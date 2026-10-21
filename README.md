@@ -1,3 +1,15 @@
+# Halo 1 Unlimited
+
+**This fork builds OpenCE for the original Xbox.** The goal is an Xbox Halo that plays like the stock game,
+with OpenCE's netcode underneath: 16 consoles, joining games in progress, AI that every console sees, folder
+maps with in-lobby map sharing, and more texture memory than the retail game ever had. See
+[port/oxbox/README.md](port/oxbox/README.md) for what it does and how to build it. The project's page is at
+https://anthonychester3d.github.io/.
+
+Everything below is upstream OpenCE's README.
+
+---
+
 # Halo: Combat Evolved for Linux, Windows, Android and the web
 
 [![Join our Discord](https://invidget.switchblade.xyz/9gqcHyr5km)](https://discord.gg/9gqcHyr5km)

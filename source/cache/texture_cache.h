@@ -44,6 +44,15 @@ void *texture_cache_steal_memory(
 	long size);
 void texture_cache_debug_render(
 	void);
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the tag cache's memory a map leaves free, lent to the texture cache until the map closes
+(cache_files.c), and where that memory ends (NULL: none lent) */
+void texture_cache_lend(
+	void *start,
+	long size);
+void *texture_cache_lent_end(
+	void);
+#endif
 
 /* ---------- globals */
 

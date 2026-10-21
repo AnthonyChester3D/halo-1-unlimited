@@ -237,7 +237,12 @@ void cheats_update(
 void cheats_load(
 	void)
 {
+#if defined(OXBOX_STRIP)
+	/* oxbox: the January build's cheats.txt, which retail Halo never read */
+	FILE *file = NULL;
+#else
 	FILE *file = fopen(CHEATS_FILENAME, "r");
+#endif
 
 	if (file)
 	{

@@ -37,6 +37,14 @@ void progress_bar_eachframe(
 	void);
 void progress_bar_display(
 	real progress);
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: after a load, the animation plays out to its end (game.c) */
+void progress_bar_oxbox_set_finishing(
+	boolean finishing);
+boolean progress_bar_oxbox_finished(
+	void);
+#endif
+
 boolean progress_bar_is_stuff_ready(
 	void);
 

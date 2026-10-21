@@ -860,6 +860,10 @@ static unsigned long network_game_server_client_machine_join_times[MAXIMUM_NETWO
 not sent the start with the others. Once the download is done it is started
 then, in progress if the game has begun. */
 static boolean network_game_server_map_pending[MAXIMUM_NETWORK_MACHINE_COUNT];
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a start asked for while a console was downloading the map (network_game_server_update_countdown) */
+static boolean network_game_server_start_wanted = FALSE;
+#endif
 /* port: those machines' players, taken out of the game the others start, and
 put back when the download is done (they spawn then, not before) */
 static struct network_player network_game_server_held_players[MAXIMUM_NETWORK_PLAYER_COUNT];
@@ -871,6 +875,21 @@ enum
 	takes (network_game_server_add_new_client) */
 	MAXIMUM_WAITING_CONNECTIONS_PER_ADDRESS = 2,
 };
+
+/* port: how long a client machine may stay without players before it is
+refused. oxbox (test build 24): on a folder map, a minute: a console that
+hasn't the map holds its players while it asks the host for it, and over the
+internet getting to the download (a lost packet or two on the way) took
+longer than 15 seconds, and the console was turned away */
+static unsigned long network_game_server_playerless_timeout(
+	struct network_game_server *server)
+{
+#if defined(HALO_XBOX_TARGET)
+	if (server->game.map.name[0] == '+')
+		return 60 * MILLISECONDS_PER_SECOND;
+#endif
+	return NETWORK_GAME_SERVER_PLAYERLESS_MACHINE_TIMEOUT;
+}
 
 /* port: the players added to the game in progress from each client
 machine's address (a machine joins from one address, and joining again
@@ -1203,6 +1222,36 @@ unsigned long network_game_server_machine_address(
 		network_game_server_client_machine_addresses[machine_index] : 0;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (test build 24): a console is joining this server's game: connected
+and not joined yet, or joined in the last 10 seconds. The map transfers
+leave room in the network memory for its join meanwhile
+(port/linux/game/hmp_share.c) */
+boolean network_game_server_machine_joining(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	unsigned long now = system_milliseconds();
+	long machine_index;
+
+	if (!server)
+		return FALSE;
+	for (machine_index = 0; machine_index < MAXIMUM_NETWORK_MACHINE_COUNT; machine_index++)
+	{
+		struct network_game_server_client_machine *machine = &server->client_machines[machine_index];
+
+		if (!machine->connection || network_game_server_client_machine_is_local(server, machine))
+			continue;
+		if (!network_game_server_client_machine_is_joined_to_game(server, machine) ||
+			now - network_game_server_client_machine_join_times[machine_index] < 10 * MILLISECONDS_PER_SECOND)
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+#endif
+
 /* port: the distributed netcode asks that a client machine be dropped (its
 game ran faster than this one's: network_distributed.c); it is, once this
 server next looks at its machines, not while its messages are read. Its
@@ -1261,6 +1310,9 @@ struct network_game_server *network_game_server_create(
 	network_game_server_memory_do_not_use_directly_in_use = TRUE;
 
 	csmemset(server, 0, sizeof(*server));
+#if defined(HALO_XBOX_TARGET)
+	network_game_server_start_wanted = FALSE;
+#endif
 
 	if (server != NULL)
 	{
@@ -1412,6 +1464,10 @@ void network_game_server_dispose(
 	if (server->connection)
 		network_connection_delete(server->connection);
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the Xbox game's second for the clients to hear the host has quit before its sockets close */
+	SleepEx(MILLISECONDS_PER_SECOND, FALSE);
+#endif
 #ifdef xbox
 	/* port: native transports flush before closing sockets, and unregistering
 	an XNet key is a stub. Preserve the original grace period on other builds. */
@@ -2171,6 +2227,12 @@ boolean network_game_server_accept_client_machine_into_game(
 					"server added machine @ %s to the game at machine index #%d",
 					transport_address_to_string(&address),
 					machine_index);
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox: the host's own machine (its client connects from 127.0.0.1) marked for the lobby */
+				NETWORK_MACHINE_HOST_MARK(&server->game.machines[machine_index]) =
+					(byte)(address.address.long_words[0] == IPV4_LOOPBACK_ADDRESS);
+				NETWORK_MACHINE_DOWNLOAD_MARK(&server->game.machines[machine_index]) = 0;
+#endif
 
 				SET_FLAG(
 					machine->flags,
@@ -3160,6 +3222,16 @@ boolean network_game_server_adjust_machine_settings(
 
 	if (machine->machine_index == machine_description->machine_index)
 	{
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the host's marks kept (the machine sends its own record, with 0 there) */
+		if (VALID_INDEX(machine_description->machine_index, MAXIMUM_NETWORK_MACHINE_COUNT))
+		{
+			struct network_machine const *old_record = &server->game.machines[machine_description->machine_index];
+
+			NETWORK_MACHINE_HOST_MARK(machine_description) = NETWORK_MACHINE_HOST_MARK(old_record);
+			NETWORK_MACHINE_DOWNLOAD_MARK(machine_description) = NETWORK_MACHINE_DOWNLOAD_MARK(old_record);
+		}
+#endif
 		success = network_game_update_machine(&server->game, machine_description);
 		if (success == TRUE)
 		{
@@ -3320,9 +3392,37 @@ static boolean server_alone(
 The countdown used to stop for that, and then start over, so a lobby rarely
 finished. The players already in the game decide. A machine with no player
 can join the game in progress. */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a console of the game still getting the host's map (map sharing: port/linux/game/hmp_share.c), or just
+done and installing it: the game can't start without it (its load of a map not all there was the damaged disc
+error), so the countdown waits, and the host can't start the game early, until it has it. A console whose
+download fails leaves the game, so it doesn't hold the others for good */
+static boolean server_machine_downloading_map(
+	struct network_game_server *server)
+{
+	long i;
+
+	for (i = 0; i < MAXIMUM_NETWORK_MACHINE_COUNT; i++)
+	{
+		struct network_game_server_client_machine *machine = server->client_machines + i;
+
+		if (network_game_server_client_machine_is_joined_to_game(server, machine) &&
+			map_share_machine_downloading(machine->machine_index))
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+#endif
+
 boolean server_ok_to_countdown(
 	struct network_game_server *server)
 {
+#if defined(HALO_XBOX_TARGET)
+	if (server_machine_downloading_map(server))
+		return FALSE;
+#endif
 	if (server_has_enough_machines(server) &&
 		(!server_needs_more_teams(server) || server_alone(server)) &&
 		(server->game.player_count >= server->game.minimum_players || server_alone(server)))
@@ -3745,7 +3845,7 @@ static boolean network_game_server_client_machine_timed_out(
 	if (!network_game_server_machine_has_players(server, machine->machine_index) &&
 		!network_game_server_machine_has_waiting_players(server, machine->machine_index) &&
 		system_milliseconds() - network_game_server_client_machine_join_times[machine->machine_index] >
-			NETWORK_GAME_SERVER_PLAYERLESS_MACHINE_TIMEOUT)
+			network_game_server_playerless_timeout(server))
 	{
 		return TRUE;
 	}
@@ -3941,6 +4041,20 @@ void network_game_server_update_countdown(
 	{
 		boolean ok_to_countdown = server_ok_to_countdown(server);
 
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: a start asked for while a console downloads the map is kept, and the countdown starts once it has
+		it (network_game_server_idle_pregame_tasks); a stop forgets it */
+		if (countdown_event == _network_game_server_countdown_event_stop)
+			network_game_server_start_wanted = FALSE;
+		else if (!ok_to_countdown && server_machine_downloading_map(server) &&
+			(countdown_event == _network_game_server_countdown_event_player_joined ||
+				countdown_event == _network_game_server_countdown_event_start_immediately))
+		{
+			if (!network_game_server_start_wanted)
+				network_event("the game starts when the map download is done");
+			network_game_server_start_wanted = TRUE;
+		}
+#endif
 		if (ok_to_countdown ||
 			countdown_event == _network_game_server_countdown_event_stop)
 		{
@@ -4775,6 +4889,14 @@ static boolean network_game_server_have_all_machines_have_precached(
 			/* port: a machine with no player is joining or leaving, and one
 			still downloading the map does not have it. Neither holds the
 			start. A download joins the game in progress once it is done. */
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: one still downloading the map holds the start (server_ok_to_countdown) */
+			if (map_share_machine_downloading(machine->machine_index))
+			{
+				all_machines_have_precached = FALSE;
+				break;
+			}
+#endif
 			if (!network_game_server_machine_has_players(server, machine->machine_index) ||
 				map_share_machine_needs_map(machine->machine_index))
 				continue;
@@ -4799,11 +4921,65 @@ static boolean network_game_server_have_all_machines_have_precached(
 	return all_machines_have_precached;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: each downloading machine's percentage in the lobby's machine names
+(ui_widget_game_data_input_functions.c), in the settings: changes of 5 or
+more, and its start and end, at most every 2 seconds */
+static void network_game_server_update_download_marks(
+	struct network_game_server *server)
+{
+	static unsigned long last_sent = 0;
+	unsigned long now = system_milliseconds();
+	boolean changed = FALSE;
+	long i;
+
+	if (now - last_sent < 2 * MILLISECONDS_PER_SECOND)
+		return;
+	for (i = 0; i < MAXIMUM_NETWORK_MACHINE_COUNT; i++)
+	{
+		struct network_machine *machine = &server->game.machines[i];
+		int percent;
+		byte mark, old_mark;
+
+		if (!network_machine_is_valid(machine))
+			continue;
+		percent = map_share_machine_percent(machine->machine_index);
+		mark = (byte)(percent < 0 ? 0 : 1 + MIN(percent, 100));
+		old_mark = NETWORK_MACHINE_DOWNLOAD_MARK(machine);
+		if (mark == old_mark || (mark && old_mark && mark > old_mark && mark < old_mark + 5))
+			continue;
+		NETWORK_MACHINE_DOWNLOAD_MARK(machine) = mark;
+		changed = TRUE;
+	}
+	if (changed)
+	{
+		last_sent = now;
+		network_game_server_send_game_settings_to_all_machines(server, &server->game, sizeof(server->game));
+	}
+}
+#endif
+
 static boolean network_game_server_idle_pregame_tasks(
 	struct network_game_server *server)
 {
 	long now = (long)system_milliseconds();
 	boolean success = TRUE;
+
+#if defined(HALO_XBOX_TARGET)
+	if (!server->sent_start_game_message)
+	{
+		network_game_server_update_download_marks(server);
+		if (network_game_server_start_wanted && server->state == _network_game_server_state_pregame &&
+			!server->countdown_state.active && server_ok_to_countdown(server))
+		{
+			network_game_server_start_wanted = FALSE;
+			network_event("the map download is done: the countdown starts");
+			network_game_server_update_countdown(server, _network_game_server_countdown_event_player_joined);
+		}
+	}
+	else
+		network_game_server_start_wanted = FALSE;
+#endif
 
 	/* port: a machine that finished downloading the map after the others
 	were told to start loads now, or joins in progress if the game has begun */
@@ -4868,7 +5044,7 @@ static boolean network_game_server_idle_pregame_tasks(
 				!map_share_machine_downloading(client_machine->machine_index) &&
 				(!network_game_has_free_player_slot(&server->game) ||
 					system_milliseconds() - network_game_server_client_machine_join_times[client_machine->machine_index] >
-						NETWORK_GAME_SERVER_PLAYERLESS_MACHINE_TIMEOUT))
+						network_game_server_playerless_timeout(server)))
 			{
 				network_game_server_refuse_late_joiner(server, client_machine,
 					network_game_has_free_player_slot(&server->game) ? _rejection_code_game_is_closed :
@@ -5041,6 +5217,9 @@ boolean network_game_server_reset_to_pregame(
 	csmemset(&server->countdown_state, 0, sizeof(server->countdown_state));
 	csmemset(network_game_server_map_pending, 0, sizeof(network_game_server_map_pending));
 	csmemset(network_game_server_held_players, 0, sizeof(network_game_server_held_players));
+#if defined(HALO_XBOX_TARGET)
+	network_game_server_start_wanted = FALSE;
+#endif
 	network_game_server_held_player_count = 0;
 	server->next_update_number = 0;
 	server->time_of_first_client_loading_completion = 0;
@@ -5186,3 +5365,43 @@ boolean network_game_server_reset_to_pregame(
 
 	return success;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the network game's map, the host's or the client's (port/linux/game/hmp_*.c); NULL outside one */
+char const *network_game_current_map_name(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	struct network_game_client *client = global_network_game_client_get();
+
+	if (server)
+		return server->game.map.name;
+	if (client)
+		return network_game_client_get_game(client)->map.name;
+	return NULL;
+}
+
+/* oxbox: hosting a game in progress that every console in it has loaded (END GAME: port/linux/game/hmp_game.c) */
+boolean network_game_server_hosting_all_loaded(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	long index;
+
+	if (!server || server->state != _network_game_server_state_ingame)
+		return FALSE;
+	for (index = 0; index < MAXIMUM_NETWORK_MACHINE_COUNT; index++)
+	{
+		struct network_game_server_client_machine *machine = &server->client_machines[index];
+
+		if (network_game_server_client_machine_is_joined_to_game(server, machine) &&
+			!network_game_server_client_machine_is_local(server, machine) &&
+			network_game_server_machine_has_players(server, machine->machine_index) &&
+			!network_game_server_client_machine_is_loaded(server, machine))
+		{
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+#endif

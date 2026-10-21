@@ -117,10 +117,23 @@ ending in a brace, like the checked form, which some uses rely on (no
 semicolon). */
 #define RELEASE_ASSERT_MESSAGE(string) \
 	(__builtin_constant_p(string) ? (char const *)(string) : "<message not formatted in release builds>")
+#if defined(OXBOX_STRIP)
+/* oxbox: the Xbox build keeps the checks (their expressions are evaluated,
+as above) but not their text: a failure is noted in debug.txt by the
+address it failed at (build/oxbox.map names the function), as the retail
+game, which compiled them out, keeps no text either. About 5,000 checks'
+expressions, file names and calls come out of the XBE. */
+void oxbox_assert_failed(void);
+#define match_assert(file, line, expr) if (!(expr)) { oxbox_assert_failed(); }
+#define match_vassert(file, line, expr, string) if (!(expr)) { oxbox_assert_failed(); }
+#define match_warn(file, line, expr) if (!(expr)) { oxbox_assert_failed(); }
+#define match_vwarn(file, line, expr, string) if (!(expr)) { oxbox_assert_failed(); }
+#else
 #define match_assert(file, line, expr) if (!(expr)) { release_assert_failed(#expr, MATCH_FILE(file), MATCH_LINE(line), TRUE); }
 #define match_vassert(file, line, expr, string) if (!(expr)) { release_assert_failed(RELEASE_ASSERT_MESSAGE(string), MATCH_FILE(file), MATCH_LINE(line), TRUE); }
 #define match_warn(file, line, expr) if (!(expr)) { release_assert_failed(#expr, MATCH_FILE(file), MATCH_LINE(line), FALSE); }
 #define match_vwarn(file, line, expr, string) if (!(expr)) { release_assert_failed(RELEASE_ASSERT_MESSAGE(string), MATCH_FILE(file), MATCH_LINE(line), FALSE); }
+#endif
 #else
 #define match_assert(file, line, expr) if (!(expr)) { display_assert(#expr, MATCH_FILE(file), MATCH_LINE(line), TRUE); system_exit(-1); }
 #define match_vassert(file, line, expr, string) if (!(expr)) { display_assert(string, MATCH_FILE(file), MATCH_LINE(line), TRUE); system_exit(-1); }

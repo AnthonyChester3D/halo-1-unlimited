@@ -682,10 +682,14 @@ finished:
 void stack_walk_initialize(
 	void)
 {
+#if !defined(OXBOX_STRIP)
+	/* (oxbox: the January build's symbol map for its crash dumps, which no retail disc has: oxbox logs addresses,
+	named from build/oxbox.map) */
 	load_symbol_table(
 		"d:\\cachebeta.map",
 		&stack_walk_globals.symbol_table,
 		"Mon Dec 17 12:49:36 2001");
+#endif
 
 	if (stack_walk_globals.fixup==NONE)
 	{

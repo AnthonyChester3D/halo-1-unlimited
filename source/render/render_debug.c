@@ -174,7 +174,11 @@ symbols in this file:
 enum
 {
 	NUMBER_OF_RENDER_DEBUG_CACHE_STRING_CHARACTERS = 1024,
+#if defined(OXBOX_STRIP)
+	MAXIMUM_RENDER_DEBUG_CACHE_ENTRIES = 16, /* oxbox: the debug drawing cache, unused on the Xbox (28 KB) */
+#else
 	MAXIMUM_RENDER_DEBUG_CACHE_ENTRIES = 512,
+#endif
 	MAXIMUM_RENDER_DEBUG_PLAYER_TEXT_LENGTH = 1024,
 
 	NUMBER_OF_RENDER_DEBUG_CIRCLE_POINTS = 16,
@@ -267,6 +271,7 @@ struct render_debug_globals_definition
 
 typedef char render_debug_cache_entry_size_check[
 	sizeof(struct render_debug_cache_entry) == 0x38 ? 1 : -1];
+#if !defined(OXBOX_STRIP)
 typedef char render_debug_globals_size_check[
 	sizeof(struct render_debug_globals_definition) == 0x740C ? 1 : -1];
 typedef char render_debug_globals_strings_offset_check[
@@ -283,6 +288,7 @@ typedef char render_debug_globals_entry_overflow_offset_check[
 	offsetof(struct render_debug_globals_definition, entry_overflow_reported) == 0x740A ? 1 : -1];
 typedef char render_debug_globals_string_overflow_offset_check[
 	offsetof(struct render_debug_globals_definition, string_overflow_reported) == 0x740B ? 1 : -1];
+#endif
 
 /* ---------- prototypes */
 

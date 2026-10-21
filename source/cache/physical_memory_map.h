@@ -28,6 +28,10 @@ void *physical_memory_get_game_state_base_address(void);
 void *physical_memory_get_tag_cache_base_address(void);
 void *physical_memory_get_texture_cache_base_address(void);
 void *physical_memory_get_sound_cache_base_address(void);
+/* port: the texture and sound caches' sizes (oxbox: larger on a console with 128 MB, chosen at start-up by
+physical_memory_allocate) */
+long physical_memory_get_texture_cache_size(void);
+long physical_memory_get_sound_cache_size(void);
 
 /* ---------- globals */
 

@@ -66,6 +66,7 @@ typedef char lruv_cache_block_size_assert[
 /* ---------- prototypes/LRUV_CACHE.C */
 
 long lruv_allocation_size(long maximum_block_count);
+long lruv_block_new_at(struct lruv_cache *cache, long first_page_index, long page_count);
 void lruv_initialize(
 	struct lruv_cache *cache,
 	const char *name,

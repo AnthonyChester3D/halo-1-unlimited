@@ -143,7 +143,11 @@ into the browser on the web, and a scoreboard is hundreds of characters.
 The Xbox drew them from its push buffer later all the same. The batch is
 drawn when the string ends, when it is full, and before a glyph's place in
 a texture is given to another (rasterizer_text_flush). */
+#if defined(HALO_XBOX_TARGET)
+#define TEXT_BATCH_MAXIMUM_CHARACTERS 1 /* (oxbox: not batched) */
+#else
 #define TEXT_BATCH_MAXIMUM_CHARACTERS 256
+#endif
 static struct rasterizer_text_vertex text_batch_vertices[TEXT_BATCH_MAXIMUM_CHARACTERS * 4];
 static short text_batch_character_count = 0;
 static boolean text_batch_open = FALSE;
@@ -434,7 +438,12 @@ maps_done:
 			D3DTSS_ALPHAKILL,
 			0);
 		/* port: (text_batch_vertices) */
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: each character drawn as the Xbox game draws it (the push buffer batches them anyway) */
+		text_batch_open = FALSE;
+#else
 		text_batch_open = TRUE;
+#endif
 		text_hires_set_reset_hook(rasterizer_text_flush);
 	}
 

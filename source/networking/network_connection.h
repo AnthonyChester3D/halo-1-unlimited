@@ -80,6 +80,10 @@ void network_connection_set_connection_rejection_procedure(
 	network_connection_rejection_procedure connection_rejection_procedure);
 boolean network_connection_active(
 	struct network_connection *connection);
+/* port: how long since the connection last heard its peer's stream (or was
+kept alive) */
+unsigned long network_connection_silent_milliseconds(
+	struct network_connection *connection);
 boolean network_connection_going_stale(
 	struct network_connection *connection);
 void network_connection_keep_alive(

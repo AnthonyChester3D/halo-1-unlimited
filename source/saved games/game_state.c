@@ -522,6 +522,12 @@ static void game_state_allocation_record(
 	// retaining one out-of-line copy under its private address-derived name.
 	FILE *file = bss_004d27b0;
 
+#if defined(OXBOX_STRIP)
+	/* oxbox (test build 24): no d:\gamestate.txt on the Xbox: a developer's list of the game state's allocations,
+	which kept a file open (and its buffer) all session, and on a disc failed and went in the log at every one */
+	(void)file; (void)name; (void)type; (void)size; (void)gpu;
+	return;
+#endif
 	if (!file)
 	{
 		file = fopen("d:\\gamestate.txt", "w");
@@ -645,6 +651,87 @@ static struct game_state_allocation *game_state_allocation_new(
 
 	return allocation;
 }
+
+#if defined(OXBOX_TEST_POOLS)
+/* oxbox test builds: how full the game state's pools get. Each frame (main.c) every data array's live entries
+and the memory pools' use are noted; every 10 seconds of a game, the most of each this session go in the log (only
+those with any use), with their maximum */
+static short game_state_pool_peaks[MAXIMUM_GAME_STATE_ALLOCATIONS];
+static long game_state_pool_bytes_peaks[MAXIMUM_GAME_STATE_ALLOCATIONS];
+
+void game_state_report_pools(
+	void)
+{
+	static unsigned long last_report;
+	unsigned long now = system_milliseconds();
+	long index;
+
+	for (index = 0; index < game_state_allocation_count; index++)
+	{
+		struct game_state_allocation const *allocation = &game_state_allocations[index];
+
+		if (allocation->kind == _game_state_allocation_data)
+		{
+			struct data_array const *data = (struct data_array const *)allocation->address;
+
+			if (data->actual_count > game_state_pool_peaks[index])
+				game_state_pool_peaks[index] = data->actual_count;
+		}
+		else if (allocation->kind == _game_state_allocation_memory_pool)
+		{
+			struct memory_pool const *pool = (struct memory_pool const *)allocation->address;
+			long used = pool->size - pool->free_size;
+
+			if (used > game_state_pool_bytes_peaks[index])
+				game_state_pool_bytes_peaks[index] = used;
+		}
+	}
+	if (now - last_report < 10000 || !game_in_progress())
+		return;
+	last_report = now;
+	{
+		void platform_log(char const *format, ...);
+		int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
+		char line[240];
+		int length = 0;
+
+		for (index = 0; index < game_state_allocation_count; index++)
+		{
+			struct game_state_allocation const *allocation = &game_state_allocations[index];
+			char item[80];
+			int item_length;
+
+			if (allocation->kind == _game_state_allocation_data && game_state_pool_peaks[index] > 0)
+			{
+				struct data_array const *data = (struct data_array const *)allocation->address;
+
+				item_length = halo_linux_snprintf(item, sizeof(item), "%s %d/%d (%ld B each), ", data->name,
+					game_state_pool_peaks[index], data->maximum_count, (long)data->size);
+			}
+			else if (allocation->kind == _game_state_allocation_memory_pool && game_state_pool_bytes_peaks[index] > 0)
+			{
+				struct memory_pool const *pool = (struct memory_pool const *)allocation->address;
+
+				item_length = halo_linux_snprintf(item, sizeof(item), "%s %ld/%ld KB, ", pool->name,
+					game_state_pool_bytes_peaks[index] / 1024, pool->size / 1024);
+			}
+			else
+				continue;
+			if (item_length < 0)
+				continue;
+			if (length + item_length >= (int)sizeof(line) - 1)
+			{
+				platform_log("pools: %s", line);
+				length = 0;
+			}
+			csmemcpy(line + length, item, item_length + 1);
+			length += item_length;
+		}
+		if (length)
+			platform_log("pools: %s", line);
+	}
+}
+#endif
 
 /* whether [address, address+size) lies in the game state */
 static boolean game_state_image_contains(
@@ -850,7 +937,8 @@ boolean game_state_image_accept(
 		if (!valid)
 			return FALSE;
 	}
-	csmemcpy(game_state_globals.base_address, image, size);
+	if (image != game_state_globals.base_address) /* (oxbox: read in place) */
+		csmemcpy(game_state_globals.base_address, image, size);
 	error(_error_silent, "the saved game is taken");
 
 	return TRUE;

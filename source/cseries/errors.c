@@ -132,8 +132,40 @@ static void write_to_debug_file(
 
 	if (!file)
 	{
-		FILE *opened = fopen("d:\\debug.txt", "a+b");
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: D: can't be written (a disc or an ISO): T:, Halo's title data on the hard drive
+		(E:\TDATA\4d530004); and neither: not tried again for each line (each try was a call to the drive) */
+		static boolean debug_file_unavailable = FALSE;
+		char const *path = "d:\\debug.txt";
+		FILE *opened;
 
+		if (debug_file_unavailable)
+			return;
+		opened = fopen(path, "a+b");
+		if (!opened)
+		{
+			path = "T:\\debug.txt";
+			opened = fopen(path, "a+b");
+		}
+		if (!opened)
+		{
+			debug_file_unavailable = TRUE;
+			return;
+		}
+		/* (one that grew past 2 MB over many sessions starts again) */
+		if (fseek(opened, 0, SEEK_END) == 0 && ftell(opened) > 2L * 1024 * 1024)
+		{
+			fclose(opened);
+			opened = fopen(path, "wb");
+			if (!opened)
+			{
+				debug_file_unavailable = TRUE;
+				return;
+			}
+		}
+#else
+		FILE *opened = fopen("d:\\debug.txt", "a+b");
+#endif
 		if (!opened)
 		{
 			return;
@@ -175,7 +207,24 @@ static void write_to_debug_file(
 		}
 	}
 	fprintf(file, "%s%s", prefix, string);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a write to the hard drive per line stalled frames (a match
+	loading logs a burst of lines): written when the buffer fills or every
+	2 seconds at most, as oxbox_log.txt (a crash loses at most those) */
+	{
+		unsigned long WINAPI GetTickCount(void);
+		static unsigned long last_flush;
+		unsigned long now = GetTickCount();
+
+		if (now - last_flush >= 2000)
+		{
+			fflush(file);
+			last_flush = now;
+		}
+	}
+#else
 	fflush(file);
+#endif
 #ifdef HALO_WEB
 	/* port: and to the page's log (port/web/README.md) */
 	fputs(string, stderr);

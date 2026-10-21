@@ -27,7 +27,11 @@ boolean xbox_demos_available(
 	void)
 {
 	struct file_reference file;
-	
+
+#if defined(OXBOX_STRIP)
+	/* oxbox: no game demos (d:\\XDemos): the menu item stays hidden, as it is when the folder is missing */
+	return FALSE;
+#endif
 	if (check_for_demos==TRUE)
 	{
 		if (file_reference_create_from_path(&file, "d:\\XDemos\\XDemos.xbe", FALSE))
@@ -51,7 +55,11 @@ boolean xbox_demos_available(
 void xbox_demos_launch(
 	void)
 {
+#if defined(OXBOX_STRIP)
+	if (FALSE)
+#else
 	if (xbox_demos_available())
+#endif
 	{
 		LAUNCH_DATA launch_data = {0};
 

@@ -3346,7 +3346,11 @@ hosts' listings, p2p_lobby.c). Joining one joins its invite (as Direct
 Link's PASTE LINK); once its host is reached its game is among the client's,
 and an A press (posted) joins it, or shows its lobby if under way */
 
+#if defined(HALO_XBOX_TARGET)
+#define LOBBY_BROWSER_GAMES 16 /* oxbox: the PC internet browser; the Xbox build lists system link games in its own menus */
+#else
 #define LOBBY_BROWSER_GAMES 256
+#endif
 /* milliseconds: a host not reached in this long is given up (p2p's own
 wait is longer) */
 #define LOBBY_BROWSER_JOIN_TIMEOUT 30000

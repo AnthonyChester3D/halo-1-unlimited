@@ -3338,6 +3338,10 @@ boolean unit_animation_enhanced(
 	char const *name;
 	long name_index;
 
+#if defined(OXBOX_STRIP)
+	/* oxbox: stock animations, always (game.enhanced_animations false) */
+	return FALSE;
+#endif
 	/* (read again when the settings change) */
 	if (read_at != config_changes())
 	{
@@ -10903,7 +10907,13 @@ fully; below it they blend toward the rest pose */
 /* the ticks the legs take to blend fully in or out, as the engine's own
 transitions between animation states */
 #define GRENADE_THROW_BLEND_TICKS 6
+#if defined(OXBOX_STRIP)
+/* oxbox: the enhanced animations are off on the Xbox (unit_animation_enhanced), and these
+weights only follow them: one slot, not 2,048 (40 KB) */
+#define GRENADE_THROW_MAXIMUM_TRACKED_UNITS 1
+#else
 #define GRENADE_THROW_MAXIMUM_TRACKED_UNITS 2048
+#endif
 
 static real grenade_throw_leg_weights[GRENADE_THROW_MAXIMUM_TRACKED_UNITS];
 static long grenade_throw_leg_weight_times[GRENADE_THROW_MAXIMUM_TRACKED_UNITS];
@@ -12517,6 +12527,11 @@ void unit_network_drop_weapon(
 
 	if (weapon_index == NONE)
 		return;
+	/* oxbox: put away first, as unit_drop_current_weapon does: a weapon
+	dropped mid-reload kept its trigger held (control flags) and its reload
+	running, and fired on the floor on the client */
+	weapon_put_away(weapon_index, TRUE);
+	weapon_get(weapon_index)->weapon.control_flags = 0;
 	if (unit->unit.current_weapon_index == slot)
 		first_person_weapon_message_from_unit(unit_index, 13);
 	unit_drop_item(unit_index, weapon_index);
@@ -12536,3 +12551,41 @@ void unit_network_forget_weapon(
 	if (unit->unit.desired_weapon_index == slot || unit->unit.desired_weapon_index == NONE)
 		unit->unit.desired_weapon_index = unit_weapon_next_index(unit_index, NONE, 0);
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: why a unit with weapons has none in hand (network_objects.c logs it for a client's own players): what
+unit_update's readying looks at */
+int snprintf(char *buffer, unsigned int count, const char *format, ...);
+char *tag_get_name(long tag_index);
+
+void unit_oxbox_weapon_diagnostic(
+	long unit_index,
+	char *text,
+	long size)
+{
+	struct unit_datum *unit = unit_get(unit_index);
+	char const *seat_label = unit_get_seat_label(unit_index);
+	long desired_weapon = unit_get_desired_weapon_index(unit_index);
+	long length;
+	short slot;
+
+	length = snprintf(text, size, "current %d desired %d (weapon %08lx, can use %d), state %d busy %d, seat '%s', "
+		"cannot hold %d, flags %08lx;",
+		unit->unit.current_weapon_index, unit->unit.desired_weapon_index, desired_weapon,
+		desired_weapon != NONE ? unit_can_use_weapon(unit_index, desired_weapon) : -1,
+		unit->unit.animation.state, unit_animation_busy(&unit->unit.animation), seat_label ? seat_label : "-",
+		TEST_FLAG(unit->object.damage_flags, _object_cannot_hold_weapon_bit) != 0, unit->unit.flags);
+	length = (long)strlen(text);
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT && length < size - 80; slot++)
+	{
+		long weapon_index = unit->unit.weapon_object_indices[slot];
+
+		if (weapon_index == NONE || !weapon_try_and_get(weapon_index))
+			continue;
+		snprintf(text + length, size - length, " [%d] %08lx '%s' label '%s' parent %08lx", slot, weapon_index,
+			tag_get_name(weapon_get(weapon_index)->definition_index), weapon_get_label(weapon_index),
+			weapon_get(weapon_index)->object.parent_object_index);
+		length = strlen(text);
+	}
+}
+#endif

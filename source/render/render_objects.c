@@ -465,6 +465,16 @@ static real object_get_level_of_detail_pixels(
 
 	object_get_bounding_sphere(object_index, &center, &radius);
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: Halo Universal's widescreen: models change to their lower
+	levels of detail at half the distance, for the wider view's cost */
+	{
+		extern int oxbox_widescreen(void);
+
+		if (oxbox_widescreen())
+			return 0.5f * render_frustum_sphere_diameter_in_pixels(&render.frustum, &center, radius);
+	}
+#endif
 	return render_frustum_sphere_diameter_in_pixels(&render.frustum, &center, radius);
 }
 

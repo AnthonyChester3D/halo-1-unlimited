@@ -319,6 +319,13 @@ extern struct dsound_globals dsound_globals;
 extern unsigned long const sound_sample_rate_samples_per_second[NUMBER_OF_SOUND_SAMPLE_RATES];
 extern HRESULT interrupt_result;
 extern boolean debug_sound_channels;
+#if defined(OXBOX_STRIP)
+/* oxbox: the effects image is read from the XBE's file for its download and freed (xbox/oxbox_entry.c) */
+void *oxbox_effects_image(unsigned long *size);
+void oxbox_effects_image_free(void *image);
+#define OXBOX_EFFECTS_IMAGE_IN_FILE
+#endif
+#if !defined(OXBOX_EFFECTS_IMAGE_IN_FILE)
 static byte const dsound_effects_image[0x3A5C]=
 {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1256,6 +1263,7 @@ static byte const dsound_effects_image[0x3A5C]=
 	0x00, 0x00, 0x00, 0x00, 0x78, 0xd2, 0x61, 0x28, 0x96, 0x43, 0x23, 0xc8, 0xc9, 0xbd, 0x98, 0xed,
 	0xf9, 0x7d, 0xc4, 0x15, 0x62, 0x69, 0xbe, 0x7a, 0x43, 0x5a, 0x36, 0xce
 };
+#endif
 
 struct sound_platform_definition platform_sound_dsound =
 {
@@ -1818,12 +1826,27 @@ static boolean dsound_initialize(
 						image_location.dwI3DL2ReverbIndex= 0;
 						image_location.dwCrosstalkIndex= 1;
 
+#if defined(OXBOX_EFFECTS_IMAGE_IN_FILE)
+						/* oxbox (test build 24): none when opence.ini says audio_effects = 0 (oxbox_entry.c) */
+						extern int oxbox_setting_audio_effects;
+						unsigned long effects_image_size = 0;
+						void *effects_image = oxbox_setting_audio_effects ? oxbox_effects_image(&effects_image_size) : NULL;
+
+						result= !oxbox_setting_audio_effects ? S_OK : effects_image ? IDirectSound_DownloadEffectsImage(
+							dsound_globals.direct_sound,
+							effects_image,
+							effects_image_size,
+							&image_location,
+							&image_description) : E_FAIL;
+						oxbox_effects_image_free(effects_image);
+#else
 						result= IDirectSound_DownloadEffectsImage(
 							dsound_globals.direct_sound,
 							dsound_effects_image,
 							sizeof(dsound_effects_image),
 							&image_location,
 							&image_description);
+#endif
 
 						if (result<0)
 						{
@@ -2591,10 +2614,10 @@ static boolean dsound_channel_queue_packet(
 			if ((byte *)channel->playing_permutation->cache_base_address>=
 					(byte *)physical_memory_get_sound_cache_base_address() &&
 				channel->playing_permutation->samples.size>=0 &&
-				channel->playing_permutation->samples.size<=SOUND_CACHE_SIZE &&
+				channel->playing_permutation->samples.size<=physical_memory_get_sound_cache_size() &&
 				(unsigned long)((byte *)channel->playing_permutation->cache_base_address-
 					(byte *)physical_memory_get_sound_cache_base_address())<=
-					(unsigned long)(SOUND_CACHE_SIZE-channel->playing_permutation->samples.size) &&
+					(unsigned long)(physical_memory_get_sound_cache_size()-channel->playing_permutation->samples.size) &&
 				channel->sample_offset>=0 &&
 				channel->sample_offset<=channel->playing_permutation->samples.size)
 			{

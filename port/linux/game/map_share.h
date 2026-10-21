@@ -144,6 +144,12 @@ boolean map_share_machine_downloading(
 the map do not wait for it (network_server_manager.c) */
 boolean map_share_machine_needs_map(
 	long machine_index);
+/* oxbox: the lobby's machine names: (the host) how far along the download of
+the map to a machine is, and (a client) how far along its own is; -1: none */
+int map_share_machine_percent(
+	long machine_index);
+int map_share_download_percent(
+	void);
 
 /* the distributed messages of map sharing (network_distributed.c, and the
 host's message handler), in the lobby too: from_stream says the message came

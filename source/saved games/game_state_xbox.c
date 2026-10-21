@@ -105,6 +105,15 @@ symbols in this file:
 
 /* ---------- constants */
 
+/* oxbox: with retail Halo's title ID (test build 19) the profiles' folders and the cache drive are the retail game's:
+the game state, whose layout is this build's own (a retail checkpoint is 3,670,016 bytes, this one's smaller), goes
+in opence.bin, so a retail savegame.bin (its checkpoint) is never read, resized or overwritten */
+#if defined(HALO_XBOX_TARGET)
+#define OXBOX_GAME_STATE_FILE_NAME "opence.bin"
+#else
+#define OXBOX_GAME_STATE_FILE_NAME "savegame.bin"
+#endif
+
 enum
 {
 	CPU_PAGE_SIZE = 0x1000,
@@ -230,7 +239,7 @@ void game_state_create_or_open_file(
 		87,
 		!xbox_game_state_globals.file_open);
 
-	xbox_game_state_globals.handle = CreateFileA("z:\\savegame.bin",
+	xbox_game_state_globals.handle = CreateFileA("z:\\" OXBOX_GAME_STATE_FILE_NAME,
 		GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
 		FILE_FLAG_NO_BUFFERING|FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 	if (xbox_game_state_globals.handle != INVALID_HANDLE_VALUE &&
@@ -302,6 +311,17 @@ boolean game_state_write_to_file(
 	return result;
 }
 
+/* oxbox: a saved game is read straight into the game state, as the Xbox game does, and checked there
+(game_state_image_accept): a 3.3 MB copy beside it doesn't fit a 64 MB Xbox, and the unbuffered file
+reads need the game state's page-aligned buffer */
+#if defined(HALO_XBOX_TARGET)
+#define OXBOX_GAME_STATE_IMAGE(size, in_place) ((void *)(in_place))
+#define OXBOX_GAME_STATE_IMAGE_FREE(image) ((void)(image))
+#else
+#define OXBOX_GAME_STATE_IMAGE(size, in_place) malloc(size)
+#define OXBOX_GAME_STATE_IMAGE_FREE(image) free(image)
+#endif
+
 boolean game_state_read_from_file(
 	void)
 {
@@ -323,7 +343,7 @@ boolean game_state_read_from_file(
 		xbox_game_state_globals.file_valid_for_read || recover_saved_games_hack);
 
 	/* port: read beside the game state, and taken once checked */
-	image = malloc(xbox_game_state_globals.buffer_size);
+	image = OXBOX_GAME_STATE_IMAGE(xbox_game_state_globals.buffer_size, xbox_game_state_globals.buffer);
 	if (image &&
 		SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN) !=
 			INVALID_SET_FILE_POINTER &&
@@ -342,7 +362,7 @@ boolean game_state_read_from_file(
 			FALSE,
 			csprintf(temporary, "couldn't read saved game file (#%d)", GetLastError()));
 	}
-	free(image);
+	OXBOX_GAME_STATE_IMAGE_FREE(image);
 
 	return result;
 }
@@ -410,7 +430,7 @@ void game_state_read_core(
 	HANDLE file;
 	unsigned long bytes_read;
 
-	void *image = malloc(buffer_size);
+	void *image = OXBOX_GAME_STATE_IMAGE(buffer_size, buffer);
 
 	sprintf(path, "d:\\core\\%s", name);
 	file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
@@ -426,7 +446,7 @@ void game_state_read_core(
 		"game state has been corrupted (thank you, come again)");
 	(void)buffer;
 	CloseHandle(file);
-	free(image);
+	OXBOX_GAME_STATE_IMAGE_FREE(image);
 
 	return;
 }
@@ -434,7 +454,7 @@ void game_state_read_core(
 const char *game_state_get_persistent_storage_filename(
 	void)
 {
-	return "savegame.bin";
+	return OXBOX_GAME_STATE_FILE_NAME;
 }
 
 static __inline boolean game_state_get_persistent_storage_path(
@@ -477,7 +497,7 @@ static HANDLE game_state_open_persistent_storage(
 		{
 			game_state_get_persistent_storage_path(path);
 		}
-		strcat(path, "savegame.bin");
+		strcat(path, OXBOX_GAME_STATE_FILE_NAME);
 
 		file = CreateFileA(path, GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, 0,
 			NULL);
@@ -672,7 +692,7 @@ void game_state_read_from_persistent_storage(
 	if (file != INVALID_HANDLE_VALUE)
 	{
 		/* port: read beside the game state, and taken once checked */
-		void *image = malloc(buffer_size);
+		void *image = OXBOX_GAME_STATE_IMAGE(buffer_size, buffer);
 
 		if (!image ||
 			SetFilePointer(file, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER ||
@@ -689,7 +709,7 @@ void game_state_read_from_persistent_storage(
 			delete_persistent_storage();
 		}
 		(void)buffer;
-		free(image);
+		OXBOX_GAME_STATE_IMAGE_FREE(image);
 		CloseHandle(file);
 	}
 

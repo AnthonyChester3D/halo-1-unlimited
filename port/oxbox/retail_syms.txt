@@ -1,0 +1,263 @@
+# name  address  evidence: Halo 01.10.12.2276 retail XBE (16-Xbox build) library functions and data the game links to
+CloseHandle 0x12c44 XbSymbolDatabase, prototype checked
+CreateDirectoryA 0x14acc XbSymbolDatabase, prototype checked
+CreateEventA 0x12c62 XbSymbolDatabase, prototype checked
+CreateFileA 0x14640 XbSymbolDatabase, prototype checked
+CreateMutexA 0x12d01 XbSymbolDatabase, prototype checked
+CreateThread 0x12be3 XbSymbolDatabase, prototype checked
+D3DCubeTexture_LockRect 0x184be0 XbSymbolDatabase, prototype checked
+D3DDevice_Begin 0x1846c0 XbSymbolDatabase, prototype checked
+D3DDevice_BeginVisibilityTest 0x181c00 XbSymbolDatabase, prototype checked
+D3DDevice_BlockUntilVerticalBlank 0x181170 XbSymbolDatabase, prototype checked
+D3DDevice_Clear 0x1830a0 XbSymbolDatabase, prototype checked
+D3DDevice_CreateCubeTexture 0x180ec0 XbSymbolDatabase, prototype checked
+D3DDevice_CreateIndexBuffer 0x185800 XbSymbolDatabase, prototype checked
+D3DDevice_CreatePalette 0x185920 XbSymbolDatabase, prototype checked
+D3DDevice_CreateTexture 0x180e60 XbSymbolDatabase, prototype checked
+D3DDevice_CreateVertexBuffer 0x185870 XbSymbolDatabase, prototype checked
+D3DDevice_CreateVertexShader 0x183990 XbSymbolDatabase, prototype checked
+D3DDevice_CreateVolumeTexture 0x180e90 XbSymbolDatabase, prototype checked
+D3DDevice_DeleteVertexShader 0x183d90 XbSymbolDatabase, prototype checked
+D3DDevice_DrawIndexedVertices 0x1842d0 XbSymbolDatabase, prototype checked
+D3DDevice_DrawVertices 0x184230 XbSymbolDatabase, prototype checked
+D3DDevice_End 0x184700 XbSymbolDatabase, prototype checked
+D3DDevice_EndVisibilityTest 0x181c30 XbSymbolDatabase, prototype checked
+D3DDevice_GetBackBuffer 0x181520 XbSymbolDatabase, prototype checked
+D3DDevice_GetDepthStencilSurface 0x1817c0 XbSymbolDatabase, prototype checked
+D3DDevice_GetDeviceCaps 0x180e40 XbSymbolDatabase, prototype checked
+D3DDevice_GetTransform 0x181000 XbSymbolDatabase, prototype checked
+D3DDevice_GetVertexShaderSize 0x183c30 XbSymbolDatabase, prototype checked
+D3DDevice_GetVisibilityTestResult 0x1810f0 XbSymbolDatabase, prototype checked
+D3DDevice_IsBusy 0x181bc0 XbSymbolDatabase, prototype checked
+D3DDevice_KickPushBuffer 0x181070 XbSymbolDatabase, prototype checked
+D3DDevice_LoadVertexShader 0x183b60 XbSymbolDatabase, prototype checked
+D3DDevice_PersistDisplay 0x181ee0 XbSymbolDatabase, prototype checked
+D3DDevice_Present 0x185670 XbSymbolDatabase, prototype checked
+D3DDevice_Release 0x181030 XbSymbolDatabase, prototype checked
+D3DDevice_SelectVertexShader 0x183bc0 XbSymbolDatabase, prototype checked
+D3DDevice_SetFlickerFilter 0x1811a0 XbSymbolDatabase, prototype checked
+D3DDevice_SetIndices 0x181b30 XbSymbolDatabase, prototype checked
+D3DDevice_SetPalette 0x181ab0 XbSymbolDatabase, prototype checked
+D3DDevice_SetPixelShaderProgram 0x184030 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderStateNotInline 0x1820f0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_BackFillMode 0x182550 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_CullMode 0x182230 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_Deferred 0x1820d0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_DoNotCullUncompressed 0x182fe0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_Dxt1NoiseEnable 0x1823c0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_EdgeAntiAlias 0x182180 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_FillMode 0x182510 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_FogColor 0x1821e0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_FrontFace 0x1822a0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_LineWidth 0x182360 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_LogicOp 0x1824c0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_MultiSampleAntiAlias 0x183000 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_MultiSampleMask 0x183050 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_MultiSampleType 0x182040 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_NormalizeNormals 0x1822e0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_OcclusionCullEnable 0x182ee0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_PSTextureModes 0x182070 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_RopZCmpAlwaysRead 0x182fa0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_RopZRead 0x182fc0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_ShadowFunc 0x1821b0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_Simple 0x1820a0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_StencilCullEnable 0x182f40 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_StencilEnable 0x182dc0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_StencilFail 0x182e40 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_TextureFactor 0x182310 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_TwoSidedLighting 0x1825a0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_VertexBlend 0x182600 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_YuvEnable 0x182eb0 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_ZBias 0x182440 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderState_ZEnable 0x182d50 XbSymbolDatabase, prototype checked
+D3DDevice_SetRenderTarget 0x1812c0 XbSymbolDatabase, prototype checked
+D3DDevice_SetShaderConstantMode 0x183c50 XbSymbolDatabase, prototype checked
+D3DDevice_SetSoftDisplayFilter 0x1811c0 XbSymbolDatabase, prototype checked
+D3DDevice_SetStreamSource 0x183ad0 XbSymbolDatabase, prototype checked
+D3DDevice_SetTexture 0x181950 XbSymbolDatabase, prototype checked
+D3DDevice_SetTextureState_BorderColor 0x182780 XbSymbolDatabase, prototype checked
+D3DDevice_SetTextureState_BumpEnv 0x182720 XbSymbolDatabase, prototype checked
+D3DDevice_SetTextureState_ColorKeyColor 0x1827c0 XbSymbolDatabase, prototype checked
+D3DDevice_SetTextureState_Deferred 0x182150 XbSymbolDatabase, prototype checked
+D3DDevice_SetTextureState_TexCoordIndex 0x182640 XbSymbolDatabase, prototype checked
+D3DDevice_SetTransform 0x180ef0 XbSymbolDatabase, prototype checked
+D3DDevice_SetVertexData2f 0x184540 XbSymbolDatabase, prototype checked
+D3DDevice_SetVertexData2s 0x1845e0 XbSymbolDatabase, prototype checked
+D3DDevice_SetVertexData4f 0x184580 XbSymbolDatabase, prototype checked
+D3DDevice_SetVertexData4ub 0x184620 XbSymbolDatabase, prototype checked
+D3DDevice_SetVertexDataColor 0x184670 XbSymbolDatabase, prototype checked
+D3DDevice_SetVertexShader 0x183eb0 XbSymbolDatabase, prototype checked
+D3DDevice_SetVertexShaderConstant 0x183f90 XbSymbolDatabase, prototype checked
+D3DDevice_SetVerticalBlankCallback 0x181150 XbSymbolDatabase, prototype checked
+D3DDevice_SetViewport 0x1817f0 XbSymbolDatabase, prototype checked
+D3DPalette_Lock 0x185840 XbSymbolDatabase, prototype checked
+D3DResource_BlockUntilNotBusy 0x184850 XbSymbolDatabase, prototype checked
+D3DResource_IsBusy 0x184a20 XbSymbolDatabase, prototype checked
+D3DResource_Register 0x184ab0 XbSymbolDatabase, prototype checked
+D3DResource_Release 0x1849d0 XbSymbolDatabase, prototype checked
+D3DSurface_GetDesc 0x185990 XbSymbolDatabase, prototype checked
+D3DSurface_LockRect 0x1859b0 XbSymbolDatabase, prototype checked
+D3DTexture_GetSurfaceLevel 0x184b60 XbSymbolDatabase, prototype checked
+D3DTexture_LockRect 0x184bb0 XbSymbolDatabase, prototype checked
+D3DVertexBuffer_Lock 0x1858d0 XbSymbolDatabase, prototype checked
+D3DVolumeTexture_LockBox 0x184bf0 XbSymbolDatabase, prototype checked
+D3D__RenderState 0x18f380 XbSymbolDatabase, prototype checked
+D3D__TextureState 0x18f180 XbSymbolDatabase, prototype checked
+DeleteFileA 0x14dcf XbSymbolDatabase, prototype checked
+Direct3D_CreateDevice 0x184ce0 XbSymbolDatabase, prototype checked
+DirectSoundCreate 0x194a9f XbSymbolDatabase, prototype checked
+DirectSoundCreateBuffer 0x194b3d XbSymbolDatabase, prototype checked
+DirectSoundDoWork 0x193e27 XbSymbolDatabase, prototype checked
+DirectSoundUseFullHRTF 0x192d8c XbSymbolDatabase, prototype checked
+FindFirstFileA 0x154fc XbSymbolDatabase, prototype checked
+FindNextFileA 0x15609 XbSymbolDatabase, prototype checked
+GetDiskFreeSpaceExA 0x156b3 XbSymbolDatabase, prototype checked
+GetExitCodeThread 0x12ab6 XbSymbolDatabase, prototype checked
+GetLastError 0x1364f XbSymbolDatabase, prototype checked
+GetSystemTime 0x12fcc XbSymbolDatabase, prototype checked
+GetTickCount 0x13030 XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_Play 0x194414 XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_Release 0x192d76 XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_SetBufferData 0x194450 XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_SetCurrentPosition 0x193d03 XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_SetLoopRegion 0x193ca7 XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_SetPitch 0x193c6f XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_SetVolume 0x193c53 XbSymbolDatabase, prototype checked
+IDirectSoundBuffer_Stop 0x194438 XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetConeAngles 0x193d68 XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetConeOrientation 0x193d6d XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetConeOutsideVolume 0x193d96 XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetI3DL2Source 0x193e22 XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetMaxDistance 0x193d9b XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetMinDistance 0x193db3 XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetMixBinVolumes 0x193d63 XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetMode 0x193dcb XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetPosition 0x193dd0 XbSymbolDatabase, prototype checked
+IDirectSoundStream_SetVelocity 0x193df9 XbSymbolDatabase, prototype checked
+IDirectSound_CommitDeferredSettings 0x193c1b XbSymbolDatabase, prototype checked
+IDirectSound_CreateSoundBuffer 0x19494b XbSymbolDatabase, prototype checked
+IDirectSound_CreateSoundStream 0x19496f XbSymbolDatabase, prototype checked
+IDirectSound_DownloadEffectsImage 0x193ad8 XbSymbolDatabase, prototype checked
+IDirectSound_GetCaps 0x193aa0 XbSymbolDatabase, prototype checked
+IDirectSound_GetSpeakerConfig 0x193abc XbSymbolDatabase, prototype checked
+IDirectSound_Release 0x192d5b XbSymbolDatabase, prototype checked
+IDirectSound_SetDistanceFactor 0x193b1f XbSymbolDatabase, prototype checked
+IDirectSound_SetI3DL2Listener 0x193c33 XbSymbolDatabase, prototype checked
+IDirectSound_SetMixBinHeadroom 0x193aff XbSymbolDatabase, prototype checked
+IDirectSound_SetOrientation 0x193b43 XbSymbolDatabase, prototype checked
+IDirectSound_SetPosition 0x193b8d XbSymbolDatabase, prototype checked
+IDirectSound_SetRolloffFactor 0x193bc2 XbSymbolDatabase, prototype checked
+IDirectSound_SetVelocity 0x193be6 XbSymbolDatabase, prototype checked
+LocalFree 0x13567 XbSymbolDatabase, prototype checked
+MoveFileA 0x14d39 XbSymbolDatabase, prototype checked
+OutputDebugStringA 0x1361d XbSymbolDatabase, prototype checked
+ReadFile 0x14e5d XbSymbolDatabase, prototype checked
+RemoveDirectoryA 0x14b38 XbSymbolDatabase, prototype checked
+ResetEvent 0x12ce3 XbSymbolDatabase, prototype checked
+SetEvent 0x12cc3 XbSymbolDatabase, prototype checked
+SetFilePointer 0x150a4 XbSymbolDatabase, prototype checked
+SetLastError 0x13677 XbSymbolDatabase, prototype checked
+retail_SetThreadPriority 0x129d5 XbSymbolDatabase, prototype checked
+Sleep 0x12ebb XbSymbolDatabase, prototype checked
+SwitchToThread 0x12aa3 XbSymbolDatabase, prototype checked
+WSAGetLastError 0x1af688 XbSymbolDatabase, prototype checked
+WSAStartup 0x1af56b XbSymbolDatabase, prototype checked
+WriteFile 0x14f4a XbSymbolDatabase, prototype checked
+XCalculateSignatureBegin 0x15ba5 XbSymbolDatabase, prototype checked
+XGetLaunchInfo 0x13796 XbSymbolDatabase, prototype checked
+retail_XInputClose 0x1d1381 XbSymbolDatabase, prototype checked
+retail_XInputGetState 0x1d138d XbSymbolDatabase, prototype checked
+retail_XInputSetState 0x1d13fe XbSymbolDatabase, prototype checked
+XLaunchNewImageA 0x1383f XbSymbolDatabase, prototype checked
+XNetGetEthernetLinkStatus 0x190dc XbSymbolDatabase, prototype checked
+XNetStartup 0x1af55d XbSymbolDatabase, prototype checked
+retail_XNetXnAddrToInAddr 0x1af471 XbSymbolDatabase, prototype checked
+retail_ws_socket 0x1b102c XNet public stub (map sharing net.c)
+retail_ws_bind 0x1b0d13 XNet public stub (net.c)
+halo_ws_listen 0x1b0572 XNet public stub (net.c)
+halo_ws_accept 0x1b0d29 XNet public stub (net.c)
+retail_ws_connect 0x1b0d1e XNet public stub (net.c)
+retail_ws_send 0x1b14ea XNet public stub (net.c)
+retail_ws_recv 0x1b149e XNet public stub (net.c)
+retail_ws_closesocket 0x1b1572 XNet public stub (net.c)
+halo_ws_ioctlsocket 0x1b01b9 XNet public stub (net.c)
+halo_ws_select 0x1b0d34 XNet public stub (net.c)
+halo_ws_setsockopt 0x1b0d04 XNet public stub (net.c)
+retail_ws_sendto 0x1b158c XNet public stub (net.c)
+retail_ws_recvfrom 0x1b157d XNet public stub (net.c)
+halo_ws_getsockopt 0x1b03e2 XNet public stub, internal ret 0x14
+halo_ws_getsockname 0x1b03f1 XNet public stub: needs bound (0x10), local port
+halo_ws_getpeername 0x1b03fc XNet public stub: needs connected (0x20), remote addr
+retail_XNetCreateKey 0x1af3e0 random kid(8)+key(16), ret 8
+retail_XNetRegisterKey 0x1af420 ret 8
+retail_XNetUnregisterKey 0x1af437 called by transport_pop_key in retail
+XNetRandom 0x1af44e called with (global_nonce, 8) in retail
+XNetGetTitleXnAddr 0x1af488 called with &global_address in retail
+XNetCleanup 0x1af652 retail transport startup failure path
+WSACleanup 0x1af65a retail transport startup failure path
+__WSAFDIsSet 0x1af68d fd_set scan, ret 8
+retail_XPhysicalAlloc 0x1565a MmAllocateContiguousMemoryEx wrapper
+XPhysicalFree 0x156ad jmp MmFreeContiguousMemory
+XPhysicalProtect 0x1569d jmp MmSetAddressProtect
+retail_GlobalAlloc 0x13585 RtlAllocateHeap(XapiProcessHeap) (LocalAlloc, folded)
+GlobalReAlloc 0x135a2 RtlReAllocateHeap (LocalReAlloc, folded)
+LocalAlloc 0x13585 (net.c)
+LocalReAlloc 0x135a2 
+LocalSize 0x13553 RtlSizeHeap
+GlobalMemoryStatus 0x135ce MmQueryStatistics
+QueryPerformanceCounter 0x24789 KeQueryPerformanceCounter
+QueryPerformanceFrequency 0x2479e KeQueryPerformanceFrequency
+ReleaseMutex 0x12d59 NtReleaseMutant
+ResumeThread 0x12a27 NtResumeThread
+SleepEx 0x12e3d KeDelayExecutionThread
+SystemTimeToFileTime 0x130a3 RtlTimeFieldsToTime
+WaitForSingleObjectEx 0x12d79 NtWaitForSingleObjectEx
+WaitForSingleObject 0x12e8f -> WaitForSingleObjectEx(h, t, FALSE)
+GetFileAttributesA 0x14c6c NtQueryFullAttributesFile
+GetFileAttributesExA 0x14cb7 NtQueryFullAttributesFile
+SetFileAttributesA 0x14bc6 open + NtSetInformationFile
+GetFileTime 0x15276 FileNetworkOpenInformation
+SetFileTime 0x152dc 
+SetEndOfFile 0x15020 FilePosition -> FileEndOfFile
+GetFileSizeEx 0x15375 FileNetworkOpenInformation EndOfFile
+ReadFileEx 0x153b3 NtReadFile + APC dispatcher
+WriteFileEx 0x15404 NtWriteFile + APC dispatcher
+CopyFileA 0x14aad -> CopyFileExA 0x147cb
+XCreateSaveGame 0x1417c SaveMeta.xbx
+XDeleteSaveGame 0x143df 
+XFindFirstSaveGame 0x144ae 
+XFindNextSaveGame 0x145b5 
+XFindClose 0x145fc 
+XFindFirstNicknameW 0x13c4a called by network_game_manager in retail
+XSetNicknameW 0x13952 called by network_game_manager in retail
+XCalculateSignatureUpdate 0x15be3 follows Begin in retail saved games
+XCalculateSignatureEnd 0x15bfd 
+DirectSoundGetStreamVoiceStatus 0x19c5e7 (voice status & 0x10000002) != 0
+DirectSoundStopStream 0x19c5ff voice vtable +0x10 (0, 0)
+IDirectSoundStream_SetFrequency 0x194470 CDirectSoundStream_SetFrequency
+IDirectSoundStream_SetMixBins 0x194484 CDirectSoundStream_SetMixBins
+IDirectSoundStream_SetVolume 0x193d4f CDirectSoundStream_SetVolume
+Direct3DCreate8 0x185af0 returns 1
+Direct3D_SetPushBufferSize 0x184cc0 D3D_SetPushBufferSize
+D3DTexture_GetLevelDesc 0x184b50 jmp D3DBaseTexture_GetLevelDesc
+D3D__IndexData 0x18f17c set by D3DDevice_SetIndices
+XDEVICE_TYPE_GAMEPAD_TABLE 0x1cf4fc passed to XGetDeviceChanges/XInputOpen in retail
+XDEVICE_TYPE_MEMORY_UNIT_TABLE 0x1cf570 g_DeviceType_MU
+retail_XInitDevices 0x1cfd15 XInitDevices (wrapped: no debug keyboard)
+retail_XGetDeviceChanges 0x1d129f XGetDeviceChanges (wrapped)
+retail_XInputOpen 0x1d130c XInputOpen (wrapped)
+RADSetMemory 0x1b6c80 retail bink_playback (alloc, free)
+BinkSetSoundSystem 0x1b6e50 (BinkOpenDirectSound, dsound)
+BinkOpenDirectSound 0x1b9a70 
+BinkSetIOSize 0x1b71a0 
+BinkOpen 0x1b83c0 
+BinkWait 0x1b7f30 
+BinkDoFrame 0x1b7990 
+BinkNextFrame 0x1b9020 
+BinkCopyToBuffer 0x1b7380 
+BinkClose 0x1b9180 
+ExQueryNonVolatileSetting 0x1912e kernel import stub (jmp [0x1d6754])
+retail_mainXapiStartup_call_main 0x15cb1 call main(0,0,0) (patched to oxbox_entry)
+D3DXGetErrorStringA 0x192739 D3DX section, called with (hr, buffer, 0x3ff) by retail rasterizer errors
+FlushFileBuffers 0x1534e NtFlushBuffersFile (net.c)
+FileTimeToLocalFileTime 0x1350b XAPI (Halo Universal stats.c)

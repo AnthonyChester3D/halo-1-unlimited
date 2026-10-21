@@ -238,6 +238,7 @@ static void rasterizer_draw_hires_character_with_dropshadow(
 
 
 static struct hardware_character_cache hardware_character_cache;
+unsigned long oxbox_text_cache_misses; /* oxbox: characters cached (xbox/oxbox_input.c logs it every 10 s) */
 static struct bitmap_data *hires_text_atlas = NULL;
 static long hires_text_font = NONE;
 /* port: the high-res text's fonts of the font tags of the map (forgotten
@@ -295,7 +296,11 @@ rasterizer_text_cache_initialize(
 			hardware_character_cache.bitmap = bitmap;
 			hardware_character_cache.initialized = TRUE;
 
-			/* port: the high-res text atlas's placeholder */
+			/* port: the high-res text atlas's placeholder (oxbox: none, the Xbox draws its own text: 128 KB) */
+#if defined(HALO_XBOX_TARGET)
+			hires_text_atlas = NULL;
+			if (0)
+#endif
 			hires_text_atlas = bitmap_2d_new(
 				HIRES_TEXT_ATLAS_BITMAP_SIZE,
 				HIRES_TEXT_ATLAS_BITMAP_SIZE,
@@ -1084,6 +1089,13 @@ the border goes without. */
 static short hardware_character_padding(
 	struct font_character const *font_character)
 {
+#if defined(HALO_XBOX_TARGET) && !defined(OXBOX_AB_TEST)
+	/* oxbox: the Xbox's 640x480 samples texel for pixel, as retail packs them (edge to edge, 0x5E520): the
+	border cost the 128x128 cache room, and the level select's large title font then pushed characters out
+	and cached them again every frame, which flickered */
+	(void)font_character;
+	return 0;
+#endif
 	return font_character &&
 		font_character->bitmap_width + 2 <= HARDWARE_CHARACTER_CACHE_BITMAP_WIDTH &&
 		font_character->bitmap_height + 2 <= HARDWARE_CHARACTER_CACHE_BITMAP_HEIGHT ? 1 : 0;
@@ -1135,6 +1147,7 @@ cache_hardware_format_character(
 		match_assert("c:\\halo\\SOURCE\\rasterizer\\rasterizer_text.c", 646, font_character->bitmap_height<=HARDWARE_CHARACTER_CACHE_BITMAP_HEIGHT);
 
 		font_character->pad = magic_number;
+		oxbox_text_cache_misses++;
 
 		if (cell_width + hardware_character_cache.x0 > HARDWARE_CHARACTER_CACHE_BITMAP_WIDTH)
 		{

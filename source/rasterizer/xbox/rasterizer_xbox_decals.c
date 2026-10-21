@@ -298,7 +298,11 @@ view, and a draw is a call into the browser on the web and work for the
 driver everywhere; on the Xbox each was a few words of push buffer. The
 vertices are the decal's own (position, then its texture coordinates as the
 declaration's normalized shorts), given as immediate data. */
+#if defined(HALO_XBOX_TARGET)
+#define DECAL_BATCH_MAXIMUM_DECALS 1 /* (oxbox: not batched) */
+#else
 #define DECAL_BATCH_MAXIMUM_DECALS 256
+#endif
 static struct
 {
 	struct decal_vertex const *vertices;
@@ -758,11 +762,21 @@ void _rasterizer_decals_draw(
 	if (!rasterizer_debug_options.draw_environment_decals)
 		return;
 
+#if defined(OXBOX_STRIP)
+	/* oxbox: in the cluster's own order, as the Xbox game (OpenCE re-sorted them for its batches, which the
+	Xbox build doesn't make: 32 KB of sort buffers and a sort each frame) */
+	for (decal_index = decal_get_first_decal_index(cluster_index, local_layer);
+		decal_index != NONE;
+		decal_index = DECAL_GET(decal_index)->next_decal_index)
+	{
+		struct decal_datum *decal = DECAL_GET(decal_index);
+#else
 	/* port: in the order rasterizer_decals_draw_order gives */
 	decal_count = rasterizer_decals_draw_order(cluster_index);
 	for (decal_order_index = 0; decal_order_index < decal_count; decal_order_index++)
 	{
 		struct decal_datum *decal = DECAL_GET(decal_index = decal_draw_order[decal_order_index]);
+#endif
 		struct decal_definition *definition = decal_definition_get(decal->definition_index);
 		struct decal_shader_definition *shader = &definition->shader;
 		short framebuffer_blend_function = shader->framebuffer_blend_function;
@@ -864,6 +878,23 @@ void _rasterizer_decals_draw(
 			"c:\\halo\\SOURCE\\rasterizer\\xbox\\rasterizer_xbox_decals.c",
 			511,
 			vertex_data_offset%sizeof(struct decal_vertex)==0);
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: drawn as the Xbox game draws them, from the decal vertex buffer (no per-vertex calls, no
+		lock of a buffer the GPU may still be reading) */
+		IDirect3DDevice8_SetVertexData4ub(
+			global_d3d_device,
+			9,
+			color >> 16,
+			color >> 8,
+			color,
+			PIXEL32_COMPONENT_MASK - intensity);
+		IDirect3DDevice8_DrawPrimitive(
+			global_d3d_device,
+			D3DPT_QUADLIST,
+			vertex_data_offset/sizeof(struct decal_vertex),
+			decal->quad_count);
+		if (0)
+#endif
 		/* port: batched (decal_batch), in place of
 		SetVertexData4ub(9, color) and DrawPrimitive(D3DPT_QUADLIST) */
 		{

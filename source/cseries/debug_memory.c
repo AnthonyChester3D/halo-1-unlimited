@@ -466,6 +466,14 @@ void *debug_malloc(
 	debug_check_memory_globals(file, line);
 
 	header = system_malloc(allocation_size);
+#if defined(HALO_XBOX_TARGET)
+	if (size >= 8192)
+	{
+		void platform_log(char const *format, ...);
+
+		platform_log("debug_malloc %u KB at %s:%ld", size / 1024, file ? file : "?", line);
+	}
+#endif
 	if (header != NULL)
 	{
 		header->file = file;

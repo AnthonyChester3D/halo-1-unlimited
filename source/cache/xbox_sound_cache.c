@@ -114,10 +114,15 @@ symbols in this file:
 /* port: the cache's pages (sound_cache_new), named for the size check */
 enum
 {
-	/* port: the native builds' cache (halo_port_capacity.h; 1024 pages) */
-	SOUND_CACHE_PAGE_COUNT = HALO_PORT_SOUND_CACHE_SIZE >> 12,
 	SOUND_CACHE_PAGE_SIZE_BITS = 12,
+	/* port: the most pages a cache can have (the debug view's array): 8 MB of them */
+	SOUND_CACHE_PAGE_COUNT_MAXIMUM = 0x800,
 };
+
+/* port: the native builds' cache (halo_port_capacity.h; 1024 pages), and oxbox's on a console with 128 MB: the
+size physical_memory_allocate chose (sound_cache_new) */
+static long sound_cache_page_count = HALO_PORT_SOUND_CACHE_SIZE >> 12;
+#define SOUND_CACHE_PAGE_COUNT sound_cache_page_count
 
 /* ---------- macros */
 
@@ -205,6 +210,10 @@ short assertion_count;
 boolean debug_sound_cache;
 boolean debug_sound_reference_counts;
 static struct xbox_sound_cache_globals xbox_sound_cache_globals = { 0 };
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the sounds read into the cache (main.c's long frames, oxbox_input.c's memory line) */
+unsigned long oxbox_sound_reads, oxbox_sound_read_bytes;
+#endif
 
 /* ---------- public code */
 
@@ -372,6 +381,9 @@ void sound_cache_sound_hardware_unlock(
 void sound_cache_new(
 	void)
 {
+	/* port: the size physical_memory_allocate chose (oxbox: larger on a console with 128 MB) */
+	sound_cache_page_count = MIN(physical_memory_get_sound_cache_size() >> SOUND_CACHE_PAGE_SIZE_BITS,
+		(long)SOUND_CACHE_PAGE_COUNT_MAXIMUM);
 	xbox_sound_cache_globals.cache_sounds = data_new(
 		"xbox sound",
 		512,
@@ -617,6 +629,12 @@ static void sound_cache_start_loading_sound(
 			}
 			else
 			{
+#if defined(HALO_XBOX_TARGET)
+				extern unsigned long oxbox_sound_reads, oxbox_sound_read_bytes;
+
+				oxbox_sound_reads++;
+				oxbox_sound_read_bytes += sound->samples.size;
+#endif
 				cache_file_read(
 					sound->cache_tag_index,
 					sound->samples.file_offset,
@@ -789,8 +807,8 @@ void sound_cache_debug_render(
 	if (debug_sound_cache)
 	{
 		/* port: (of the native builds' pages: the cache fills page_usage) */
-		short rows = SOUND_CACHE_PAGE_COUNT / 640;
-		byte page_usage[SOUND_CACHE_PAGE_COUNT];
+		short rows = (short)(SOUND_CACHE_PAGE_COUNT / 640);
+		byte page_usage[SOUND_CACHE_PAGE_COUNT_MAXIMUM];
 		long x;
 		real_argb_color const *colors[4];
 

@@ -10,7 +10,13 @@ PROFILE.H
 
 enum
 {
+#ifdef OXBOX_STRIP
+	/* oxbox: the profiler never runs on the Xbox (MAXIMUM_PROFILE_FRAMES 1): each of the ~67 sections kept 120
+	frames of history, 96 KB of .data */
+	MAXIMUM_PROFILE_HISTORY = 1,
+#else
 	MAXIMUM_PROFILE_HISTORY = 120,
+#endif
 };
 
 enum profile_sort_mode
@@ -84,8 +90,6 @@ struct profile_section
 	__int64 peak_elapsed_timebase;
 };
 
-typedef char profile_section_size_assert[
-	sizeof(struct profile_section) == 0x5F8 ? 1 : -1];
 typedef char profile_section_recent_call_count_offset_assert[
 	offsetof(struct profile_section, recent_call_count) == 0x18 ? 1 : -1];
 typedef char profile_section_reserved1C_offset_assert[
@@ -94,6 +98,10 @@ typedef char profile_section_recent_elapsed_timebase_offset_assert[
 	offsetof(struct profile_section, recent_elapsed_timebase) == 0x20 ? 1 : -1];
 typedef char profile_section_frame_call_count_history_offset_assert[
 	offsetof(struct profile_section, frame_call_count_history) == 0x28 ? 1 : -1];
+/* (oxbox: the history is 1 frame long, and what follows it moves up) */
+#ifndef OXBOX_STRIP
+typedef char profile_section_size_assert[
+	sizeof(struct profile_section) == 0x5F8 ? 1 : -1];
 typedef char profile_section_frame_elapsed_timebase_history_offset_assert[
 	offsetof(struct profile_section, frame_elapsed_timebase_history) == 0x208 ? 1 : -1];
 typedef char profile_section_sample_count_offset_assert[
@@ -114,6 +122,7 @@ typedef char profile_section_reserved5EC_offset_assert[
 	offsetof(struct profile_section, reserved5EC) == 0x5EC ? 1 : -1];
 typedef char profile_section_peak_elapsed_timebase_offset_assert[
 	offsetof(struct profile_section, peak_elapsed_timebase) == 0x5F0 ? 1 : -1];
+#endif
 
 /* ---------- prototypes/PROFILE.C */
 

@@ -214,6 +214,16 @@ static wchar_t *fallback_string(long tag_index, short string_index)
 	char const *tag_name = tag_get_name(tag_index);
 	short fallback_index = string_index - FIRST_FALLBACK_MULTIPLAYER_GAME_TEXT_STRING;
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: Halo Universal's texts past the tags' (port/linux/game/hmp_maps.c): folder maps' names and descriptions,
+	the lobby's live map name, END GAME's */
+	if (string_index >= 0x4000)
+	{
+		extern wchar_t *hmp_string(long tag_index, short string_index);
+
+		return hmp_string(tag_index, string_index);
+	}
+#endif
 	/* (a Custom Edition map's name or description, by its display index) */
 	if (!csstrcasecmp(tag_name, LEVEL_NAMES_TAG_NAME) || !csstrcasecmp(tag_name, PC_LEVEL_NAMES_TAG_NAME))
 		return custom_edition_maps_name(string_index);

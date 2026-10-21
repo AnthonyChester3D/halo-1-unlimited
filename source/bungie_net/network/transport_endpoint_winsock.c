@@ -299,7 +299,13 @@ enum
 	not acknowledged, up to 128 ticks of 3.9 KB with 128 players, and the
 	host's connection to its own client all it sends in one frame; a full
 	buffer blocks the host (network_connection_write) */
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: XNet's buffers come out of its private pool (transport_endpoint_set_winsock.c: 256 KB);
+	the January game asked 16 KB, 16 players' traffic fits 64 KB */
+	MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE = 64 * 1024,
+#else
 	MINIMUM_ENDPOINT_SOCKET_BUFFER_SIZE = 1024 * 1024,
+#endif
 };
 
 /* ---------- macros */
@@ -1783,6 +1789,18 @@ static SOCKET create_socket(
 		{
 			winsock_error_to_string(WSAGetLastError());
 		}
+#if defined(HALO_XBOX_TARGET)
+		{
+			void platform_log(char const *format, ...);
+			int send_size = 0, receive_size = 0;
+			int length = sizeof(int);
+
+			getsockopt(endpoint_socket, SOL_SOCKET, SO_SNDBUF, (char *)&send_size, &length);
+			length = sizeof(int);
+			getsockopt(endpoint_socket, SOL_SOCKET, SO_RCVBUF, (char *)&receive_size, &length);
+			platform_log("socket buffers: send %d, receive %d (type %d)", send_size, receive_size, socket_type);
+		}
+#endif
 #ifndef HALO_WINDOWS
 		}
 #endif

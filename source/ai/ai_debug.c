@@ -206,6 +206,15 @@ struct ai_debug_state ai_debug;
 
 struct actor_debug_info *actor_debug_array = NULL;
 struct path_debug_storage *actor_path_debug_array = NULL;
+
+/* oxbox: the record ACTOR_DEBUG_INFO gives when there are none (ai_debug.h) */
+struct actor_debug_info *actor_debug_scratch(
+	void)
+{
+	static struct actor_debug_info scratch;
+
+	return &scratch;
+}
 static short global_ai_debug_path_render_id = 0;
 
 real_point3d global_ai_debug_drawstack_next_position;
@@ -266,6 +275,11 @@ void ai_debug_initialize(
 	ai_debug.last_render_id = 1;
 	ai_debug.render = TRUE;
 
+#ifdef HALO_XBOX_TARGET
+	/* oxbox: the debug build's AI records (6.6 MB and 3.7 MB) don't fit a 64 MB Xbox beside the game; without
+	them the AI debug views are off, and only maps with actors need them (to do: compile the writes out) */
+	return;
+#endif
 	actor_debug_array = actor_debug_array==NULL ? (struct actor_debug_info *)debug_malloc(sizeof(*actor_debug_array) * MAXIMUM_NUMBER_OF_ACTORS, FALSE, "c:\\halo\\SOURCE\\ai\\ai_debug.c", 147) : actor_debug_array;
 	actor_path_debug_array = actor_path_debug_array==NULL ? (struct path_debug_storage *)debug_malloc(sizeof(*actor_path_debug_array) * MAXIMUM_NUMBER_OF_ACTOR_PATHS, FALSE, "c:\\halo\\SOURCE\\ai\\ai_debug.c", 148) : actor_path_debug_array;
 
@@ -318,6 +332,10 @@ void ai_debug_dispose_from_old_map(
 void ai_debug_clear_storage(
 	void)
 {
+#ifdef HALO_XBOX_TARGET
+	if (!actor_debug_array || !actor_path_debug_array)
+		return;
+#endif
 	match_assert("c:\\halo\\SOURCE\\ai\\ai_debug.c", 208, actor_debug_array);
 
 	memset(actor_debug_array, 0, sizeof(*actor_debug_array) * MAXIMUM_NUMBER_OF_ACTORS);
@@ -332,6 +350,10 @@ void ai_debug_actor_deleted(
 	long actor_index)
 {
 	short path_index;
+
+	/* oxbox: none to clear without the debug records (ai_debug_initialize) */
+	if (!actor_path_debug_array)
+		return;
 
 	for (path_index = 0; path_index<MAXIMUM_NUMBER_OF_ACTOR_PATHS; ++path_index)
 	{
@@ -419,6 +441,14 @@ boolean ai_debug_highlight_cluster(
 void ai_debug_render(
 	void)
 {
+#if defined(OXBOX_STRIP)
+	/* oxbox: no AI debug views at all (and their drawing code is left out of the XBE) */
+	return;
+#elif defined(HALO_XBOX_TARGET)
+	/* oxbox: no AI debug records, no AI debug views (ai_debug_initialize) */
+	if (!actor_debug_array || !actor_path_debug_array)
+		return;
+#endif
 	if (ai_globals->ai_initialized_for_map)
 	{
 		global_ai_debug_string_position = rasterizer_globals.reserved04.frame_bounds.y1 - 20;
@@ -1107,6 +1137,7 @@ static void ai_debug_render_actor(
 				}
 			}
 
+#ifndef OXBOX_STRIP /* (oxbox: the avoidance data isn't kept: ai_debug.h) */
 			/* Avoidance intermediate */
 
 			if (ai_debug.render_vector_avoidance_intermediate)
@@ -1176,6 +1207,7 @@ static void ai_debug_render_actor(
 						global_real_argb_aqua);
 				}
 			}
+#endif
 
 			{
 				boolean found_player = FALSE;
@@ -1220,7 +1252,9 @@ static void ai_debug_render_actor(
 
 				if (found_player)
 				{
+#ifndef OXBOX_STRIP
 					render_debug_vector(TRUE, &actor_debug_info->avoidance_data.origin, &actor_debug_info->field_6540, 1.f, global_real_argb_pink);
+#endif
 					render_debug_string_at_point(TRUE, ai_debug_drawstack(), csprintf(temporary, "move emergency %.2f", actor_debug_info->field_654C), global_real_argb_pink);
 				}
 			}
@@ -4624,12 +4658,18 @@ void ai_debug_initialize_for_new_map(
 void ai_debug_update(
 	void)
 {
+#ifdef HALO_XBOX_TARGET
+	/* oxbox: no AI debug records (ai_debug_initialize) */
+	if (!actor_debug_array || !actor_path_debug_array)
+		return;
+#endif
 	if (ai_debug.render_lineofsight)
 	{
 		ai_debug.lineofsight_point_count = 0;
 		ai_debug.lineofsight_pair_count = 0;
 	}
 
+#ifndef OXBOX_STRIP /* oxbox: the debug path test (its records are left out: ai_debug.h) */
 	if (ai_debug.path)
 	{
 		if (!ai_debug.path_start_freeze)
@@ -4734,6 +4774,7 @@ void ai_debug_update(
 			ai_debug.path_storage.actor_index = NONE;
 		}
 	}
+#endif
 
 	if (ai_debug.fix_defending_guard_firing_positions && game_in_editor())
 	{
@@ -4977,6 +5018,10 @@ struct path_debug_storage *ai_debug_get_path_storage(
 {
 	short storage_index = NONE;
 	short index;
+
+	/* oxbox: no debug path records on the Xbox (ai_debug_initialize): the path code takes NULL as none */
+	if (!actor_path_debug_array)
+		return NULL;
 
 	for (index = 0; index<MAXIMUM_AI_DEBUG_PATH_STORAGE; index++)
 	{
@@ -5581,6 +5626,7 @@ static void ai_debug_render_vehicles_enterable(
 static void ai_debug_render_path(
 	void)
 {
+#ifndef OXBOX_STRIP
 	if (ai_debug.path_start_valid && ai_debug.path_end_valid && !ai_debug.field_608A8)
 	{
 		real_argb_color const *color;
@@ -5613,6 +5659,7 @@ static void ai_debug_render_path(
 	}
 
 	return;
+#endif
 }
 
 static void ai_debug_render_paths_failed(

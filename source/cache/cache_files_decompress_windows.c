@@ -744,7 +744,13 @@ static void cache_copy_initialize_file_data(
 	self->source_file = CreateFile(
 		self->src_name,
 		GENERIC_READ,
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: others may read it meanwhile (map sharing sends the map a host is precaching; its version is read
+		from its header: port/linux/game/hmp_share.c) */
+		0x00000001 /* FILE_SHARE_READ */,
+#else
 		0,
+#endif
 		NULL,
 		OPEN_EXISTING,
 		FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED,

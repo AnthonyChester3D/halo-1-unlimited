@@ -476,7 +476,12 @@ static struct
 } coop_events;
 
 /* host: each device group as last sent, indexed by group */
+#if defined(OXBOX_STRIP)
+/* (oxbox: a co-op host's alone, allocated with its object records: coop_host_tables_update) */
+static struct coop_host_devices
+#else
 static struct
+#endif
 {
 	/* false until the first tick, which records the map's starting state */
 	boolean started;
@@ -491,7 +496,13 @@ static struct
 	boolean moved[MAXIMUM_DEVICE_GROUPS];
 	short refresh_next, moved_refresh_next;
 	struct distributed_coop_device_groups_message message;
+#if defined(OXBOX_STRIP)
+	short group_indices[MAXIMUM_DEVICE_GROUPS];
+} *host_devices_block;
+#define host_devices (*host_devices_block)
+#else
 } host_devices;
+#endif
 
 /* The players' maximum vitality, once the scripts have set a player's: on
 the host as they set it, on a client as the host's presentation has it.
@@ -859,11 +870,22 @@ within a tick or two instead of after a pass through hundreds. */
 static void host_send_device_groups(
 	void)
 {
+#if defined(OXBOX_STRIP)
+	short *group_indices = host_devices_block ? host_devices_block->group_indices : NULL;
+	struct distributed_coop_device_group *entries = host_devices_block ? host_devices.message.groups : NULL;
+#else
 	static short group_indices[MAXIMUM_DEVICE_GROUPS];
 	struct distributed_coop_device_group *entries = host_devices.message.groups;
-	short count = device_group_entries(entries, group_indices);
+#endif
+	short count;
 	short moved_count = 0, moved_index = 0;
 	short index, sent = 0;
+
+#if defined(OXBOX_STRIP)
+	if (!host_devices_block)
+		return;
+#endif
+	count = device_group_entries(entries, group_indices);
 
 	for (index = 0; index < count; index++)
 	{
@@ -958,13 +980,19 @@ travel, 0 to 1) */
 
 /* host: each device's position and power as last sent, by its absolute
 index, and whether they have changed since the map placed it */
-static struct
+static struct host_sent_devices_entry
 {
 	long object_index;
 	boolean moved;
 	real position;
 	real power;
-} host_sent_devices[MAXIMUM_OBJECTS_PER_MAP];
+}
+#if defined(OXBOX_STRIP)
+/* oxbox: allocated for a co-op host only (coop_host_tables_update) */
+*host_sent_devices;
+#else
+host_sent_devices[MAXIMUM_OBJECTS_PER_MAP];
+#endif
 
 /* host: the structure BSP each client player's machine last said it has,
 NONE before its first input */
@@ -979,6 +1007,9 @@ static void host_send_device_states(
 	struct object_iterator iterator;
 	struct device_datum *device;
 	short count = 0;
+
+	if (!host_sent_devices)
+		return;
 
 	object_iterator_new(&iterator, _object_mask_device, 0);
 	while ((device = object_iterator_next(&iterator)) != NULL)
@@ -1025,13 +1056,19 @@ static void host_send_device_states(
 
 /* host: where each scenery or machine was last sent, by its absolute
 index, and whether it has moved since the map placed it */
-static struct
+static struct host_sent_transforms_entry
 {
 	long object_index;
 	boolean moved;
 	real_point3d position;
 	real_vector3d forward;
-} host_sent_transforms[MAXIMUM_OBJECTS_PER_MAP];
+}
+#if defined(OXBOX_STRIP)
+/* oxbox: allocated for a co-op host only (coop_host_tables_update) */
+*host_sent_transforms;
+#else
+host_sent_transforms[MAXIMUM_OBJECTS_PER_MAP];
+#endif
 
 /* host, each tick: the scenery and machines that moved (and, every
 OBJECT_REFRESH_TICKS, all that ever have) */
@@ -1042,6 +1079,9 @@ static void host_send_object_transforms(
 	struct object_iterator iterator;
 	struct object_datum *object;
 	short count = 0;
+
+	if (!host_sent_transforms)
+		return;
 
 	object_iterator_new(&iterator, COOP_MOVED_OBJECTS, 0);
 	while ((object = object_iterator_next(&iterator)) != NULL)
@@ -1089,13 +1129,19 @@ static void host_send_object_transforms(
 
 /* host: how each object looked when last sent, by its absolute index, and
 whether that has changed since it was made */
-static struct
+static struct host_sent_looks_entry
 {
 	long object_index;
 	boolean changed;
 	byte region_permutations[MAXIMUM_REGIONS_PER_OBJECT];
 	real scale;
-} host_sent_looks[MAXIMUM_OBJECTS_PER_MAP];
+}
+#if defined(OXBOX_STRIP)
+/* oxbox: allocated for a co-op host only (coop_host_tables_update) */
+*host_sent_looks;
+#else
+host_sent_looks[MAXIMUM_OBJECTS_PER_MAP];
+#endif
 
 /* host, each tick: the objects whose looks changed (and, every
 OBJECT_REFRESH_TICKS, all whose looks ever have) */
@@ -1106,6 +1152,9 @@ static void host_send_object_looks(
 	struct object_iterator iterator;
 	struct object_datum *object;
 	short count = 0;
+
+	if (!host_sent_looks)
+		return;
 
 	object_iterator_new(&iterator, _object_mask_all, 0);
 	while ((object = object_iterator_next(&iterator)) != NULL)
@@ -1934,18 +1983,62 @@ static void players_vitality_keep(
 
 /* ---------- public code */
 
+#if defined(OXBOX_STRIP)
+/* oxbox: the host's record of what it sent of each object (138 KB, for
+2,048 objects) is needed only by a co-op host: allocated for a network game
+the host plays on a campaign scenario, freed for any other game (the menus'
+included), so a multiplayer game and single player have the memory free */
+static void coop_host_tables_update(
+	void)
+{
+	static void *block = NULL;
+	boolean needed = game_connection() == _game_connection_network_server &&
+		global_scenario && global_scenario->type == _scenario_type_solo;
+
+	if (needed && !block)
+	{
+		block = malloc(MAXIMUM_OBJECTS_PER_MAP * (sizeof(struct host_sent_devices_entry) +
+			sizeof(struct host_sent_transforms_entry) + sizeof(struct host_sent_looks_entry)) +
+			sizeof(struct coop_host_devices));
+		if (!block)
+			error(_error_silent, "co-op: no memory for the host's object records: objects won't be synced");
+	}
+	else if (!needed && block)
+	{
+		free(block);
+		block = NULL;
+	}
+	host_sent_devices = block;
+	host_sent_transforms = block ? (void *)(host_sent_devices + MAXIMUM_OBJECTS_PER_MAP) : NULL;
+	host_sent_looks = block ? (void *)(host_sent_transforms + MAXIMUM_OBJECTS_PER_MAP) : NULL;
+	/* (and the device groups as last sent: 30 KB) */
+	host_devices_block = block ? (void *)(host_sent_looks + MAXIMUM_OBJECTS_PER_MAP) : NULL;
+}
+#endif
+
 void network_coop_new_game(
 	void)
 {
+#if defined(OXBOX_STRIP)
+	coop_host_tables_update();
+#endif
 	csmemset(&coop_presentation, 0, sizeof(coop_presentation));
 	csmemset(&coop_events, 0, sizeof(coop_events));
+#if defined(OXBOX_STRIP)
+	if (host_devices_block)
+		csmemset(host_devices_block, 0, sizeof(*host_devices_block));
+#else
 	csmemset(&host_devices, 0, sizeof(host_devices));
+#endif
 	csmemset(&client_devices, 0, sizeof(client_devices));
 	csmemset(client_names_differing, 0, sizeof(client_names_differing));
 	csmemset(client_script_sounds.definition_indices, NONE, sizeof(client_script_sounds.definition_indices));
-	csmemset(host_sent_transforms, 0, sizeof(host_sent_transforms));
-	csmemset(host_sent_looks, 0, sizeof(host_sent_looks));
-	csmemset(host_sent_devices, 0, sizeof(host_sent_devices));
+	if (host_sent_transforms)
+		csmemset(host_sent_transforms, 0, MAXIMUM_OBJECTS_PER_MAP * sizeof(struct host_sent_transforms_entry));
+	if (host_sent_looks)
+		csmemset(host_sent_looks, 0, MAXIMUM_OBJECTS_PER_MAP * sizeof(struct host_sent_looks_entry));
+	if (host_sent_devices)
+		csmemset(host_sent_devices, 0, MAXIMUM_OBJECTS_PER_MAP * sizeof(struct host_sent_devices_entry));
 	csmemset(host_player_structure_bsps, NONE, sizeof(host_player_structure_bsps));
 	csmemset(&host_sent_screen_effect, 0, sizeof(host_sent_screen_effect));
 	csmemset(&host_resend, 0, sizeof(host_resend));
@@ -2076,7 +2169,11 @@ boolean network_coop_set_players_vitality(
 void network_coop_note_device_snap(
 	short group_index)
 {
-	if (coop_host() && group_index >= 0 && group_index < MAXIMUM_DEVICE_GROUPS)
+	if (coop_host() && group_index >= 0 && group_index < MAXIMUM_DEVICE_GROUPS
+#if defined(OXBOX_STRIP)
+		&& host_devices_block
+#endif
+		)
 		host_devices.snap_counts[group_index]++;
 }
 

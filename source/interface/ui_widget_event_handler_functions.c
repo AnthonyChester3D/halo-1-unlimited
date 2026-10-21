@@ -2432,6 +2432,15 @@ static boolean network_game_remove_local_player(
 	match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 4073,
 		event && event->controller_index >= 0 && event->controller_index < 4,
 		"valid controller index required to remove player from network game");
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the host's END GAME item has LEAVE GAME's handler (port/linux/game/hmp_game.c) */
+	{
+		extern boolean hmp_game_handles_leave(struct widget_instance *widget);
+
+		if (hmp_game_handles_leave(widget))
+			return TRUE;
+	}
+#endif
 	/* port: a multiplayer map played alone (its pause screen: ui_widget.c's
 	ui_check_for_pause_game) has no network game to leave: the main menu,
 	the map not saved (as the campaign's pause screen quits it) */
@@ -5824,7 +5833,12 @@ static boolean multiplayer_profile_set_for_game(
 		server = global_network_game_server_get();
 		if (saved_game_file_get_path_to_enclosing_directory(profile_index, directory_path))
 			saved_game_file_remember_last_used_multiplayer_variant_directory(directory_path);
+#if defined(OXBOX_STRIP)
+		/* oxbox: the January build's test hook (a variant named in d:\\variant_automation.txt), not retail's */
+		file = NULL;
+#else
 		file = fopen("d:\\variant_automation.txt", "r");
+#endif
 		if (file)
 		{
 			fgets(variant_name, sizeof(variant_name), file);

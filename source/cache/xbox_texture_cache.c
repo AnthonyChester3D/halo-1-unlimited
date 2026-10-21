@@ -129,18 +129,38 @@ typedef char verify_xbox_texture_cache_size[
 
 enum
 {
-	/* port: the native builds' larger cache (halo_port_capacity.h) */
-	XBOX_TEXTURE_CACHE_PAGE_COUNT = HALO_PORT_TEXTURE_CACHE_PAGE_COUNT,
 	XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS = 14,
 	XBOX_TEXTURE_CACHE_PAGE_SIZE = 1 << XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS,
 	XBOX_TEXTURE_CACHE_STEAL_GUARD_SIZE = 0x104000,
-	XBOX_TEXTURE_CACHE_STEALABLE_PAGE_COUNT =
-		XBOX_TEXTURE_CACHE_PAGE_COUNT -
-		2 * (XBOX_TEXTURE_CACHE_STEAL_GUARD_SIZE / XBOX_TEXTURE_CACHE_PAGE_SIZE),
 	XBOX_TEXTURE_CACHE_ENTRY_SIZE = 0x20,
-	XBOX_TEXTURE_CACHE_SIZE = HALO_PORT_TEXTURE_CACHE_SIZE,
 	XBOX_TEXTURE_CACHE_PROTECTION = 0x404,
+	/* port: the most pages a cache can have (a debug view's array): 64 MB of them */
+	XBOX_TEXTURE_CACHE_PAGE_COUNT_MAXIMUM = 0x1000,
 };
+
+/* port: the native builds' larger cache (halo_port_capacity.h), and oxbox's on a console with 128 MB: the size
+physical_memory_allocate chose, in pages (texture_cache_new) */
+static long xbox_texture_cache_page_count = HALO_PORT_TEXTURE_CACHE_PAGE_COUNT;
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the tag cache's memory a map left free, lent to the texture cache for that map (texture_cache_lend):
+the cache's pages then run from the lower of the two memories to the end of the upper, and a locked block keeps
+it off what lies between them (the map's structure bsps, the rest of memory) */
+static struct
+{
+	byte *start;            /* (NULL: none lent) */
+	long size;
+	long gap_block_index;   /* the locked block between the two (NONE: none) */
+	long page_count;        /* the cache's pages while lent (the two memories and what lies between them) */
+} texture_cache_lent = { NULL, 0, NONE, 0 };
+/* the most textures the cache may hold: its own pages' worth and some (more of them fit while memory is lent) */
+#define XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES (xbox_texture_cache_page_count + 512)
+#else
+#define XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES XBOX_TEXTURE_CACHE_PAGE_COUNT
+#endif
+#define XBOX_TEXTURE_CACHE_PAGE_COUNT xbox_texture_cache_page_count
+#define XBOX_TEXTURE_CACHE_SIZE (xbox_texture_cache_page_count * XBOX_TEXTURE_CACHE_PAGE_SIZE)
+#define XBOX_TEXTURE_CACHE_STEALABLE_PAGE_COUNT \
+	(XBOX_TEXTURE_CACHE_PAGE_COUNT - 2 * (XBOX_TEXTURE_CACHE_STEAL_GUARD_SIZE / XBOX_TEXTURE_CACHE_PAGE_SIZE))
 
 enum
 {
@@ -286,6 +306,10 @@ static boolean texture_cache_start_loading_bitmap(
 	boolean block);
 static boolean texture_cache_bitmap_valid(
 	struct bitmap_data *bitmap);
+#if defined(HALO_XBOX_TARGET)
+static void texture_cache_unlend(
+	void);
+#endif
 
 /* ---------- globals */
 
@@ -335,8 +359,16 @@ static const long bitmap_d3d_format_tables
 };
 /* provisional name: the January map leaves this .bss array unnamed; it holds the debug
  * listing's cached bitmaps */
-static struct bitmap_data *texture_cache_debug_bitmaps[XBOX_TEXTURE_CACHE_PAGE_COUNT];
+#ifdef OXBOX_STRIP
+/* oxbox: the debug list (texture_cache_debug_options.list) lists the first 64 */
+static struct bitmap_data *texture_cache_debug_bitmaps[64];
+#else
+static struct bitmap_data *texture_cache_debug_bitmaps[XBOX_TEXTURE_CACHE_PAGE_COUNT_MAXIMUM];
+#endif
 static struct xbox_texture_cache_globals xbox_texture_cache_globals;
+#if defined(HALO_XBOX_TARGET)
+unsigned long oxbox_texture_reads, oxbox_texture_read_bytes, oxbox_texture_blocking_reads;
+#endif
 struct texture_cache_debug_options texture_cache_debug_options = {0};
 boolean debug_texture_cache = FALSE;
 static unsigned long texture_cache_last_failure_time = 0;
@@ -418,16 +450,27 @@ void texture_cache_bitmap_delete(
 void *texture_cache_steal_memory(
 	long size)
 {
-	long page_count = size / XBOX_TEXTURE_CACHE_PAGE_SIZE + 1;
-	long remaining_page_count =
+	long page_count;
+	long remaining_page_count;
+	byte *base_address;
+	long stolen_size;
+	byte *stolen_address;
+	byte *end_guard_address;
+
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the tag cache's memory given back first: what's taken is the end of the cache's own */
+	texture_cache_unlend();
+#endif
+	page_count = size / XBOX_TEXTURE_CACHE_PAGE_SIZE + 1;
+	remaining_page_count =
 		XBOX_TEXTURE_CACHE_STEALABLE_PAGE_COUNT - page_count;
-	byte *base_address =
+	base_address =
 		(byte *)physical_memory_get_texture_cache_base_address() +
 		remaining_page_count * XBOX_TEXTURE_CACHE_PAGE_SIZE;
-	long stolen_size = page_count * XBOX_TEXTURE_CACHE_PAGE_SIZE;
-	byte *stolen_address =
+	stolen_size = page_count * XBOX_TEXTURE_CACHE_PAGE_SIZE;
+	stolen_address =
 		base_address + XBOX_TEXTURE_CACHE_STEAL_GUARD_SIZE;
-	byte *end_guard_address =
+	end_guard_address =
 		base_address + XBOX_TEXTURE_CACHE_STEAL_GUARD_SIZE + stolen_size;
 
 	match_assert(
@@ -545,6 +588,112 @@ static boolean compare(
 	return difference > 0;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the memory lent back: the cache emptied (waiting for the graphics chip to finish with each texture),
+the memory cached again, as tag data is read into it, and the cache on its own memory alone */
+static void texture_cache_unlend(
+	void)
+{
+	if (!texture_cache_lent.start)
+		return;
+	IDirect3DDevice8_KickPushBuffer(global_d3d_device);
+	lruv_flush(xbox_texture_cache_globals.cache);
+	texture_cache_lent.gap_block_index = NONE;
+	XPhysicalProtect(texture_cache_lent.start, texture_cache_lent.size, PAGE_READWRITE);
+	lruv_initialize(
+		xbox_texture_cache_globals.cache,
+		"xbox texture cache",
+		XBOX_TEXTURE_CACHE_PAGE_COUNT,
+		XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS,
+		XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
+		texture_cache_delete_block_proc,
+		texture_cache_locked_block_proc);
+	xbox_texture_cache_globals.base_address = physical_memory_get_texture_cache_base_address();
+	texture_cache_lent.start = NULL;
+	texture_cache_lent.size = 0;
+	texture_cache_lent.page_count = 0;
+}
+
+/* oxbox: size bytes from start (the tag cache's memory between a map's tag data and its lowest structure bsp:
+cache_files.c) lent to the texture cache until the map closes (texture_cache_close), or the cache's memory is
+taken for a movie or a map's copy (texture_cache_steal_memory). Both memories are whole pages of the cache from
+the lower one's start; the pages of what lies between them are a locked block. Nothing is lent while the cache's
+memory is taken. */
+void texture_cache_lend(
+	void *start,
+	long size)
+{
+	byte *own = physical_memory_get_texture_cache_base_address();
+	long own_size = XBOX_TEXTURE_CACHE_SIZE;
+	byte *lent = (byte *)start;
+	byte *low, *high, *first_end, *second_start, *second_end;
+	long page_count, gap_first, gap_last;
+
+	texture_cache_unlend();
+	if (xbox_texture_cache_globals.stolen_memory || !lent || size < XBOX_TEXTURE_CACHE_PAGE_SIZE ||
+		(lent < own + own_size && lent + size > own))
+	{
+		return;
+	}
+	low = lent < own ? lent : own;
+	high = lent < own ? own : lent;
+	first_end = lent < own ? lent + size : own + own_size;
+	second_end = lent < own ? own + own_size : lent + size;
+	/* (pages of the cache counted from low: the first memory's whole pages, then the second's, starting at its
+	first whole page) */
+	gap_first = (long)(first_end - low) / XBOX_TEXTURE_CACHE_PAGE_SIZE;
+	gap_last = (long)((high - low) + XBOX_TEXTURE_CACHE_PAGE_SIZE - 1) / XBOX_TEXTURE_CACHE_PAGE_SIZE;
+	second_start = low + gap_last * XBOX_TEXTURE_CACHE_PAGE_SIZE;
+	page_count = (long)(second_end - low) / XBOX_TEXTURE_CACHE_PAGE_SIZE;
+	if (second_start >= second_end || page_count <= gap_last || page_count > 0x8000)
+		return;
+
+	IDirect3DDevice8_KickPushBuffer(global_d3d_device);
+	lruv_flush(xbox_texture_cache_globals.cache);
+	XPhysicalProtect(lent, size, XBOX_TEXTURE_CACHE_PROTECTION);
+	lruv_initialize(
+		xbox_texture_cache_globals.cache,
+		"xbox texture cache",
+		page_count,
+		XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS,
+		XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
+		texture_cache_delete_block_proc,
+		texture_cache_locked_block_proc);
+	texture_cache_lent.gap_block_index = gap_last > gap_first ?
+		lruv_block_new_at(xbox_texture_cache_globals.cache, gap_first, gap_last - gap_first) : NONE;
+	if (gap_last > gap_first && texture_cache_lent.gap_block_index == NONE)
+	{
+		/* (no block for what lies between: the cache stays on its own memory) */
+		XPhysicalProtect(lent, size, PAGE_READWRITE);
+		lruv_initialize(
+			xbox_texture_cache_globals.cache,
+			"xbox texture cache",
+			XBOX_TEXTURE_CACHE_PAGE_COUNT,
+			XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS,
+			XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
+			texture_cache_delete_block_proc,
+			texture_cache_locked_block_proc);
+		return;
+	}
+	xbox_texture_cache_globals.base_address = low;
+	texture_cache_lent.start = lent;
+	texture_cache_lent.size = size;
+	texture_cache_lent.page_count = page_count;
+	{
+		void platform_log(char const *format, ...);
+
+		platform_log("texture cache: %ld KB of the tag cache lent for this map: %ld KB in all",
+			(long)(size / 1024), (long)((page_count - (gap_last - gap_first)) * (XBOX_TEXTURE_CACHE_PAGE_SIZE / 1024)));
+	}
+}
+
+void *texture_cache_lent_end(
+	void)
+{
+	return texture_cache_lent.start ? texture_cache_lent.start + texture_cache_lent.size : NULL;
+}
+#endif
+
 void texture_cache_flush(
 	void)
 {
@@ -558,7 +707,14 @@ void texture_cache_flush(
 static boolean texture_cache_locked_block_proc(
 	long block_index)
 {
-	struct xbox_texture_cache_texture *texture = datum_get(
+	struct xbox_texture_cache_texture *texture;
+
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the block between the cache's own memory and the tag cache's it is lent is never given up */
+	if (block_index == texture_cache_lent.gap_block_index)
+		return TRUE;
+#endif
+	texture = datum_get(
 		xbox_texture_cache_globals.textures,
 		block_index);
 
@@ -571,6 +727,15 @@ static void texture_cache_delete_block_proc(
 {
 	struct xbox_texture_cache_texture *texture;
 	struct xbox_texture_cache_texture *cache_entry;
+
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: that block holds no texture */
+	if (block_index == texture_cache_lent.gap_block_index)
+	{
+		texture_cache_lent.gap_block_index = NONE;
+		return;
+	}
+#endif
 
 	texture = datum_get(
 		xbox_texture_cache_globals.textures,
@@ -691,9 +856,12 @@ static void render_inverse_transform_screen_point(
 void texture_cache_new(
 	void)
 {
+	/* port: the size physical_memory_allocate chose (oxbox: larger on a console with 128 MB) */
+	xbox_texture_cache_page_count = MIN(physical_memory_get_texture_cache_size() / XBOX_TEXTURE_CACHE_PAGE_SIZE,
+		(long)XBOX_TEXTURE_CACHE_PAGE_COUNT_MAXIMUM);
 	xbox_texture_cache_globals.textures = data_new(
 		"xbox texture",
-		XBOX_TEXTURE_CACHE_PAGE_COUNT,
+		XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
 		XBOX_TEXTURE_CACHE_ENTRY_SIZE);
 	match_vassert(
 		"c:\\halo\\SOURCE\\cache\\xbox_texture_cache.c",
@@ -704,7 +872,7 @@ void texture_cache_new(
 		"xbox texture cache",
 		XBOX_TEXTURE_CACHE_PAGE_COUNT,
 		XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS,
-		XBOX_TEXTURE_CACHE_PAGE_COUNT,
+		XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
 		texture_cache_delete_block_proc,
 		texture_cache_locked_block_proc);
 	match_vassert(
@@ -730,6 +898,9 @@ void texture_cache_close(
 		"c:\\halo\\SOURCE\\cache\\xbox_texture_cache.c",
 		133,
 		!xbox_texture_cache_globals.stolen_memory);
+#if defined(HALO_XBOX_TARGET)
+	texture_cache_unlend();
+#endif
 	texture_cache_flush();
 	data_make_invalid(xbox_texture_cache_globals.textures);
 
@@ -841,6 +1012,32 @@ static boolean texture_cache_start_loading_bitmap(
 		bitmap->base_address = base_address;
 		texture->bitmap = bitmap;
 		texture_cache_initialize_hardware_format(bitmap, &texture->hardware_format);
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: a folder map's preview.bin, or a gametype picture of the postgame's, read now into the texture's
+		memory (port/linux/game/hmp_maps.c) */
+		{
+			extern boolean hmp_texture_read(struct bitmap_data *bitmap, void *buffer, long size);
+
+			if (hmp_texture_read(bitmap, base_address, bitmap->pixels_size))
+			{
+				__asm__ volatile("lock orl $0, (%%esp)" ::: "memory");   /* (write-combined memory drained for the GPU) */
+				texture->read_request_handle = NONE;
+				texture->loaded = TRUE;
+				return TRUE;
+			}
+		}
+#endif
+#if defined(HALO_XBOX_TARGET)
+		{
+			/* oxbox: counted, for the long frames' lines and the 10-second memory line (main.c, oxbox_input.c) */
+			extern unsigned long oxbox_texture_reads, oxbox_texture_read_bytes, oxbox_texture_blocking_reads;
+
+			oxbox_texture_reads++;
+			oxbox_texture_read_bytes += bitmap->pixels_size;
+			if (block)
+				oxbox_texture_blocking_reads++;
+		}
+#endif
 		texture->read_request_handle = cache_file_read(
 			bitmap->tag_index,
 			bitmap->pixels_offset,
@@ -858,9 +1055,10 @@ static boolean texture_cache_start_loading_bitmap(
 void texture_cache_debug_render(
 	void)
 {
-	if (texture_cache_debug_options.graph)
+	if (texture_cache_debug_options.graph &&
+		xbox_texture_cache_globals.cache->page_count <= XBOX_TEXTURE_CACHE_PAGE_COUNT_MAXIMUM)
 	{
-		byte page_usage[XBOX_TEXTURE_CACHE_PAGE_COUNT];
+		byte page_usage[XBOX_TEXTURE_CACHE_PAGE_COUNT_MAXIMUM];
 		real_point3d world_positions[2];
 		real_point2d screen_positions[2];
 		real_point3d *world_position;
@@ -884,7 +1082,7 @@ void texture_cache_debug_render(
 		colors[3] = NULL;
 		lruv_cache_get_page_usage(xbox_texture_cache_globals.cache, page_usage);
 
-		for (page_index = 0; page_index < XBOX_TEXTURE_CACHE_PAGE_COUNT; page_index++)
+		for (page_index = 0; page_index < xbox_texture_cache_globals.cache->page_count; page_index++)
 		{
 			x_offset = render.camera.window_bounds.x0 -
 				render.camera.viewport_bounds.x0;
@@ -946,7 +1144,7 @@ void texture_cache_debug_render(
 		{
 			struct bitmap_data *bitmap = texture->bitmap;
 
-			if (bitmap->tag_index != NONE)
+			if (bitmap->tag_index != NONE && bitmap_count < (short)NUMBEROF(texture_cache_debug_bitmaps))
 			{
 				texture_cache_debug_bitmaps[bitmap_count++] = bitmap;
 			}

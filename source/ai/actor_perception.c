@@ -954,8 +954,10 @@ typedef char actor_emotion_definition_minimum_stand_offset_assert[
 	offsetof(struct actor_definition, defensive.defensive_crouch_min_stand_time) == 0x304 ? 1 : -1];
 typedef char actor_emotion_definition_minimum_crouch_offset_assert[
 	offsetof(struct actor_definition, defensive.defensive_crouch_min_crouch_time) == 0x308 ? 1 : -1];
+#ifndef OXBOX_STRIP
 typedef char actor_perception_debug_awareness_speed_offset_assert[
 	offsetof(struct actor_debug_info, perception_awareness_speed) == 0x6578 ? 1 : -1];
+#endif
 typedef char actor_perception_source_unit_sound_offset_assert[
 	offsetof(struct unit_definition, unit.constant_sound) == 0x182 ? 1 : -1];
 typedef char actor_perception_source_actor_target_offset_assert[
@@ -984,10 +986,14 @@ typedef char actor_perception_encounter_view_corpse_ignore_time_offset_assert[
 	offsetof(struct actor_perception_encounter_view, corpse_ignore_time) == 0x58 ? 1 : -1];
 typedef char actor_visibility_variant_modified_vision_range_offset_assert[
 	offsetof(struct actor_variant_definition, ranged_combat.modified_vision_range) == 0x150 ? 1 : -1];
+#ifndef OXBOX_STRIP /* (oxbox: the avoidance data isn't kept: ai_debug.h) */
 typedef char actor_visibility_debug_info_size_assert[
 	sizeof(struct actor_debug_info) == 0x657C ? 1 : -1];
+#endif
+#ifndef OXBOX_STRIP
 typedef char actor_visibility_debug_info_last_time_offset_assert[
 	offsetof(struct actor_debug_info, vision_last_time) == 0x656C ? 1 : -1];
+#endif
 typedef char actor_orphan_prop_view_related_prop_index_offset_assert[
 	offsetof(struct actor_orphan_prop_view, related_prop_index) == 0xC ? 1 : -1];
 typedef char actor_orphan_prop_view_orphan_inspection_ticks_offset_assert[
@@ -2505,9 +2511,10 @@ short actor_visibility_at_point(
 
 perception_factor_ready:
 				{
-					struct actor_debug_info *debug =
-						&actor_debug_array[
-							DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index)];
+					/* oxbox: the debug build's AI records are not made on the Xbox (ai_debug.c): written to a
+					scratch record then, as retail has none */
+					/* (the one scratch record, ai_debug.c: these only write scalars to it; 2 x 26 KB less) */
+					struct actor_debug_info *debug = ACTOR_DEBUG_INFO(actor_index);
 
 					if (target_is_player)
 					{
@@ -2687,9 +2694,9 @@ short actor_audibility_at_point(
 		}
 
 		{
-			struct actor_debug_info *debug =
-				&actor_debug_array[
-					DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index)];
+			/* oxbox: a scratch record without the debug build's AI records (ai_debug.c) */
+			/* (the one scratch record, ai_debug.c: these only write scalars to it; 2 x 26 KB less) */
+			struct actor_debug_info *debug = ACTOR_DEBUG_INFO(actor_index);
 
 			debug->field_A8 = maximum_distance;
 			debug->field_A4 = TRUE;
@@ -6483,7 +6490,7 @@ void actor_perception_update(
 
 		case _prop_state_becoming_acknowledged:
 			{
-				struct actor_debug_info *debug = &actor_debug_array[DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index)];
+				struct actor_debug_info *debug = ACTOR_DEBUG_INFO(actor_index);
 
 				if (prop->perception == _actor_perception_none)
 				{

@@ -508,7 +508,13 @@ struct cluster_partition light_cluster_partition;
 as many as the light partition's lists can hold */
 enum
 {
+#ifdef OXBOX_STRIP
+	/* oxbox: only the lights drawn this frame are kept, at most 128 (MAXIMUM_RENDERED_LIGHTS); past this it falls
+	back to the stock walk (30 KB less) */
+	LIGHTS_PORT_MAXIMUM_ENTRIES = 512,
+#else
 	LIGHTS_PORT_MAXIMUM_ENTRIES = HALO_PORT_MAXIMUM_CLUSTER_REFERENCES,
+#endif
 };
 struct lights_port_entry
 {

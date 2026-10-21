@@ -320,7 +320,9 @@ extern unsigned long current_time;
 static boolean progress_bar_rendering_enabled= TRUE;
 
 /* the compressed monk chant played behind the loading screen */
-byte compressed_monk_tone[18396]=
+/* oxbox: aligned: DirectSound plays it from here (SetBufferData), and the audio hardware fetches whole aligned
+blocks; at an odd address (test 08) a real Xbox played noise */
+__attribute__((aligned(16))) byte compressed_monk_tone[18396]=
 {
 	0xe2,0x0c,0x00,0x00,0xf7,0xff,0x9e,0xcc,0xaa,0xaa,0xba,0x98,0x9c,0xd8,0x32,0x18,
 	0xaa,0x20,0x97,0x18,0x09,0xd2,0x8c,0xa9,0x88,0x8e,0x99,0x90,0xa2,0x02,0xbb,0x8f,
@@ -1598,6 +1600,29 @@ void progress_bar_end(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a fast load (xemu, a hard drive) ended the loop while the ring was
+still easing toward the progress, cutting it and its sounds off at ~90%; the
+load now lets it ease the rest of the way to 1, where its picture and its
+sounds have faded out (game.c) */
+static boolean progress_bar_oxbox_finishing= FALSE;
+
+void progress_bar_oxbox_set_finishing(
+	boolean finishing)
+{
+	progress_bar_oxbox_finishing= finishing;
+
+	return;
+}
+
+boolean progress_bar_oxbox_finished(
+	void)
+{
+	return !progress_bar_mode.active || !progress_bar_mode.texture0 ||
+		!progress_bar_rendering_enabled || last_t>=0.995f;
+}
+#endif
+
 boolean progress_bar_is_active(
 	void)
 {
@@ -2003,6 +2028,12 @@ static void progress_bar_render(
 	long stage;
 
 	wobble_phase+= 0.01f;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: playing out to the end, the ring settles on 1 (no wobble) */
+	if (progress_bar_oxbox_finishing)
+		progress= (real)((progress - last_t)*0.2 + last_t);
+	else
+#endif
 	progress= (real)((sin(wobble_phase)*0.05 + progress - last_t)*0.2 + last_t);
 	if (progress>1.0)
 		progress= 1.f;
@@ -2232,6 +2263,42 @@ static void progress_bar_make_stuff_ready(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET) && !defined(OXBOX_AB_TEST)
+/* oxbox: retail Halo (01.10, 0xD4670) no longer reads maps\loading.tga (the retail disc has none, so the
+January code drew whatever memory the texture got): the picture is in the XBE, run-length coded (each byte a
+count in its high nibble and a level in its low one). The retail XBE's .data holds it at the addresses below,
+which the OpenCE XBE leaves in place (xbox/oxbox_overlay.h). */
+#define RETAIL_LOADING_WIDTH ((short *)0x210988)
+#define RETAIL_LOADING_HEIGHT ((short *)0x21098c)
+#define RETAIL_LOADING_DATA ((unsigned char const *)0x210990)
+#define RETAIL_LOADING_DATA_SIZE 0x67e4
+
+static void progress_bar_load_loading_texture(
+	IDirect3DTexture8 **texture)
+{
+	D3DLOCKED_RECT locked_rect;
+	unsigned long *pixel;
+	long index;
+
+	IDirect3DDevice8_CreateTexture(global_d3d_device, *RETAIL_LOADING_WIDTH, *RETAIL_LOADING_HEIGHT, 1, 0,
+		D3DFMT_LIN_A8B8G8R8, 0, texture);
+	IDirect3DTexture8_LockRect(*texture, 0, &locked_rect, NULL, 0);
+	pixel= locked_rect.pBits;
+	for (index= 0; index<RETAIL_LOADING_DATA_SIZE; index++)
+	{
+		unsigned char code= RETAIL_LOADING_DATA[index];
+		unsigned long level= (code&0x0f)<<4;
+		unsigned long color= (level<<16) | ((level&0xfe)<<7) | (level>>2);
+		long count= code>>4;
+
+		while (count-->0)
+			*pixel++= color;
+	}
+	IDirect3DTexture8_UnlockRect(*texture, 0);
+
+	return;
+}
+#else
 static void progress_bar_load_loading_texture(
 	IDirect3DTexture8 **texture)
 {
@@ -2270,6 +2337,8 @@ static void progress_bar_load_loading_texture(
 
 	return;
 }
+
+#endif
 
 boolean progress_bar_is_stuff_ready(
 	void)

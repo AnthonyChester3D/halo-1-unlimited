@@ -355,7 +355,20 @@ static void lens_flare_data_error(
 /* ---------- globals */
 
 static struct lens_flare_occlusion_test_results local_lens_flare_occlusion_test_results[MAXIMUM_LIGHTS_PER_MAP] = {0};
+#if defined(OXBOX_STRIP)
+/* oxbox: the occlusion results of a structure's first 2,048 lens flare markers
+and the queued ones (8 KB, not 256 KB: a map has a few hundred markers);
+markers past those share one spare slot (drawn, their occlusion test result
+not kept apart) */
+enum
+{
+	OXBOX_LENS_FLARE_MARKER_RESULTS = 2048,
+	OXBOX_LENS_FLARE_RESULTS = OXBOX_LENS_FLARE_MARKER_RESULTS + MAXIMUM_QUEUED_LENS_FLARES + 1
+};
+static byte local_lens_flare_occlusion_test_results2[OXBOX_LENS_FLARE_RESULTS][MAXIMUM_WINDOWS];
+#else
 static byte local_lens_flare_occlusion_test_results2[MAXIMUM_LENS_FLARE_MARKERS_PER_STRUCTURE+MAXIMUM_QUEUED_LENS_FLARES][MAXIMUM_WINDOWS];
+#endif
 static struct rasterizer_lens_flare_submit_parameters local_lens_flare_parameters[MAXIMUM_LENS_FLARES_PER_FRAME] = {0};
 static long local_lens_flare_count = 0;
 extern short global_screenshot_count;
@@ -421,6 +434,19 @@ static byte *lens_flare_occlusion_test_results_get(
 			88,
 			structure_lens_flare_index>=0 && structure_lens_flare_index<(MAXIMUM_LENS_FLARE_MARKERS_PER_STRUCTURE+MAXIMUM_QUEUED_LENS_FLARES));
 
+#if defined(OXBOX_STRIP)
+		if (structure_lens_flare_index >= MAXIMUM_LENS_FLARE_MARKERS_PER_STRUCTURE)
+			structure_lens_flare_index = OXBOX_LENS_FLARE_MARKER_RESULTS +
+				(structure_lens_flare_index - MAXIMUM_LENS_FLARE_MARKERS_PER_STRUCTURE);
+		else if (structure_lens_flare_index >= OXBOX_LENS_FLARE_MARKER_RESULTS)
+			structure_lens_flare_index = OXBOX_LENS_FLARE_RESULTS - 1;
+		if (structure_lens_flare_index < 0 || structure_lens_flare_index >= OXBOX_LENS_FLARE_RESULTS ||
+			window_index < 0 || window_index >= MAXIMUM_WINDOWS)
+		{
+			structure_lens_flare_index = OXBOX_LENS_FLARE_RESULTS - 1;
+			window_index = 0;
+		}
+#endif
 		return &local_lens_flare_occlusion_test_results2[structure_lens_flare_index][window_index];
 	}
 

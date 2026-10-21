@@ -660,6 +660,8 @@ static struct
 /* a client: each player's ping as the host last told it (UNKNOWN_PING: not
 told) */
 static word distributed_player_pings[MAXIMUM_TRACKED_PLAYERS];
+/* oxbox: (the host) which players' entries above it has sent (distributed_send_pings) */
+static boolean distributed_player_host_shown[MAXIMUM_TRACKED_PLAYERS];
 
 /* the host: its clients' machines, found once a tick */
 static struct
@@ -1313,15 +1315,33 @@ boolean distributed_machine_sees_player(
 		TEST_FLAG(distributed_sends[machine_index][player_index], _distributed_send_sees_bit);
 }
 
+static long distributed_player_ping_live(
+	short player_index);
+
 long distributed_player_ping(
 	short player_index)
 {
-	long machine_index;
-
 	if (player_index < 0 || player_index >= MAXIMUM_TRACKED_PLAYERS || !distributed_player(player_index))
 		return NONE;
 	if (game_connection() == _game_connection_network_client)
 		return distributed_player_pings[player_index] == UNKNOWN_PING ? NONE : (long)distributed_player_pings[player_index];
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the host's scoreboard shows what it last sent the clients (every 2 seconds), as theirs
+	does, not the running average redrawn every frame */
+	if (game_connection() == _game_connection_network_server &&
+		distributed_player_host_shown[player_index] && distributed_player_pings[player_index] != UNKNOWN_PING)
+	{
+		return (long)distributed_player_pings[player_index];
+	}
+#endif
+	return distributed_player_ping_live(player_index);
+}
+
+static long distributed_player_ping_live(
+	short player_index)
+{
+	long machine_index;
+
 	if (game_connection() != _game_connection_network_server)
 		return NONE;
 	/* (the host: its own players' none, a client's its machine's) */
@@ -3089,10 +3109,16 @@ static void distributed_send_pings(
 
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 	{
-		long ping = distributed_player_ping(player_index);
+		long ping = distributed_player(player_index) ? distributed_player_ping_live(player_index) : NONE;
 
 		if (!distributed_player(player_index))
+		{
+			distributed_player_host_shown[player_index] = FALSE;
 			continue;
+		}
+		/* oxbox: what the host's own scoreboard shows until the next send */
+		distributed_player_pings[player_index] = ping == NONE ? UNKNOWN_PING : (word)MIN(ping, UNKNOWN_PING - 1);
+		distributed_player_host_shown[player_index] = TRUE;
 		message.players[count].player_index = (byte)player_index;
 		message.players[count].pad = 0;
 		message.players[count].milliseconds = ping == NONE ? UNKNOWN_PING : (word)MIN(ping, UNKNOWN_PING - 1);
@@ -3354,6 +3380,7 @@ void network_distributed_new_game(
 	}
 	distributed_own_round_trip = 0.0f;
 	csmemset(distributed_player_pings, 0xFF, sizeof(distributed_player_pings));
+	csmemset(distributed_player_host_shown, 0, sizeof(distributed_player_host_shown));
 	csmemset(distributed_machine_players, 0xFF, sizeof(distributed_machine_players));
 	distributed_machines.in_tick = FALSE;
 	distributed_machines.valid = FALSE;
@@ -3481,9 +3508,37 @@ static boolean distributed_message_stale(
 	if (sender < 0 || sender >= MAXIMUM_SENDERS)
 		return TRUE;
 	latest = &distributed_received_times[sender][header->type];
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a message far behind the latest is not a late one but a new clock (taken, and the latest with it), and
+	one far ahead of this game's tick is from another game, which is not taken as the latest (it would have made
+	every message of its kind stale until this game's clock caught up: on a client, a game of no weapons in hand,
+	its players' inventories all dropped) */
+	{
+		enum { CLOCK_WINDOW_TICKS = 5 * TICKS_PER_SECOND };
+		static long logged;
+
+		if (*latest != NONE && header->game_time < *latest)
+		{
+			if (*latest - header->game_time <= CLOCK_WINDOW_TICKS)
+				return TRUE;
+			if (logged++ < 20)
+				error(_error_silent, "netcode: message kind %d from sender %d went back from tick %ld to %ld: a new clock",
+					header->type, sender, *latest, header->game_time);
+		}
+		if (game_time_initialized() && header->game_time > game_time_get() + CLOCK_WINDOW_TICKS &&
+			game_connection() == _game_connection_network_client)
+		{
+			if (logged++ < 20)
+				error(_error_silent, "netcode: message kind %d at tick %ld, this game at %ld: not taken as the latest",
+					header->type, header->game_time, game_time_get());
+			return FALSE;
+		}
+	}
+#else
 	/* (a tick's several messages of a kind have its time alike) */
 	if (*latest != NONE && header->game_time < *latest)
 		return TRUE;
+#endif
 	*latest = header->game_time;
 	return FALSE;
 }

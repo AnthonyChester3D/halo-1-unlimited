@@ -743,6 +743,38 @@ long lruv_block_new(
 #undef index
 }
 
+/* port: a block at a given place in a cache that has none (oxbox: the pages of a range the texture cache must
+not use, between its own memory and the tag cache's it is lent: xbox_texture_cache.c) */
+long lruv_block_new_at(
+	struct lruv_cache *cache,
+	long first_page_index,
+	long page_count)
+{
+	struct lruv_cache_block *block;
+	long block_index;
+
+	lruv_cache_verify(cache, TRUE);
+	if (cache->first_block_index != NONE || first_page_index < 0 || page_count <= 0 ||
+		first_page_index + page_count > cache->page_count)
+	{
+		return NONE;
+	}
+	block_index = datum_new(cache->blocks);
+	if (block_index == NONE)
+		return NONE;
+	block = datum_get(cache->blocks, block_index);
+	block->first_page_index = first_page_index;
+	block->page_count = page_count;
+	block->last_used_tick = cache->tick;
+	block->previous_block_index = NONE;
+	block->next_block_index = NONE;
+	cache->first_block_index = block_index;
+	cache->last_block_index = block_index;
+	lruv_cache_verify(cache, TRUE);
+
+	return block_index;
+}
+
 /* ---------- private code */
 
 static long lruv_cache_bytes_to_pages(

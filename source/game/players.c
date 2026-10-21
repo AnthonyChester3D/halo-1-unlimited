@@ -407,10 +407,12 @@ struct players_static_data
 	struct player_screen_flash_parameters screen_flash_parameters[2];
 };
 
+#ifndef OXBOX_STRIP /* (oxbox: a profile section is smaller: profile.h) */
 typedef char players_static_data_size_assert[
 	sizeof(struct players_static_data) == 0xC18 ? 1 : -1];
 typedef char players_static_data_screen_flash_offset_assert[
 	offsetof(struct players_static_data, screen_flash_parameters) == 0xBF0 ? 1 : -1];
+#endif
 
 /* ---------- prototypes */
 
@@ -3719,10 +3721,17 @@ boolean unit_should_autopick_weapon(
 	if ((unit_approve_weapon_pickup(unit_index, weapon_index) &&
 		TEST_FLAG(weapon_definition->weapon.flags, _weapon_doesnt_count_toward_maximum_bit)) ||
 		weapon_count == 0 ||
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: as the Xbox game: a second weapon is picked up on its own in campaign only */
+		(!game_engine_running() &&
+			unit_approve_weapon_pickup(unit_index, weapon_index) &&
+			weapon_count < 2) ||
+#else
 		/* port: and in multiplayer (campaign's only), a second weapon into
 		the empty slot, readied (unit_add_weapon_to_inventory) */
 		(unit_approve_weapon_pickup(unit_index, weapon_index) &&
 			weapon_count < 2) ||
+#endif
 		game_engine_force_autopickup(unit_index, weapon_index))
 	{
 		result = TRUE;
@@ -4855,7 +4864,9 @@ void players_update_before_game(
 				unit = unit_get(player->unit_index);
 				if (!players_globals->input_disabled)
 				{
+#if !defined(HALO_XBOX_TARGET) /* oxbox: (a debugging log) */
 					network_player_log_idle_action(iterator.datum_index, action->control_flags);
+#endif
 					/* port: not for the keyboard's action key, which only acts
 					(units.h, UNIT_CONTROL_PORT_ACTION_ONLY_BIT) */
 					if (TEST_FLAG(action->control_flags, _unit_control_action_bit) &&
@@ -5187,6 +5198,17 @@ boolean player_name_clean(
 	boolean visible = FALSE;
 
 	name[count - 1] = 0;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: names as the Xbox game takes them (no ban command to type them): only control characters,
+	which draw as nothing, are left out; any name with something in it is fine */
+	for (read = 0; read < count && name[read]; read++)
+	{
+		if ((unsigned short)name[read] >= 0x20)
+			name[written++] = name[read];
+	}
+	name[written] = 0;
+	return written > 0;
+#endif
 	for (read = 0; read < count && name[read]; read++)
 	{
 		unsigned short character = (unsigned short)name[read];
@@ -5227,6 +5249,12 @@ boolean player_name_valid(
 	wchar_t cleaned[32];
 	long index;
 
+#if defined(OXBOX_STRIP)
+	/* oxbox: no bans, so no name the ban command must name: every profile
+	plays, as on retail; the Default and Inverted profiles (no name) get a
+	random name from the host, as retail gives them (network_server_manager.c) */
+	return TRUE;
+#endif
 	if (count > NUMBEROF(cleaned))
 		count = NUMBEROF(cleaned);
 	for (index = 0; index < count; index++)

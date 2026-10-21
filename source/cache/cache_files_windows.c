@@ -559,6 +559,23 @@ void cache_files_precache_set_priority(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a map's cached copy is forgotten (map sharing just replaced its folder with the host's build); TRUE if one was */
+boolean cache_files_forget_cached_map(
+	char const *map_name)
+{
+	short map_file_index = cached_map_files_find_map(map_name);
+
+	if (map_file_index == NONE || map_file_index == cache_file_globals.open_map_file_index ||
+		map_file_index == cache_file_globals.copying_to_map_file_index)
+	{
+		return FALSE;
+	}
+	cached_map_file_get(map_file_index)->header.name[0] = 0;
+	return TRUE;
+}
+#endif
+
 boolean cache_files_precache_in_progress(
 	void)
 {
@@ -630,7 +647,13 @@ boolean cache_files_precache_map_begin(
 			header (cached_map_files_find_map): a map file whose header names
 			another map would be copied again each time it was asked for, for
 			ever */
-			if (_stricmp(header.name, cache_map_name) != 0)
+			/* oxbox: a folder map's file names itself whatever its maker called it; the cache slot gets its key
+			(cache_files_precache_map_end) */
+			if (_stricmp(header.name, cache_map_name) != 0
+#if defined(HALO_XBOX_TARGET)
+				&& cache_map_name[0] != '+'
+#endif
+				)
 			{
 				error(_error_silent, "map '%s' names itself '%s' in its header: refused", cache_map_name, header.name);
 				platform_log("map %s.map names itself '%s' in its header; a map's name must be its file's",
@@ -732,6 +755,20 @@ void cache_files_precache_map_end(
 	texture_cache_return_memory();
 	cached_map_file_set_modification_date(cache_file_globals.copying_to_map_file_index);
 	cached_map_file_read_header(cache_file_globals.copying_to_map_file_index);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a folder map's slot is found by its key ("+Precipice"), whatever name the map has inside (Halo
+	Universal's cache identity) */
+	if (cache_file_globals.copying_to_map_file_name[0] == '+')
+	{
+		struct cached_map_file *map_file = cached_map_file_get(cache_file_globals.copying_to_map_file_index);
+
+		if (map_file->header.name[0])
+		{
+			csstrncpy(map_file->header.name, cache_file_globals.copying_to_map_file_name, sizeof(map_file->header.name) - 1);
+			map_file->header.name[sizeof(map_file->header.name) - 1] = 0;
+		}
+	}
+#endif
 	cache_file_globals.copy_in_progress = FALSE;
 	cache_file_globals.copying_to_map_file_index = NONE;
 
@@ -1111,12 +1148,21 @@ static void cache_files_open_cache_files(
 			char *cache_map_name = cached_map_file_get(map_file_index)->header.name;
 
 			cached_map_file_read_header(map_file_index);
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: never keep a map cached by an earlier launch, as Halo Universal does (PATCHES.txt 1):
+			a copy cut short (xemu closed, a console switched off while it copied) keeps a whole header
+			with the map's checksum, and its missing data drew as garbage in the menus. Each map is copied
+			fresh the first time a launch loads it. */
+			(void)cache_map_name;
+			(void)dvd_header;
+#else
 			if (cache_file_read_header_from_dvd(cache_map_name, &dvd_header) &&
 				map_file->header.checksum == dvd_header.checksum &&
 				valid)
 			{
 				continue;
 			}
+#endif
 		}
 
 		memset(
@@ -1267,7 +1313,18 @@ static void cache_file_get_map_path(
 	{
 		MAXIMUM_MAP_PATH_LENGTH = 256,
 	};
-	int length = snprintf(path, MAXIMUM_MAP_PATH_LENGTH, "%s%s.map", cache_files_map_directory(), map_name);
+	int length;
+
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a folder map ("+key") is read from its folder (port/linux/game/hmp_maps.c) */
+	{
+		extern boolean hmp_map_file_path(char const *level_name, char *path, long size);
+
+		if (hmp_map_file_path(map_name, path, MAXIMUM_MAP_PATH_LENGTH))
+			return;
+	}
+#endif
+	length = snprintf(path, MAXIMUM_MAP_PATH_LENGTH, "%s%s.map", cache_files_map_directory(), map_name);
 
 	if (length < 0 || length >= MAXIMUM_MAP_PATH_LENGTH)
 	{
@@ -1373,6 +1430,26 @@ static short cached_map_files_find_free_map(
 		}
 	}
 
+#if defined(OXBOX_STRIP)
+	/* oxbox (Halo Universal 2): a multiplayer or menu map too big for its own cache files goes into one of the
+	campaign's (278 MiB), which keep their stock size */
+	if (best_map_file_index == NONE && first_map_file_index != 0)
+	{
+		for (map_file_index = 0; map_file_index <= 1; map_file_index++)
+		{
+			struct cached_map_file *map_file = cached_map_file_get(map_file_index);
+
+			if (cache_file_globals.open_map_file_index != map_file_index &&
+				cached_map_file_get_size(map_file_index) > file_length &&
+				(best_map_file_index == NONE ||
+					CompareFileTime(&best_map_file->last_modification_date, &map_file->last_modification_date) > 0))
+			{
+				best_map_file_index = map_file_index;
+				best_map_file = map_file;
+			}
+		}
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\cache\\cache_files_windows.c",
 		1200,

@@ -290,7 +290,11 @@ enum
 {
 	MAXIMUM_PROFILE_SECTIONS = 256,
 	MAXIMUM_GAME_TICKS_PER_FRAME = 150,
+#ifdef OXBOX_STRIP
+	MAXIMUM_PROFILE_FRAMES = 1,   /* (oxbox: the profiler is never on: one frame of history) */
+#else
 	MAXIMUM_PROFILE_FRAMES = 256,
+#endif
 	MAXIMUM_PROFILE_WINDOWS = 4,
 };
 

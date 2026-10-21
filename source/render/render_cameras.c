@@ -1154,6 +1154,17 @@ void render_camera_build_frustum(
 
 	half_bounds_width =
 		(frustum->frustum_bounds.x1 - frustum->frustum_bounds.x0) * 0.5f;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: Halo Universal's widescreen: with the dashboard set to
+	widescreen, the 640x480 picture is shown 16:9, and the view is that much
+	wider (Hor+: x 0.6667 where stock has x 0.5) */
+	{
+		extern int oxbox_widescreen(void);
+
+		if (oxbox_widescreen())
+			half_bounds_width *= 4.0f / 3.0f;
+	}
+#endif
 	half_bounds_height =
 		(frustum->frustum_bounds.y1 - frustum->frustum_bounds.y0) * 0.5f;
 	bounds_center_x =

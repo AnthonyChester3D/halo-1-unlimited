@@ -521,8 +521,10 @@ static void rasterizer_sort_external(
 
 	/* port: move model packets next to their glass surface, leaving other
 	   packets on their original side of every surface. */
+#if !defined(HALO_XBOX_TARGET) /* oxbox: the Xbox game's order (and no per-frame vertex walk) */
 	rasterizer_transparent_geometry_order_models(
 		transparent_geometry_group_sorted_indices, transparent_geometry_group_count);
+#endif
 
 	for (group_index = 0; group_index<transparent_geometry_group_count; group_index++)
 	{

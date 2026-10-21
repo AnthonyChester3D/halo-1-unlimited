@@ -39,7 +39,9 @@ boolean shell_initialize(
 		tag_files_open();
 		/* port: Custom Edition maps live in custom_maps, beside maps.
 		Make that folder when this launch does not already have it. */
+#if !defined(HALO_XBOX_TARGET) /* oxbox: no Custom Edition maps */
 		directory_create("custom_maps");
+#endif
 		real_math_initialize();
 		game_state_initialize();
 		

@@ -270,6 +270,17 @@ short transport_initialize(
 		startup_params.cfgSockMaxSockets = 128;
 		startup_params.cfgKeyRegMax = 1;
 		startup_params.cfgSecRegMax = 32;
+#ifdef HALO_XBOX_TARGET
+		/* oxbox: the distributed netcode's datagrams (about 55 a second each way) and its stream; with the retail
+		sizes (24 pages, 8 receive slots) a client in xemu stopped receiving within a minute, with these it held */
+		/* oxbox test build 06: 64 pages (256 KB) with the connection queues sized for 16 players
+		(network_connection.c); 128 before */
+		startup_params.cfgPrivatePoolSizeInPages = 64;
+		startup_params.cfgEnetReceiveQueueLength = 32;
+#if defined(OXBOX_TEST_RXQ)
+		startup_params.cfgEnetReceiveQueueLength = OXBOX_TEST_RXQ;
+#endif
+#endif
 
 		link_status = XNetGetEthernetLinkStatus();
 		error(
@@ -281,7 +292,12 @@ short transport_initialize(
 			(link_status & XNET_ETHERNET_LINK_FULL_DUPLEX) ? " in full-duplex mode" : "",
 			(link_status & XNET_ETHERNET_LINK_HALF_DUPLEX) ? " in half-duplex mode" : "");
 
+#if defined(OXBOX_STRIP)
+		/* oxbox: a development kit's switch (XNET_STARTUP_BYPASS_SECURITY), not retail's */
+		bypass_file = NULL;
+#else
 		bypass_file = fopen("d:\\bypass_security.txt", "r");
+#endif
 		if (bypass_file)
 		{
 			error(_error_silent, "XNET_STARTUP_BYPASS_SECURITY [ON]");

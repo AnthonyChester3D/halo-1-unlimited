@@ -412,6 +412,17 @@ enum
 	long as the host waits for a silent machine, network_server_manager.c):
 	network_game_client_network_lost */
 	NETWORK_GAME_CLIENT_LINK_DOWN_TIMEOUT = 15000,
+	/* how long the host's stream may be silent in the lobby and on the
+	carnage report before the client gives up on the host (it sends a
+	keep-alive every 5 seconds). oxbox: 45 seconds, not 15: a console whose
+	stream lost packets after the game over (an xemu host and a real Xbox)
+	gave up while the stream was still retrying them, and the host, with
+	nothing wrong, lost it (test build 22) */
+#if defined(HALO_XBOX_TARGET)
+	NETWORK_GAME_CLIENT_LOBBY_TIMEOUT = 45000,
+#else
+	NETWORK_GAME_CLIENT_LOBBY_TIMEOUT = 15000,
+#endif
 	/* port: how long a frame the client spends on the messages that came
 	(a host that floods it with them would hold each frame for as long as
 	they took): those left wait in the queue, in order, for the next
@@ -2355,6 +2366,19 @@ static boolean network_game_client_map_name_is_valid(
 
 	if (!memchr(map_name, '\0', size))
 		return FALSE;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a folder map's key ("+folder", "+pack/folder": port/linux/game/hmp_maps.c), looked up in this
+	console's own list of folders, never opened as a path: the characters a folder's name can have */
+	if (map_name[0] == '+')
+	{
+		for (character = map_name + 1; *character; character++)
+		{
+			if ((unsigned char)*character < 0x20 || (unsigned char)*character > 0x7e || strchr("\\:*?\"<>|", *character))
+				return FALSE;
+		}
+		return map_name[1] != 0 && !strstr(map_name, "..");
+	}
+#endif
 	for (character = map_name; *character; character++)
 	{
 		if (!((*character >= 'a' && *character <= 'z') || (*character >= 'A' && *character <= 'Z') ||
@@ -2890,6 +2914,35 @@ static boolean network_game_client_idle_joining(
 	return success;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the host's stream silent in the lobby or on the carnage report for 8 seconds (it sends something every 5),
+and back, in the log: whether a stalled stream comes back, and after how long (test build 22's lost console) */
+static void network_game_client_log_stream_silence(
+	struct network_game_client *client,
+	char const *where)
+{
+	static boolean silent = FALSE;
+	static unsigned long longest = 0;
+	unsigned long silence = network_connection_silent_milliseconds(client->connection);
+
+	if (silence > 8 * MILLISECONDS_PER_SECOND)
+	{
+		if (!silent)
+			network_event("the host's stream has been silent for 8 seconds (%s)", where);
+		silent = TRUE;
+		if (silence > longest)
+			longest = silence;
+	}
+	else if (silent)
+	{
+		silent = FALSE;
+		network_event("the host's stream came back after %lu seconds of silence (%s)",
+			longest / MILLISECONDS_PER_SECOND, where);
+		longest = 0;
+	}
+}
+#endif
+
 static boolean network_game_client_idle_pregame(
 	struct network_game_client *client)
 {
@@ -2902,7 +2955,7 @@ static boolean network_game_client_idle_pregame(
 		{
 			network_game_client_update_precache_status(client);
 
-			if (!(success = network_connection_idle(client->connection, 15000, NULL)))
+			if (!(success = network_connection_idle(client->connection, NETWORK_GAME_CLIENT_LOBBY_TIMEOUT, NULL)))
 			{
 				network_event("network_connection_idle() failed in network_game_client_idle_pregame()");
 				if (network_game_client_process_last_messages(client))
@@ -2914,6 +2967,9 @@ static boolean network_game_client_idle_pregame(
 			{
 				network_event("network_game_client_process_incoming_messages() failed in network_game_client_idle_pregame()");
 			}
+#if defined(HALO_XBOX_TARGET)
+			network_game_client_log_stream_silence(client, "lobby");
+#endif
 		}
 		else
 		{
@@ -3031,7 +3087,7 @@ static boolean network_game_client_idle_postgame(
 	}
 	else
 	{
-		if (!(success = network_connection_idle(client->connection, 15000, NULL)))
+		if (!(success = network_connection_idle(client->connection, NETWORK_GAME_CLIENT_LOBBY_TIMEOUT, NULL)))
 		{
 			network_event("network_connection_idle() failed in network_game_client_idle_postgame()");
 			if (network_game_client_process_last_messages(client))
@@ -3043,6 +3099,9 @@ static boolean network_game_client_idle_postgame(
 		{
 			network_event("network_game_client_process_incoming_messages() failed in network_game_client_idle_postgame()");
 		}
+#if defined(HALO_XBOX_TARGET)
+		network_game_client_log_stream_silence(client, "carnage report");
+#endif
 	}
 
 	if (!success)

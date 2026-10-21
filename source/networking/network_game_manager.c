@@ -257,9 +257,16 @@ void network_game_generate_local_machine_name(
 	char ascii_machine_name[32];
 	HANDLE find_handle;
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the random names kept while the menus' list is loaded, for the
+	players a host adds in game (network_game_ui.c) */
+	network_game_get_random_player_name();
+#endif
+
 	/* port: a machine that brings one player to the game (the one who
 	joined multiplayer on it) is named after that player's profile, not the
 	system's random nickname: the system link list shows a host's game by it */
+#if !defined(HALO_XBOX_TARGET) /* oxbox: the Xbox game names the machine by the console's nickname (retail) */
 	{
 		short local_player_index;
 		short joined_player_index = NONE;
@@ -286,6 +293,7 @@ void network_game_generate_local_machine_name(
 			}
 		}
 	}
+#endif
 	find_handle = XFindFirstNicknameW(FALSE, machine_name, 32);
 
 	if (find_handle == INVALID_HANDLE_VALUE)

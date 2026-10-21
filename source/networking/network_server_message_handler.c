@@ -665,6 +665,13 @@ static void network_game_server_clean_player_name(
 	wchar_t base[NUMBEROF(player->name)];
 	long number;
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: as the Xbox game: no name (the Default and Inverted profiles)
+	stays empty, and the host then gives a random one from the pool, as it
+	does a name another player has (network_game_server_add_player) */
+	player_name_clean(player->name, NUMBEROF(player->name));
+	return;
+#endif
 	network_game_server_clean_name(player->name, NUMBEROF(player->name), L"Player");
 	csmemcpy(base, player->name, sizeof(base));
 	for (number = 2; number < 100 && network_game_server_player_name_taken(server, player->name, own_index); number++)

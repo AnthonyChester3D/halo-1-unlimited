@@ -753,7 +753,9 @@ void input_abstraction_update(
 					error(_error_silent, "unknown joystick preset");
 					break;
 			}
+#if !defined(HALO_XBOX_TARGET) /* oxbox: the gamepad alone */
 			keyboard_controls_update(controller_index, state);
+#endif
 			input_abstraction_globals.controller_available[controller_index] = TRUE;
 		}
 		else

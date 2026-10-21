@@ -376,7 +376,11 @@ void release_assert_failed(
 		char const *file;
 		long line;
 		unsigned long count;
+#ifdef OXBOX_STRIP
+	} places[64];   /* (oxbox: a place past these is reported every time) */
+#else
 	} places[512];
+#endif
 	static volatile long places_lock;
 	unsigned long index = ((unsigned long)(size_t)file + (unsigned long)line * 2654435761UL) % NUMBEROF(places);
 	unsigned long count = 0;
@@ -420,6 +424,46 @@ void release_assert_failed(
 		error(_error_log, "EXCEPTION %s in %s,#%ld: %s (release build)", fatal ? "assert" : "warn",
 			file, line, information ? information : "<no reason given>");
 	}
+}
+#endif
+
+#if defined(OXBOX_STRIP)
+/* oxbox: a failed check, by the address after its call (cseries.h): noted
+the 1st, 10th, 100th... time at each place, as release_assert_failed */
+__attribute__((noinline)) void oxbox_assert_failed(
+	void)
+{
+	static struct
+	{
+		unsigned long address;
+		unsigned long count;
+	} places[256];
+	unsigned long address = (unsigned long)(size_t)__builtin_return_address(0);
+	unsigned long index = (address * 2654435761UL) % NUMBEROF(places);
+	unsigned long count = 0;
+	unsigned long probe;
+
+	for (probe = 0; probe < NUMBEROF(places); probe++)
+	{
+		if (!places[index].address)
+			places[index].address = address;
+		if (places[index].address == address)
+		{
+			count = ++places[index].count;
+			break;
+		}
+		index = (index + 1) % NUMBEROF(places);
+	}
+	if (count > 1)
+	{
+		unsigned long power = 10;
+
+		while (power < count && power < 1000000000UL)
+			power *= 10;
+		if (power != count)
+			return;
+	}
+	error(_error_log, "EXCEPTION assert at %08lx (release build, failed %lu times)", address, count ? count : 1);
 }
 #endif
 

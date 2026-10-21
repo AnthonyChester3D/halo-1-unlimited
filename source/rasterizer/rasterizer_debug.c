@@ -74,7 +74,11 @@ symbols in this file:
 
 enum
 {
-	MAXIMUM_DEBUG_PRIMITIVES = 8192,
+#if defined(OXBOX_STRIP)
+	MAXIMUM_DEBUG_PRIMITIVES = 32, /* (8192; oxbox: debug drawing only, 3 x 2 KB instead of 3 x 30 KB) */
+#else
+	MAXIMUM_DEBUG_PRIMITIVES = 512, /* (8192: the proof of concept saves 1.4 MB of debug lines) */
+#endif
 	MAXIMUM_VERTICES_PER_DEBUG_PRIMITIVE = 3
 };
 

@@ -3556,11 +3556,13 @@ static void update_channels(
 				{
 				case _sound_spatialization_mode_none:
 					/* port: (unpanned and dry: dsound_port_set_channel_stereo_position) */
+#if !defined(HALO_XBOX_TARGET) /* oxbox: the Xbox's stereo channels, unpanned, faded linearly, dry */
 					if (TEST_FLAG(channel->type_flags, _sound_channel_stereo_bit))
 					{
 						dsound_port_set_channel_stereo_position(channel_index, FALSE, 0.f, 0.f, 0.f, 1.f,
 							0.f, 0.f, FALSE);
 					}
+#endif
 					break;
 
 				case _sound_spatialization_mode_absolute:
@@ -3605,11 +3607,13 @@ static void update_channels(
 						factor is 1), so that it fades as a mono sound does. A
 						3D sound is not cut off at the tag's maximum distance
 						either: none starts past it. */
+#if !defined(HALO_XBOX_TARGET) /* oxbox: the Xbox's stereo channels, unpanned, faded linearly, dry */
 						if (TEST_FLAG(channel->type_flags, _sound_channel_stereo_bit))
 						{
 							distance_fade = minimum_distance > 0.f && distance > minimum_distance ?
 								minimum_distance / distance : 1.f;
 						}
+#endif
 						fade *= distance_fade;
 						/* port: and a stereo sound is panned towards where it
 						is, as the mixer pans a 3D one (port/linux/src/dsound_sdl.c,
@@ -3618,6 +3622,7 @@ static void update_channels(
 						stereo channels never were: a Custom Edition map's stereo
 						gunfire came from nowhere. (Obstruction and occlusion go
 						where the 3D channels' call above puts them.) */
+#if !defined(HALO_XBOX_TARGET) /* oxbox: the Xbox's stereo channels, unpanned, faded linearly, dry */
 						if (TEST_FLAG(channel->type_flags, _sound_channel_stereo_bit))
 						{
 							real horizontal = square_root(
@@ -3633,6 +3638,7 @@ static void update_channels(
 								distance, minimum_distance, distance_fade,
 								stereo_obstruction, stereo_occlusion, stereo_underwater);
 						}
+#endif
 					}
 					break;
 

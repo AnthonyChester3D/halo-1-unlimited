@@ -1754,8 +1754,13 @@ short actor_select_firing_position(
 	real best_evaluation= 0.0f;
 	boolean debug_evaluation= FALSE;
 
+#if defined(OXBOX_STRIP)
+	/* oxbox: the AI debug views are compiled out (ai_debug_render), and their records with them */
+	if (FALSE)
+#else
 	if (actor->meta.encounter_index==ai_debug.selected_squad_index &&
 		(ai_debug.selected_actor_index==NONE || ai_debug.selected_actor_index==actor_index))
+#endif
 	{
 		if (ai_debug.render_evaluations &&
 			evaluation_context->evaluation_mode!=_firing_point_evaluation_mode_pursue)
@@ -2085,7 +2090,11 @@ short actor_select_firing_position(
 				}
 				if (TEST_FLAG(evaluation_context->allowed_position_mask, firing_position_definition->group_index))
 				{
+#if defined(OXBOX_STRIP)
+					if (debug_evaluation) /* oxbox: (no debug records on the Xbox: ai_debug.h) */
+#else
 					if (actor->meta.encounter_index==ai_debug.selected_squad_index)
+#endif
 					{
 						ai_debug.actor_record[index].pursuit=
 							evaluation_context->evaluation_mode==_firing_point_evaluation_mode_pursue;

@@ -243,6 +243,12 @@ boolean rasterizer_frame_statistics_initialize(
 {
 	boolean success = TRUE;
 
+#if defined(OXBOX_STRIP)
+	/* oxbox: the debug statistics' 144 KB scratch, only used with rasterizer_stats on (the counts below
+	are 0 without it) */
+	rasterizer_frame_statistics_temp_buffer = NULL;
+	return TRUE;
+#endif
 	rasterizer_frame_statistics_temp_buffer = match_malloc(
 		"c:\\halo\\SOURCE\\rasterizer\\rasterizer_frame_statistics.c",
 		41,
@@ -354,6 +360,8 @@ long rasterizer_frame_statistics_count_static_vertices(
 {
 	long vertex_count = 0;
 
+	if (!rasterizer_frame_statistics_temp_buffer)
+		return 0;
 	if (triangle_buffer && vertex_buffer)
 	{
 		if (triangle_buffer->type == _triangle_buffer_type_precompiled_strip)
@@ -401,6 +409,8 @@ long rasterizer_frame_statistics_count_dynamic_vertices(
 {
 	long vertex_count = 0;
 
+	if (!rasterizer_frame_statistics_temp_buffer)
+		return 0;
 	if (dynamic_triangle_buffer_index >= 0)
 	{
 		short *triangles = rasterizer_dynamic_triangles_lock(dynamic_triangle_buffer_index);

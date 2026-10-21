@@ -704,6 +704,12 @@ static boolean network_client_unreliable_connection_read(
 	return FALSE;
 }
 
+unsigned long network_connection_silent_milliseconds(
+	struct network_connection *connection)
+{
+	return connection ? system_milliseconds() - connection->last_keep_alive_time : 0;
+}
+
 void network_connection_keep_alive(
 	struct network_connection *connection)
 {
@@ -990,7 +996,13 @@ static struct network_connection *network_connection_create_client_from_endpoint
 		connection->reliable_endpoint = reliable_endpoint;
 		connection->reliable_incoming_queue = circular_queue_new(
 			"incoming-reliable",
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: two of a client's largest messages (it sends little on its stream: its hit reports,
+			asking for objects); more waits in the socket, read the next frame (24 KB less per client) */
+			2 * RELIABLE_MESSAGE_MAXIMUM_SIZE);
+#else
 			0x8000);
+#endif
 		if (!connection->reliable_incoming_queue)
 		{
 			network_connection_delete(connection);
@@ -1086,6 +1098,21 @@ static boolean network_connection_idle_client_reliable_endpoint(
 	{
 		error(_error_silent, "blocked in network_connection_idle_client_reliable_endpoint");
 	}
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the most the stream's queue has held (the host's for a client, a machine's from its host), logged
+	as it grows, to size them (test build 15: 8 KB and 16 KB) */
+	{
+		static long peaks[2];
+		boolean serverside = TEST_FLAG(connection->flags, _connection_create_serverside_client_bit) != 0;
+		long used = circular_queue_size(connection->reliable_incoming_queue);
+
+		if (used >= peaks[serverside] + 1024)
+		{
+			peaks[serverside] = used;
+			error(_error_silent, "%s reliable incoming queue peak %ld bytes", serverside ? "host's" : "client's", used);
+		}
+	}
+#endif
 
 	return success;
 }
@@ -1125,7 +1152,13 @@ struct network_connection *network_connection_new(
 				connection = &server->connection;
 				reliable_queue_size = 0;
 				/* room for every machine's input datagrams between two idles */
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox: 15 clients on the Xbox, not the PC's 127 (January: 0x1900); a queue only
+				takes what it has room for, the rest waits in the socket */
+				unreliable_queue_size = 0x10000;
+#else
 				unreliable_queue_size = 0x20000;
+#endif
 			}
 			else
 			{
@@ -1142,6 +1175,15 @@ struct network_connection *network_connection_new(
 			0xB6);
 		if (connection)
 		{
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: sized for 16 players, not the PC's 128 (January: 0x8000 and 0x640). The stream's
+			queue only reads what it has room for (the rest waits in the socket, TCP holds it), so a
+			smaller one costs only throughput in a burst */
+			/* (test build 15: the stream's 16 KB, four of the host's largest messages; 64 KB before: the
+			rest waits in the socket, read the next frame, 480 KB a second) */
+			reliable_queue_size = 0x4000;
+			unreliable_queue_size = 0x8000;
+#else
 			/* a few seconds of per-tick updates of 128 players (3.9 KB each) */
 			reliable_queue_size = 0x40000;
 			/* room for the host's per-tick datagrams (up to
@@ -1149,6 +1191,7 @@ struct network_connection *network_connection_new(
 			game's 0x640 held one, and what the host sent waited in the
 			socket, later every frame */
 			unreliable_queue_size = 0x20000;
+#endif
 		}
 	}
 
@@ -1866,7 +1909,15 @@ static boolean network_connection_write_reliable(
 			progress */
 			connection->reliable_outgoing_queue = circular_queue_new(
 				"outgoing-reliable",
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox: 128 KB, not 256: on a host with 15 clients two lagging
+				ones would have taken all the free memory (what a game in
+				progress sends a late joiner is the largest burst; the peak is
+				logged) */
+				0x20000);
+#else
 				0x40000);
+#endif
 			if (!connection->reliable_outgoing_queue)
 			{
 				return FALSE;
@@ -1884,6 +1935,18 @@ static boolean network_connection_write_reliable(
 			error(_error_silent, "the reliable outgoing queue overflowed");
 			return FALSE;
 		}
+#if defined(HALO_XBOX_TARGET)
+		{
+			static long peak;
+			long size = circular_queue_size(connection->reliable_outgoing_queue);
+
+			if (size > peak + 8192)
+			{
+				peak = size;
+				error(_error_silent, "reliable outgoing queue peak %ld bytes", size);
+			}
+		}
+#endif
 	}
 
 	return TRUE;
@@ -1930,6 +1993,15 @@ static boolean network_connection_flush_reliable(
 			return FALSE;
 		}
 	}
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the 256 KB a backed-up stream got (network_connection_write_reliable) given back once it
+	has all gone, so a host doesn't keep one for every client that ever lagged or joined in progress */
+	if (circular_queue_size(queue) == 0)
+	{
+		circular_queue_delete(queue);
+		connection->reliable_outgoing_queue = NULL;
+	}
+#endif
 
 	return TRUE;
 }
@@ -1948,7 +2020,11 @@ static void network_connection_flush_reliable_last(
 	while (connection->reliable_outgoing_queue && circular_queue_size(connection->reliable_outgoing_queue) > 0 &&
 		network_connection_flush_reliable(connection) &&
 		circular_queue_size(connection->reliable_outgoing_queue) > 0 &&
+#if defined(HALO_XBOX_TARGET)
+		system_milliseconds() - start_time < 100 && /* oxbox: no long hitch when a machine leaves */
+#else
 		system_milliseconds() - start_time < 500 &&
+#endif
 		system_milliseconds() - connection->reliable_outgoing_time < 100)
 	{
 		Sleep(5);

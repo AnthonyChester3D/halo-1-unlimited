@@ -403,7 +403,7 @@ symbols in this file:
 #include "custom_edition_cache.h" /* port: custom_edition_level_name */
 #include "view_fov.h" /* port: display.fov, before the projection and culling */
 
-#if defined(HALO_WINDOWS) || defined(HALO_ANDROID) || defined(__linux__)
+#if (defined(HALO_WINDOWS) || defined(HALO_ANDROID) || defined(__linux__)) && !defined(HALO_XBOX_TARGET) /* oxbox: the Xbox build is the Xbox game */
 #define HALO_NATIVE_BUILD_INFO 1
 #ifndef HALO_BUILD_NUMBER
 #define HALO_BUILD_NUMBER 0
@@ -2749,7 +2749,14 @@ void main_rasterizer_throttle(
 				second (display.interpolation off). A millisecond is well
 				inside a 33 ms frame (Windows sets its timer to 1 ms:
 				win32_posix.c) */
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox: as the Xbox game: spin to the vertical blank, sleeping only while a map copies
+				to the cache (a sleep can wake late and miss the blank) */
+				if (cache_files_precache_in_progress())
+					Sleep(1);
+#else
 				Sleep(1);
+#endif
 				if (system_milliseconds() > start_milliseconds + 1000)
 				{
 					console_warning(
@@ -3376,6 +3383,115 @@ static void main_loop_web_frame(
 }
 #endif
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (test build 24): a frame of 100 ms or more goes in the log, with where its time went (the hunt for the lag
+spikes seen when a vehicle hit a wall): input, the network's start, the menus, the network's end, the game's ticks
+(the simulation: physics, collisions, objects), the camera, drawing, the wait for the graphics chip and the present;
+how many ticks it ran, the textures and sounds it had to read from the disc or hard drive (and the reads it waited
+for), and the bytes the game's sockets sent and got. At most a line every 2 seconds; the others counted. */
+enum
+{
+	_frame_probe_start,
+	_frame_probe_input,
+	_frame_probe_network,
+	_frame_probe_menus,
+	_frame_probe_network_end,
+	_frame_probe_ticks,
+	_frame_probe_camera,
+	_frame_probe_drawing,
+	_frame_probe_gpu_wait,
+	_frame_probe_present,
+	NUMBER_OF_FRAME_PROBE_MARKS
+};
+static LARGE_INTEGER frame_probe_marks[NUMBER_OF_FRAME_PROBE_MARKS];
+static long frame_probe_ticks_before;
+static unsigned long frame_probe_reads_before[5], frame_probe_net_before[2];
+extern unsigned long oxbox_texture_reads, oxbox_texture_read_bytes, oxbox_texture_blocking_reads;
+extern unsigned long oxbox_sound_reads, oxbox_sound_read_bytes;
+extern unsigned long oxbox_net_bytes_sent, oxbox_net_bytes_received;
+
+static void frame_probe_mark(
+	short mark)
+{
+	QueryPerformanceCounter(&frame_probe_marks[mark]);
+}
+
+static void frame_probe_start(
+	void)
+{
+	short mark;
+
+	frame_probe_mark(_frame_probe_start);
+	for (mark = 1; mark < NUMBER_OF_FRAME_PROBE_MARKS; mark++)
+		frame_probe_marks[mark] = frame_probe_marks[_frame_probe_start];
+	frame_probe_ticks_before = game_time_get();
+	frame_probe_reads_before[0] = oxbox_texture_reads;
+	frame_probe_reads_before[1] = oxbox_texture_read_bytes;
+	frame_probe_reads_before[2] = oxbox_texture_blocking_reads;
+	frame_probe_reads_before[3] = oxbox_sound_reads;
+	frame_probe_reads_before[4] = oxbox_sound_read_bytes;
+	frame_probe_net_before[0] = oxbox_net_bytes_sent;
+	frame_probe_net_before[1] = oxbox_net_bytes_received;
+}
+
+static void frame_probe_end(
+	void)
+{
+	static LARGE_INTEGER frequency;
+	static unsigned long last_line, unlogged;
+	LARGE_INTEGER end;
+	long ms[NUMBER_OF_FRAME_PROBE_MARKS];
+	long total;
+	short mark;
+
+	QueryPerformanceCounter(&end);
+	if (!frequency.QuadPart)
+		QueryPerformanceFrequency(&frequency);
+	if (frequency.QuadPart <= 0)
+		return;
+	total = (long)((end.QuadPart - frame_probe_marks[_frame_probe_start].QuadPart) * 1000 / frequency.QuadPart);
+	if (total < 100 || !game_in_progress() || !game_engine_running())
+		return;
+	if (system_milliseconds() - last_line < 2000)
+	{
+		unlogged++;
+		return;
+	}
+	last_line = system_milliseconds();
+	for (mark = 1; mark < NUMBER_OF_FRAME_PROBE_MARKS; mark++)
+	{
+		/* (a step the frame skipped took nothing: its mark is the one before) */
+		if (frame_probe_marks[mark].QuadPart < frame_probe_marks[mark - 1].QuadPart)
+			frame_probe_marks[mark] = frame_probe_marks[mark - 1];
+		ms[mark] = (long)((frame_probe_marks[mark].QuadPart - frame_probe_marks[mark - 1].QuadPart) * 1000 / frequency.QuadPart);
+	}
+	{
+		void platform_log(char const *format, ...);
+
+		platform_log("long frame: %ld ms at %lu s (%ld ticks): input %ld, network %ld, menus %ld, network end %ld, ticks %ld, "
+			"camera %ld, drawing %ld, gpu wait %ld, present %ld ms; textures read %lu (%lu KB, %lu waited for), sounds read %lu "
+			"(%lu KB); game sockets sent %lu B, got %lu B%s",
+			total, system_milliseconds() / 1000, game_time_get() - frame_probe_ticks_before,
+			ms[_frame_probe_input], ms[_frame_probe_network], ms[_frame_probe_menus], ms[_frame_probe_network_end],
+			ms[_frame_probe_ticks], ms[_frame_probe_camera], ms[_frame_probe_drawing], ms[_frame_probe_gpu_wait],
+			ms[_frame_probe_present],
+			oxbox_texture_reads - frame_probe_reads_before[0], (oxbox_texture_read_bytes - frame_probe_reads_before[1]) / 1024,
+			oxbox_texture_blocking_reads - frame_probe_reads_before[2], oxbox_sound_reads - frame_probe_reads_before[3],
+			(oxbox_sound_read_bytes - frame_probe_reads_before[4]) / 1024,
+			oxbox_net_bytes_sent - frame_probe_net_before[0], oxbox_net_bytes_received - frame_probe_net_before[1],
+			unlogged ? " (and more over 100 ms since the last line)" : "");
+		unlogged = 0;
+	}
+}
+#define FRAME_PROBE_START() frame_probe_start()
+#define FRAME_PROBE(mark) frame_probe_mark(mark)
+#define FRAME_PROBE_END() frame_probe_end()
+#else
+#define FRAME_PROBE_START()
+#define FRAME_PROBE(mark)
+#define FRAME_PROBE_END()
+#endif
+
 void main_loop(
 	void)
 {
@@ -3504,6 +3620,7 @@ static boolean main_loop_iteration(
 		}
 
 		profile_frame_start();
+		FRAME_PROBE_START();
 		profile_scope_enter(main_input_section)
 		input_frame_begin();
 		input_update();
@@ -3514,17 +3631,23 @@ static boolean main_loop_iteration(
 		event_manager_update();
 		telnet_console_process();
 		profile_scope_exit(main_platform_events_section)
+		FRAME_PROBE(_frame_probe_input);
 
 		if (!shell_application_is_paused())
 		{
 			render_frame = TRUE;
 
 			/* automated system link tests (port/linux/game/network_test.c) */
+#if !defined(HALO_XBOX_TARGET) /* oxbox: no network tests, voice chat or PC map sharing on the Xbox */
 			network_test_update(main_globals.main_menu_scenario_loaded, main_globals.seconds_elapsed);
 			/* port: voice chat, in the lobby and in game (port/linux/game/network_voice.c) */
 			network_voice_update();
 			/* port: map sharing, in the lobby and in game (port/linux/game/map_share.c) */
 			map_share_update();
+#else
+			/* oxbox: Halo Universal's map sharing, play stats and END GAME (port/linux/game/hmp_share.c) */
+			map_share_update();
+#endif
 			profile_scope_enter(main_network_start_frame_section)
 			connection = main_globals.connection;
 			if (connection==_game_connection_network_client)
@@ -3557,12 +3680,14 @@ static boolean main_loop_iteration(
 				break;
 			}
 			profile_scope_exit(main_network_start_frame_section)
+			FRAME_PROBE(_frame_probe_network);
 
 			profile_scope(main_update_time_section, main_update_time();)
 			profile_scope_enter(main_ui_update_section)
 			process_ui_widgets();
 			bink_playback_update();
 			profile_scope_exit(main_ui_update_section)
+			FRAME_PROBE(_frame_probe_menus);
 
 			/* port: not the Xbox debug keyboard's End and Escape, which stop
 			the movie and restart the map: this keyboard reaches the game only
@@ -3596,9 +3721,11 @@ static boolean main_loop_iteration(
 						network_game_abort();
 					}
 					profile_scope_exit(main_network_end_frame_section)
+					FRAME_PROBE(_frame_probe_network_end);
 
 					profile_scope(main_game_time_update_section,
 						game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);)
+					FRAME_PROBE(_frame_probe_ticks);
 
 					render_frame = main_globals.main_menu_scenario_loaded ||
 						(main_globals.halt_time_scale &&
@@ -3615,6 +3742,7 @@ static boolean main_loop_iteration(
 					collision_log_end_period();
 					game_engine_update_non_deterministic((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 					profile_scope_exit(main_non_deterministic_update_section)
+					FRAME_PROBE(_frame_probe_camera);
 				}
 
 				if (main_globals.saving_map)
@@ -3630,6 +3758,7 @@ static boolean main_loop_iteration(
 					render_interpolation_frame_end();
 					profile_render_end();
 				}
+				FRAME_PROBE(_frame_probe_drawing);
 			}
 			else
 			{
@@ -3639,14 +3768,24 @@ static boolean main_loop_iteration(
 			}
 
 			profile_scope(main_throttle_section, main_rasterizer_throttle();)
+			FRAME_PROBE(_frame_probe_gpu_wait);
 
 			if (render_frame && !debug_no_drawing)
 			{
 				profile_scope(main_present_section, main_present_frame();)
 			}
+			FRAME_PROBE(_frame_probe_present);
 		}
 
 		input_frame_end();
+		FRAME_PROBE_END();
+#if defined(OXBOX_TEST_POOLS)
+		{
+			void game_state_report_pools(void);
+
+			game_state_report_pools();
+		}
+#endif
 		profile_frame_end();
 		main_frame_rate_debug();
 

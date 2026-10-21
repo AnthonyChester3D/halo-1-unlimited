@@ -82,7 +82,12 @@ extern real global_gravity;
 enum
 {
 	MAXIMUM_DAMAGE_EVENTS_PER_TICK = 256,
+#if defined(OXBOX_STRIP)
+	/* oxbox: a client's own players' hits in a tick (at most 4 players) */
+	MAXIMUM_HIT_REPORTS_PER_TICK = 128,
+#else
 	MAXIMUM_HIT_REPORTS_PER_TICK = 256,
+#endif
 	MAXIMUM_ENTRIES_PER_MESSAGE = 64,
 	/* the weapons a player has carried lately, whose damage the host takes
 	from them (a grenade lands, a rocket arrives, after its thrower has
@@ -110,9 +115,18 @@ enum
 	EFFECT_HITS_PER_SECOND = 4,
 	/* the explosions' hits of a tick told apart, a player's (an explosion
 	and an object each) */
+#ifdef OXBOX_STRIP
+	MAXIMUM_EXPLOSIONS_PER_TICK = 32,   /* (oxbox: 16 players; 10 KB less) */
+#else
 	MAXIMUM_EXPLOSIONS_PER_TICK = 64,
+#endif
 	/* what weapons and grenades deal, remembered (a power of two) */
+#ifdef OXBOX_STRIP
+	/* oxbox: 256 (21 KB less; full, the tags are looked up again) */
+	DAMAGE_RATE_CACHE_SIZE = 256,
+#else
 	DAMAGE_RATE_CACHE_SIZE = 1024,
+#endif
 	/* the damage events kept for killing blows */
 	RESERVED_KILL_EVENTS = 64,
 	/* tags within tags followed looking for a damage effect */
@@ -139,7 +153,11 @@ enum
 	loss, has its shooter where they were then; one that says it was made
 	long ago does not look further back than that) */
 	PLAYER_TRAIL_REPORT_SLACK_TICKS = TICKS_PER_SECOND,
+#ifdef OXBOX_STRIP
+	PLAYER_TRAIL_POINTS = 64,   /* (oxbox: about 6.4 seconds; 24 KB less) */
+#else
 	PLAYER_TRAIL_POINTS = 128,
+#endif
 	PLAYER_TRAIL_TICKS = PLAYER_TRAIL_INTERVAL_TICKS * PLAYER_TRAIL_POINTS,
 };
 

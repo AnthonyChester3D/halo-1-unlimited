@@ -123,7 +123,11 @@ enum
 
 enum
 {
+#if defined(OXBOX_STRIP)
+	MAXIMUM_PROFILE_VALUES = 16, /* oxbox: the 14 the debug profile graph has (64 x 524 bytes x 3 in the XBE) */
+#else
 	MAXIMUM_PROFILE_VALUES = 64,
+#endif
 
 	NUMBER_OF_PROFILE_GAME_VALUES = 3,
 	NUMBER_OF_PROFILE_FRAME_VALUES = 1,

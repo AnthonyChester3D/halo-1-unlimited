@@ -2572,7 +2572,9 @@ void _rasterizer_present(
 			"IDirect3DDevice8_Present(global_d3d_device, NULL, NULL, window_globals.hWndPresentTarget, NULL)");
 	}
 	rasterizer_globals.fps_accumulation_frame_index++;
+#if !defined(HALO_XBOX_TARGET) /* oxbox: always 640 wide */
 	rasterizer_screen_width_update();
+#endif
 	if (!success)
 		error(_error_silent, "### ERROR rasterizer_present failed");
 	return;

@@ -17,7 +17,13 @@ enum
 {
 	/* port: the most bytes of the empty data (tag_empty_data): more than
 	any tag's root or any block's element */
+#if defined(OXBOX_STRIP)
+	/* oxbox: 16 KB, four times the largest tag root (the dialogue's, 4,112
+	bytes; the scenario's 1,456) or block element */
+	TAG_EMPTY_DATA_SIZE = 0x4000,
+#else
 	TAG_EMPTY_DATA_SIZE = 0x10000,
+#endif
 };
 
 /* ---------- globals */

@@ -684,9 +684,14 @@ struct widget_instance;
 
 enum
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the Xbox's own menus: twice the Xbox's 16 KB, not the PC screens' 256 KB */
+	WIDGET_MEMORY_POOL_SIZE = 0x8000,
+#else
 	/* port: 16 KB on the Xbox; the PC version's screens (port/assets/menus)
 	have many more widgets */
 	WIDGET_MEMORY_POOL_SIZE = 0x40000,
+#endif
 	MAXIMUM_WIDGET_MEMORY_POOL_BLOCKS = 4096
 };
 
@@ -1452,6 +1457,14 @@ static long spinner_string_list_extra_count(
 static wchar_t *spinner_string_list_get_string(
 	long string_list_index,
 	short string_index);
+
+#if defined(HALO_XBOX_TARGET)
+static void root_process_event(struct widget_instance *widget, struct ui_widget_definition *definition,
+	struct event_record *event, boolean *widget_deleted);
+#define ROOT_PROCESS_EVENT(w, d, e, deleted) root_process_event((w), (d), (e), (deleted))
+#else
+#define ROOT_PROCESS_EVENT(w, d, e, deleted) widget_instance_process_one_event_recursive((w), (d), (e), (deleted))
+#endif
 
 /* ---------- globals */
 
@@ -3312,7 +3325,8 @@ static void event_handler_dispatch(
 			handler->function,
 			&widget_deleted))
 	{
-		error(_error_silent, "event handler function failed");
+		error(_error_silent, "event handler function failed (widget '%s', function %ld)",
+			widget && widget->name ? widget->name : "?", (long)handler->function);
 		function_failed = TRUE;
 	}
 	else
@@ -4086,6 +4100,10 @@ static void render_state_bitmap(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+short draw_string_and_hack_in_icons_end;
+#endif
+
 void draw_string_and_hack_in_icons(
 	rectangle2d *bounds,
 	rectangle2d *clip,
@@ -4233,6 +4251,10 @@ void draw_string_and_hack_in_icons(
 	if (current)
 		render_state_text(bounds, &cursor_bounds, current);
 	draw_string_set_indents(0, 0);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: where the line ended (hmp_browse.c measures lines it then draws so they end at a place) */
+	draw_string_and_hack_in_icons_end = cursor_bounds.x0;
+#endif
 
 	return;
 }
@@ -5332,6 +5354,17 @@ static void widget_instance_render_text_box(
 			color_alpha = color.alpha;
 		}
 	}
+#if defined(OXBOX_STRIP)
+	/* oxbox: the main menu's build number in the blue of the map and level
+	descriptions (ui\shell\main_menu\build_number is orange in the tag) */
+	if (widget->name && !strcmp(widget->name, "build_number"))
+	{
+		color.red = 0.16f;
+		color.green = 0.59f;
+		color.blue = 1.0f;
+		color_alpha = 1.0f;
+	}
+#endif
 	color.alpha = alpha_modifier * color_alpha;
 	if (TEST_FLAG(definition->text_box_flags, _text_box_flashing_text_bit))
 	{
@@ -7106,8 +7139,13 @@ static void widget_instance_render_recursive(
 			rectangle2d texels = bounds;
 			short frame_x, frame_y, frame_width, frame_height;
 			boolean shown = TRUE;
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: a folder map's preview.bin is laid out as Halo's own map pictures are (hmp_maps.c) */
+			boolean stretched = FALSE;
+#else
 			boolean stretched = custom_edition_picture &&
 				custom_edition_maps_campaign_level(widget->animation.current_frame_index) == NONE;
+#endif
 
 			if (pc_menu_frame_placement(bitmap, &frame_x, &frame_y, &frame_width, &frame_height))
 			{
@@ -7159,6 +7197,14 @@ static void widget_instance_render_recursive(
 			text_bounds.x0 += definition->horizontal_offset;
 			text_bounds.y0 += definition->vertical_offset;
 			menu_functions_text_box_drawn(widget, &text_bounds);
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: the host's machine name in the lobby has its mark beside it (port/linux/game/hmp_browse.c) */
+			{
+				extern void hmp_lobby_text_drawn(struct widget_instance *widget, rectangle2d const *bounds);
+
+				hmp_lobby_text_drawn(widget, &text_bounds);
+			}
+#endif
 		}
 		break;
 
@@ -7169,6 +7215,28 @@ static void widget_instance_render_recursive(
 			clip_rect,
 			offset,
 			focus);
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the map list's sort and button line (port/linux/game/hmp_browse.c), in the list's alpha */
+		{
+			extern char **hmp_maps_table(void);
+			extern void hmp_browse_render(short selected_index, float alpha);
+
+			if (widget->visible && widget->parameters.list.list_items &&
+				widget->parameters.list.list_items == (void *)hmp_maps_table())
+			{
+				hmp_browse_render(widget->parameters.list.selected_index, widget_instance_get_cumulative_alpha_modifier(widget));
+			}
+			else
+			{
+				/* oxbox: the lobby's SELECT GAMETYPE: its X =EDIT, Y =NEW (port/linux/game/hmp_game.c) */
+				extern boolean hmp_gametypes_list_is(struct widget_instance *list);
+				extern void hmp_gametypes_render(float alpha);
+
+				if (widget->visible && hmp_gametypes_list_is(widget))
+					hmp_gametypes_render(widget_instance_get_cumulative_alpha_modifier(widget));
+			}
+		}
+#endif
 		if (TEST_FLAG(
 				definition->list_flags,
 				_list_items_generated_from_string_list_tag) &&
@@ -7429,6 +7497,10 @@ void render_ui_widgets(
 static long spinner_string_list_extra_count(
 	long string_list_index)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the Xbox's kills to win (up to 50), no extra values */
+	return 0;
+#endif
 	if (string_list_index != NONE && !csstrcmp(tag_get_name(string_list_index),
 		"ui\\shell\\main_menu\\settings_select\\multiplayer_setup\\playlist_edit\\slayer_edit\\var_kills_to_win"))
 	{
@@ -7655,9 +7727,39 @@ picks up whichever pad is at hand. Its screens read every controller's
 events (process_ui_widgets), and take them
 (widget_takes_events_of_controller). With two or more players, each
 controller keeps to its own player's menus */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: whether a screen has panes of other players (split screen's
+profile select: a pane per controller), where each controller must keep to
+its own pane, as on the Xbox: player 1's took every controller's presses,
+so a second controller chose player 1's profile (white, nameless, played
+by the first controller) */
+static boolean widget_tree_has_other_players(
+	struct widget_instance const *widget)
+{
+	struct widget_instance const *child;
+
+	if (widget->local_player_index > 0)
+		return TRUE;
+	for (child = widget->child; child; child = child->next)
+	{
+		if (widget_tree_has_other_players(child))
+			return TRUE;
+	}
+	return FALSE;
+}
+#endif
+
 static boolean widget_takes_any_controller(
 	struct widget_instance const *widget)
 {
+#if defined(HALO_XBOX_TARGET)
+	struct widget_instance const *root = widget;
+
+	while (root->parent)
+		root = root->parent;
+	if (widget->local_player_index == 0 && widget_tree_has_other_players(root))
+		return FALSE;
+#endif
 	return widget->local_player_index == 0 && !pc_menu_split_players() &&
 		(we_are_at_the_main_menu || players_port_local_player_count() <= 1);
 }
@@ -7716,6 +7818,20 @@ static void widget_instance_process_one_event_recursive(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		3067,
 		widget && definition && event && return_widget_deleted);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the map list's own buttons (Halo Universal's browser: X / White sort, Y favorite, Black hide, LT / RT
+	groups; port/linux/game/hmp_browse.c) */
+	if (event_for_this_widget && widget->type == _ui_widget_type_spinner_list && event->type == _event_type_button)
+	{
+		extern boolean hmp_browse_event(struct widget_instance *list, struct event_record const *event);
+
+		if (hmp_browse_event(widget, event))
+		{
+			*return_widget_deleted = FALSE;
+			return;
+		}
+	}
+#endif
 	if (event->type == _event_type_button &&
 		event->data.button.index >= _widget_event_dpad_up &&
 		event->data.button.index <= _widget_event_dpad_right)
@@ -8199,6 +8315,42 @@ static void widget_instance_process_one_event_recursive(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a local player's top menu gets an event: the host's END GAME dialog takes its own A / B first, and opens once
+the pause menu is done with the event that asked for it (port/linux/game/hmp_game.c) */
+static void root_process_event(
+	struct widget_instance *widget,
+	struct ui_widget_definition *definition,
+	struct event_record *event,
+	boolean *widget_deleted)
+{
+	extern boolean hmp_game_dispatch(struct widget_instance *root, struct event_record *event);
+	extern void hmp_game_after_dispatch(struct widget_instance *root);
+	extern long hmp_options_dispatch(struct widget_instance *root, struct event_record *event);
+	long options = hmp_options_dispatch(widget, event);
+
+	if (options)
+	{
+		if (options == 2) *widget_deleted = TRUE;
+		return;
+	}
+	if (hmp_game_dispatch(widget, event))
+	{
+		*widget_deleted = TRUE;
+		return;
+	}
+	widget_instance_process_one_event_recursive(widget, definition, event, widget_deleted);
+	hmp_game_after_dispatch(widget);
+}
+
+struct widget_instance *ui_widget_get_active_widget(
+	short local_player_index)
+{
+	return local_player_index >= 0 && local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS ?
+		widget_globals.active_widgets[local_player_index] : NULL;
+}
+#endif
+
 static boolean ui_check_for_pause_game(
 	void)
 {
@@ -8291,6 +8443,20 @@ static boolean ui_check_for_pause_game(
 						widget_name = NULL;
 						break;
 					}
+#if defined(HALO_XBOX_TARGET)
+					/* oxbox: the host's gets END GAME (port/linux/game/hmp_game.c) */
+					if (widget_name)
+					{
+						extern void hmp_game_pause_menu_opened(struct widget_instance *root, short local_player_index);
+						struct widget_instance *pause_menu = ui_widget_load_by_name_or_tag(
+							widget_name, NONE, NULL, controller_index, NONE, NONE, NONE);
+
+						if (!pause_menu)
+							error(_error_silent, "failed to load multiplayer pause game window");
+						else if (!network_coop_active())
+							hmp_game_pause_menu_opened(pause_menu, controller_index);
+					}
+#else
 					if (widget_name &&
 						!ui_widget_load_by_name_or_tag(
 							widget_name,
@@ -8305,6 +8471,7 @@ static boolean ui_check_for_pause_game(
 							_error_silent,
 							"failed to load multiplayer pause game window");
 					}
+#endif
 				}
 				else
 				{
@@ -8444,7 +8611,9 @@ void process_ui_widgets(
 		644,
 		widget_globals.initialized);
 	widget_globals.current_system_milliseconds = system_milliseconds();
+#if !defined(HALO_XBOX_TARGET) /* oxbox: no mouse or touch */
 	ui_widgets_process_mouse();
+#endif
 	if (ui_widget_port_press_controller != NONE)
 	{
 		event_manager_post_button(ui_widget_port_press_controller, ui_widget_port_press_button);
@@ -8576,11 +8745,7 @@ void process_ui_widgets(
 				if (!pause_pressed)
 				{
 					event.controller_index = widget->local_player_index;
-					widget_instance_process_one_event_recursive(
-						widget,
-						definition,
-						&event,
-						&widget_deleted);
+					ROOT_PROCESS_EVENT(widget, definition, &event, &widget_deleted);
 				}
 			}
 			else
@@ -8589,11 +8754,7 @@ void process_ui_widgets(
 				{
 					if (!pause_pressed)
 					{
-						widget_instance_process_one_event_recursive(
-							widget,
-							definition,
-							&event,
-							&widget_deleted);
+						ROOT_PROCESS_EVENT(widget, definition, &event, &widget_deleted);
 						if (widget_deleted == TRUE)
 							break;
 					}

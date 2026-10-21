@@ -18,7 +18,12 @@ header included in hcex build.
 enum
 {
 	MAXIMUM_WINDOWS = 4,
+#ifdef OXBOX_STRIP
+	/* oxbox: 512 (20 KB less; past it a flare isn't drawn) */
+	MAXIMUM_LENS_FLARES_PER_FRAME = 512,
+#else
 	MAXIMUM_LENS_FLARES_PER_FRAME = 1024,
+#endif
 	MAXIMUM_LIGHTS_PER_WINDOW = 128,
 };
 
@@ -37,11 +42,19 @@ enum
 	/* port: the structure's 32768 triangles (render.h) and, past them, as
 	much again as the Xbox's 16384 left a frame for its lights, shadows and
 	contrails (a request that would fill the buffer is refused) */
+#if defined(OXBOX_STRIP)
+	RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLES = 32768, /* oxbox: the Xbox's (structure surfaces are 16384 again) */
+#else
 	RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLES = 49152,
+#endif
 	RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLE_BUFFERS = 1024,
 	/* four per particle (build_sprites_begin), for the native builds' larger
 	particle pool (halo_port_capacity.h) */
+#if defined(OXBOX_STRIP)
+	RASTERIZER_MAXIMUM_DYNAMIC_UNLIT_VERTICES = 8192, /* oxbox: the Xbox's (particles, weather, glows, antennas) */
+#else
 	RASTERIZER_MAXIMUM_DYNAMIC_UNLIT_VERTICES = 4 * HALO_PORT_MAXIMUM_PARTICLES,
+#endif
 	RASTERIZER_MAXIMUM_DYNAMIC_LIT_VERTICES = 2,
 	RASTERIZER_MAXIMUM_DYNAMIC_SCREEN_VERTICES = 16384,
 	RASTERIZER_MAXIMUM_DYNAMIC_MODEL_VERTICES = 2048,

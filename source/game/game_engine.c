@@ -1395,6 +1395,26 @@ static void game_engine_generate_title_string(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a wide string appended within a buffer of size characters */
+static void oxbox_ustrcat(
+	wchar_t *string,
+	wchar_t const *addition,
+	long size)
+{
+	long length = 0;
+
+	while (length < size - 1 && string[length])
+		length++;
+	while (length < size - 1 && *addition)
+		string[length++] = *addition++;
+	string[length] = 0;
+}
+
+/* oxbox: the rows the in-game score draws below its title (its heading and players) */
+static long oxbox_score_rows;
+#endif
+
 static void rasterize_in_game_score_draw_line(
 	wchar_t const *string,
 	boolean brighten,
@@ -1402,8 +1422,8 @@ static void rasterize_in_game_score_draw_line(
 	long row_index)
 {
 	rectangle2d bounds = render.camera.window_bounds;
-	short narrow_tab_stops[3];
-	short wide_tab_stops[3];
+	short narrow_tab_stops[4];
+	short wide_tab_stops[4];
 	short *tab_stops;
 	boolean splitscreen;
 	long font_index;
@@ -1416,6 +1436,9 @@ static void rasterize_in_game_score_draw_line(
 	wide_tab_stops[0] = 130;
 	wide_tab_stops[1] = 195;
 	wide_tab_stops[2] = 315;
+	/* oxbox: the ping column's, as Halo Universal's (PATCHES.txt 9b) */
+	narrow_tab_stops[3] = 260;
+	wide_tab_stops[3] = 410;
 
 	if (bounds.x1 - bounds.x0 > 320)
 		tab_stops = wide_tab_stops;
@@ -1423,7 +1446,7 @@ static void rasterize_in_game_score_draw_line(
 		tab_stops = narrow_tab_stops;
 
 	if (row_index)
-		draw_string_set_tab_stops(tab_stops, 3);
+		draw_string_set_tab_stops(tab_stops, 4);
 	else
 		draw_string_set_tab_stops(NULL, 0);
 
@@ -1441,6 +1464,15 @@ static void rasterize_in_game_score_draw_line(
 		if (!splitscreen)
 			line_height += font->descending_height;
 		line_height += font->ascending_height;
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: with many players on one screen the rows start higher, so the last stays above y=456
+		(Halo Universal: (456 / line height - rows - 2) lines down when that is less than 8) */
+		if (!splitscreen && line_height > 0 && oxbox_score_rows > 0 &&
+			456 / line_height - oxbox_score_rows - 2 < row_offset)
+		{
+			row_offset = MAX(456 / line_height - oxbox_score_rows - 2, 0);
+		}
+#endif
 
 		if (brighten)
 		{
@@ -2511,7 +2543,16 @@ static void game_engine_rasterize_in_game_score(
 {
 	wchar_t row_string[256];
 	wchar_t score_string[256];
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: Halo Universal's scoreboard (PATCHES.txt 9b): the stock scoreboard, all 16 players with one
+	view (6 in split screen), and a ping column in a network game */
+	struct statistic_buffer entries[16];
+	boolean ping_column = game_connection() == _game_connection_network_client ||
+		game_connection() == _game_connection_network_server;
+	wchar_t ping_string[16];
+#else
 	struct statistic_buffer entries[6];
+#endif
 	wchar_t title_string[80];
 	real_argb_color text_color;
 	real_argb_color team_colors[2];
@@ -2526,19 +2567,32 @@ static void game_engine_rasterize_in_game_score(
 
 	/* port: a full-screen view's its own, as is the campaign's
 	(game_engine_rasterize_scoreboard) */
+#if defined(HALO_XBOX_TARGET)
+	if (!game_engine)
+#else
 	if (local_player_count() <= 1 || !game_engine)
+#endif
 	{
 		game_engine_rasterize_scoreboard(player_index, alpha);
 		return;
 	}
 	game_engine_generate_title_string(title_string, player_index);
+#if !defined(HALO_XBOX_TARGET) /* oxbox: as the Xbox game, players who quit stay on the scoreboard as "Quit" */
 	statistic_buffer_in_game_only = TRUE;
+#endif
 	entry_count = select_players_to_display(
 		_postgame_statistic_ranking,
 		player_index,
 		entries,
+#if defined(HALO_XBOX_TARGET)
+		local_player_count() <= 1 ? 16 : 6);
+#else
 		NUMBEROF(entries));
+#endif
 	statistic_buffer_in_game_only = FALSE;
+#if defined(HALO_XBOX_TARGET)
+	oxbox_score_rows = entry_count + 1;
+#endif
 
 	color.alpha = alpha;
 	color.red = 0.7f;
@@ -2566,6 +2620,10 @@ static void game_engine_rasterize_in_game_score(
 	game_engine->format_score_name(score_string);
 	usnprintf(row_string, NUMBEROF(row_string), L"\t%s\t%s\t%s", column_name, score_name, score_string);
 	row_string[NUMBEROF(row_string) - 1] = 0;
+#if defined(HALO_XBOX_TARGET)
+	if (ping_column)
+		oxbox_ustrcat(row_string, L"\tPing", NUMBEROF(row_string));
+#endif
 	rasterize_in_game_score_draw_line(row_string, FALSE, &color, 1);
 
 	for (entry_index = 0; entry_index < entry_count; entry_index++)
@@ -2630,6 +2688,18 @@ static void game_engine_rasterize_in_game_score(
 				player->name,
 				status_string);
 			row_string[NUMBEROF(row_string) - 1] = 0;
+#if defined(HALO_XBOX_TARGET)
+			if (ping_column)
+			{
+				long ping = distributed_player_ping((short)DATUM_INDEX_TO_ABSOLUTE_INDEX(entry_player_index));
+
+				ping_string[0] = 0;
+				if (!player->quit_out_of_game && ping != NONE)
+					usnprintf(ping_string, NUMBEROF(ping_string), L"\t%ld", MIN(ping, 999L));
+				ping_string[NUMBEROF(ping_string) - 1] = 0;
+				oxbox_ustrcat(row_string, ping_string, NUMBEROF(row_string));
+			}
+#endif
 
 			if (has_teams)
 				row_color = &team_colors[PIN(player->team_index, 0, 1)];
@@ -2647,6 +2717,33 @@ static void game_engine_rasterize_in_game_score(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the postgame table for 16 players, as Halo Universal lays it out (its test build 22): "<gametype> on <map>" at
+y 72 where the teams' scores were; they move down a row (90, 108) and in a team game so does the table (column titles at
+144), keeping Halo's empty row above it. The last player stays above 380, clear of the button line at 410: a team game
+of 14 drops the empty row and one of 15-16 packs its rows tighter; a game without teams of more than 14 moves the table
+up. Rows (Halo's, 18 px each): teams' scores 4 and 5, column titles 7, players from 8. */
+#define POSTGAME_LAST_ROW_Y 380
+static long postgame_player_count;
+static short postgame_row_y(
+	long row)
+{
+	long n = postgame_player_count, h, step = 18, gap = 1;
+
+	if (global_variant.universal_variant.teams)
+	{
+		if (90 + (n + 3) * 18 > POSTGAME_LAST_ROW_Y) gap = 0;
+		if (90 + (n + 2) * 18 > POSTGAME_LAST_ROW_Y) step = ((POSTGAME_LAST_ROW_Y - 90) / (n + 2)) & ~1;
+		if (row == 4 || row == 5) return (short)(90 + (row - 4) * step);
+		if (row >= 7) return (short)(90 + (row - 5 + gap) * step);
+		return (short)(row * 18);
+	}
+	h = 126;
+	if (h + n * 18 > POSTGAME_LAST_ROW_Y) h -= ((h + n * 18 - POSTGAME_LAST_ROW_Y) + 17) / 18 * 18;
+	return (short)(row >= 7 ? h + (row - 7) * 18 : row * 18);
+}
+#endif
+
 static void drawline(
 	wchar_t const *string,
 	long row_index,
@@ -2660,13 +2757,26 @@ static void drawline(
 		&bounds,
 		-render.camera.viewport_bounds.x0,
 		-render.camera.viewport_bounds.y0);
+#if defined(HALO_XBOX_TARGET)
+	bounds.y0 = postgame_row_y(row_index);
+	bounds.y1 = (short)(bounds.y0 + line_height + line_spacing);
+#else
 	bounds.y0 = (short)(row_index * line_height);
 	bounds.y1 = (short)((row_index + 1) * line_height + line_spacing);
+#endif
 	draw_string_set_format(NONE, justification, 0);
 	rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, string);
 
 	return;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the postgame's button line with Y (=favorite) first (port/linux/game/hmp_browse.c) */
+extern void hmp_browse_postgame_button_line(rectangle2d *bounds, wchar_t const *text);
+#define POSTGAME_BUTTON_LINE(bounds, text) hmp_browse_postgame_button_line((bounds), (text))
+#else
+#define POSTGAME_BUTTON_LINE(bounds, text) draw_string_and_hack_in_icons((bounds), NULL, NULL, 0, (text), FALSE)
+#endif
 
 void game_engine_post_rasterize_post_game(
 	void)
@@ -2729,6 +2839,19 @@ void game_engine_post_rasterize_post_game(
 				TRUE);
 		}
 	}
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: all 16 players, laid out to fit (postgame_row_y), and "<gametype> on <map>" under the title
+	(port/linux/game/hmp_browse.c) */
+	{
+		extern void hmp_browse_postgame_title_line(void);
+
+		entry_count = select_players_to_display(_postgame_statistic_ranking, NONE, entries, MULTIPLAYER_MAXIMUM_PLAYERS);
+		postgame_player_count = entry_count;
+		hmp_browse_postgame_title_line();
+		draw_string_set_color(&winner_color);
+		draw_string_set_format(NONE, 0, 0);
+	}
+#endif
 
 	if (global_variant.universal_variant.teams)
 	{
@@ -2821,7 +2944,9 @@ void game_engine_post_rasterize_post_game(
 		drawline(row_string, 7, 0);
 	}
 
+#if !defined(HALO_XBOX_TARGET)
 	entry_count = select_players_to_display(_postgame_statistic_ranking, NONE, entries, 12);
+#endif
 	for (entry_index = 0; entry_index < entry_count; entry_index++)
 	{
 		long player_index = entries[entry_index].player_index;
@@ -2935,13 +3060,7 @@ void game_engine_post_rasterize_post_game(
 					unicode_string_list_get_string(string_list_index, 0x48);
 			else
 				prompt = L"";
-			draw_string_and_hack_in_icons(
-				&bounds,
-				NULL,
-				NULL,
-				0,
-				prompt,
-				FALSE);
+			POSTGAME_BUTTON_LINE(&bounds, prompt);
 			return;
 		}
 
@@ -2951,13 +3070,7 @@ void game_engine_post_rasterize_post_game(
 			prompt = unicode_string_list_get_string(string_list_index, 0x49);
 		else
 			prompt = L"";
-		draw_string_and_hack_in_icons(
-			&bounds,
-			NULL,
-			NULL,
-			0,
-			prompt,
-			FALSE);
+		POSTGAME_BUTTON_LINE(&bounds, prompt);
 	}
 
 	return;
@@ -3609,6 +3722,11 @@ boolean match_game_type(
 static boolean game_engine_infinite_grenades_internal(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the Xbox's rule: no infinite grenades with five or more players (grenades spawn instead) */
+	if (TEST_FLAG(game_engine_globals.flags, _game_engine_5_or_more_players_bit))
+		return FALSE;
+#endif
 	/* port: whatever the number of players (the Xbox game's had none with
 	five or more) */
 	return TEST_FLAG(global_variant.universal_variant.flags, _game_variant_infinite_grenades_bit);
@@ -4212,6 +4330,81 @@ static void game_engine_update_player_no_shield(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the Xbox's own light limits (flashlights off past 4 players or 4 vehicles, dynamic lights past 12
+players or 8 with 2 vehicles): they keep big system link games fast */
+static void game_engine_build_lighting(
+	void)
+{
+	long player_count = 0;
+	long object_count = 0;
+
+	{
+		struct data_iterator iterator;
+
+		data_iterator_new(&iterator, player_data);
+		while (data_iterator_next(&iterator))
+			player_count++;
+	}
+
+	if (global_variant.universal_variant.vehicle_set != _game_engine_vehicles_none)
+	{
+		if (global_variant.game_engine_index == game_engine_race)
+		{
+			struct scenario *scenario = global_scenario_get();
+			short flag_index;
+
+			for (flag_index = 0;
+				flag_index < scenario->netgame_flags.count;
+				flag_index++)
+			{
+				struct scenario_netgame_flag *flag = TAG_BLOCK_GET_ELEMENT(
+					&scenario->netgame_flags,
+					flag_index,
+					struct scenario_netgame_flag);
+
+				if (flag->type == _netgame_flag_race_vehicle)
+					object_count++;
+			}
+
+			if (object_count > player_count)
+				object_count = player_count;
+		}
+		else
+		{
+			struct object_iterator object_iterator;
+
+			object_iterator_new(
+				&object_iterator,
+				_object_mask_vehicle,
+				0);
+			while (object_iterator_next(&object_iterator))
+				object_count++;
+		}
+	}
+
+	if ((player_count > 8 && object_count >= 2) ||
+		player_count >= 13)
+	{
+		SET_FLAG(game_engine_globals.flags, _game_engine_disable_dynamic_light_bit, TRUE);
+	}
+
+	if (player_count > 4 ||
+		object_count >= 4 ||
+		TEST_FLAG(game_engine_globals.flags, _game_engine_disable_dynamic_light_bit))
+	{
+		SET_FLAG(game_engine_globals.flags, _game_engine_disable_integrated_lights_bit, TRUE);
+	}
+
+	if (player_count >= 5)
+		SET_FLAG(game_engine_globals.flags, _game_engine_5_or_more_players_bit, TRUE);
+
+	if (player_count >= 9)
+		SET_FLAG(game_engine_globals.flags, _game_engine_9_or_more_players_bit, TRUE);
+
+	return;
+}
+#else
 static void game_engine_build_lighting(
 	void)
 {
@@ -4238,6 +4431,7 @@ static void game_engine_build_lighting(
 
 	return;
 }
+#endif
 
 void game_engine_dispose_from_old_map(
 	void)
@@ -4605,7 +4799,12 @@ enum
 {
 	/* (a map places up to 80 vehicles, a Custom Edition map more: those
 	past this never came back) */
+#ifdef OXBOX_STRIP
+	/* oxbox: 256 (40 KB less): a stock map places up to 80, a ported Custom Edition map rarely more */
+	MAXIMUM_VEHICLE_HOMES = 256
+#else
 	MAXIMUM_VEHICLE_HOMES = 1024
+#endif
 };
 
 static struct
@@ -5676,6 +5875,17 @@ void game_engine_load_stage(
 
 	return;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the host's END GAME (port/linux/game/hmp_game.c): the game over now, as a score limit ends it, which tells
+every console. (The postgame used to come on the next tick, which cut the announcer's "Game over" off at "Game"; now
+the 7 seconds a score limit gets, the announcer and the fade, then the carnage report) */
+void game_engine_end_game_now(
+	void)
+{
+	game_engine_end_game();
+}
+#endif
 
 void game_engine_end_game(
 	void)
@@ -7366,6 +7576,10 @@ void game_engine_initialize(
 	if (variant && variant->game_engine_index)
 	{
 		global_variant = *variant;
+#if defined(OXBOX_TEST_VEHICLES)
+		/* oxbox: test builds only: every game with this vehicle set (the weaponless clients' repro) */
+		global_variant.universal_variant.vehicle_set = OXBOX_TEST_VEHICLES;
+#endif
 		game_engine_variant_cleanup(&global_variant);
 		/* port: the cleaned variant's (the one given may be any number) */
 		game_engine = game_engines[global_variant.game_engine_index];
@@ -7743,7 +7957,13 @@ long game_engine_remap_vehicle(
 
 		/* (port: and the other types a gametype's sets name, which a map may
 		have: game_engine_variant_vehicle_type) */
-		if (result != vehicle0 &&
+		if (
+#if defined(OXBOX_STRIP)
+			/* oxbox (Halo Universal 9): Vehicles: All keeps every vehicle the map places, not only the three
+			of its globals (None, Warthogs, Ghosts and Scorpions below as before) */
+			FALSE &&
+#endif
+			result != vehicle0 &&
 			result != vehicle1 &&
 			result != vehicle2 &&
 			((game_variant_options_get()->vehicle_set[0] == _game_engine_vehicles_default &&

@@ -484,6 +484,49 @@ static void saved_game_files_release_mapfile_mutex(
 static short enumerate_default_profiles(
 	void);
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: copies the files of a saved game folder (old_directory, ending in '\\') into new_directory, but its metadata
+(SaveMeta.xbx, which XCreateSaveGame made) and blam.sav (copied already); FALSE if one couldn't be copied */
+static boolean saved_game_folder_copy_files(
+	char const *old_directory,
+	char const *new_directory)
+{
+	char pattern[MAXIMUM_FILENAME_LENGTH + 1];
+	char from[MAXIMUM_FILENAME_LENGTH + 1];
+	char to[MAXIMUM_FILENAME_LENGTH + 1];
+	WIN32_FIND_DATAA data;
+	HANDLE find;
+	boolean result = TRUE;
+
+	_snprintf(pattern, MAXIMUM_FILENAME_LENGTH, "%s*", old_directory);
+	pattern[MAXIMUM_FILENAME_LENGTH] = 0;
+	find = FindFirstFileA(pattern, &data);
+	if (find == INVALID_HANDLE_VALUE)
+		return TRUE;
+	do
+	{
+		if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+			!_stricmp(data.cFileName, "SaveMeta.xbx") || !_stricmp(data.cFileName, "blam.sav"))
+		{
+			continue;
+		}
+		_snprintf(from, MAXIMUM_FILENAME_LENGTH, "%s%s", old_directory, data.cFileName);
+		from[MAXIMUM_FILENAME_LENGTH] = 0;
+		_snprintf(to, MAXIMUM_FILENAME_LENGTH, "%s%s", new_directory, data.cFileName);
+		to[MAXIMUM_FILENAME_LENGTH] = 0;
+		if (!CopyFileA(from, to, FALSE))
+		{
+			error(_error_silent, "couldn't copy %s to the renamed profile's folder", data.cFileName);
+			result = FALSE;
+		}
+	}
+	while (FindNextFileA(find, &data));
+	CloseHandle(find);
+
+	return result;
+}
+#endif
+
 /* ---------- globals */
 
 /* only the hard drive is supported by this build */
@@ -1105,6 +1148,17 @@ boolean synchronize_metadata_display_name_with_profile_name(
 								old_persistent_storage_path[MAXIMUM_FILENAME_LENGTH] = 0;
 								filename = strstr(old_persistent_storage_path, "blam.sav");
 
+#if defined(HALO_XBOX_TARGET)
+								/* oxbox: every other file of the old folder comes along (a retail savegame.bin, this build's
+								opence.bin, whatever else is there), as the old folder is deleted afterwards; a profile that
+								has no checkpoint of this build's is renamed too */
+								if (filename)
+								{
+									*filename = 0;
+									success = saved_game_folder_copy_files(old_persistent_storage_path, save_game_directory);
+								}
+								else
+#endif
 								if (filename)
 								{
 									*filename = 0;
@@ -1791,6 +1845,12 @@ long saved_game_file_find_profile_index_for_directory_path(
 void saved_game_files_delete_all_custom_profiles(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the saves are retail Halo's (its title ID): a script never deletes every one of them */
+	error(_error_silent, "saved_game_files_delete_all_custom_profiles: not on this build (the saves are retail Halo's)");
+	if (1)
+		return;
+#endif
 	XGAME_FIND_DATA find_data;
 	long number_of_enumerated_files = 0;
 	unsigned long memory_unit_index;
@@ -1945,12 +2005,17 @@ static void enumerate_memory_units(
 												if (!csmemcmp(&old_style_crc, block+checksum_data_size, sizeof(old_style_crc)))
 												{
 													error(_error_silent, "checksum validation matched old-style crc; updating saved game file '%s'", file.path);
+#if defined(HALO_XBOX_TARGET)
+													/* oxbox: read as is, never rewritten (the saves are retail Halo's) */
+													file.valid = TRUE;
+#else
 													csmemcpy(block+checksum_data_size, &checksum, sizeof(checksum));
 													if (file_set_position(&saved_game_file, 0) &&
 														file_write(&saved_game_file, sizeof(block), block))
 													{
 														file.valid = TRUE;
 													}
+#endif
 												}
 											}
 										}

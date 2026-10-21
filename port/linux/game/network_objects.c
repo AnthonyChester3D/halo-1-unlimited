@@ -66,6 +66,9 @@ same datum index (identifier and all), so that any message can name one:
 #include "network_coop.h"
 #include "network_distributed.h"
 #include "profile_sections.h"
+#if defined(OXBOX_TEST_VEHICLES)
+#include "tag_files/tag_files.h"
+#endif
 
 #include <math.h>
 
@@ -486,6 +489,36 @@ static struct
 	long create_failures;
 	long own_objects_removed;
 } objects_statistics;
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the host's inventories of this machine's own players' units taken (the unarmed diagnostic) */
+static long objects_client_own_inventories_received;
+/* oxbox: the host's inventories as they come here (the unarmed diagnostic): messages, entries, entries refused (the
+unit not one of the host's here, or dead), entries taken; and the host's inventory entries sent each machine */
+static struct
+{
+	long messages, entries, not_here, dead, taken, refusals_logged;
+	long last_units[8], last_count;            /* the units of the latest entries taken */
+} objects_client_inventory_counts;
+static long objects_host_inventory_entries_sent[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+#endif
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: what goes wrong with the host's objects on a client, in the log (oxbox_log.txt), at most
+DIAGNOSTIC_LINES a game: a create refused and why, the asking again, its own unit waiting for a weapon */
+void platform_log(const char *format, ...);
+enum { DIAGNOSTIC_LINES = 300 };
+static long objects_diagnostic_lines;
+static void objects_diagnostic_pool(char *text)
+{
+	struct objects_information information;
+
+	objects_information_get(&information);
+	sprintf(text, "%d objects, pool %d%% used", information.object_count, (int)(information.used_memory * 100.0f));
+}
+#define OBJECTS_DIAGNOSTIC(arguments) do { if (objects_diagnostic_lines++ < DIAGNOSTIC_LINES) platform_log arguments; } while (0)
+#else
+#define OBJECTS_DIAGNOSTIC(arguments) ((void)0)
+#endif
 
 void network_distributed_item_statistics(
 	long *creates,
@@ -943,13 +976,22 @@ static byte host_damage_animation_number;
 
 /* client: the host's latest pick of each type for each unit, by absolute
 index: its number, and when it came (NONE once played) */
+#if defined(OXBOX_STRIP)
+/* oxbox: a slot per absolute index modulo 256 (64 KB for every object
+otherwise): a pick is kept a moment only, and one that another unit's takes
+the slot of is the client's own, as without the host's */
+#define CLIENT_DAMAGE_ANIMATION_SLOTS 256
+#else
+#define CLIENT_DAMAGE_ANIMATION_SLOTS MAXIMUM_TRACKED_OBJECTS
+#endif
+#define CLIENT_DAMAGE_ANIMATION(absolute_index) client_damage_animations[(absolute_index) % CLIENT_DAMAGE_ANIMATION_SLOTS]
 static struct
 {
 	long unit_index;
 	short animation_index[NUMBER_OF_UNIT_DAMAGE_ANIMATIONS];
 	byte number[NUMBER_OF_UNIT_DAMAGE_ANIMATIONS];
 	long time[NUMBER_OF_UNIT_DAMAGE_ANIMATIONS];
-} client_damage_animations[MAXIMUM_TRACKED_OBJECTS];
+} client_damage_animations[CLIENT_DAMAGE_ANIMATION_SLOTS];
 
 /* whether the animation is one of the unit's graph */
 static boolean distributed_unit_has_animation(
@@ -987,14 +1029,14 @@ short network_objects_damage_animation(
 		host_damage_animations[host_damage_animation_count++].sends = DAMAGE_ANIMATION_SENDS;
 	}
 	else if (connection == _game_connection_network_client && absolute_index >= 0 &&
-		absolute_index < MAXIMUM_TRACKED_OBJECTS && client_damage_animations[absolute_index].unit_index == unit_index)
+		absolute_index < MAXIMUM_TRACKED_OBJECTS && CLIENT_DAMAGE_ANIMATION(absolute_index).unit_index == unit_index)
 	{
-		long *time = &client_damage_animations[absolute_index].time[type];
+		long *time = &CLIENT_DAMAGE_ANIMATION(absolute_index).time[type];
 
 		if (*time != NONE && game_time_get() - *time < DAMAGE_ANIMATION_KEPT_TICKS)
 		{
 			*time = NONE;
-			return client_damage_animations[absolute_index].animation_index[type];
+			return CLIENT_DAMAGE_ANIMATION(absolute_index).animation_index[type];
 		}
 	}
 	return animation_index;
@@ -1047,22 +1089,22 @@ void network_objects_handle_damage_animations(
 		{
 			continue;
 		}
-		if (client_damage_animations[absolute_index].unit_index != animation->unit_index)
+		if (CLIENT_DAMAGE_ANIMATION(absolute_index).unit_index != animation->unit_index)
 		{
-			csmemset(&client_damage_animations[absolute_index], 0, sizeof(client_damage_animations[absolute_index]));
-			client_damage_animations[absolute_index].unit_index = animation->unit_index;
+			csmemset(&CLIENT_DAMAGE_ANIMATION(absolute_index), 0, sizeof(CLIENT_DAMAGE_ANIMATION(absolute_index)));
+			CLIENT_DAMAGE_ANIMATION(absolute_index).unit_index = animation->unit_index;
 			for (type = 0; type < NUMBER_OF_UNIT_DAMAGE_ANIMATIONS; type++)
-				client_damage_animations[absolute_index].time[type] = NONE;
+				CLIENT_DAMAGE_ANIMATION(absolute_index).time[type] = NONE;
 		}
 		/* (a pick sent again) */
-		else if (client_damage_animations[absolute_index].number[animation->type] == animation->number)
+		else if (CLIENT_DAMAGE_ANIMATION(absolute_index).number[animation->type] == animation->number)
 		{
 			continue;
 		}
-		client_damage_animations[absolute_index].number[animation->type] = animation->number;
-		client_damage_animations[absolute_index].animation_index[animation->type] = animation->animation_index;
+		CLIENT_DAMAGE_ANIMATION(absolute_index).number[animation->type] = animation->number;
+		CLIENT_DAMAGE_ANIMATION(absolute_index).animation_index[animation->type] = animation->animation_index;
 		/* (replayed here already: switched to the host's if it has only just begun) */
-		client_damage_animations[absolute_index].time[animation->type] =
+		CLIENT_DAMAGE_ANIMATION(absolute_index).time[animation->type] =
 			unit_port_correct_damage_animation(animation->unit_index, animation->type, animation->animation_index) ?
 			NONE : game_time_get();
 	}
@@ -1142,6 +1184,16 @@ static void distributed_host_update_objects(
 				count = 0;
 			}
 		}
+#if defined(OXBOX_OBJLOG)
+		{
+			char *tag_get_name(long tag_index);
+			struct object_datum *made = object_get(iterator.index);
+
+			platform_log("objlog %ld: made %08lx %s at %.1f %.1f %.1f%s", game_time_get(), iterator.index,
+				tag_get_name(made->definition_index), made->object.position.x, made->object.position.y,
+				made->object.position.z, made->object.parent_object_index != NONE ? " (carried)" : "");
+		}
+#endif
 		objects_host_told[absolute_index] = iterator.index;
 		if (absolute_index >= objects_host_told_count)
 			objects_host_told_count = absolute_index + 1;
@@ -1159,6 +1211,9 @@ static void distributed_host_update_objects(
 	{
 		if (objects_host_told[absolute_index] == NONE || seen[absolute_index])
 			continue;
+#if defined(OXBOX_OBJLOG)
+		platform_log("objlog %ld: gone %08lx", game_time_get(), objects_host_told[absolute_index]);
+#endif
 		csmemset(&message.changes[count], 0, sizeof(message.changes[count]));
 		message.changes[count].change = _object_change_delete;
 		message.changes[count].object_index = objects_host_told[absolute_index];
@@ -1221,6 +1276,8 @@ void network_objects_client_asked(
 
 	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
 		return;
+	if (again)
+		OBJECTS_DIAGNOSTIC(("netobj: machine #%ld failed to make an object and asks for them all again", machine_index));
 	player_list = machine_get_player_list(machine_index);
 	/* (another machine in its place has other players) */
 	if ((again && game_time_get() - objects_host_machines[machine_index].time >= HOST_OBJECTS_RESEND_TICKS) ||
@@ -1447,20 +1504,31 @@ times), and a few at rest, round them all */
 static void distributed_host_send_states(
 	void)
 {
+#if defined(OXBOX_STRIP)
+	/* oxbox: the states are taken and sent STATES_PER_PASS at a time (90 KB
+	for every object at once otherwise); a game rarely has more to send in
+	a tick, and one that does sends the rest in more messages */
+	enum { STATES_PER_PASS = 256 };
+#else
 	/* (one come to rest may be in its turn too) */
-	static struct distributed_object_state states[MAXIMUM_TRACKED_OBJECTS + RESTING_STATES_PER_TICK];
-	static byte kinds[MAXIMUM_TRACKED_OBJECTS + RESTING_STATES_PER_TICK];
+	enum { STATES_PER_PASS = MAXIMUM_TRACKED_OBJECTS + RESTING_STATES_PER_TICK };
+#endif
+	static struct distributed_object_state states[STATES_PER_PASS];
+	static byte kinds[STATES_PER_PASS];
 	struct distributed_object_state_message message;
 	short limit = MIN(MAXIMUM_ENTRIES_PER_MESSAGE, DATAGRAM_ENTRIES(struct distributed_object_state));
 	short resting = 0;
 	long told_count = objects_host_told_count;
-	long state_count = 0;
-	long absolute_index;
-	long step;
+	long state_count;
+	long absolute_index = 0;
+	long step = 0;
 	short machine_number;
 
+	do
+	{
+	state_count = 0;
 	/* the moving ones, and those at rest now that were not */
-	for (absolute_index = 0; absolute_index < told_count; absolute_index++)
+	for (; absolute_index < told_count && state_count < STATES_PER_PASS; absolute_index++)
 	{
 		long object_index = distributed_host_placed_object(absolute_index);
 		boolean was_moving = objects_host_state_moving[absolute_index];
@@ -1479,16 +1547,17 @@ static void distributed_host_send_states(
 		kinds[state_count++] = at_rest ? _host_state_to_all : _host_state_moving;
 	}
 	/* those at rest from the cursor on, round to it */
-	for (step = 0; step < told_count && resting < RESTING_STATES_PER_TICK; step++)
+	for (; absolute_index >= told_count && step < told_count && resting < RESTING_STATES_PER_TICK &&
+		state_count < STATES_PER_PASS; step++)
 	{
 		long object_index;
+		long resting_index = (objects_host_resting_cursor + step) % told_count;
 
-		absolute_index = (objects_host_resting_cursor + step) % told_count;
-		object_index = distributed_host_placed_object(absolute_index);
+		object_index = distributed_host_placed_object(resting_index);
 		if (object_index == NONE || !TEST_FLAG(object_get(object_index)->object.flags, _object_at_rest_bit))
 			continue;
 		resting++;
-		objects_host_resting_cursor = (absolute_index + 1) % told_count;
+		objects_host_resting_cursor = (resting_index + 1) % told_count;
 		distributed_state_from_object(object_index, &states[state_count]);
 		kinds[state_count++] = _host_state_to_all;
 	}
@@ -1555,6 +1624,8 @@ static void distributed_host_send_states(
 				(word)(sizeof(message.header) + count * sizeof(struct distributed_object_state)));
 		}
 	}
+	}
+	while (state_count == STATES_PER_PASS);
 }
 
 static void distributed_inventory_from_unit(
@@ -1630,9 +1701,16 @@ see its shots less) */
 static void distributed_host_send_inventories(
 	void)
 {
-	static struct distributed_inventory inventories[MAXIMUM_TRACKED_OBJECTS];
-	static byte kinds[MAXIMUM_TRACKED_OBJECTS];
-	static real_point3d origins[MAXIMUM_TRACKED_OBJECTS];
+#if defined(OXBOX_STRIP)
+	/* oxbox: the units are taken and sent INVENTORIES_PER_TICK at a time
+	(152 KB for all 2,048 objects at once otherwise) */
+	enum { INVENTORIES_PER_TICK = 64 };
+#else
+	enum { INVENTORIES_PER_TICK = MAXIMUM_TRACKED_OBJECTS };
+#endif
+	static struct distributed_inventory inventories[INVENTORIES_PER_TICK];
+	static byte kinds[INVENTORIES_PER_TICK];
+	static real_point3d origins[INVENTORIES_PER_TICK];
 	struct distributed_inventory_message message;
 	short limit = MIN(MAXIMUM_ENTRIES_PER_MESSAGE, DATAGRAM_ENTRIES(struct distributed_inventory));
 	long inventory_count = 0;
@@ -1640,8 +1718,16 @@ static void distributed_host_send_inventories(
 	struct object_iterator iterator;
 	short machine_number;
 
+	boolean more = TRUE;
+
 	object_iterator_new(&iterator, _object_mask_unit, 0);
-	while (object_iterator_next(&iterator) && inventory_count < MAXIMUM_TRACKED_OBJECTS)
+	while (more)
+	{
+	inventory_count = 0;
+	/* (oxbox: the pointer compared, not kept in a boolean: a byte of it, which is zero for an object whose datum's
+	address ends in 00, ended the units there. On Blood Gulch with its vehicles that was the 7th unit, before any
+	player's: no player's weapons were sent, and the clients had none in hand) */
+	while (inventory_count < INVENTORIES_PER_TICK && (more = (object_iterator_next(&iterator) != NULL)) != FALSE)
 	{
 		struct unit_datum *unit = unit_get(iterator.index);
 		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.index);
@@ -1736,6 +1822,10 @@ static void distributed_host_send_inventories(
 				}
 			}
 			message.inventories[count] = inventories[index];
+#if defined(HALO_XBOX_TARGET)
+			if (machine_index >= 0 && machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+				objects_host_inventory_entries_sent[machine_index]++;
+#endif
 			if (++count == limit)
 			{
 				distributed_send_to_machine(machine_index, &message, _distributed_message_inventories, count,
@@ -1748,6 +1838,7 @@ static void distributed_host_send_inventories(
 			distributed_send_to_machine(machine_index, &message, _distributed_message_inventories, count,
 				(word)(sizeof(message.header) + count * sizeof(struct distributed_inventory)));
 		}
+	}
 	}
 }
 
@@ -2060,6 +2151,70 @@ void network_objects_host_tick(
 	if (game_time_get() % INVENTORY_INTERVAL_TICKS == 0)
 		profile_scope(objects_host_tick_send_inventories_section, distributed_host_send_inventories();)
 	profile_scope(objects_host_tick_send_damage_animations_section, distributed_host_send_damage_animations();)
+#if defined(OXBOX_TEST_VEHICLES)
+	/* (test builds only: the vehicles the host's game has, by tag, 20 seconds in) */
+	if (game_time_get() == 20 * TICKS_PER_SECOND)
+	{
+		struct object_iterator vehicles;
+		long count = 0;
+
+		object_iterator_new(&vehicles, _object_mask_vehicle, 0);
+		while (object_iterator_next(&vehicles))
+		{
+			platform_log("netobj: test: vehicle %08lx %s", vehicles.index,
+				tag_get_name(object_get(vehicles.index)->definition_index));
+			count++;
+		}
+		platform_log("netobj: test: %ld vehicles (vehicle set %d)", count, (int)game_engine_get_variant()->universal_variant.vehicle_set);
+	}
+#endif
+#if defined(HALO_XBOX_TARGET)
+	if (game_time_get() % (60 * TICKS_PER_SECOND) == 0)
+	{
+		char pool[64];
+
+		objects_diagnostic_pool(pool);
+		platform_log("netobj: host: %ld told, %ld deleted; highest index told %ld; %s", objects_statistics.creates,
+			objects_statistics.deletes, objects_host_told_count, pool);
+		{
+			char line[160];
+			long machine, length = 0;
+			short number;
+
+			line[0] = 0;
+			for (number = 0; number < objects_host_viewers.count && length < (long)sizeof(line) - 40; number++)
+			{
+				machine = objects_host_viewers.indices[number];
+				length += sprintf(line + length, " #%ld: %ld (%d units)", machine,
+					machine >= 0 && machine < HALO_PORT_MAXIMUM_NETWORK_MACHINES ? objects_host_inventory_entries_sent[machine] : 0,
+					objects_host_viewers.machines[number].unit_count);
+			}
+			platform_log("netobj: host: inventory entries sent this game, by machine:%s", line[0] ? line : " (no client machines)");
+		}
+		{
+			/* the units, as the inventories see them: index, biped or vehicle, player, weapons carried, networked,
+			dead, when last sent to all */
+			struct object_iterator units;
+			long listed = 0;
+
+			object_iterator_new(&units, _object_mask_unit, 0);
+			while (object_iterator_next(&units) && listed < 24)
+			{
+				struct unit_datum *unit = unit_get(units.index);
+				short slot, carried = 0;
+
+				for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++) carried += unit->unit.weapon_object_indices[slot] != NONE;
+				platform_log("netobj: host:   unit %08lx %s player %ld, %d weapons (first %08lx), %s%s, sent to all at %ld (now %ld)",
+					units.index, TEST_FLAG(_object_mask_vehicle, unit->object.type) ? "vehicle" : "biped",
+					(long)unit->unit.player_index, carried, unit->unit.weapon_object_indices[0],
+					distributed_object_networked(units.index) ? "networked" : "NOT networked",
+					TEST_FLAG(unit->object.damage_flags, _object_dead_bit) ? ", dead" : "",
+					objects_host_inventories[DATUM_INDEX_TO_ABSOLUTE_INDEX(units.index)].time, game_time_get());
+				listed++;
+			}
+		}
+	}
+#endif
 }
 
 /* ---------- a client */
@@ -2170,6 +2325,7 @@ static void distributed_client_create_failed(
 	/* (not asked since the last: that asking covers this one) */
 	if (objects_client_failed_time != NONE && objects_client_ready_time <= objects_client_failed_time)
 		return;
+	OBJECTS_DIAGNOSTIC(("netobj: asking the host for all its objects again in %ld ticks", objects_client_retry_ticks));
 	objects_client_ask_again = TRUE;
 	objects_client_failed_time = game_time_get();
 	objects_client_synchronized = FALSE;
@@ -2327,6 +2483,8 @@ static void distributed_client_create(
 		!distributed_client_change_valid(change, &forward, &up))
 	{
 		objects_statistics.create_failures++;
+		OBJECTS_DIAGNOSTIC(("netobj: host object %08lx (definition %08lx) refused: not a valid create",
+			change->object_index, change->definition_index));
 		return;
 	}
 	header = (struct datum_header const *)((byte const *)object_header_data->data +
@@ -2355,10 +2513,15 @@ static void distributed_client_create(
 			return;
 		}
 		/* something else in its place: gone */
+		OBJECTS_DIAGNOSTIC(("netobj: host object %08lx (definition %08lx): %08lx (definition %08lx, %s) in its place, deleted",
+			change->object_index, change->definition_index, existing_index,
+			existing ? existing->definition_index : NONE,
+			objects_client_has[absolute_index] == existing_index ? "the host's" : "this machine's"));
 		distributed_client_delete(existing_index);
 		objects_client_has[absolute_index] = NONE;
 		if (header->identifier)
 		{
+			OBJECTS_DIAGNOSTIC(("netobj: host object %08lx: its place could not be emptied", change->object_index));
 			distributed_client_create_failed();
 			return;
 		}
@@ -2381,6 +2544,15 @@ static void distributed_client_create(
 	objects_statistics.creates++;
 	if (object_index != change->object_index)
 	{
+#if defined(HALO_XBOX_TARGET)
+		{
+			char pool[64];
+
+			objects_diagnostic_pool(pool);
+			OBJECTS_DIAGNOSTIC(("netobj: host object %08lx (definition %08lx) not made (object_new gave %08lx): %s",
+				change->object_index, change->definition_index, object_index, pool));
+		}
+#endif
 		if (object_index != NONE)
 		{
 			objects_client_deleting = TRUE;
@@ -2443,6 +2615,9 @@ void network_objects_handle_synchronized(
 		objects_client_failed_time = NONE;
 		objects_client_retry_ticks = CLIENT_RETRY_TICKS;
 	}
+	if (!objects_client_synchronized)
+		OBJECTS_DIAGNOSTIC(("netobj: all the host's objects here (%ld made, %ld failed so far)",
+			objects_statistics.creates, objects_statistics.create_failures));
 	objects_client_synchronized = TRUE;
 }
 
@@ -2765,15 +2940,49 @@ static void distributed_client_apply_inventory(
 	boolean local;
 	short weapon_slot;
 
+#if defined(HALO_XBOX_TARGET)
+	objects_client_inventory_counts.entries++;
+#endif
 	if (!network_objects_client_has(inventory->unit_index) ||
 		!object_try_and_get_and_verify_type(inventory->unit_index, _object_mask_unit))
 	{
+#if defined(HALO_XBOX_TARGET)
+		long absolute = DATUM_INDEX_TO_ABSOLUTE_INDEX(inventory->unit_index);
+		boolean in_range = absolute >= 0 && absolute < MAXIMUM_TRACKED_OBJECTS && absolute < object_header_data->maximum_count;
+		struct object_header_datum *header = in_range ?
+			(struct object_header_datum *)((byte *)object_header_data->data + absolute * object_header_data->size) : NULL;
+
+		if (header && !header->identifier)
+			header = NULL;
+
+		objects_client_inventory_counts.not_here++;
+		if (objects_client_inventory_counts.refusals_logged++ < 12)
+		{
+			platform_log("netobj: host's inventory of unit %08lx not taken: at its place here %08lx (type %d), the host's there %08lx; %s",
+				inventory->unit_index, header ? (((long)header->identifier << 16) | absolute) : NONE,
+				header ? header->type : NONE, in_range ? objects_client_has[absolute] : NONE,
+				objects_client_synchronized ? "synchronized" : "not synchronized");
+		}
+#endif
 		return;
 	}
 	unit = unit_get(inventory->unit_index);
 	if (TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+	{
+#if defined(HALO_XBOX_TARGET)
+		objects_client_inventory_counts.dead++;
+#endif
 		return;
+	}
+#if defined(HALO_XBOX_TARGET)
+	objects_client_inventory_counts.taken++;
+	objects_client_inventory_counts.last_units[objects_client_inventory_counts.last_count++ & 7] = inventory->unit_index;
+#endif
 	local = distributed_player_is_local(unit->unit.player_index);
+#if defined(HALO_XBOX_TARGET)
+	if (local)
+		objects_client_own_inventories_received++;
+#endif
 	if (local)
 	{
 		short local_player_index = player_get(unit->unit.player_index)->local_player_index;
@@ -2799,6 +3008,31 @@ static void distributed_client_apply_inventory(
 		if (wanted_index != NONE &&
 			(!network_objects_client_has(wanted_index) || !object_try_and_get_and_verify_type(wanted_index, _object_mask_weapon)))
 		{
+#if defined(HALO_XBOX_TARGET)
+			/* (oxbox: logged when one of its own players' weapons is still not here a second on) */
+			if (local)
+			{
+				static long waiting_index = NONE, waiting_since;
+
+				if (waiting_index != wanted_index)
+				{
+					waiting_index = wanted_index;
+					waiting_since = game_time_get();
+				}
+				else if (game_time_get() - waiting_since == TICKS_PER_SECOND)
+				{
+					long absolute = DATUM_INDEX_TO_ABSOLUTE_INDEX(wanted_index);
+					char pool[64];
+
+					objects_diagnostic_pool(pool);
+					OBJECTS_DIAGNOSTIC(("netobj: own unit %08lx still waits for weapon %08lx (here at its place: %08lx, the host's: %08lx; %s; %s)",
+						inventory->unit_index, wanted_index,
+						absolute >= 0 && absolute < MAXIMUM_TRACKED_OBJECTS && object_try_and_get(wanted_index) ? wanted_index : NONE,
+						absolute >= 0 && absolute < MAXIMUM_TRACKED_OBJECTS ? objects_client_has[absolute] : NONE,
+						objects_client_synchronized ? "synchronized" : "not synchronized", pool));
+				}
+			}
+#endif
 			continue;
 		}
 		if (weapon_index != NONE)
@@ -2962,6 +3196,9 @@ void network_objects_handle_inventories(
 	struct distributed_inventory const *inventories = (struct distributed_inventory const *)entries;
 	short index;
 
+#if defined(HALO_XBOX_TARGET)
+	objects_client_inventory_counts.messages++;
+#endif
 	for (index = 0; index < count; index++)
 		distributed_client_apply_inventory(&inventories[index]);
 }
@@ -3190,6 +3427,85 @@ void network_objects_client_tick(
 	/* (too many to look at one by one later: all of them) */
 	else if (objects_client_new_object_count >= MAXIMUM_CLIENT_NEW_OBJECTS)
 		objects_client_check_all = TRUE;
+#if defined(HALO_XBOX_TARGET)
+	/* (oxbox: its own players' units holding weapons but none in hand, 3 seconds on and every 30 after: why) */
+	{
+		static long unarmed_unit[MAXIMUM_LOCAL_PLAYERS], unarmed_since[MAXIMUM_LOCAL_PLAYERS];
+		short local_player_index;
+
+		for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
+		{
+			long player_index = local_player_get_player_index(local_player_index);
+			struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+			long unit_index = distributed_living_unit(player);
+			struct unit_datum *unit = unit_index != NONE ? unit_get(unit_index) : NULL;
+			boolean carries = FALSE;
+			short slot;
+
+			for (slot = 0; unit && slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+				carries |= unit->unit.weapon_object_indices[slot] != NONE;
+			if (unit && !carries && unit->object.parent_object_index == NONE)
+			{
+				/* (none at all: the host's inventories of it not taken?) */
+				static long empty_unit[MAXIMUM_LOCAL_PLAYERS], empty_since[MAXIMUM_LOCAL_PLAYERS];
+
+				if (empty_unit[local_player_index] != unit_index)
+				{
+					empty_unit[local_player_index] = unit_index;
+					empty_since[local_player_index] = game_time_get();
+				}
+				else if ((game_time_get() - empty_since[local_player_index]) % (30 * TICKS_PER_SECOND) == 3 * TICKS_PER_SECOND)
+				{
+					OBJECTS_DIAGNOSTIC(("netobj: own unit %08lx (local player %d, tick %ld) has no weapons at all; host's inventories of own units taken so far: %ld",
+						unit_index, local_player_index, game_time_get(), objects_client_own_inventories_received));
+					OBJECTS_DIAGNOSTIC(("netobj:   inventories this game: %ld messages, %ld entries, %ld taken, %ld of units not here, %ld of dead ones; own unit here %s, host's at its place %08lx",
+						objects_client_inventory_counts.messages, objects_client_inventory_counts.entries,
+						objects_client_inventory_counts.taken, objects_client_inventory_counts.not_here,
+						objects_client_inventory_counts.dead, network_objects_client_has(unit_index) ? "the host's" : "NOT the host's",
+						objects_client_has[DATUM_INDEX_TO_ABSOLUTE_INDEX(unit_index)]));
+					{
+						long *u = objects_client_inventory_counts.last_units;
+						OBJECTS_DIAGNOSTIC(("netobj:   latest inventories were of units %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx; own unit's player %ld (local %d)",
+							u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], (long)unit->unit.player_index,
+							unit->unit.player_index != NONE && distributed_player_is_local(unit->unit.player_index)));
+					}
+				}
+			}
+			if (!unit || !carries || unit->unit.current_weapon_index != NONE || unit->object.parent_object_index != NONE)
+			{
+				unarmed_unit[local_player_index] = NONE;
+				continue;
+			}
+			if (unarmed_unit[local_player_index] != unit_index)
+			{
+				unarmed_unit[local_player_index] = unit_index;
+				unarmed_since[local_player_index] = game_time_get();
+			}
+			else if ((game_time_get() - unarmed_since[local_player_index]) % (30 * TICKS_PER_SECOND) == 3 * TICKS_PER_SECOND)
+			{
+				void unit_oxbox_weapon_diagnostic(long unit_index, char *text, long size);
+				long player_control_get_desired_weapon(short local_player_index, long unit_index);
+				char text[512];
+
+				unit_oxbox_weapon_diagnostic(unit_index, text, sizeof(text));
+				OBJECTS_DIAGNOSTIC(("netobj: own unit %08lx (local player %d, tick %ld) carries weapons, none in hand: %s; player control's %08lx; game engine %d",
+					unit_index, local_player_index, game_time_get(), text,
+					player_control_get_desired_weapon(local_player_index, unit_index),
+					game_engine_get_variant() ? (int)game_engine_get_variant()->game_engine_index : -1));
+			}
+		}
+	}
+	/* (oxbox: a summary a minute, in the log) */
+	if (game_time_get() % (60 * TICKS_PER_SECOND) == 0)
+	{
+		char pool[64];
+
+		objects_diagnostic_pool(pool);
+		platform_log("netobj: client: %ld made, %ld deleted, %ld failed, %ld own removed; %s; %s",
+			objects_statistics.creates, objects_statistics.deletes, objects_statistics.create_failures,
+			objects_statistics.own_objects_removed, objects_client_synchronized ? "synchronized" : "not synchronized", pool);
+	}
+#endif
 	distributed_client_ready_picked_up_weapons();
 	distributed_client_note_own_inventories();
 	distributed_client_send_vehicles();
@@ -3205,12 +3521,19 @@ void network_objects_client_tick(
 void network_objects_new_game(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	objects_diagnostic_lines = 0;
+#endif
 	long absolute_index;
 	short machine_index;
 	short local_player_index;
 	short index;
 
 	csmemset(objects_host_inventories, 0, sizeof(objects_host_inventories));
+#if defined(HALO_XBOX_TARGET)
+	csmemset(&objects_client_inventory_counts, 0, sizeof(objects_client_inventory_counts));
+	csmemset(objects_host_inventory_entries_sent, 0, sizeof(objects_host_inventory_entries_sent));
+#endif
 	host_damage_animation_count = 0;
 	csmemset(client_damage_animations, 0, sizeof(client_damage_animations));
 	for (absolute_index = 0; absolute_index < MAXIMUM_TRACKED_OBJECTS; absolute_index++)

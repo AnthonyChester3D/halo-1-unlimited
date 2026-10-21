@@ -708,6 +708,12 @@ void game_initialize_for_new_map(
 	from now on go elsewhere, port/linux/game/network_objects.c) */
 	network_objects_placed();
 	ui_widgets_safe_to_load(TRUE);
+#if defined(OXBOX_MEMPROF)
+	{
+		void oxbox_memprof_report(const char *label);
+		oxbox_memprof_report(game_globals->options.map_name);
+	}
+#endif
 
 	return;
 }
@@ -871,6 +877,23 @@ void game_precache_new_map(
 			}
 			while (!map_status);
 
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: let the loading animation play out (progress_bar.c) */
+			if (map_status != _cached_map_file_failed)
+			{
+				short frame;
+
+				game_globals->loading_progress = 1.0f;
+				progress_bar_oxbox_set_finishing(TRUE);
+				for (frame = 0; frame < 120 && !progress_bar_oxbox_finished(); frame++)
+				{
+					main_pregame_render();
+					main_rasterizer_throttle();
+					main_present_frame();
+				}
+				progress_bar_oxbox_set_finishing(FALSE);
+			}
+#endif
 			progress_bar_end();
 			ui_widgets_close_all();
 			if (map_status == _cached_map_file_failed)

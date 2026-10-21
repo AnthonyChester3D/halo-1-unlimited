@@ -139,6 +139,13 @@ symbols in this file:
 #include "cache_file_formats.h" /* port: CUSTOM_EDITION_TAG_CACHE_BYTES */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 
+#ifdef HALO_XBOX_TARGET
+/* (Halo Universal's folder maps and map sharing: port/linux/game/hmp_maps.c, hmp_share.c) */
+boolean hmp_map_file_path(char const *level_name, char *path, long size);
+long hmp_maps_find(char const *level_name);
+unsigned long hmp_share_map_version(char const *level_name);
+#endif
+
 /* ---------- constants */
 
 enum
@@ -990,8 +997,21 @@ boolean cache_files_map_plays_multiplayer(
 	header's build is Halo PC's, not one to check */
 	if (custom_edition_level_name(map_name))
 		return TRUE;
+#ifdef HALO_XBOX_TARGET
+	/* oxbox: a folder map plays whatever its header's build string (Halo Universal's "any build string": a ported
+	map's is often not a retail build's); host and clients play the same file, matched by its size and checksum */
+	if (map_name[0] == '+')
+		return TRUE;
+	/* oxbox: a folder map's file is in its folder (port/linux/game/hmp_maps.c) */
+	if (!hmp_map_file_path(map_name, path, sizeof(path)))
+#endif
 	snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), tag_name_strip_path(map_name));
+#ifdef HALO_XBOX_TARGET
+	/* oxbox: shared (see cache_files_map_present) */
+	file = CreateFileA(path, GENERIC_READ, 1 /* FILE_SHARE_READ */, NULL, OPEN_EXISTING, 0, NULL);
+#else
 	file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+#endif
 	if (file != INVALID_HANDLE_VALUE)
 	{
 		unsigned long bytes_read;
@@ -1053,8 +1073,22 @@ game's own maps, whose builds of other regions play together. */
 unsigned long cache_files_map_version(
 	char const *map_name)
 {
+#ifdef HALO_XBOX_TARGET
+	/* oxbox: a folder map's build (its size and Halo Map Porter's checksum: port/linux/game/hmp_share.c) */
+	if (map_name && map_name[0] == '+')
+		return hmp_share_map_version(map_name);
+#endif
 	return custom_edition_level_name(map_name) ? custom_edition_map_version(map_name) : 0;
 }
+
+#ifdef HALO_XBOX_TARGET
+/* oxbox: the loaded map's name (its header's: a folder map's key), NULL when none is */
+char const *cache_files_loaded_map_name(
+	void)
+{
+	return cache_file_globals.tags_loaded ? cache_file_globals.header.name : NULL;
+}
+#endif
 
 /* port: whether this machine has the map a network game is on (a client
 joining it: network_client_manager.c); when not, tells the player which map
@@ -1093,10 +1127,32 @@ boolean cache_files_map_present(
 		char path[256];
 		HANDLE file;
 
+#ifdef HALO_XBOX_TARGET
+		/* oxbox: a folder map of the host's build (cache_files_map_version), else asked of the host (map sharing:
+		port/linux/game/hmp_share.c) */
+		if (map_name[0] == '+')
+		{
+			if (hmp_maps_find(map_name) != NONE && (!version || hmp_share_map_version(map_name) == version))
+				return TRUE;
+			if (map_share_download_begin(map_name, version, NULL))
+				return TRUE;
+		}
+#endif
 		if (cache_files_precache_map_loaded(map_name))
 			return TRUE;
+#ifdef HALO_XBOX_TARGET
+		if (!hmp_map_file_path(map_name, path, sizeof(path)))
+#endif
 		snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), name);
+#ifdef HALO_XBOX_TARGET
+		/* oxbox: by its attributes, as the map may be open already (precaching opens it exclusively, and the
+		Xbox, unlike the native ports' platform layer, enforces that) */
+		if (GetFileAttributesA(path) != 0xFFFFFFFF)
+			return TRUE;
+		file = INVALID_HANDLE_VALUE;
+#else
 		file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+#endif
 		if (file != INVALID_HANDLE_VALUE)
 		{
 			CloseHandle(file);
@@ -1173,6 +1229,46 @@ boolean cache_files_give_time_to_precache(
 
 	return result;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the tag cache holds a map's tag data at its start and its structure bsps at its end, each where the map
+says (stock multiplayer maps: about 7 MB and 1 MB of 22 MB). What lies between them is free while the map is
+loaded: lent to the texture cache, in whole pages of its (texture_cache_lend), until the map closes. A bsp is
+read to its own place and only there; the ones of a level that has several all lie above the lowest. */
+static void cache_file_lend_free_tag_memory(
+	void)
+{
+	byte *tag_cache = physical_memory_get_tag_cache_base_address();
+	byte *start = tag_cache + ((cache_file_globals.header.tag_data_size + 0x3FFF) & ~0x3FFF);
+	byte *end = tag_cache + TAG_CACHE_SIZE;
+	struct cache_file_tag_header *tag_header = cache_file_globals.tag_header;
+	struct scenario *scenario;
+	long index;
+
+	if (!tag_header || tag_header->scenario_tag_index == NONE)
+		return;
+	scenario = tag_get(SCENARIO_TAG, tag_header->scenario_tag_index);
+	if (!scenario)
+		return;
+	for (index = 0; index < scenario->structure_bsp_references.count; index++)
+	{
+		struct scenario_structure_bsp_reference *reference = TAG_BLOCK_GET_ELEMENT(
+			&scenario->structure_bsp_references,
+			index,
+			struct scenario_structure_bsp_reference);
+		byte *bsp = (byte *)reference->base_address;
+
+		/* (one that would load over the tag data, or outside the cache, is refused when it loads: nothing is lent) */
+		if (bsp < start || bsp >= tag_cache + TAG_CACHE_SIZE)
+			return;
+		if (bsp < end)
+			end = bsp;
+	}
+	end = (byte *)((unsigned long)end & ~0x3FFFUL);
+	if (end - start >= 0x100000)
+		texture_cache_lend(start, (long)(end - start));
+}
+#endif
 
 long scenario_tags_load(
 	char const *scenario_name)
@@ -1322,6 +1418,11 @@ long scenario_tags_load(
 
 				loose_sounds_tags_loaded();
 			}
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: the tag cache's memory this map leaves free lent to the texture cache (not the menus') */
+			if (_stricmp(cache_file_globals.header.name, "ui"))
+				cache_file_lend_free_tag_memory();
+#endif
 			result = cache_file_globals.tag_header->scenario_tag_index;
 		}
 		/* port: a map refused is closed for the next to open */
@@ -1367,10 +1468,21 @@ boolean scenario_structure_bsp_load(
 	tag_cache_base_address = physical_memory_get_tag_cache_base_address();
 	if (!custom_edition_cache_tags_loaded())
 	{
+		byte *fill = tag_cache_base_address + cache_file_globals.header.tag_data_size;
+
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: not the memory lent to the texture cache: its textures are there */
+		{
+			byte *lent_end = texture_cache_lent_end();
+
+			if (lent_end && lent_end > fill)
+				fill = lent_end;
+		}
+#endif
 		csmemset(
-			tag_cache_base_address + cache_file_globals.header.tag_data_size,
+			fill,
 			0xCD,
-			0x01600000 - cache_file_globals.header.tag_data_size);
+			tag_cache_base_address + 0x01600000 - fill);
 	}
 	{
 		boolean read_complete;

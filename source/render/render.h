@@ -20,8 +20,12 @@ enum
 {
 	MAXIMUM_RENDERED_DISTANT_LIGHTS = 2,
 	MAXIMUM_RENDERED_POINT_LIGHTS = 2,
+#if defined(OXBOX_STRIP)
+	MAXIMUM_RENDERED_ENVIRONMENT_SURFACES = 16384, /* oxbox: the Xbox's */
+#else
 	/* port: twice the Xbox's 16384 structure triangles a frame */
 	MAXIMUM_RENDERED_ENVIRONMENT_SURFACES = 32768,
+#endif
 	MAXIMUM_RENDERED_CLUSTERS = 128,
 	MAXIMUM_SURFACES_PER_STRUCTURE = 0x20000,
 	MAXIMUM_RENDERED_LIGHTS = 128,
@@ -94,7 +98,12 @@ struct render_globals
 	unsigned long visible_cluster_flags[MAXIMUM_CLUSTERS_PER_STRUCTURE / LONG_BITS];
 	struct rendered_cluster rendered_clusters[MAXIMUM_RENDERED_CLUSTERS];
 	short rendered_cluster_count;
+#if defined(OXBOX_STRIP)
+	/* oxbox: a bit vector (every use is BIT_VECTOR_*): 16 KB of bits, not the 512 KB of longs declared */
+	unsigned long environment_surface_flags[MAXIMUM_SURFACES_PER_STRUCTURE / LONG_BITS];
+#else
 	unsigned long environment_surface_flags[MAXIMUM_SURFACES_PER_STRUCTURE];
+#endif
 	/* port: a long, as a short would wrap at the raised count */
 	long environment_surface_count;
 	long environment_surface_indices[MAXIMUM_RENDERED_ENVIRONMENT_SURFACES];

@@ -228,14 +228,29 @@ struct client_actor
 
 /* ---------- globals */
 
+#if defined(OXBOX_STRIP)
+/* oxbox: a machine is the host or a client in a game, never both: the two
+tables share their memory (31 KB), each used only in its own role
+(host_actor_for, client_actor_for), both emptied for a new game */
+static union
+{
+	struct host_actor host[MAXIMUM_NETWORK_ACTORS];
+	struct client_actor client[MAXIMUM_NETWORK_ACTORS];
+} actor_tables;
+#define host_actors (actor_tables.host)
+#define client_actors (actor_tables.client)
+#else
 static struct host_actor host_actors[MAXIMUM_NETWORK_ACTORS];
+#endif
 static short host_actor_count;
 /* host: the numbers of every unit's impulses, speech and animations, from
 one counter, so a unit that drops out of the table and comes back can't
 repeat the number a client last played */
 static byte host_event_number;
 
+#if !defined(OXBOX_STRIP)
 static struct client_actor client_actors[MAXIMUM_NETWORK_ACTORS];
+#endif
 static short client_actor_count;
 
 /* ---------- private code */
@@ -276,6 +291,10 @@ static struct host_actor *host_actor_for(
 {
 	short index;
 
+#if defined(OXBOX_STRIP)
+	if (game_connection() != _game_connection_network_server || client_actor_count)
+		return NULL;
+#endif
 	for (index = 0; index < host_actor_count; index++)
 	{
 		if (host_actors[index].unit_index == unit_index)
@@ -296,6 +315,10 @@ static struct client_actor *client_actor_for(
 {
 	short index;
 
+#if defined(OXBOX_STRIP)
+	if (game_connection() != _game_connection_network_client || host_actor_count)
+		return NULL;
+#endif
 	for (index = 0; index < client_actor_count; index++)
 	{
 		if (client_actors[index].unit_index == unit_index)
@@ -729,17 +752,26 @@ actor's control, and dropped it stood running in place on the clients. */
 void network_actors_host_tick(
 	void)
 {
-	static struct distributed_actor_state states[MAXIMUM_NETWORK_ACTORS];
+#if defined(OXBOX_STRIP)
+	/* oxbox: the states are taken and sent STATES_PER_PASS at a time (25 KB
+	for every actor at once otherwise) */
+	enum { STATES_PER_PASS = 64 };
+#else
+	enum { STATES_PER_PASS = MAXIMUM_NETWORK_ACTORS };
+#endif
+	static struct distributed_actor_state states[STATES_PER_PASS];
 	/* sent to every client this tick, whatever its period */
-	static boolean urgent[MAXIMUM_NETWORK_ACTORS];
+	static boolean urgent[STATES_PER_PASS];
 	struct distributed_actor_state_message message;
 	long machine_indices[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 	short machine_count = distributed_client_machines(machine_indices, HALO_PORT_MAXIMUM_NETWORK_MACHINES);
 	long now = game_time_get();
 	short state_count = 0;
+	short actor_index;
 	short index;
 	short machine_number;
 
+	/* (those no longer driven out of the table first) */
 	for (index = 0; index < host_actor_count; index++)
 	{
 		struct host_actor *actor = &host_actors[index];
@@ -748,8 +780,15 @@ void network_actors_host_tick(
 			(!actor->noted && !TEST_FLAG(unit_get(actor->unit_index)->unit.flags, _unit_running_blindly_bit)))
 		{
 			host_actors[index--] = host_actors[--host_actor_count];
-			continue;
 		}
+	}
+	host_send_damage();
+	for (actor_index = 0; actor_index < host_actor_count; )
+	{
+	for (state_count = 0; actor_index < host_actor_count && state_count < STATES_PER_PASS; actor_index++)
+	{
+		struct host_actor *actor = &host_actors[actor_index];
+
 		actor_state_from_unit(actor, &states[state_count]);
 		urgent[state_count] = states[state_count].impulse != NO_IMPULSE || states[state_count].speech_sound != NONE ||
 			states[state_count].user_animation_graph != NONE ||
@@ -764,7 +803,6 @@ void network_actors_host_tick(
 		if (actor->user_animation_sends > 0)
 			actor->user_animation_sends--;
 	}
-	host_send_damage();
 	for (machine_number = 0; machine_number < machine_count; machine_number++)
 	{
 		long machine_index = machine_indices[machine_number];
@@ -790,6 +828,7 @@ void network_actors_host_tick(
 			distributed_send_to_machine(machine_index, &message, _distributed_message_actor_states, count,
 				(word)(sizeof(message.header) + count * sizeof(struct distributed_actor_state)));
 		}
+	}
 	}
 }
 

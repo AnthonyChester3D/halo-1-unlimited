@@ -169,22 +169,41 @@ void system_get_user_name(
 	return;
 }
 
+static void *oxbox_system_note(void *p, long size, void *caller);
 void *system_calloc(
 	long count,
 	long size)
 {
-	return GlobalAlloc(GMEM_ZEROINIT, count * size);
+	return oxbox_system_note(GlobalAlloc(GMEM_ZEROINIT, count * size), count * size, __builtin_return_address(0));
+}
+
+/* (oxbox memory measurement: the game's own heap blocks, live and peak, and who asks for 16 KB or more) */
+void platform_log(const char *format, ...);
+unsigned long oxbox_system_live, oxbox_system_peak;
+static void *oxbox_system_note(void *p, long size, void *caller)
+{
+	if (p)
+	{
+		oxbox_system_live += LocalSize(p);
+		if (oxbox_system_live > oxbox_system_peak)
+			oxbox_system_peak = oxbox_system_live;
+		if (size >= 0x4000)
+			platform_log("system_malloc %ld KB by %p (game heap %lu KB)", size / 1024, caller, oxbox_system_live / 1024);
+	}
+	return p;
 }
 
 void *system_malloc(
 	long size)
 {
-	return GlobalAlloc(0, size);
+	return oxbox_system_note(GlobalAlloc(0, size), size, __builtin_return_address(0));
 }
 
 void system_free(
 	void *pointer)
 {
+	if (pointer)
+		oxbox_system_live -= LocalSize(pointer);
 	LocalFree(pointer);
 	return;
 }

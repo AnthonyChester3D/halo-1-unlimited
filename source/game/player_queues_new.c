@@ -124,8 +124,16 @@ enum
 	MAXIMUM_NUMBER_OF_PLAYERS = HALO_PORT_MAXIMUM_NETWORK_PLAYERS,
 	MAXIMUM_NETWORK_MACHINE_COUNT = HALO_PORT_MAXIMUM_NETWORK_MACHINES,
 
+#ifdef OXBOX_STRIP
+	/* oxbox: the distributed netcode's clients never use the client ring (update_client_dequeue_distributed); the
+	host and a local game fill it and use it up in the same frame, which is at most 30 ticks (game_time.c), and read
+	the server's back at most 7 ticks: 32 and 16 (powers of two), 57 KB less than retail's 128 and 32 */
+	MAXIMUM_SERVER_UPDATES = 16,
+	MAXIMUM_CLIENT_UPDATES = 32,
+#else
 	MAXIMUM_SERVER_UPDATES = 32,
 	MAXIMUM_CLIENT_UPDATES = 128,
+#endif
 
 	/* the host's ticks after a client machine's player's last input that
 	the player's input is held: after them it stands still

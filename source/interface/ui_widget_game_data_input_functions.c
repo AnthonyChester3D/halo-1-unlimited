@@ -356,6 +356,12 @@ symbols in this file:
 #include "text/unicode.h"
 #include "custom_edition_maps.h" /* port: port/linux/game/custom_edition_maps.c */
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the lobby's machine names (port/linux/game/hmp_browse.c) */
+wchar_t const *hmp_lobby_machine_name(wchar_t const *name, struct network_machine const *machine, boolean local,
+	wchar_t *buffer, long buffer_count);
+void hmp_lobby_note_name(struct widget_instance *text, boolean host);
+#endif
 
 /* ---------- constants */
 
@@ -1345,6 +1351,10 @@ static void network_pregame_status_screen_update(
 		long local_player_index;
 		long length;
 		boolean local_machine_found;
+#if defined(HALO_XBOX_TARGET)
+		long local_machine_slot = NONE;
+		wchar_t lobby_name[48];
+#endif
 
 		second_machine_widget = local_machine_widget->next;
 		third_machine_widget = second_machine_widget->next;
@@ -1446,6 +1456,9 @@ static void network_pregame_status_screen_update(
 				if (local_machine && local_machine->name[0])
 					machine_name = local_machine->name;
 				local_machine_found = TRUE;
+#if defined(HALO_XBOX_TARGET)
+				local_machine_slot = machine_index;
+#endif
 			}
 		}
 
@@ -1465,6 +1478,14 @@ static void network_pregame_status_screen_update(
 			}
 		}
 
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the download's percentage after the name, and the host's mark beside it (port/linux/game/hmp_browse.c) */
+		machine_name = hmp_lobby_machine_name(machine_name,
+			local_machine_slot != NONE ? &game->machines[local_machine_slot] : NULL, TRUE, lobby_name, NUMBEROF(lobby_name));
+		hmp_lobby_note_name(machine_name_text, game->machine_count > 1 &&
+			(global_network_game_server_get() != NULL ||
+			(local_machine_slot != NONE && NETWORK_MACHINE_HOST_MARK(&game->machines[local_machine_slot]))));
+#endif
 		length = ustrlen(machine_name);
 		machine_name_text->parameters.text_box.text = ui_widget_realloc(
 			machine_name_text->parameters.text_box.text,
@@ -1647,8 +1668,16 @@ static void network_pregame_status_screen_update(
 				}
 				else
 				{
+					wchar_t const *remote_name = game->machines[machine_indices[machine_widget_index]].name;
+
 					remote_machine_icon->animation.current_frame_index = 1;
-					length = ustrlen(game->machines[machine_indices[machine_widget_index]].name);
+#if defined(HALO_XBOX_TARGET)
+					remote_name = hmp_lobby_machine_name(remote_name,
+						&game->machines[machine_indices[machine_widget_index]], FALSE, lobby_name, NUMBEROF(lobby_name));
+					hmp_lobby_note_name(remote_machine_name_text,
+						NETWORK_MACHINE_HOST_MARK(&game->machines[machine_indices[machine_widget_index]]));
+#endif
+					length = ustrlen(remote_name);
 					remote_machine_name_text->parameters.text_box.text = ui_widget_realloc(
 						remote_machine_name_text->parameters.text_box.text,
 						(word)(2 * length + 2),
@@ -1658,7 +1687,7 @@ static void network_pregame_status_screen_update(
 					{
 						ustrncpy(
 							remote_machine_name_text->parameters.text_box.text,
-							game->machines[machine_indices[machine_widget_index]].name,
+							remote_name,
 							length);
 						remote_machine_name_text->parameters.text_box.text[length] = 0;
 					}
@@ -1751,6 +1780,10 @@ static void splitscreen_pregame_status_screen_update(
 		long local_player_index;
 		long length;
 		boolean local_machine_found;
+#if defined(HALO_XBOX_TARGET)
+		long local_machine_slot = NONE;
+		wchar_t lobby_name[48];
+#endif
 
 		countdown_text->parameters.text_box.text = ui_widget_realloc(
 			countdown_text->parameters.text_box.text,
@@ -1844,6 +1877,9 @@ static void splitscreen_pregame_status_screen_update(
 				if (local_machine && local_machine->name[0])
 					machine_name = local_machine->name;
 				local_machine_found = TRUE;
+#if defined(HALO_XBOX_TARGET)
+				local_machine_slot = machine_index;
+#endif
 				break;
 			}
 		}
@@ -1864,6 +1900,14 @@ static void splitscreen_pregame_status_screen_update(
 			}
 		}
 
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the download's percentage after the name, and the host's mark beside it (port/linux/game/hmp_browse.c) */
+		machine_name = hmp_lobby_machine_name(machine_name,
+			local_machine_slot != NONE ? &game->machines[local_machine_slot] : NULL, TRUE, lobby_name, NUMBEROF(lobby_name));
+		hmp_lobby_note_name(machine_name_text, game->machine_count > 1 &&
+			(global_network_game_server_get() != NULL ||
+			(local_machine_slot != NONE && NETWORK_MACHINE_HOST_MARK(&game->machines[local_machine_slot]))));
+#endif
 		length = ustrlen(machine_name);
 		machine_name_text->parameters.text_box.text = ui_widget_realloc(
 			machine_name_text->parameters.text_box.text,
@@ -2024,10 +2068,22 @@ static void set_textbox_to_build_number(
 
 	if (!build_number_string[0])
 	{
+#if defined(OXBOX_STRIP) && defined(OXBOX_BUILD_NUMBER)
+		/* oxbox: our build number, not January's (ui_widget.c draws it in the
+		menus' description blue) */
+		char label[32];
+
+		sprintf(label, "v1.%02d", OXBOX_BUILD_NUMBER);
+		ascii_to_wide(
+			label,
+			build_number_string,
+			sizeof(build_number_string));
+#else
 		ascii_to_wide(
 			"01.01.14.2342",
 			build_number_string,
 			sizeof(build_number_string));
+#endif
 	}
 
 	if (!widget->parameters.text_box.text)
@@ -4246,6 +4302,22 @@ static void mp_level_select_list_update_displayed_items(
 				_ui_widget_type_text_box,
 			"expected a text box widget for the list item's third child (map description)");
 
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: what each list position holds (Halo Universal's map folders and order: port/linux/game/hmp_maps.c):
+		a folder map's wrapped name, picture and description, a stock map's own wherever it's listed */
+		{
+			extern void hmp_maps_list_item(short card, long position, short *name, short *frame, short *description);
+			short name_index = (short)displayed_item_indices[item_index];
+			short frame_index = name_index;
+			short description_index = name_index;
+
+			hmp_maps_list_item((short)item_index, displayed_item_indices[item_index], &name_index, &frame_index,
+				&description_index);
+			map_name->parameters.text_box.string_list_index = name_index;
+			map_bitmap->animation.current_frame_index = frame_index;
+			map_description->parameters.text_box.string_list_index = description_index;
+		}
+#else
 		/* port: the Custom Edition maps after the Xbox levels show their own
 		names, pictures and descriptions (port/linux/game/custom_edition_maps.c) */
 		displayed_item_indices[item_index] = custom_edition_maps_level_display_index(
@@ -4256,6 +4328,7 @@ static void mp_level_select_list_update_displayed_items(
 			(short)displayed_item_indices[item_index];
 		map_description->parameters.text_box.string_list_index =
 			(short)displayed_item_indices[item_index];
+#endif
 	}
 	return;
 }

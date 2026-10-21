@@ -22,9 +22,18 @@ enum
 	MAXIMUM_AI_DEBUG_IDLE_LOOK_PROPS = 32,
 	NUMBER_OF_AI_DEBUG_COMMUNICATION_TYPES = 57,
 	NUMBER_OF_AI_DEBUG_VOCALIZATION_TYPES = 209,
+#ifdef OXBOX_STRIP
+	MAXIMUM_AI_DEBUG_LINEOFSIGHT_POINTS = 64,   /* (oxbox strip test: the AI line-of-sight debug drawing) */
+	MAXIMUM_AI_DEBUG_LINEOFSIGHT_PAIRS = 32,
+#else
 	MAXIMUM_AI_DEBUG_LINEOFSIGHT_POINTS = 16384,
 	MAXIMUM_AI_DEBUG_LINEOFSIGHT_PAIRS = 8192,
+#endif
+#ifdef OXBOX_STRIP
+	NUMBER_OF_AI_DEBUG_ACTOR_RECORDS = 1, /* (oxbox: only the AI debug views wrote them) */
+#else
 	NUMBER_OF_AI_DEBUG_ACTOR_RECORDS = 512,
+#endif
 	MAXIMUM_AI_DEBUG_PATH_STORAGE = 32,
 };
 
@@ -325,10 +334,12 @@ struct ai_debug_state
 	real field_4C814;
 	boolean field_4C818;
 	char __unknown4C819[3];
+#ifndef OXBOX_STRIP /* oxbox: the debug path test's records (199 KB), never used on the Xbox */
 	struct path_state path_state;
 	boolean field_608A8;
 	char __unknown608A9[91];
 	struct path_debug_storage path_storage;
+#endif
 	boolean evaluation_context_valid;
 	char __unknown7D381[3];
 	struct firing_position_evaluation_context evaluation_context;
@@ -355,6 +366,7 @@ struct ai_debug_state
 	short speak_vocalization_type;
 };
 
+#ifndef OXBOX_STRIP
 typedef char ai_debug_state_path_offset_assert[
 	offsetof(struct ai_debug_state, path) == 0x3C ? 1 : -1];
 typedef char ai_debug_state_print_speech_offset_assert[
@@ -389,6 +401,7 @@ typedef char ai_debug_actor_record_field_3C_offset_assert[
 	offsetof(struct ai_debug_actor_record, firing_position.evaluation) == 0x3C ? 1 : -1];
 typedef char ai_debug_state_field_7D380_offset_assert[
 	offsetof(struct ai_debug_state, evaluation_context_valid) == 0x7D380 ? 1 : -1];
+#endif
 
 struct actor_debug_info
 {
@@ -469,7 +482,10 @@ struct actor_debug_info
 	boolean field_198;
 	short flying_error_ticks;
 	long field_19C;
+#ifndef OXBOX_STRIP
+	/* (oxbox: not kept: 24 KB of the scratch record, copied each actor move; ai_debug.c's avoidance drawing) */
 	struct vector_avoidance_data avoidance_data;
+#endif
 	short avoidance_type[ACTOR_MAXIMUM_AVOIDANCE_RAYS];
 	real collision_t[ACTOR_MAXIMUM_AVOIDANCE_RAYS];
 	real_point3d ray_origin[ACTOR_MAXIMUM_AVOIDANCE_RAYS];
@@ -621,5 +637,13 @@ extern short global_ai_debug_string_position;
 extern real_argb_color global_temporary_render_color;
 
 /* ---------- public code */
+
+
+/* oxbox: an actor's debug record, or a scratch one where the debug build's records are not made (the Xbox:
+ai_debug_initialize), so the AI's debug writes need no 6.6 MB; retail Halo has no such records */
+extern struct actor_debug_info *actor_debug_array;
+struct actor_debug_info *actor_debug_scratch(void);
+#define ACTOR_DEBUG_INFO(actor_index) \
+	(actor_debug_array ? &actor_debug_array[DATUM_INDEX_TO_ABSOLUTE_INDEX(actor_index)] : actor_debug_scratch())
 
 #endif // __AI_DEBUG_H

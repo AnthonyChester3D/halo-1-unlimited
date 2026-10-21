@@ -69,6 +69,10 @@ struct physical_memory_map_globals
 
 static struct physical_memory_map_globals physical_memory_map_globals;
 
+/* port: the caches' sizes (oxbox: chosen at start-up, physical_memory_allocate) */
+static long physical_memory_texture_cache_size = TEXTURE_CACHE_SIZE;
+static long physical_memory_sound_cache_size = SOUND_CACHE_SIZE;
+
 /* ---------- public code */
 
 void physical_memory_allocate(
@@ -82,11 +86,64 @@ void physical_memory_allocate(
 #line 50 "c:\\halo\\SOURCE\\cache\\physical_memory_map.c"
 	match_assert(__FILE__, __LINE__, (unsigned long)physical_memory_map_globals.tag_cache_base_address==TAG_CACHE_BASE_ADDRESS);
 
-	physical_memory_map_globals.texture_cache_base_address = XPhysicalAlloc(TEXTURE_CACHE_SIZE, -1, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a console with 128 MB (a devkit, or an upgraded and modded retail Xbox) gives the texture cache
+	most of its extra 64 MB and the sound cache 8 MB; a stock 64 MB console keeps the sizes the build was made
+	for (halo_port_capacity.h). The cache needs one contiguous block: the largest that the console has, of
+	60 MB down to 32 MB, 4 MB at a time (the top of memory holds the graphics chip's own tables) */
+	{
+		MEMORYSTATUS status;
+		void platform_log(char const *format, ...);
+
+		GlobalMemoryStatus(&status);
+#if defined(OXBOX_TEST_TEXTURE_CACHE_KB)
+		/* (test builds only: a smaller cache, the sizes' plumbing checked on a 64 MB console) */
+		physical_memory_texture_cache_size = OXBOX_TEST_TEXTURE_CACHE_KB * 1024L;
+#endif
+#if defined(OXBOX_TEST_AS_128MB)
+		/* (test builds only: the 128 MB attempts on a 64 MB console, which fail, and fall back) */
+		status.dwTotalPhys = 128UL << 20;
+#endif
+		if (status.dwTotalPhys >= 100UL << 20)
+		{
+			long size;
+
+			for (size = 0x3C00000; size >= 0x2000000 && !physical_memory_map_globals.texture_cache_base_address;
+				size -= 0x400000)
+			{
+				physical_memory_map_globals.texture_cache_base_address =
+					XPhysicalAlloc(size, -1, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
+				if (physical_memory_map_globals.texture_cache_base_address)
+					physical_memory_texture_cache_size = size;
+			}
+			physical_memory_map_globals.sound_cache_base_address = XPhysicalAlloc(0x800000, -1, 0, PAGE_READWRITE);
+			if (physical_memory_map_globals.sound_cache_base_address)
+				physical_memory_sound_cache_size = 0x800000;
+		}
+		if (!physical_memory_map_globals.texture_cache_base_address)
+		{
+			physical_memory_map_globals.texture_cache_base_address =
+				XPhysicalAlloc(physical_memory_texture_cache_size, -1, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
+		}
+		if (!physical_memory_map_globals.sound_cache_base_address)
+		{
+			physical_memory_map_globals.sound_cache_base_address =
+				XPhysicalAlloc(physical_memory_sound_cache_size, -1, 0, PAGE_READWRITE);
+		}
+		GlobalMemoryStatus(&status);
+		platform_log("memory: %lu MB console: texture cache %ld KB, sound cache %ld KB, %lu KB free",
+			(status.dwTotalPhys + (1UL << 20) - 1) >> 20, physical_memory_texture_cache_size >> 10,
+			physical_memory_sound_cache_size >> 10, status.dwAvailPhys >> 10);
+	}
+#else
+	physical_memory_map_globals.texture_cache_base_address = XPhysicalAlloc(physical_memory_texture_cache_size, -1, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
+#endif
 #line 55 "c:\\halo\\SOURCE\\cache\\physical_memory_map.c"
 	match_assert(__FILE__, __LINE__, physical_memory_map_globals.texture_cache_base_address);
 
-	physical_memory_map_globals.sound_cache_base_address = XPhysicalAlloc(SOUND_CACHE_SIZE, -1, 0, PAGE_READWRITE);
+#if !defined(HALO_XBOX_TARGET)
+	physical_memory_map_globals.sound_cache_base_address = XPhysicalAlloc(physical_memory_sound_cache_size, -1, 0, PAGE_READWRITE);
+#endif
 #line 58 "c:\\halo\\SOURCE\\cache\\physical_memory_map.c"
 	match_assert(__FILE__, __LINE__, physical_memory_map_globals.sound_cache_base_address);
 
@@ -133,6 +190,18 @@ void physical_memory_free(
 		XPhysicalFree(physical_memory_map_globals.sound_cache_base_address);
 
 	return;
+}
+
+long physical_memory_get_texture_cache_size(
+	void)
+{
+	return physical_memory_texture_cache_size;
+}
+
+long physical_memory_get_sound_cache_size(
+	void)
+{
+	return physical_memory_sound_cache_size;
 }
 
 void *physical_memory_get_game_state_base_address(

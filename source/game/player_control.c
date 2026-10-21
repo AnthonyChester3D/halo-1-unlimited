@@ -1416,10 +1416,15 @@ static void get_local_player_input_blob(
 					}
 				}
 
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox: as the Xbox game: how long fire is held (its button's ticks, of 255) */
+				input->primary_trigger = (real)input_state->buttons[_button_fire] * (1.f / 255.f);
+#else
 				/* port: the fire control's pull, not how long it is held
 				(input_abstraction_port_primary_trigger) */
 				input->primary_trigger = effective_buttons[_button_fire] ?
 					input_abstraction_port_primary_trigger(gamepad_index) : 0.f;
+#endif
 				SET_FLAG(
 					input->unit_control_flags,
 					_unit_control_weapon_primary_trigger_bit,

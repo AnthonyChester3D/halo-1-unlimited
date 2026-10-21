@@ -133,6 +133,10 @@ symbols in this file:
 #include "text/draw_string.h"
 #include "text/text_group.h"
 #include <xtl.h>
+#include "cache/physical_memory_map.h"
+#if defined(HALO_XBOX_TARGET)
+extern D3DDevice *global_d3d_device;
+#endif
 
 /* ---------- constants */
 
@@ -435,8 +439,29 @@ void bink_playback_initialize(
 	void)
 {
 	csmemset(&bink_globals, 0, sizeof(bink_globals));
+#if !defined(HALO_XBOX_TARGET)
 	RADSetMemory(bink_alloc, bink_free);
+#endif
+	/* oxbox: Bink isn't loaded at boot (oxbox_sdk.c): its allocators are set
+	when a movie starts */
 	bink_globals.initialized = TRUE;
+#if defined(OXBOX_BINK_SELFTEST)
+	{
+		extern int oxbox_bink_sections(int load);
+		MEMORYSTATUS before, loaded, after;
+		int ok;
+
+		GlobalMemoryStatus(&before);
+		ok = oxbox_bink_sections(TRUE);
+		GlobalMemoryStatus(&loaded);
+		if (ok)
+			RADSetMemory(bink_alloc, bink_free);
+		oxbox_bink_sections(FALSE);
+		GlobalMemoryStatus(&after);
+		error(_error_silent, "bink self-test: load %d, free %lu KB -> %lu KB loaded -> %lu KB unloaded",
+			ok, before.dwAvailPhys / 1024, loaded.dwAvailPhys / 1024, after.dwAvailPhys / 1024);
+	}
+#endif
 
 	return;
 }
@@ -458,7 +483,29 @@ void bink_playback_stop(
 		bink_globals.bink = NULL;
 	}
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the GPU done with the movie's frames before their memory goes back to the texture cache. The frame
+	texture is in that memory (bink_texture over the pool), and the last frame or two drawn with it are still
+	queued when the movie stops: given back at once, the menu's textures were read into it while those frames were
+	drawn, and they showed garbage. (At most a couple of frames' wait; given up after 200 ms) */
+	if (bink_globals.memory_pool_base && global_d3d_device)
+	{
+		unsigned long start = GetTickCount();
+
+		IDirect3DDevice8_KickPushBuffer(global_d3d_device);
+		while (IDirect3DDevice8_IsBusy(global_d3d_device) && GetTickCount() - start < 200)
+			;
+	}
+#endif
 	bink_free_texture_cache();
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the player's code out of memory again until the next movie */
+	{
+		extern int oxbox_bink_sections(int load);
+
+		oxbox_bink_sections(FALSE);
+	}
+#endif
 
 	if (TEST_FLAG(bink_globals.flags, _bink_playback_return_to_main_menu_when_finished_bit))
 		main_menu_load();
@@ -517,6 +564,20 @@ void bink_playback_start(
 		return;
 	if (cache_files_precache_in_progress())
 		return;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the player's code in for this movie (oxbox_sdk.c), from the
+	free memory (the menus have plenty) */
+	{
+		extern int oxbox_bink_sections(int load);
+
+		if (!oxbox_bink_sections(TRUE))
+		{
+			error(_error_silent, "### ERROR couldn't load the bink player for '%s'", full_pathname);
+			return;
+		}
+		RADSetMemory(bink_alloc, bink_free);
+	}
+#endif
 
 	match_dassert(
 		"c:\\halo\\SOURCE\\bink\\bink_playback.c",
@@ -527,6 +588,18 @@ void bink_playback_start(
 	bink_globals.memory_pool_size= TEST_FLAG(flags, _bink_playback_eat_up_memory_like_a_goddamn_beaver_bit) ?
 		BINK_MEMORY_POOL_SIZE_GODDAMN_BEAVER : BINK_MEMORY_POOL_SIZE;
 	bink_globals.memory_pool_offset= 0;
+#ifdef HALO_XBOX_TARGET
+	/* oxbox: the 16 MB pool (the intro movie's: it reads the movie in 12 MB at a time) only when the texture
+	cache it is taken from has it; the proof of concept's 12 MB cache didn't, and the intro, still asking
+	for its 12 MB read buffer from a 4 MB pool, stopped on a black screen. Without it the intro plays as
+	the attract movies do (the smaller pool and read buffer: flag dropped below). */
+	/* (xbox_texture_cache.c keeps two 0x104000 guards and at least a page: test 10's 20.1 MB has 2 MB left over) */
+	if (physical_memory_get_texture_cache_size() < BINK_MEMORY_POOL_SIZE_GODDAMN_BEAVER + 2*0x104000 + 0x100000)
+	{
+		bink_globals.memory_pool_size= BINK_MEMORY_POOL_SIZE;
+		flags&= ~FLAG(_bink_playback_eat_up_memory_like_a_goddamn_beaver_bit);
+	}
+#endif
 	bink_globals.memory_pool_base= texture_cache_steal_memory(bink_globals.memory_pool_size);
 	match_assert(
 		"c:\\halo\\SOURCE\\bink\\bink_playback.c",
@@ -643,12 +716,26 @@ void bink_playback_start(
 		{
 			error(_error_silent, "### ERROR failed to open bink file '%s'", full_pathname);
 			bink_free_texture_cache();
+#if defined(HALO_XBOX_TARGET)
+			{
+				extern int oxbox_bink_sections(int load);
+
+				oxbox_bink_sections(FALSE);
+			}
+#endif
 		}
 	}
 	else
 	{
 		error(_error_immediate, "### ERROR bink failed to fucking steal some fucking memory from the fucking texture cache");
 		bink_free_texture_cache();
+#if defined(HALO_XBOX_TARGET)
+		{
+			extern int oxbox_bink_sections(int load);
+
+			oxbox_bink_sections(FALSE);
+		}
+#endif
 	}
 
 	return;

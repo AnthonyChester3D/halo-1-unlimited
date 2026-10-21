@@ -170,7 +170,11 @@ of hundred of them) as one list of quads, instead of a draw each: each
 draw is a call into the browser on the web, and work for the driver
 everywhere; the Xbox drew them from its push buffer. Only the sprites'
 own registers differ between them (rasterizer_widget_batch_sprites). */
+#if defined(HALO_XBOX_TARGET)
+#define WIDGET_SPRITE_BATCH_MAXIMUM 1 /* (oxbox: not batched) */
+#else
 #define WIDGET_SPRITE_BATCH_MAXIMUM 256
+#endif
 
 struct widget_sprite_batch_vertex
 {
@@ -217,7 +221,13 @@ void rasterizer_widget_batch_sprites(
 	boolean batch)
 {
 	rasterizer_widget_draw_sprite_batch();
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: each light volume sprite drawn as the Xbox game draws it */
+	widget_sprite_batching = FALSE;
+	(void)batch;
+#else
 	widget_sprite_batching = batch;
+#endif
 
 	return;
 }

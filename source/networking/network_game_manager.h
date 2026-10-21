@@ -30,6 +30,13 @@ struct network_machine
 	byte __padding41[3];
 };
 
+/* oxbox: the host's marks in a machine's padding, which the settings carry
+(retail and older builds send 0 there): its own machine (1), and how far
+along a machine's download of the map is (1 + percent; 0: none), for the
+lobby's machine names (ui_widget_game_data_input_functions.c) */
+#define NETWORK_MACHINE_HOST_MARK(machine) ((machine)->__padding41[0])
+#define NETWORK_MACHINE_DOWNLOAD_MARK(machine) ((machine)->__padding41[1])
+
 struct network_game_map
 {
 	long version;
