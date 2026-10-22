@@ -113,6 +113,18 @@ symbols in this file:
 #include "text/text_group.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the HUD's parts timed for the developers' perf log (test build 33, oxbox_perf.h), when opence.ini loads it */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_MARK(step)
+#define OXBOX_PERF_OBJECT(type_or_event)
+#define OXBOX_PERF_OBJECT_MARK(step)
+#define OXBOX_PERF_OBJECT_MARK_COUNTED(step)
+#define OXBOX_PERF_TRANSLATE_START()
+#define OXBOX_PERF_TRANSLATE_END()
+#define OXBOX_PERF_WEATHER(particles, sprites, boxes, polyhedra)
+#endif
 
 /* ---------- constants */
 
@@ -1423,12 +1435,14 @@ void hud_draw_screen(
 		/* port: the network co-op vote to skip a cinematic */
 		if (cinematic_in_progress())
 			coop_skip_vote_draw(render.local_player_index);
+		OXBOX_PERF_MARK(_oxbox_perf_hud_players)
 
 		if (!game_time_get_paused() &&
 			render.local_player_index == local_player_get_next(NONE))
 		{
 			motion_sensor_tick();
 		}
+		OXBOX_PERF_MARK(_oxbox_perf_hud_motion_sensor)
 
 		if (hud_scripted_globals->show_hud)
 		{
@@ -1437,11 +1451,14 @@ void hud_draw_screen(
 				player->unit_index != NONE)
 			{
 				hud_render_weapon_interface(player);
+				OXBOX_PERF_MARK(_oxbox_perf_hud_weapon)
 				hud_show_action_response(player_index);
 				hud_play_unit_sounds(player, hud_scripted_globals->show_hud);
 				hud_render_unit_interface(player);
+				OXBOX_PERF_MARK(_oxbox_perf_hud_unit)
 				hud_render_nav_points(render.local_player_index);
 				hud_render_damage_indicators(render.local_player_index);
+				OXBOX_PERF_MARK(_oxbox_perf_hud_nav_damage)
 			}
 			else
 			{
@@ -1455,6 +1472,7 @@ void hud_draw_screen(
 		}
 
 		hud_messaging_update(render.local_player_index);
+		OXBOX_PERF_MARK(_oxbox_perf_hud_messages)
 	}
 
 	rasterizer_hud_end();
@@ -1462,6 +1480,7 @@ void hud_draw_screen(
 	{
 		temporary_hud_draw();
 	}
+	OXBOX_PERF_MARK(_oxbox_perf_hud_other)
 
 	return;
 }

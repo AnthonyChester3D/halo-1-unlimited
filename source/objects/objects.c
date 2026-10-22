@@ -53,6 +53,17 @@ OBJECTS.C
 #include "sound/game_sound.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: objects_update's and object_update's steps timed for the developers' perf log (test build 33,
+oxbox_perf.h), when opence.ini loads it */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_OBJECT(type_or_event)
+#define OXBOX_PERF_OBJECT_MARK(step)
+#define OXBOX_PERF_OBJECT_MARK_COUNTED(step)
+#define OXBOX_PERF_TRANSLATE_START()
+#define OXBOX_PERF_TRANSLATE_END()
+#endif
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_update(long object_index, real_point3d const *center, real radius);
 /* port: port/linux/game/first_person_legs.c's */
@@ -3425,9 +3436,11 @@ void object_translate(
 		562, 
 		new_position);
 
+	OXBOX_PERF_TRANSLATE_START()
 	object_disconnect_from_map(object_index);
 	object->object.position = *new_position;
 	object_reconnect_to_map(object_index, new_location);
+	OXBOX_PERF_TRANSLATE_END()
 
 	return;
 }
@@ -3848,20 +3861,25 @@ static boolean object_update(
 		}
 
 		object_type_update(object_index);
+		OXBOX_PERF_OBJECT_MARK_COUNTED(_oxbox_perf_object_type_update)
 		if (object_definition->object.collision_model.index!=NONE)
 		{
 			object_damage_update(object_index);
 		}
+		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_damage)
 
 		object_type_export_function_values(object_index);
+		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_export_functions)
 
 		if (!TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
 		{
 			object_compute_node_matrices(object_index);
 		}
+		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_node_matrices)
 
 		object_compute_function_values(object_index);
 		object_compute_change_colors(object_index);
+		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_functions_colors)
 
 		if (
 			TEST_FLAG(object->object.flags, _object_dynamic_lighting_recompute_bit) &&
@@ -3873,11 +3891,14 @@ static boolean object_update(
 		{
 			object_connect_lights(object_index, TRUE, TRUE);
 		}
+		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_connect_lights)
 
 		// Update children (if we have any)
 		if (object->object.first_child_object_index!=NONE)
 		{
+			OXBOX_PERF_OBJECT(_oxbox_perf_object_event_children_begin)
 			object_update(object->object.first_child_object_index);
+			OXBOX_PERF_OBJECT(_oxbox_perf_object_event_children_end)
 		}
 
 		if (object->object.parent_object_index!=NONE)
@@ -3889,6 +3910,7 @@ static boolean object_update(
 		}
 
 		object_postprocess_node_matrices(object_index);
+		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_postprocess)
 	}
 
 	return result;
@@ -4500,7 +4522,9 @@ void objects_update(
 			last_active_cluster_bits,
 			active_cluster_bits,
 			cluster_count);
+		OXBOX_PERF_OBJECT_MARK_COUNTED(_oxbox_perf_object_activation_changed)
 	}
+	OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_activation)
 
 	object_header = (struct object_header_datum *)object_header_data->data;
 	for (i = 0; i<object_header_data->count; ++object_header)
@@ -4518,12 +4542,14 @@ void objects_update(
 					TEST_FLAG(_object_mask_unit, object_header->type) &&
 					unit_get(object_index)->unit.player_index!=NONE)
 				{
+					OXBOX_PERF_OBJECT(i)
 					object_update(object_index);
 				}
 			}
 		}
 		++i;
 	}
+	OXBOX_PERF_OBJECT(_oxbox_perf_object_event_loop_end)
 
 	object_header = (struct object_header_datum *)object_header_data->data;
 	for (i = 0; i<object_header_data->count; ++object_header)
@@ -4538,6 +4564,7 @@ void objects_update(
 					object_header->flags,
 					_object_header_being_created_bit,
 					FALSE);
+				OXBOX_PERF_OBJECT(_oxbox_perf_object_event_created)
 				object_update(DATUM_INDEX_NEW(i, object_header->identifier));
 			}
 
@@ -4549,7 +4576,9 @@ void objects_update(
 		++i;
 	}
 
+	OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_create_delete)
 	objects_garbage_collection();
+	OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_garbage)
 
 	profile_exit(section);
 

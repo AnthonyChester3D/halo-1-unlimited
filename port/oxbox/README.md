@@ -23,6 +23,8 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
 - **Memory.** The texture cache borrows whatever part of Halo's 22 MB of tag memory the map leaves unused, from
   map load until the map closes. That's 12 to 14 MB on stock-sized maps. On a 128 MB console the texture cache
   grows to as much as 60 MB and the sound cache to 8 MB.
+- **Detail levels.** A model's level of detail comes from its straight-line distance to the camera, not its depth
+  in the view, so models don't change detail, or vanish at their lowest one, as the camera turns.
 - **Logs.** It writes `debug.txt` and `oxbox_log.txt` beside the XBE, or in `T:` when the XBE runs from a
   disc or ISO. They record the kernel version, memory, map sharing, and any frame of 100 ms or more.
 - **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, holds one `name = number` per line:
@@ -38,9 +40,13 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     whether it's busy. Each second's line also has the time of every step of a game tick and of the render window
     (the visibility traversals, sky, objects, lightmaps, lights, decals, reflections, fog, particles, transparent
     geometry, HUD and more) and counts (objects drawn and updated, actors, effects, particles, dynamic lights, the
-    level's triangles and clusters drawn, dynamic triangles used). The log's code and buffers are in an XBE section
-    of their own (OXPERF), loaded only when the setting is on: with it off, the game has the same free memory as
-    without it.
+    level's triangles and clusters drawn, dynamic triangles used). It also splits up the rest of the frame (input,
+    network, menus, the camera, between frames), the object updates (their steps, each object type's time and
+    count, object_translate and the clusters it touches) and the HUD's parts; it names the three object tags that
+    took the most update time; and it counts the weather's particles. Slow frames' lines also say what the log's
+    writer thread was doing, and fill in the game tick's steps when the tick took over 25 ms. The log's code and
+    buffers are in an XBE section of their own (OXPERF), loaded only when the setting is on: with it off, the game
+    has the same free memory as without it.
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 
@@ -71,6 +77,11 @@ them, adds that code after its last section, and points the startup at it.
 
 The output is `build-xbox/halo1unlimited.xbe`. Copy it to the Xbox in place of the game's `default.xbe`,
 next to the game's `maps` folder.
+
+Most of the game is compiled for size (`-Os`); the drawing, physics, collision, objects and maths folders are compiled
+for speed (`-O2`). To compile more folders for speed, name them in `OXBOX_HOT_EXTRA`, for example
+`OXBOX_HOT_EXTRA="units devices items ai interface"` (test build 33's experiment, which costs about 80 KB of
+memory). Such a build's menus say "v1.33 O2", and so do its perf logs.
 
 How the pieces fit:
 

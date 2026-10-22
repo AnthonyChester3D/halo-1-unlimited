@@ -79,6 +79,12 @@ symbols in this file:
 
 #include <math.h>
 #include <string.h>
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the crosshairs timed for the developers' perf log (test build 33, oxbox_perf.h), when opence.ini loads it */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_MARK(step)
+#endif
 
 /* ---------- constants */
 
@@ -2064,6 +2070,7 @@ void hud_render_weapon_interface(
 				weapon_index,
 				hud_index,
 				&weapon_state);
+			OXBOX_PERF_MARK(_oxbox_perf_hud_crosshair)
 			render_weapon_hud(
 				hud_index,
 				player->local_player_index,
@@ -2087,6 +2094,7 @@ void hud_render_weapon_interface(
 			NONE,
 			hud_globals->defaults.default_weapon_hud.index,
 			&weapon_state);
+		OXBOX_PERF_MARK(_oxbox_perf_hud_crosshair)
 	}
 
 	render_grenade_hud(

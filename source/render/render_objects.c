@@ -480,16 +480,23 @@ static real object_get_level_of_detail_pixels(
 	object_get_bounding_sphere(object_index, &center, &radius);
 
 #if defined(HALO_XBOX_TARGET)
-	/* oxbox: Halo Universal's widescreen: models change to their lower
-	levels of detail at half the distance, for the wider view's cost */
+	/* oxbox (test build 33): the size from the straight-line distance to the bounding sphere's center, not from its
+	view-space depth (render_frustum_sphere_diameter_in_pixels), which is less than the distance towards the edges
+	of the screen: there objects counted as bigger, so scenery showed at the edge and hid when the camera faced
+	it, and the levels of detail changed as the camera turned. Only the level of detail uses this: visibility
+	still culls with the frustum. One square root an object drawn.
+	Halo Universal's widescreen: models change to their lower levels of detail at half the distance, for the wider
+	view's cost. */
 	{
 		extern int oxbox_widescreen(void);
+		real distance = distance3d(&render.camera.position, &center);
+		real pixels = (render.frustum.projection_world_to_screen.j / MAX(distance, 0.1f)) * radius * 2.0f;
 
-		if (oxbox_widescreen())
-			return 0.5f * render_frustum_sphere_diameter_in_pixels(&render.frustum, &center, radius);
+		return oxbox_widescreen() ? 0.5f * pixels : pixels;
 	}
-#endif
+#else
 	return render_frustum_sphere_diameter_in_pixels(&render.frustum, &center, radius);
+#endif
 }
 
 static void render_object_list(

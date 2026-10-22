@@ -459,10 +459,11 @@ static void render_window(
 		OXBOX_PERF_MARK(_oxbox_perf_draw_other)
 		interface_draw_screen();
 		rasterizer_screen_flash();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_screen_flash)
 		halo_screen_ui_offset(TRUE);
 		render_ui_widgets(local_player_index, &rasterizer_camera->viewport_bounds);
 		halo_screen_ui_offset(FALSE);
-		OXBOX_PERF_MARK(_oxbox_perf_draw_hud)
+		OXBOX_PERF_MARK(_oxbox_perf_draw_ui_widgets)
 	}
 
 	bink_playback_render();

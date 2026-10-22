@@ -27,7 +27,7 @@ abi = ['--target=i686-linux-gnu', '-m32', '-fms-extensions', '-fshort-wchar', '-
        # Xbox code (MSVC, the libraries, the kernel) keeps the stack 4-byte aligned, not 16
        '-mstack-alignment=4',
        '-ffunction-sections', '-fdata-sections', '-fno-stack-protector', '-fno-asynchronous-unwind-tables',
-       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=32', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
+       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=33', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
 abi += [f'-fno-builtin-{n}' for n in ('wcslen', 'wcsnlen', 'wcschr', 'wcsrchr', 'wcscmp', 'wcsncmp', 'wcscpy', 'wcsncpy',
                                       'wcscat', 'wcsncat', 'wmemchr', 'wmemcmp', 'wmemcpy', 'wmemmove', 'wmemset')]
 gflags = ['-std=gnu89', '-D__STRICT_ANSI__', '-w', '-Wno-error=incompatible-pointer-types',
@@ -62,11 +62,22 @@ def add(s, rule, sub=''):
 # (test build 18: debug and profiling units in those folders, never run in a game, compiled for size too)
 COLD = ('render_debug', 'rasterizer_xbox_profile', 'profile', 'collision_usage', 'rasterizer_debug', 'collision_debug')
 HOT = ('rasterizer', 'render', 'math', 'physics', 'models', 'structures', 'effects', 'memory', 'cseries', 'objects')
+# (test build 33's experiment: OXBOX_HOT_EXTRA="units devices items ai interface" compiles those folders -O2 too;
+# that build says so, in the menus' build number and in its perf logs' build line)
+HOT_EXTRA = tuple(os.environ.get('OXBOX_HOT_EXTRA', '').split())
+HOT += HOT_EXTRA
+VARIANT = ['-DOXBOX_BUILD_O2'] if HOT_EXTRA else []
+VARIANT_UNITS = ('ui_widget_game_data_input_functions', 'oxbox_perf')
 for s in srcs + port_game + [Path('port/third_party/stb_vorbis/stb_vorbis.c')]:
     add(s, 'game')
     parts = Path(s).parts
+    flags = []
     if not (len(parts) > 1 and parts[0] == 'source' and parts[1] in HOT) or Path(s).stem in COLD:
-        print('  game_cflags = $game_cflags -Os')
+        flags.append('-Os')
+    if Path(s).stem in VARIANT_UNITS:
+        flags += VARIANT
+    if flags:
+        print('  game_cflags = $game_cflags ' + ' '.join(flags))
 # port units reused as they are, compiled beside our platform.h (they include "platform.h")
 for name in ('halo_linker_common.c', 'msvc_wide.c'):
     c = f'{B}/portcopy/{name}'
@@ -79,6 +90,8 @@ for s in sorted(Path('port/third_party/musl-math/src').glob('*.c')):
 for s in sorted(Path(X).glob('*.c')):
     # (the perf log reads the game's structures: a game unit; link.ld puts it in its own section, OXPERF)
     add(s, 'game' if s.name == 'oxbox_perf.c' else 'plat', 'xbox')
+    if s.stem in VARIANT_UNITS and VARIANT:
+        print('  game_cflags = $game_cflags ' + ' '.join(VARIANT))
     if s.name in ('oxbox_libc.c', 'oxbox_stdio.c', 'oxbox_math.c'):
         # (the C library itself: no loop may become a call to the function it is)
         print('  plat_cflags = $plat_cflags -ffreestanding -fno-builtin')

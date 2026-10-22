@@ -105,6 +105,18 @@ symbols in this file:
 #include "units/unit_definitions.h"
 #include "units/units.h"
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the HUD's parts timed for the developers' perf log (test build 33, oxbox_perf.h), when opence.ini loads it */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_MARK(step)
+#define OXBOX_PERF_OBJECT(type_or_event)
+#define OXBOX_PERF_OBJECT_MARK(step)
+#define OXBOX_PERF_OBJECT_MARK_COUNTED(step)
+#define OXBOX_PERF_TRANSLATE_START()
+#define OXBOX_PERF_TRANSLATE_END()
+#define OXBOX_PERF_WEATHER(particles, sprites, boxes, polyhedra)
+#endif
 
 /* ---------- constants */
 
@@ -726,9 +738,11 @@ void interface_draw_screen(
 	{
 		rasterizer_screen_effect(NULL);
 	}
+	OXBOX_PERF_MARK(_oxbox_perf_hud_screen_effect)
 
 	hud_draw_screen();
 	game_engine_post_rasterize();
+	OXBOX_PERF_MARK(_oxbox_perf_hud_game_engine)
 
 	return;
 }

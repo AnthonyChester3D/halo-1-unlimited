@@ -86,6 +86,18 @@ symbols in this file:
 #include "tag_files/tag_groups.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the motion sensor's draw timed for the developers' perf log (test build 33, oxbox_perf.h), when opence.ini loads it */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_MARK(step)
+#define OXBOX_PERF_OBJECT(type_or_event)
+#define OXBOX_PERF_OBJECT_MARK(step)
+#define OXBOX_PERF_OBJECT_MARK_COUNTED(step)
+#define OXBOX_PERF_TRANSLATE_START()
+#define OXBOX_PERF_TRANSLATE_END()
+#define OXBOX_PERF_WEATHER(particles, sprites, boxes, polyhedra)
+#endif
 
 /* ---------- constants */
 
@@ -1126,6 +1138,7 @@ void hud_render_unit_interface(
 					hud_state->last_body_vitality = hud_unit->object.body_vitality;
 				}
 
+				OXBOX_PERF_MARK(_oxbox_perf_hud_unit)
 				if (unit_count == 0 &&
 					!TEST_FLAG(
 						unit_hud_globals->script_flags,
@@ -1190,6 +1203,7 @@ void hud_render_unit_interface(
 						local_player_count() > 1,
 						&corner);
 				}
+				OXBOX_PERF_MARK(_oxbox_perf_hud_motion_sensor)
 
 				{
 					struct auxilary_panel_definition *auxilary_panel = &hud_definition->auxilary_panel;

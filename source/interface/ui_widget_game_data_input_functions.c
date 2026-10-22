@@ -2073,7 +2073,12 @@ static void set_textbox_to_build_number(
 		menus' description blue) */
 		char label[32];
 
+#if defined(OXBOX_BUILD_O2)
+		/* (test build 33's -O2 experiment: gen_xbox.py OXBOX_HOT_EXTRA) */
+		sprintf(label, "v1.%02d O2", OXBOX_BUILD_NUMBER);
+#else
 		sprintf(label, "v1.%02d", OXBOX_BUILD_NUMBER);
+#endif
 		ascii_to_wide(
 			label,
 			build_number_string,

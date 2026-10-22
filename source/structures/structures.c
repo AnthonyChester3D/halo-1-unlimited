@@ -74,6 +74,12 @@ symbols in this file:
 #include "structure_bsp_definitions.h"
 #include "structure_vector_tests.h"
 #include "structures.h"
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the clusters an object_translate touches, for the developers' perf log (test build 33, oxbox_perf.h) */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_TRANSLATE_CLUSTERS(count)
+#endif
 
 /* ---------- constants */
 
@@ -732,6 +738,7 @@ short structure_clusters_in_sphere(
 			cluster_count = 1;
 		}
 	}
+	OXBOX_PERF_TRANSLATE_CLUSTERS(cluster_count)
 
 	return cluster_count;
 }

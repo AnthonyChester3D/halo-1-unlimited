@@ -85,6 +85,12 @@ symbols in this file:
 #include "shaders/shader_definitions.h"
 #include "structures/structure_bsp_definitions.h"
 #include "tag_files/tag_groups.h"
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the weather's counts for the developers' perf log (test build 33, oxbox_perf.h), when opence.ini loads it */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_WEATHER(particles, sprites, boxes, polyhedra)
+#endif
 
 /* ---------- constants */
 
@@ -743,6 +749,7 @@ static void weather_particle_system_render(
 				}
 			}
 
+			OXBOX_PERF_WEATHER(type->particle_count, sprite_data.sprite_count, box_count, visible_polyhedron_count)
 			build_sprites_end(&sprite_data);
 		}
 	}

@@ -40,6 +40,14 @@ window, in ms a frame (oxbox_perf.h: the marks in game.c game_tick and render.c 
 profile sections for the visibility traversals and the level's lights and shadows), and counts a frame (objects
 drawn and updated, actors, effects, particles, dynamic lights, the level's triangles and clusters drawn, the
 dynamic triangles used of 32768). Sums over the row's second: S rows leave them empty.
+
+Test build 33 (phase 3), more columns at the rows' end:
+- other_ms split by the frame's own marks (both rows); in S rows the writer thread's state and timing.
+- objects_update's steps (P rows): the activation pass, each object's update steps (summed over all objects,
+  children too), its top-level updates by the object's type (each with its children), the children, the created
+  objects, object_translate, the garbage collection.
+- S rows with a tick over 25 ms fill in the tick steps for that frame.
+- The weather's counts and the HUD's parts (P rows).
 */
 
 #include "cseries.h"
@@ -221,6 +229,8 @@ struct perf_sample
 	__int64 frame;               /* (counter ticks) */
 	__int64 worst;
 	__int64 ticks, drawing, present, vsync, other;
+	/* (other's parts, test build 33: the frame's marks) */
+	__int64 other_input, other_network, other_menus, other_network_end, other_camera, other_after_present, other_between;
 	unsigned long gpu_busy, gpu_samples;
 	long game_ticks;
 	unsigned long texture_bytes, texture_reads, texture_waits, sound_bytes, net_sent, net_received;
@@ -278,6 +288,7 @@ enum
 	_section_structure_diffuse_lights,
 	_section_structure_specular_lights,
 	_section_structure_shadows,
+	_section_objects_update,  /* (objects_update's steps are timed from its start) */
 	NUMBER_OF_SECTIONS,
 
 	/* (a profile section's field_C: this tag and its slot, 0xFFFF for one the log leaves alone) */
@@ -292,6 +303,7 @@ static char const *const section_names[NUMBER_OF_SECTIONS] =
 	"render_structure_diffuse_lights",
 	"render_structure_specular_lights",
 	"render_structure_shadows",
+	"objects_update",
 };
 static struct
 {
@@ -300,10 +312,80 @@ static struct
 	unsigned long mark_last;
 	unsigned long objects_drawn, objects_updated, actors, effects, particles, dynamic_lights, level_triangles,
 		clusters, dynamic_triangles, dynamic_triangles_peak, windows;
+	/* (test build 33) */
+	unsigned __int64 object_steps[NUMBER_OF_OXBOX_PERF_OBJECT_STEPS];
+	unsigned long object_updates, activation_runs;
+	unsigned __int64 type_cycles[NUMBER_OF_OBJECT_TYPES];
+	unsigned long type_counts[NUMBER_OF_OBJECT_TYPES];
+	unsigned __int64 loop_cycles, children_cycles, translate_cycles;
+	unsigned long children_begun, created_count, translate_count, translate_cluster_queries, translate_clusters;
+	unsigned long weather_particles, weather_sprites, weather_boxes, weather_polyhedra;
+	unsigned long hook_calls, object_marks;
 } window;
 
+/* objects_update's top-level update under way (the object hook) and the children's updates' starts */
+static struct
+{
+	long root_type;
+	long root_definition_index;
+	unsigned long root_start;
+	long children_depth;
+	unsigned long children_start;
+} objects = { NONE, NONE, 0, 0, 0 };
+
+/* the top-level updates' time by object tag over the window (open addressing on the tag's absolute index) */
+enum { TAG_SLOTS = 256 };
+static struct
+{
+	long definition_index;   /* (NONE: empty) */
+	unsigned long count;
+	unsigned __int64 cycles;
+} tag_slots[TAG_SLOTS];
+
+static void tag_slots_clear(
+	void)
+{
+	long index;
+
+	for (index = 0; index < TAG_SLOTS; index++)
+	{
+		tag_slots[index].definition_index = NONE;
+		tag_slots[index].count = 0;
+		tag_slots[index].cycles = 0;
+	}
+}
+
+static void tag_slot_add(
+	long definition_index,
+	unsigned long cycles)
+{
+	long index = definition_index & (TAG_SLOTS - 1), probes;
+
+	for (probes = 0; probes < TAG_SLOTS; probes++, index = (index + 1) & (TAG_SLOTS - 1))
+	{
+		if (tag_slots[index].definition_index == definition_index || tag_slots[index].definition_index == NONE)
+		{
+			tag_slots[index].definition_index = definition_index;
+			tag_slots[index].count++;
+			tag_slots[index].cycles += cycles;
+			return;
+		}
+	}
+}
+
+/* the tick steps of the frame under way (S rows of a long tick) */
+static unsigned __int64 frame_tick_steps[_oxbox_perf_tick_other + 1];
+
+/* what a hook costs, measured at start-up: an inline object mark and a hook call, in cycles */
+static unsigned long inline_mark_cycles, hook_call_cycles;
+
+/* the writer's last pass (QueryPerformanceCounter: S rows) */
+static volatile __int64 writer_pass_start, writer_pass_end;
+
+static struct oxbox_perf_hooks perf_hooks;
+
 static void window_reset(void);
-static unsigned long session_hook_calls, session_frames;
+static unsigned long session_hook_calls, session_frames, hook_calls_at_window_start;
 static void frame_counts(long game_ticks);
 
 /* the graphics chip's busy samples (the timer's DPC; only ever counted up) */
@@ -411,6 +493,12 @@ static unsigned long __stdcall writer_thread(
 		{
 			continue;
 		}
+		{
+			LARGE_INTEGER counter;
+
+			QueryPerformanceCounter(&counter);
+			writer_pass_start = counter.QuadPart;
+		}
 		while (tail != head)
 		{
 			char c = ring[tail & (RING_SIZE - 1)];
@@ -464,6 +552,12 @@ static unsigned long __stdcall writer_thread(
 		}
 		PERF_BARRIER();
 		ring_tail = tail;
+		{
+			LARGE_INTEGER counter;
+
+			QueryPerformanceCounter(&counter);
+			writer_pass_end = counter.QuadPart;
+		}
 		/* (the file is written through: a crash or a power-off loses at most the last 2 seconds) */
 		flushes_done = flushes;
 		last_write = now;
@@ -729,10 +823,35 @@ static char const frame_fields[] =
 	"render_contrails_ms,render_transparent_ms,render_detail_objects_ms,render_hud_ms,render_other_ms,"
 	/* (phase 2, P rows only: counts a frame) */
 	"objects_drawn,objects_updated,actors_active,effects_alive,particles_alive,dynamic_lights,level_triangles,"
-	"clusters_rendered,dynamic_triangles,dynamic_triangles_peak";
+	"clusters_rendered,dynamic_triangles,dynamic_triangles_peak,"
+	/* (phase 3: other_ms's parts, both rows) */
+	"other_input_ms,other_network_ms,other_menus_ms,other_network_end_ms,other_camera_ms,other_after_present_ms,"
+	"other_between_frames_ms,"
+	/* (phase 3, S rows: the writer thread) */
+	"writer_state,writer_since_ms,writer_write_ms,writer_overlap_ms,"
+	/* (phase 3, P rows: objects_update, ms and counts a frame) */
+	"obj_activation_ms,obj_activation_runs,obj_loop_ms,obj_type_update_ms,obj_damage_ms,obj_export_functions_ms,"
+	"obj_node_matrices_ms,obj_functions_colors_ms,obj_connect_lights_ms,obj_postprocess_ms,obj_create_delete_ms,"
+	"obj_garbage_ms,obj_updates,obj_children_ms,obj_children_count,obj_created_count,obj_translate_ms,"
+	"obj_translate_count,"
+	"obj_biped_ms,obj_biped_count,obj_vehicle_ms,obj_vehicle_count,obj_weapon_ms,obj_weapon_count,"
+	"obj_equipment_ms,obj_equipment_count,obj_garbage_type_ms,obj_garbage_type_count,obj_projectile_ms,"
+	"obj_projectile_count,obj_scenery_ms,obj_scenery_count,obj_machine_ms,obj_machine_count,obj_control_ms,"
+	"obj_control_count,obj_light_fixture_ms,obj_light_fixture_count,obj_placeholder_ms,obj_placeholder_count,"
+	"obj_sound_scenery_ms,obj_sound_scenery_count,"
+	/* (phase 3, P rows: the weather, counts a frame; the HUD's parts, ms a frame; the hooks' own time) */
+	"weather_particles,weather_sprites,weather_boxes,weather_polyhedra,"
+	"render_interface_ms,hud_screen_effect_ms,hud_players_ms,hud_motion_sensor_ms,hud_crosshair_ms,hud_weapon_ms,"
+	"hud_unit_ms,hud_nav_damage_ms,hud_messages_ms,hud_other_ms,hud_game_engine_ms,render_screen_flash_ms,"
+	"render_ui_widgets_ms,hooks_ms,"
+	/* (phase 3, P rows: the clusters an object_translate call touches, and its cluster queries, a call) */
+	"obj_translate_clusters,obj_translate_cluster_queries,"
+	/* (phase 3, P rows: the three object tags whose top-level updates took the most time, ms a frame each) */
+	"top_object_1,top_object_1_ms,top_object_2,top_object_2_ms,top_object_3,top_object_3_ms";
 
 /* phase 2's columns (P rows) and the steps or profile sections each one sums (a step is NUMBER_OF_SECTIONS + it) */
 #define STEP_COLUMN(step) (NUMBER_OF_SECTIONS + (step))
+#define HUD_COLUMN (-1)   /* (render_hud_ms: the HUD's parts, test build 33, added up) */
 static short const window_time_columns[] =
 {
 	STEP_COLUMN(_oxbox_perf_tick_units), STEP_COLUMN(_oxbox_perf_tick_ai), STEP_COLUMN(_oxbox_perf_tick_players_before),
@@ -751,7 +870,7 @@ static short const window_time_columns[] =
 	STEP_COLUMN(_oxbox_perf_draw_reflections), STEP_COLUMN(_oxbox_perf_draw_structure_transparent),
 	STEP_COLUMN(_oxbox_perf_draw_fog), STEP_COLUMN(_oxbox_perf_draw_weather), STEP_COLUMN(_oxbox_perf_draw_particles),
 	STEP_COLUMN(_oxbox_perf_draw_contrails), STEP_COLUMN(_oxbox_perf_draw_transparent),
-	STEP_COLUMN(_oxbox_perf_draw_detail_objects), STEP_COLUMN(_oxbox_perf_draw_hud),
+	STEP_COLUMN(_oxbox_perf_draw_detail_objects), HUD_COLUMN,
 	STEP_COLUMN(_oxbox_perf_draw_other),   /* (and _oxbox_perf_draw_end's) */
 };
 enum { NUMBER_OF_WINDOW_COUNT_COLUMNS = 10 };
@@ -921,22 +1040,38 @@ static void frame_row(
 	}
 	put_signed(&line, local_player_count()); put_comma(&line);
 	put_fixed(&line, cycles_to_ms((double)sample->log_cycles) / frames, 3);
-	/* phase 2: P rows, the second's sums a frame; S rows, nothing */
+	/* phase 2: P rows, the second's sums a frame; S rows, nothing (but a long tick's steps, test build 33) */
 	{
 		long column;
+		boolean long_tick = kind == 'S' && ticks_to_ms(sample->ticks) > 25.0;
 
 		for (column = 0; column < (long)NUMBEROF(window_time_columns); column++)
 		{
+			long source = window_time_columns[column];
+
 			put_comma(&line);
 			if (kind == 'P')
 			{
-				long source = window_time_columns[column];
-				unsigned __int64 cycles = source < NUMBER_OF_SECTIONS ? window.sections[source] :
-					window.steps[source - NUMBER_OF_SECTIONS];
+				unsigned __int64 cycles = 0;
 
-				if (source == STEP_COLUMN(_oxbox_perf_draw_other))
-					cycles += window.steps[_oxbox_perf_draw_end];
+				if (source == HUD_COLUMN)
+				{
+					long step;
+
+					for (step = _oxbox_perf_hud_screen_effect; step <= _oxbox_perf_draw_ui_widgets; step++)
+						cycles += window.steps[step];
+				}
+				else
+				{
+					cycles = source < NUMBER_OF_SECTIONS ? window.sections[source] : window.steps[source - NUMBER_OF_SECTIONS];
+					if (source == STEP_COLUMN(_oxbox_perf_draw_other))
+						cycles += window.steps[_oxbox_perf_draw_end];
+				}
 				put_trimmed(&line, cycles_to_ms((double)(__int64)cycles) / frames);
+			}
+			else if (long_tick && source >= STEP_COLUMN(0) && source <= STEP_COLUMN(_oxbox_perf_tick_other))
+			{
+				put_trimmed(&line, cycles_to_ms((double)(__int64)frame_tick_steps[source - NUMBER_OF_SECTIONS]));
 			}
 		}
 		if (kind == 'P')
@@ -960,6 +1095,176 @@ static void frame_row(
 			for (column = 0; column < NUMBER_OF_WINDOW_COUNT_COLUMNS; column++)
 				put_comma(&line);
 		}
+	}
+	/* phase 3: other's parts (both rows) */
+	{
+		__int64 const parts[7] =
+		{
+			sample->other_input, sample->other_network, sample->other_menus, sample->other_network_end,
+			sample->other_camera, sample->other_after_present, sample->other_between
+		};
+		long part;
+
+		for (part = 0; part < 7; part++)
+		{
+			put_comma(&line);
+			put_trimmed(&line, ticks_to_ms(parts[part]) / frames);
+		}
+	}
+	/* the writer thread (S rows): its state now, the ms since its last pass ended, that pass's length, and how much of
+	this frame it was writing */
+	if (kind == 'S')
+	{
+		LARGE_INTEGER counter;
+		__int64 now, start = writer_pass_start, end = writer_pass_end, frame_start, overlap = 0;
+		unsigned long state = oxbox_perf_writer_state;
+
+		QueryPerformanceCounter(&counter);
+		now = counter.QuadPart;
+		frame_start = now - sample->frame;
+		if (state == 3 || end < start)
+			end = now;   /* (a pass under way) */
+		if (start && end > frame_start)
+			overlap = end - (start > frame_start ? start : frame_start);
+		put_comma(&line);
+		put_unsigned(&line, state);
+		put_comma(&line);
+		if (writer_pass_end)
+			put_trimmed(&line, ticks_to_ms(now - writer_pass_end));
+		put_comma(&line);
+		if (start && end >= start)
+			put_trimmed(&line, ticks_to_ms(end - start));
+		put_comma(&line);
+		put_trimmed(&line, ticks_to_ms(overlap > 0 ? overlap : 0));
+	}
+	else
+	{
+		put_text(&line, ",,,,");
+	}
+	/* phase 3: objects_update, the weather, the HUD and the hooks (P rows) */
+	if (kind == 'P')
+	{
+		static short const object_step_order[] =
+		{
+			_oxbox_perf_object_type_update, _oxbox_perf_object_damage, _oxbox_perf_object_export_functions,
+			_oxbox_perf_object_node_matrices, _oxbox_perf_object_functions_colors, _oxbox_perf_object_connect_lights,
+			_oxbox_perf_object_postprocess, _oxbox_perf_object_create_delete, _oxbox_perf_object_garbage
+		};
+		long index, type, roots = 0;
+		double hooks_cycles;
+
+		put_comma(&line);
+		put_trimmed(&line, cycles_to_ms((double)(__int64)(window.object_steps[_oxbox_perf_object_activation] +
+			window.object_steps[_oxbox_perf_object_activation_changed])) / frames);
+		put_comma(&line);
+		put_unsigned(&line, window.activation_runs);
+		put_comma(&line);
+		put_trimmed(&line, cycles_to_ms((double)(__int64)window.loop_cycles) / frames);
+		for (index = 0; index < (long)NUMBEROF(object_step_order); index++)
+		{
+			put_comma(&line);
+			put_trimmed(&line, cycles_to_ms((double)(__int64)window.object_steps[object_step_order[index]]) / frames);
+		}
+		for (type = 0; type < NUMBER_OF_OBJECT_TYPES; type++)
+			roots += window.type_counts[type];
+		put_comma(&line);
+		put_trimmed(&line, (double)window.object_updates / frames);
+		put_comma(&line);
+		put_trimmed(&line, cycles_to_ms((double)(__int64)window.children_cycles) / frames);
+		put_comma(&line);
+		put_trimmed(&line, (double)(window.object_updates > (unsigned long)roots + window.created_count ?
+			window.object_updates - roots - window.created_count : 0) / frames);
+		put_comma(&line);
+		put_trimmed(&line, (double)window.created_count / frames);
+		put_comma(&line);
+		put_trimmed(&line, cycles_to_ms((double)(__int64)window.translate_cycles) / frames);
+		put_comma(&line);
+		put_trimmed(&line, (double)window.translate_count / frames);
+		for (type = 0; type < NUMBER_OF_OBJECT_TYPES; type++)
+		{
+			put_comma(&line);
+			put_trimmed(&line, cycles_to_ms((double)(__int64)window.type_cycles[type]) / frames);
+			put_comma(&line);
+			put_trimmed(&line, (double)window.type_counts[type] / frames);
+		}
+		put_comma(&line);
+		put_trimmed(&line, (double)window.weather_particles / frames);
+		put_comma(&line);
+		put_trimmed(&line, (double)window.weather_sprites / frames);
+		put_comma(&line);
+		put_trimmed(&line, (double)window.weather_boxes / frames);
+		put_comma(&line);
+		put_trimmed(&line, (double)window.weather_polyhedra / frames);
+		{
+			unsigned __int64 interface_cycles = 0;
+			long step;
+
+			for (step = _oxbox_perf_hud_screen_effect; step <= _oxbox_perf_hud_game_engine; step++)
+				interface_cycles += window.steps[step];
+			put_comma(&line);
+			put_trimmed(&line, cycles_to_ms((double)(__int64)interface_cycles) / frames);
+			for (step = _oxbox_perf_hud_screen_effect; step <= _oxbox_perf_draw_ui_widgets; step++)
+			{
+				put_comma(&line);
+				put_trimmed(&line, cycles_to_ms((double)(__int64)window.steps[step]) / frames);
+			}
+		}
+		/* (the hooks' own time, from their counts and what each costs, measured at start-up) */
+		hooks_cycles = (double)window.hook_calls * hook_call_cycles + (double)window.object_marks * inline_mark_cycles;
+		put_comma(&line);
+		put_trimmed(&line, cycles_to_ms(hooks_cycles) / frames);
+		put_comma(&line);
+		if (window.translate_count)
+			put_trimmed(&line, (double)window.translate_clusters / window.translate_count);
+		put_comma(&line);
+		if (window.translate_count)
+			put_trimmed(&line, (double)window.translate_cluster_queries / window.translate_count);
+		/* the three tags whose top-level updates took the most (each with its children's) */
+		{
+			long rank, best[3] = { NONE, NONE, NONE };
+
+			for (rank = 0; rank < 3; rank++)
+			{
+				long slot;
+
+				for (slot = 0; slot < TAG_SLOTS; slot++)
+				{
+					if (tag_slots[slot].definition_index != NONE && slot != best[0] && slot != best[1] &&
+						(best[rank] == NONE || tag_slots[slot].cycles > tag_slots[best[rank]].cycles))
+					{
+						best[rank] = slot;
+					}
+				}
+			}
+			for (rank = 0; rank < 3; rank++)
+			{
+				put_comma(&line);
+				if (best[rank] != NONE)
+				{
+					char const *name = tag_get_name(tag_slots[best[rank]].definition_index);
+					long start = line.length, index;
+
+					put_text(&line, name ? name : "?");
+					/* (a CSV field: no commas) */
+					for (index = start; index < line.length; index++)
+					{
+						if (line.text[index] == ',')
+							line.text[index] = ';';
+					}
+				}
+				put_comma(&line);
+				if (best[rank] != NONE)
+					put_trimmed(&line, cycles_to_ms((double)(__int64)tag_slots[best[rank]].cycles) / frames);
+			}
+		}
+	}
+	else
+	{
+		long column;
+
+		/* (18 + 24 objects, 4 weather, 13 HUD, 1 hooks, 2 object_translate's clusters, 6 top objects) */
+		for (column = 0; column < 18 + 2 * NUMBER_OF_OBJECT_TYPES + 4 + 13 + 1 + 2 + 6; column++)
+			put_comma(&line);
 	}
 	put_line(&line);
 }
@@ -1011,8 +1316,15 @@ static void session_start(
 	put_line(&line);
 	put_text(&line, "# build v1.");
 	put_unsigned(&line, OXBOX_BUILD_NUMBER);
+#if defined(OXBOX_BUILD_O2)
+	put_text(&line, " O2");
+#endif
 	put_text(&line, " (OpenCE on the Xbox, test build ");
 	put_unsigned(&line, OXBOX_BUILD_NUMBER);
+#if defined(OXBOX_BUILD_O2)
+	/* (test build 33's experiment: gen_xbox.py OXBOX_HOT_EXTRA) */
+	put_text(&line, "; the -O2 experiment: units devices items ai interface compiled -O2");
+#endif
 	put_char(&line, ')');
 	put_line(&line);
 	put_text(&line, "# map ");
@@ -1035,16 +1347,24 @@ static void session_start(
 	put_text(&line, "# memory_fields ");
 	put_text(&line, memory_fields);
 	put_line(&line);
-	put_text(&line, "# fields ");
-	put_text(&line, frame_fields);
-	put_line(&line);
+	/* (straight into the ring: longer than a row's buffer) */
+	ring_put("# fields ", 9);
+	ring_put(frame_fields, sizeof(frame_fields) - 1);
+	ring_put("\r\n", 2);
 
 	perf.active = TRUE;
 	perf.map_checksum = cache_file_globals.header.checksum;
 	perf.session_start = now;
 	perf.session_cycles = cycles64();
 	perf.session_log_cycles = 0;
-	session_hook_calls = session_frames = 0;
+	session_hook_calls = session_frames = hook_calls_at_window_start = 0;
+	/* (the object marks' sums from before the session, and the objects' state) */
+	memset(perf_hooks.object_cycles, 0, sizeof(perf_hooks.object_cycles));
+	memset(perf_hooks.object_counts, 0, sizeof(perf_hooks.object_counts));
+	perf_hooks.translate_cycles = perf_hooks.translate_count = 0;
+	perf_hooks.translate_cluster_queries = perf_hooks.translate_clusters = 0;
+	objects.root_type = NONE;
+	objects.children_depth = 0;
 	perf.seconds_reported = 0;
 	perf.session_gpu_samples = gpu_samples;
 	perf.second_start = now;
@@ -1143,6 +1463,8 @@ static void perf_enter(
 	section->entry_timebase = cycles64();
 	if (slot == _section_game_update)
 		window.mark_last = (unsigned long)section->entry_timebase;
+	else if (slot == _section_objects_update)
+		perf_hooks.object_last = (unsigned long)section->entry_timebase;
 }
 
 static void perf_exit(
@@ -1151,7 +1473,7 @@ static void perf_exit(
 	long slot = section_slot(section);
 
 	session_hook_calls++;
-	if (slot == NONE || slot == _section_game_update || !section->entry_timebase)
+	if (slot == NONE || slot == _section_game_update || slot == _section_objects_update || !section->entry_timebase)
 		return;
 	window.sections[slot] += cycles64() - section->entry_timebase;
 	section->entry_timebase = 0;
@@ -1168,6 +1490,8 @@ static void perf_mark(
 	if (step == _oxbox_perf_draw_start || step < 0 || step >= NUMBER_OF_OXBOX_PERF_STEPS)
 		return;
 	window.steps[step] += elapsed;
+	if (step <= _oxbox_perf_tick_other)
+		frame_tick_steps[step] += elapsed;
 	if (step == _oxbox_perf_draw_end)
 	{
 		/* (the window's counts, as it left them) */
@@ -1208,10 +1532,107 @@ static void frame_counts(
 	window.particles += particle_data ? particle_data->actual_count : 0;
 }
 
+/* objects_update's loop (test build 33): a top-level object's update about to start (its type) ends the one before
+it, which ended at its last object mark (the time between them is the loop's); the children's updates' start and
+end; a created object's update */
+static void perf_object(
+	long event)
+{
+	unsigned long now = cycles_now();
+
+	session_hook_calls++;
+	if (event >= 0 || event == _oxbox_perf_object_event_loop_end)
+	{
+		if (objects.root_type != NONE)
+		{
+			unsigned long cycles = perf_hooks.object_last - objects.root_start;
+
+			window.type_cycles[objects.root_type] += cycles;
+			if (objects.root_definition_index != NONE)
+				tag_slot_add(objects.root_definition_index, cycles);
+		}
+		window.loop_cycles += now - perf_hooks.object_last;
+		perf_hooks.object_last = now;
+		objects.root_type = NONE;
+		if (event >= 0 && object_header_data && event < object_header_data->count)
+		{
+			struct object_header_datum const *header = (struct object_header_datum const *)object_header_data->data + event;
+
+			if (header->type < NUMBER_OF_OBJECT_TYPES)
+			{
+				objects.root_type = header->type;
+				objects.root_definition_index = header->datum ? header->datum->definition_index : NONE;
+				objects.root_start = now;
+				window.type_counts[header->type]++;
+			}
+		}
+	}
+	else if (event == _oxbox_perf_object_event_children_begin)
+	{
+		if (!objects.children_depth++)
+			objects.children_start = now;
+		window.children_begun++;
+	}
+	else if (event == _oxbox_perf_object_event_children_end)
+	{
+		if (objects.children_depth > 0 && !--objects.children_depth)
+			window.children_cycles += now - objects.children_start;
+	}
+	else if (event == _oxbox_perf_object_event_created)
+	{
+		perf_hooks.object_cycles[_oxbox_perf_object_create_delete] += now - perf_hooks.object_last;
+		perf_hooks.object_last = now;
+		window.created_count++;
+	}
+}
+
+/* the weather, a particle type drawn (test build 33) */
+static void perf_weather(
+	long particles,
+	long sprites,
+	long boxes,
+	long polyhedra)
+{
+	session_hook_calls++;
+	window.weather_particles += particles > 0 ? particles : 0;
+	window.weather_sprites += sprites > 0 ? sprites : 0;
+	window.weather_boxes += boxes > 0 ? boxes : 0;
+	window.weather_polyhedra += polyhedra > 0 ? polyhedra : 0;
+}
+
+/* the inline object marks' and object_translate's sums, into the window (the frame hook: they're 32 bits) */
+static void objects_fold(
+	void)
+{
+	long step;
+
+	for (step = 0; step < NUMBER_OF_OXBOX_PERF_OBJECT_STEPS; step++)
+	{
+		window.object_steps[step] += perf_hooks.object_cycles[step];
+		perf_hooks.object_cycles[step] = 0;
+	}
+	window.object_updates += perf_hooks.object_counts[_oxbox_perf_object_type_update];
+	window.activation_runs += perf_hooks.object_counts[_oxbox_perf_object_activation_changed];
+	/* (the marks a frame: 8 an object update, about 3 more a tick) */
+	window.object_marks += perf_hooks.object_counts[_oxbox_perf_object_type_update] * 8;
+	memset(perf_hooks.object_counts, 0, sizeof(perf_hooks.object_counts));
+	window.translate_cycles += perf_hooks.translate_cycles;
+	window.translate_count += perf_hooks.translate_count;
+	window.object_marks += perf_hooks.translate_count * 2 + perf_hooks.translate_cluster_queries;
+	window.translate_cluster_queries += perf_hooks.translate_cluster_queries;
+	window.translate_clusters += perf_hooks.translate_clusters;
+	perf_hooks.translate_cycles = 0;
+	perf_hooks.translate_count = 0;
+	perf_hooks.translate_cluster_queries = 0;
+	perf_hooks.translate_clusters = 0;
+}
+
 static void window_reset(
 	void)
 {
 	unsigned long mark_last = window.mark_last;
+
+	tag_slots_clear();
 
 	memset(&window, 0, sizeof(window));
 	window.mark_last = mark_last;
@@ -1229,6 +1650,7 @@ static void perf_frame(
 	struct perf_sample sample;
 	long index;
 	boolean wanted, paused, postgame;
+	__int64 previous_frame_end;
 
 	unsigned long hook_start = cycles_now();
 
@@ -1245,6 +1667,7 @@ static void perf_frame(
 		return;
 	}
 	frame = now - perf.last_frame_end;
+	previous_frame_end = perf.last_frame_end;
 	perf.last_frame_end = now;
 
 	if (writer_failures)
@@ -1262,6 +1685,7 @@ static void perf_frame(
 	if (!perf.active)
 	{
 		perf.frame_start = counters;
+		memset(frame_tick_steps, 0, sizeof(frame_tick_steps));
 		return;
 	}
 
@@ -1284,9 +1708,18 @@ static void perf_frame(
 	sample.other = frame - sample.ticks - sample.drawing - sample.vsync - sample.present;
 	if (sample.other < 0)
 		sample.other = 0;
+	/* (other's parts: the frame's own marks, and the time from the last frame's end to this one's start) */
+	sample.other_input = marks[_mark_input] - marks[_mark_start];
+	sample.other_network = marks[_mark_network] - marks[_mark_input];
+	sample.other_menus = marks[_mark_menus] - marks[_mark_network];
+	sample.other_network_end = marks[_mark_network_end] - marks[_mark_menus];
+	sample.other_camera = marks[_mark_camera] - marks[_mark_ticks];
+	sample.other_after_present = now > marks[_mark_present] ? now - marks[_mark_present] : 0;
+	sample.other_between = marks[_mark_start] > previous_frame_end ? marks[_mark_start] - previous_frame_end : 0;
 	counters_since(&sample, &perf.frame_start, &counters);
 	perf.frame_start = counters;
 	frame_counts(sample.game_ticks);
+	objects_fold();
 	session_frames++;
 
 	/* this second */
@@ -1299,6 +1732,13 @@ static void perf_frame(
 	perf.second.present += sample.present;
 	perf.second.vsync += sample.vsync;
 	perf.second.other += sample.other;
+	perf.second.other_input += sample.other_input;
+	perf.second.other_network += sample.other_network;
+	perf.second.other_menus += sample.other_menus;
+	perf.second.other_network_end += sample.other_network_end;
+	perf.second.other_camera += sample.other_camera;
+	perf.second.other_after_present += sample.other_after_present;
+	perf.second.other_between += sample.other_between;
 	perf.second.log_cycles += perf.last_hook_cycles;
 
 	/* a slow frame: a line of its own */
@@ -1314,6 +1754,7 @@ static void perf_frame(
 			perf.slow_lines_skipped++;
 		}
 	}
+	memset(frame_tick_steps, 0, sizeof(frame_tick_steps));
 
 	/* a second's summary */
 	if (now - perf.second_start >= perf.frequency)
@@ -1328,6 +1769,8 @@ static void perf_frame(
 		perf.session_log_cycles += perf.second.log_cycles;
 		if (++perf.seconds_reported % 60 == 0)
 			cost_report();
+		window.hook_calls = session_hook_calls - hook_calls_at_window_start;
+		hook_calls_at_window_start = session_hook_calls;
 		frame_row('P', ticks_to_ms(now - perf.session_start) / 1000.0, &perf.second);
 		window_reset();
 		perf.second_start = now;
@@ -1346,9 +1789,30 @@ static void perf_frame(
 	perf.last_hook_cycles = cycles_now() - hook_start;
 }
 
-static struct oxbox_perf_hooks perf_hooks = { perf_frame, perf_enter, perf_exit, perf_mark };
+static struct oxbox_perf_hooks perf_hooks = { perf_frame, perf_enter, perf_exit, perf_mark, perf_object, perf_weather };
 
 /* ---------- start-up */
+
+/* what a hook costs, in cycles: an inline object mark, and a hook call (perf_mark's quickest path) */
+static void calibrate_hooks(
+	void)
+{
+	struct oxbox_perf_hooks *saved = oxbox_perf;
+	unsigned long start, index;
+
+	oxbox_perf = &perf_hooks;
+	start = cycles_now();
+	for (index = 0; index < 1000; index++)
+		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_garbage)
+	inline_mark_cycles = (cycles_now() - start) / 1000;
+	start = cycles_now();
+	for (index = 0; index < 1000; index++)
+		OXBOX_PERF_MARK(_oxbox_perf_draw_start)
+	hook_call_cycles = (cycles_now() - start) / 1000;
+	oxbox_perf = saved;
+	perf_hooks.object_cycles[_oxbox_perf_object_garbage] = 0;
+	session_hook_calls = 0;
+}
 
 /* opence.ini's perf_ settings (oxbox_entry.c reads perf_log, and the others are only read here) */
 static void read_settings(
@@ -1435,8 +1899,11 @@ struct oxbox_perf_hooks *oxbox_perf_start(
 	{
 		platform_log("perf: the kernel's timer functions weren't found: no gpu_busy_pct");
 	}
+	calibrate_hooks();
 	platform_log("perf: on (OXPERF loaded at %p, %lu KB, and a %lu KB writer stack); slow frames over %ld ms; "
-		"a GPU sample every %ld ms", __oxperf_start, (unsigned long)(((__oxperf_end - __oxperf_start) + 0xFFF) & ~0xFFF) / 1024,
-		(unsigned long)WRITER_STACK_SIZE / 1024, perf.slow_frame_ms, perf.gpu_sample_ms);
+		"a GPU sample every %ld ms; an object mark costs %lu cycles, a hook call %lu", __oxperf_start,
+		(unsigned long)(((__oxperf_end - __oxperf_start) + 0xFFF) & ~0xFFF) / 1024,
+		(unsigned long)WRITER_STACK_SIZE / 1024, perf.slow_frame_ms, perf.gpu_sample_ms, inline_mark_cycles,
+		hook_call_cycles);
 	return &perf_hooks;
 }
