@@ -57,6 +57,55 @@ d += bytes((-len(d)) % 0x1000)
 struct.pack_into('<III', d, cap + 8, vsz, 0x26a000, len(raw))   # virtual size, raw address, raw size
 struct.pack_into('<I', d, 0x10c, 0x3b5000 + vsz - base)          # size of image
 
+# the developers' perf log (port/oxbox/oxbox_perf.c: link.ld's .oxperf and .oxperf.bss) as a section of its own, OXPERF,
+# after .cap16: not loaded at boot (no preload flag), so with perf_log off it takes no memory; oxbox_sdk.c loads it
+# with the kernel's XeLoadSection when opence.ini turns the log on. The XBE header (one page, 0x10000-0x10FFF,
+# under .text) has no room after its 25 section headers: what follows them (the shared page counts, the section
+# names, the library versions, the debug names and the logo) moves up by one header, and the new section's page
+# counts and name go after it, in the page's unused end.
+perf_start, perf_load_end, perf_end = sym['__oxperf_start'], sym['__oxperf_load_end'], sym['__oxperf_end']
+perf_size = 0
+if perf_end > perf_start:
+    subprocess.run(['llvm-objcopy', '-O', 'binary', '--only-section=.oxperf', elf, os.path.join(os.path.dirname(elf), 'oxbox_perf.bin')], check=True)
+    perf = open(os.path.join(os.path.dirname(elf), 'oxbox_perf.bin'), 'rb').read()
+    assert len(perf) == perf_load_end - perf_start, (hex(len(perf)), hex(perf_load_end - perf_start))
+    assert perf_start == 0x3b5000 + vsz and not perf_start & 0xFFF
+    perf_raw = len(d)
+    d += perf + bytes((-len(perf)) % 0x1000)
+    u = lambda o: struct.unpack_from('<I', d, o)[0]
+    nsec, sh = u(0x11c), u(0x120) - base
+    at = sh + nsec * 0x38                      # the new section header's place
+    ends = [at]                                # the header's used end: as far as its pointers reach
+    for i in range(nsec):
+        hh = sh + i * 0x38
+        ends += [d.index(b'\0', u(hh + 0x14) - base) + 1, u(hh + 0x1c) - base + 2, u(hh + 0x20) - base + 2]
+    ends += [u(0x164) - base + 16 * u(0x160), u(0x168) - base + 16, u(0x16c) - base + 16, u(0x170) - base + u(0x174),
+             d.index(b'\0', u(0x14c) - base) + 1, d.index(b'\0', u(0x150) - base) + 1]
+    e = u(0x154) - base
+    while d[e:e + 2] != b'\0\0': e += 2
+    used = max(ends + [e + 2])
+    assert not any(d[used:u(0x108)]), 'the XBE header past its used end'
+    counts = (used + 0x38 + 3) & ~3            # the new section's head and tail page counts (its own pages: none shared)
+    name = counts + 4
+    assert name + 7 <= u(0x108), 'no room in the XBE header for OXPERF'
+    d[at + 0x38:used + 0x38] = d[at:used]
+    d[at:at + 0x38] = bytes(0x38)
+    def moved(o):
+        p = u(o)
+        if base + at <= p < base + used: struct.pack_into('<I', d, o, p + 0x38)
+    for i in range(nsec):
+        for f in (0x14, 0x1c, 0x20): moved(sh + i * 0x38 + f)
+    for o in (0x14c, 0x150, 0x154, 0x164, 0x168, 0x16c, 0x170): moved(o)
+    d[counts:counts + 4] = bytes(4)
+    d[name:name + 7] = b'OXPERF\0'
+    perf_size = ((perf_end + 0xFFF) & ~0xFFF) - perf_start
+    # flags: writable (1), executable (4); not preload (2)
+    struct.pack_into('<IIIIIIIII', d, at, 5, perf_start, perf_end - perf_start, perf_raw, len(perf),
+                     base + name, 0, base + counts, base + counts + 2)
+    struct.pack_into('<I', d, 0x11c, nsec + 1)
+    struct.pack_into('<I', d, 0x10c, perf_start + perf_size - base)   # size of image
+    nsec += 1
+
 # mainXapiStartup: call main(0, 0, 0) -> call oxbox_entry(0, 0, 0)
 site = 0x15cb1
 o = site - 0x11000 + 0x1000
@@ -122,5 +171,7 @@ for i in range(nsec):
     d[hh + 0x24:hh + 0x38] = hashlib.sha1(struct.pack('<I', rs) + bytes(d[r:r + rs])).digest()
 open(dst, 'wb').write(d)
 print(f'overlay code and data written into the retail sections: {lovl_total // 1024} KB in {len(lovl)} sections')
+print(f'OXPERF (the perf log, loaded only with perf_log = 1): {perf_end - perf_start} bytes at {perf_start:#x} '
+      f'({perf_load_end - perf_start} from the file, {perf_size // 4096} pages)' if perf_size else 'OXPERF: none')
 print(f'wrote {dst}: {len(d)} bytes, image {start:#x}-{end:#x}, bss to {bss_end:#x}, entry {entry:#x}, '
       f'.cap16 vsize {vsz:#x}, md5 {hashlib.md5(d).hexdigest()}')

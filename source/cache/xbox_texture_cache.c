@@ -145,7 +145,8 @@ static long xbox_texture_cache_page_count = HALO_PORT_TEXTURE_CACHE_PAGE_COUNT;
 /* oxbox: the tag cache's memory a map left free, lent to the texture cache for that map (texture_cache_lend):
 the cache's pages then run from the lower of the two memories to the end of the upper, and a locked block keeps
 it off what lies between them (the map's structure bsps, the rest of memory) */
-static struct
+/* (oxbox: not static: the perf log reads it, port/oxbox/oxbox_perf.c) */
+struct
 {
 	byte *start;            /* (NULL: none lent) */
 	long size;
@@ -365,7 +366,12 @@ static struct bitmap_data *texture_cache_debug_bitmaps[64];
 #else
 static struct bitmap_data *texture_cache_debug_bitmaps[XBOX_TEXTURE_CACHE_PAGE_COUNT_MAXIMUM];
 #endif
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: not static: the perf log reads the cache's size and use (port/oxbox/oxbox_perf.c) */
+struct xbox_texture_cache_globals xbox_texture_cache_globals = { 0 };
+#else
 static struct xbox_texture_cache_globals xbox_texture_cache_globals;
+#endif
 #if defined(HALO_XBOX_TARGET)
 unsigned long oxbox_texture_reads, oxbox_texture_read_bytes, oxbox_texture_blocking_reads;
 #endif

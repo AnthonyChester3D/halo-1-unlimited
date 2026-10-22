@@ -27,7 +27,7 @@ abi = ['--target=i686-linux-gnu', '-m32', '-fms-extensions', '-fshort-wchar', '-
        # Xbox code (MSVC, the libraries, the kernel) keeps the stack 4-byte aligned, not 16
        '-mstack-alignment=4',
        '-ffunction-sections', '-fdata-sections', '-fno-stack-protector', '-fno-asynchronous-unwind-tables',
-       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=27', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
+       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=31', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
 abi += [f'-fno-builtin-{n}' for n in ('wcslen', 'wcsnlen', 'wcschr', 'wcsrchr', 'wcscmp', 'wcsncmp', 'wcscpy', 'wcsncpy',
                                       'wcscat', 'wcsncat', 'wmemchr', 'wmemcmp', 'wmemcpy', 'wmemmove', 'wmemset')]
 gflags = ['-std=gnu89', '-D__STRICT_ANSI__', '-w', '-Wno-error=incompatible-pointer-types',
@@ -77,7 +77,8 @@ for name in ('adler32.c', 'crc32.c', 'inffast.c', 'inflate.c', 'inftrees.c', 'un
 for s in sorted(Path('port/third_party/musl-math/src').glob('*.c')):
     add(s, 'musl')
 for s in sorted(Path(X).glob('*.c')):
-    add(s, 'plat', 'xbox')
+    # (the perf log reads the game's structures: a game unit; link.ld puts it in its own section, OXPERF)
+    add(s, 'game' if s.name == 'oxbox_perf.c' else 'plat', 'xbox')
     if s.name in ('oxbox_libc.c', 'oxbox_stdio.c', 'oxbox_math.c'):
         # (the C library itself: no loop may become a call to the function it is)
         print('  plat_cflags = $plat_cflags -ffreestanding -fno-builtin')

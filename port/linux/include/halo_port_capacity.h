@@ -31,8 +31,17 @@ vertices, as on the Xbox. A change to a pool's size changes the game state's
 layout: saved games of builds before it no longer load. */
 
 #define HALO_PORT_GAME_STATE_BASE_ADDRESS 0x80061000 /* (xbox) */
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+/* oxbox (test build 30): the game state as big as its pools, with the AI's trimmed (below): 2,626,380 bytes of
+CPU pools and 163,840 of decal vertices, "game state:" in oxbox_log.txt. It still starts at 0x80061000, and the tag
+cache at 0x803A6000; the 612 KB between them are free for the rest of the game (physical_memory_map.c allocates the
+game state's size alone), and the texture cache is 512 KB bigger for it. */
+#define HALO_PORT_GAME_STATE_CPU_SIZE 0x284000 /* (xbox: 0x305000) */
+#define HALO_PORT_GAME_STATE_GPU_SIZE 0x28000 /* (xbox: 0x40000) */
+#else
 #define HALO_PORT_GAME_STATE_CPU_SIZE 0x305000 /* (xbox) */
 #define HALO_PORT_GAME_STATE_GPU_SIZE 0x40000 /* (xbox) */
+#endif
 #define HALO_PORT_GAME_STATE_SIZE (HALO_PORT_GAME_STATE_CPU_SIZE+HALO_PORT_GAME_STATE_GPU_SIZE)
 
 /* ---------- textures
@@ -59,7 +68,8 @@ sharing memory, co-op host tables allocated for a co-op host only, smaller per-o
 more debug buffers left out: 448 KB more)
    (test build 08: 0x4EC, 19.7 MB: asserts without their text, cold code compiled for size, smaller debug
 buffers, and OpenCE code and data placed over the retail game's unused code as well: 1.1 MB more) */
-#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x536
+/* (test build 30: 0x556, 21.3 MB: the AI's pools trimmed and the game state as big as its pools: 512 KB more) */
+#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x556
 #elif defined(HALO_ARM64_GUEST) || defined(HALO_WEB)
 #define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x280 /* (xbox: 0x580; the proof of concept frees 12 MB for its larger image) */
 #else
@@ -89,10 +99,22 @@ Network co-op adds enemies for its players (port/linux/game/coop_enemies.c):
 the actors, and their knowledge of the units about them (props: with many
 players, more each), have room for several times a level's own. */
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+/* oxbox (test build 30): multiplayer's AI, a quarter of the Xbox's. Maps that use AI with care have a few dozen at
+most (Precipice: 10 actors and 8 props at the peak, test build 24's measurement); past 64, an encounter's next
+actor isn't made (actor_place: "cannot create actor", its unit deleted). Distributed-netcode clients make no actors
+at all. 538 KB less game state (the actors 351 KB, the props 176 KB, the swarm components 8 KB), which goes to the
+texture cache; network co-op (coop_enemies.c) has no room for its extra enemies at this size. */
+#define HALO_PORT_MAXIMUM_ACTORS 64 /* (xbox: 256) */
+#define HALO_PORT_MAXIMUM_PROPS 192 /* (xbox: 768) */
+#define HALO_PORT_MAXIMUM_SWARMS 32 /* (xbox) */
+#define HALO_PORT_MAXIMUM_SWARM_COMPONENTS 128 /* (xbox: 256) */
+#else
 #define HALO_PORT_MAXIMUM_ACTORS 256 /* (xbox) */
 #define HALO_PORT_MAXIMUM_PROPS 768 /* (xbox) */
 #define HALO_PORT_MAXIMUM_SWARMS 32 /* (xbox) */
 #define HALO_PORT_MAXIMUM_SWARM_COMPONENTS 256 /* (xbox) */
+#endif
 
 /* ---------- objects */
 

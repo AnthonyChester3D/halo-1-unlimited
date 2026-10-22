@@ -402,3 +402,46 @@ int oxbox_bink_sections(int load)
 	platform_log("bink: player %s", load ? "loaded" : "unloaded");
 	return 1;
 }
+
+/* ---------- the developers' perf log, in a section of its own
+
+link.ld puts the perf log (oxbox_perf.c) in the XBE section OXPERF (mkxbe.py), which isn't loaded at boot: with
+perf_log off it takes no memory, and the game's hooks (oxbox_perf.h) find oxbox_perf NULL. With perf_log = 1 in
+opence.ini, start-up loads it here, once, and oxbox_perf points at its hooks. */
+
+#include "oxbox_perf.h"
+
+struct oxbox_perf_hooks *oxbox_perf;
+
+void oxbox_perf_load(void)
+{
+	struct oxbox_perf_hooks *oxbox_perf_start(void);
+	oxbox_section_proc load_section = (oxbox_section_proc)oxbox_kernel_export(327);
+	const unsigned char *header = (const unsigned char *)0x10000;
+	unsigned long count = *(const unsigned long *)(header + 0x11C);
+	unsigned char *sections = *(unsigned char *const *)(header + 0x120);
+	unsigned long index;
+
+	for (index = 0; index < count; index++)
+	{
+		unsigned char *section = sections + index * 0x38;
+		LONG status;
+
+		if (strcmp(*(const char *const *)(section + 0x14), "OXPERF"))
+			continue;
+		if (!load_section)
+		{
+			platform_log("perf: the kernel's XeLoadSection wasn't found");
+			return;
+		}
+		status = load_section(section);
+		if (status < 0)
+		{
+			platform_log("perf: XeLoadSection(OXPERF) failed (%08lx)", (unsigned long)status);
+			return;
+		}
+		oxbox_perf = oxbox_perf_start();
+		return;
+	}
+	platform_log("perf: this XBE has no OXPERF section");
+}

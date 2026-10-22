@@ -4,12 +4,21 @@ INCLUDE ovl.ld   /* OpenCE .bss over the retail game's unused code and globals (
 SECTIONS {
   . = 0x3B9000;
   __oxbox_image_start = .;
-  .text : { *(.text.oxbox_entry) *(.text .text.*) }
-  .rodata : { *(.rodata .rodata.*) }
-  .data : { *(.data .data.*) }
+  .text : { *(.text.oxbox_entry) *(EXCLUDE_FILE(*oxbox_perf.o) .text .text.*) }
+  .rodata : { *(EXCLUDE_FILE(*oxbox_perf.o) .rodata .rodata.*) }
+  .data : { *(EXCLUDE_FILE(*oxbox_perf.o) .data .data.*) }
   .init_array : { __oxbox_init_start = .; KEEP(*(.init_array*)) __oxbox_init_end = .; }
   __oxbox_image_end = .;
-  .bss (NOLOAD) : { __oxbox_bss_start = .; *(.bss .bss.*) *(COMMON) __oxbox_bss_end = .; }
+  .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o) .bss .bss.* COMMON)
+                    __oxbox_bss_end = .; }
+  /* the developers' perf log (port/oxbox/oxbox_perf.c), code, data and buffers, in its own XBE section (OXPERF, tools/mkxbe.py)
+     after the image: not loaded at boot, only when opence.ini says perf_log = 1 (oxbox_sdk.c oxbox_perf_load) */
+  . = ALIGN(0x1000);
+  __oxperf_start = .;
+  .oxperf : { *oxbox_perf.o(.text .text.* .rodata .rodata.* .data .data.*) }
+  __oxperf_load_end = .;
+  .oxperf.bss (NOLOAD) : { *oxbox_perf.o(.bss .bss.* COMMON) }
+  __oxperf_end = .;
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.gnu*) }
 }
 /* the overlay's .bss parts oxbox_entry zeroes (ovl.ld defines those it has) */

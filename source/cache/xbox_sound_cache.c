@@ -209,7 +209,12 @@ static struct xbox_cache_sound_datum *sound_cache_sound_get_cache_sound(
 short assertion_count;
 boolean debug_sound_cache;
 boolean debug_sound_reference_counts;
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: not static: the perf log reads the cache's size and use (port/oxbox/oxbox_perf.c) */
+struct xbox_sound_cache_globals xbox_sound_cache_globals = { 0 };
+#else
 static struct xbox_sound_cache_globals xbox_sound_cache_globals = { 0 };
+#endif
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: the sounds read into the cache (main.c's long frames, oxbox_input.c's memory line) */
 unsigned long oxbox_sound_reads, oxbox_sound_read_bytes;

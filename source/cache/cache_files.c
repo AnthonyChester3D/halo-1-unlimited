@@ -261,7 +261,12 @@ static boolean cache_file_structure_bsp_tag_valid(
 
 /* ---------- globals */
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: not static: the perf log reads the map's header (port/oxbox/oxbox_perf.c) */
+struct cache_file_globals cache_file_globals = { 0 };
+#else
 static struct cache_file_globals cache_file_globals = { 0 };
+#endif
 extern struct cache_file_tag_instance *global_tag_instances;
 /* port: global_tag_instances' count. The menus add their tags to a copy of
 the table (port/linux/game/menu_tags.c); the map's tag header keeps its own,

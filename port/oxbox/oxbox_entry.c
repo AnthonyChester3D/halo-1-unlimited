@@ -301,9 +301,43 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	                     doesn't take it (a Stellar BIOS's player had to take it out to play)
 	fps_counter = 1      the frame rate in the screen's bottom right corner, for testing (test build 27): Halo's own
 	                     counter (display_framerate), frames a second over the last half second, green at 30 and
-	                     up, red under */
+	                     up, red under
+	bot_log = 1          the bots' developer log (test build 28, bots.c): a line every 10 seconds in this log, and
+	                     opence_bot_log.txt beside it, the spots where bots gave up on where they were going
+	perf_log = 1         the developers' performance and memory log (test build 31, oxbox_perf.c): a CSV file a map
+	                     in perf\ beside the XBE; its own settings (perf_slow_frame_ms, perf_gpu_sample_ms) are
+	                     read by it */
 int oxbox_setting_audio_effects = 1;
+int oxbox_setting_bot_log = 0;
+static int oxbox_setting_perf_log = 0;
 extern unsigned char display_framerate;   /* (main.c's, a boolean) */
+
+/* a whole file written beside the logs (the XBE's folder, else T:); FALSE when neither could be written */
+int oxbox_write_log_file(const char *name, const void *data, unsigned long size)
+{
+	static const char *const folders[] = { "d:\\", "T:\\" };
+	unsigned i;
+
+	for (i = 0; i < sizeof(folders) / sizeof(folders[0]); i++)
+	{
+		char path[128];
+		HANDLE file;
+		unsigned long written = 0, n = 0, k;
+
+		for (k = 0; folders[i][k] && n < sizeof(path) - 1; k++)
+			path[n++] = folders[i][k];
+		for (k = 0; name[k] && n < sizeof(path) - 1; k++)
+			path[n++] = name[k];
+		path[n] = 0;
+		file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (file == INVALID_HANDLE_VALUE)
+			continue;
+		WriteFile(file, data, size, &written, NULL);
+		CloseHandle(file);
+		return written == size;
+	}
+	return 0;
+}
 
 /* (a byte loop: the compiler makes strcmp against a constant into bcmp, which this build has no copy of) */
 static int same_text(const char *a, const char *b)
@@ -352,6 +386,10 @@ static void read_settings(const char *path)
 			oxbox_setting_audio_effects = value != 0;
 		else if (same_text(name, "fps_counter"))
 			display_framerate = value != 0;
+		else if (same_text(name, "bot_log"))
+			oxbox_setting_bot_log = value != 0;
+		else if (same_text(name, "perf_log"))
+			oxbox_setting_perf_log = value != 0;
 		else
 			continue;
 		platform_log("settings: %s from %s", name, path);
@@ -406,6 +444,13 @@ int oxbox_entry(int argc, char **argv, char **envp)
 	read_settings("T:\\opence.ini");
 	if (!oxbox_setting_audio_effects)
 		platform_log("settings: no DirectSound effects image (audio_effects = 0)");
+	/* (the developers' perf log: its section loaded and started only with perf_log = 1, oxbox_sdk.c) */
+	if (oxbox_setting_perf_log)
+	{
+		void oxbox_perf_load(void);
+
+		oxbox_perf_load();
+	}
 	oxbox_stage = 2;
 	result = main();
 	platform_log("main returned %d", result);

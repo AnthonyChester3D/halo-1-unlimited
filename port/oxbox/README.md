@@ -7,12 +7,18 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
 
 - **OpenCE's netcode on system link.** Each console predicts its own player and the host decides. Consoles can
   join a game in progress, and up to 16 consoles can play. The host also sends the AI to every console, so maps
-  with AI play the same for everyone.
+  with AI play the same for everyone. Up to 64 AI are alive at once (a quarter of the Xbox game's pool, which
+  leaves 512 KB more for textures); past that, an encounter's next AI isn't made.
 - **Folder maps.** Maps go in `maps\<Name>\` on the hard drive or in `T:\maps`, with an optional `info.txt` and
   preview picture. They show up in a map browser that has sorts, favourites, hidden maps and play counts.
 - **Map sharing.** A console that lacks the host's map downloads it in the lobby (TCP port 5152), over up to
   three connections. The countdown waits for it. A console joining a game in progress downloads the map first,
   then joins.
+- **Bots.** In the system link lobby the host presses Y to pick a bot mode: Off, Suggested (the map's
+  suggested player count, or 8), Max (16 players) or Custom (RT and LT set the count). Bots are named BOT plus
+  one of Halo's random names. They walk the whole map with Halo's own AI pathfinding, take teleporters, fight
+  (spotting, aiming, bursts, weapon choice and pickups, grenades, melee; only the other team in team games), and
+  leave to make room when a person joins. No vehicles or objectives yet.
 - **END GAME.** The host has an END GAME item in the pause menu.
 - **Memory.** The texture cache borrows whatever part of Halo's 22 MB of tag memory the map leaves unused, from
   map load until the map closes. That's 12 to 14 MB on stock-sized maps. On a 128 MB console the texture cache
@@ -22,6 +28,15 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
 - **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, holds one `name = number` per line:
   - `audio_effects = 0` skips DirectSound's effects program.
   - `fps_counter = 1` shows the frame rate in the bottom right corner (off by default).
+  - `bot_log = 1` turns on the bots' developer log (off by default): a line every 10 seconds in
+    `oxbox_log.txt`, and `opence_bot_log.txt` beside it, listing the spots where bots got stuck.
+  - `perf_log = 1` turns on the developers' performance and memory log (off by default). It writes a CSV file per
+    map in `perf\` beside the XBE: memory at map load, a line a second (frame times split into game ticks,
+    drawing, waiting on the graphics chip and the vertical blank; the graphics chip's busy share; free memory;
+    texture reads; the camera's position, BSP and cluster), and a line for each frame over `perf_slow_frame_ms`
+    (34 by default). `perf_gpu_sample_ms` (1 by default, 0 for none) sets how often the graphics chip is asked
+    whether it's busy. The log's code and buffers are in an XBE section of their own (OXPERF), loaded only when
+    the setting is on: with it off, the game has the same free memory as without it.
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 

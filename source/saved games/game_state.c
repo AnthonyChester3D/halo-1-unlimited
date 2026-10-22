@@ -296,6 +296,21 @@ void game_state_initialize_for_new_map(
 	game_state_globals.locked = TRUE;
 	game_state_globals.saved_game_valid = FALSE;
 	game_state_globals.revert_time = NONE;
+#if defined(HALO_XBOX_TARGET)
+	{
+		/* oxbox: how much of the game state its pools take (once: the same every map) */
+		static boolean reported = FALSE;
+		void platform_log(char const *format, ...);
+
+		if (!reported)
+		{
+			reported = TRUE;
+			platform_log("game state: %ld of %ld bytes (and %ld of %ld for the GPU)",
+				(long)game_state_globals.cpu_allocation_size, (long)GAME_STATE_CPU_SIZE,
+				(long)game_state_globals.gpu_allocation_size, (long)GAME_STATE_GPU_SIZE);
+		}
+	}
+#endif
 
 	memset(game_state_globals.header, 0, sizeof(*game_state_globals.header));
 

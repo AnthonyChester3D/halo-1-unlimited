@@ -3406,6 +3406,7 @@ enum
 	NUMBER_OF_FRAME_PROBE_MARKS
 };
 static LARGE_INTEGER frame_probe_marks[NUMBER_OF_FRAME_PROBE_MARKS];
+#include "oxbox_perf.h"
 static long frame_probe_ticks_before;
 static unsigned long frame_probe_reads_before[5], frame_probe_net_before[2];
 extern unsigned long oxbox_texture_reads, oxbox_texture_read_bytes, oxbox_texture_blocking_reads;
@@ -3787,6 +3788,11 @@ static boolean main_loop_iteration(
 
 		input_frame_end();
 		FRAME_PROBE_END();
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the developers' perf log (port/oxbox/oxbox_perf.c), loaded only when opence.ini turns it on */
+		if (oxbox_perf)
+			oxbox_perf->frame(frame_probe_marks, NUMBER_OF_FRAME_PROBE_MARKS);
+#endif
 #if defined(OXBOX_TEST_POOLS)
 		{
 			void game_state_report_pools(void);
