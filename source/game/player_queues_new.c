@@ -447,6 +447,17 @@ void update_server_next_update(
 			update->update.action_count += 1;
 			continue;
 		}
+		/* oxbox: a bot's action is its brain's (port/linux/game/bots.c) */
+		{
+			boolean bots_player_action(long absolute_player_index, struct player_action *action);
+
+			if (bots_player_action(queue_index, &update->update.actions[queue_index]))
+			{
+				update_server_pending_control_flags[queue_index] = 0;
+				update->update.action_count += 1;
+				continue;
+			}
+		}
 		csmemcpy(
 			&update->update.actions[queue_index],
 			&queue->current_action,

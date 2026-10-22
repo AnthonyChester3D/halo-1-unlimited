@@ -2009,7 +2009,9 @@ void map_share_render(void) {
     rectangle2d bounds;
     /* (in the lobby's countdown bar, right-aligned after "Game Start in: 0:17"; drawn as plain text: the icon drawing
        takes '%' for the start of a button's name and drew each piece aligned on its own) */
-    if (!g_status_on || !g_label[0] || game_engine || (font = tag_loaded('font', "ui\\large_ui")) == NONE) return;
+    /* (the lobby's alone: not the gametype and map choices opened from it) */
+    if (!g_status_on || !g_label[0] || game_engine || !ui_widget_lobby_showing() ||
+        (font = tag_loaded('font', "ui\\large_ui")) == NONE) return;
     draw_string_set_draw_mode(font, NONE, 1, 0, &color);
     draw_string_set_tab_stops(NULL, 0);
     bounds.y0 = 82; bounds.x0 = 250; bounds.y1 = 106; bounds.x1 = 565;
@@ -2017,6 +2019,9 @@ void map_share_render(void) {
 }
 
 boolean hmp_worker_running(void) { return g_worker != 0; }
+
+/* oxbox: whether the lobby's countdown bar shows a download's status (bots.c draws its label there otherwise) */
+boolean map_share_status_showing(void) { return g_status_on && g_label[0]; }
 
 void hmp_log(char const *format, ...) {
     char line[300];

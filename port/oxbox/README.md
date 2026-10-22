@@ -18,9 +18,10 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
   map load until the map closes. That's 12 to 14 MB on stock-sized maps. On a 128 MB console the texture cache
   grows to as much as 60 MB and the sound cache to 8 MB.
 - **Logs.** It writes `debug.txt` and `oxbox_log.txt` beside the XBE, or in `T:` when the XBE runs from a
-  disc or ISO. They record the kernel and BIOS, memory, map sharing, and any frame of 100 ms or more.
-- **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, can hold
-  `audio_effects = 0` to skip DirectSound's effects program.
+  disc or ISO. They record the kernel version, memory, map sharing, and any frame of 100 ms or more.
+- **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, holds one `name = number` per line:
+  - `audio_effects = 0` skips DirectSound's effects program.
+  - `fps_counter = 1` shows the frame rate in the bottom right corner (off by default).
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 
@@ -67,4 +68,4 @@ How the pieces fit:
 This builds on [OpenCE](https://github.com/OpenCommunityEdition/OpenCE), the port of the Halo: Combat Evolved
 decompilation by [bnunu/halo-1](https://github.com/bnunu/halo-1), which was forked from
 [punpckhdq/halo](https://github.com/punpckhdq/halo). The map features come from the Halo Universal XBE. Maps for
-it are made with [Halo Map Porter](https://github.com/AnthonyChester3D/halo-map-porter).
+it are made with [Halo Map Porter](https://github.com/YOUR-GITHUB-NAME/halo-map-porter).

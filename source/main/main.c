@@ -2963,7 +2963,9 @@ static void screenshot_render(
 void main_framerate_render(
 	void)
 {
-	if (display_framerate)
+	/* (oxbox: hud_globals is the loaded map's, none before the first map: opence.ini's fps_counter sets
+	display_framerate at start-up) */
+	if (display_framerate && hud_globals)
 	{
 		long font_tag_index;
 
@@ -3648,6 +3650,12 @@ static boolean main_loop_iteration(
 			/* oxbox: Halo Universal's map sharing, play stats and END GAME (port/linux/game/hmp_share.c) */
 			map_share_update();
 #endif
+			/* oxbox: the host's bots (port/linux/game/bots.c) */
+			{
+				void bots_update(void);
+
+				bots_update();
+			}
 			profile_scope_enter(main_network_start_frame_section)
 			connection = main_globals.connection;
 			if (connection==_game_connection_network_client)

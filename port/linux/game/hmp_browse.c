@@ -1059,6 +1059,34 @@ void hmp_browse_tick(void)
 	}
 }
 
+/* oxbox: a level's suggested most players, for the bots' Suggested (bots.c): the stock table's, or the folder
+   map's card's ("Players: 4-16", or "4-16 players" in its description); 0 when it says none */
+short hmp_browse_suggested_players(char const *level_name)
+{
+	struct map_tags t, *saved_parsing = g.parsing;
+	long saved_line = g.parse_line;
+	boolean saved_players = g.parse_players;
+	unsigned char text[1024];
+	long k, m, got;
+	if (!level_name || !level_name[0]) return 0;
+	for (k = 0; k < HMP_STOCK_LEVELS; k++)
+	{
+		char const *stock = hmp_maps_stock_level(k);
+		if (stock && !ieq(stock, level_name)) return stock_players[k][1];
+	}
+	m = hmp_maps_find(level_name);
+	if (m == NONE || (got = hmp_maps_read_info(m, text, sizeof(text))) <= 0) return 0;
+	csmemset(&t, 0, sizeof(t));
+	g.parsing = &t;
+	g.parse_line = 0;
+	g.parse_players = FALSE;
+	tag_lines(text, got);
+	g.parsing = saved_parsing;
+	g.parse_line = saved_line;
+	g.parse_players = saved_players;
+	return t.players_maximum;
+}
+
 #endif /* HALO_XBOX_TARGET */
 
 

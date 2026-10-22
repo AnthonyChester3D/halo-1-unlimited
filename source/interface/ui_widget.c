@@ -7818,6 +7818,26 @@ static void widget_instance_process_one_event_recursive(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		3067,
 		widget && definition && event && return_widget_deleted);
+	/* oxbox: the lobby's bot buttons, the host's (Y the mode, LT / RT Custom's count; port/linux/game/bots.c) */
+	if (event->type == _event_type_button && event->data.button.value == 1 &&
+		(event->data.button.index == _gamepad_analog_button_y ||
+			event->data.button.index == _gamepad_analog_button_left_trigger ||
+			event->data.button.index == _gamepad_analog_button_right_trigger))
+	{
+		char const *name = tag_get_name(widget->definition_tag_index);
+		char const *leaf = name ? strrchr(name, '\\') : NULL;
+
+		if (leaf && !csstrcmp(leaf + 1, "connected_pregame_screen"))
+		{
+			extern boolean bots_lobby_button(short button);
+
+			if (bots_lobby_button(event->data.button.index))
+			{
+				*return_widget_deleted = FALSE;
+				return;
+			}
+		}
+	}
 #if defined(HALO_XBOX_TARGET)
 	/* oxbox: the map list's own buttons (Halo Universal's browser: X / White sort, Y favorite, Black hide, LT / RT
 	groups; port/linux/game/hmp_browse.c) */
@@ -8350,6 +8370,28 @@ struct widget_instance *ui_widget_get_active_widget(
 		widget_globals.active_widgets[local_player_index] : NULL;
 }
 #endif
+
+/* oxbox: whether a screen shown is the system link lobby (connected_pregame_screen). The lobby's countdown bar
+carries the bots label and a map download's status (bots.c, hmp_share.c); the screens opened from the lobby (the
+gametype and map choices) are drawn while the game is still in its pregame too, and mustn't show them. (Opening a
+screen replaces the one shown, so the lobby isn't an active widget behind them.) */
+boolean ui_widget_lobby_showing(
+	void)
+{
+	long widget_index;
+
+	for (widget_index = 0; widget_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; widget_index++)
+	{
+		struct widget_instance *widget = widget_globals.active_widgets[widget_index];
+		char const *name = widget ? tag_get_name(widget->definition_tag_index) : NULL;
+		char const *leaf = name ? strrchr(name, '\\') : NULL;
+
+		if (leaf && !csstrcmp(leaf + 1, "connected_pregame_screen"))
+			return TRUE;
+	}
+
+	return FALSE;
+}
 
 static boolean ui_check_for_pause_game(
 	void)

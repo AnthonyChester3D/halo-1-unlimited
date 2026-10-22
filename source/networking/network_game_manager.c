@@ -365,7 +365,7 @@ boolean network_game_add_player(
 	if (game->player_count < game->maximum_players)
 	{
 		if (VALID_INDEX(player->machine_index, MAXIMUM_NETWORK_MACHINE_COUNT) &&
-			VALID_INDEX(player->controller_index, MAXIMUM_LOCAL_PLAYERS))
+			(VALID_INDEX(player->controller_index, MAXIMUM_LOCAL_PLAYERS) || network_player_is_bot(player)))
 		{
 			for (player_index = 0; player_index < NETWORK_GAME_PLAYER_SLOTS; player_index++)
 			{
@@ -376,7 +376,7 @@ boolean network_game_add_player(
 				}
 			}
 
-			if (player_index == NETWORK_GAME_PLAYER_SLOTS && network_player_is_valid(player))
+			if (player_index == NETWORK_GAME_PLAYER_SLOTS && network_player_is_present(player))
 			{
 				new_player_index = NONE;
 				/* (the host's slot, as it chose it) */
@@ -420,9 +420,26 @@ boolean network_game_add_player(
 	return result;
 }
 
+/* oxbox: whether a player can join: a free slot, or a bot who gives a person
+its place (network_game_server_add_player_to_game) */
+boolean network_game_has_free_player_slot(
+	struct network_game *game)
+{
+	long player_index;
+
+	if (network_game_has_open_player_slot(game))
+		return TRUE;
+	for (player_index = 0; player_index < NETWORK_GAME_PLAYER_SLOTS; player_index++)
+	{
+		if (network_player_is_bot(&game->players[player_index]))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 /* port: whether a player can be added to the game (a free slot, which in a
 game in progress is not the slot of a player who left: network_game_add_player) */
-boolean network_game_has_free_player_slot(
+boolean network_game_has_open_player_slot(
 	struct network_game *game)
 {
 	long player_index;
@@ -455,6 +472,24 @@ boolean network_player_is_valid(
 	}
 
 	return FALSE;
+}
+
+/* oxbox: a bot (network_game_manager.h) */
+boolean network_player_is_bot(
+	struct network_player const *player)
+{
+	return player &&
+		player->machine_index >= 0 &&
+		(long)player->machine_index < MAXIMUM_NETWORK_MACHINE_COUNT &&
+		player->controller_index >= NETWORK_BOT_CONTROLLER_FIRST &&
+		player->controller_index < NETWORK_BOT_CONTROLLER_FIRST + NETWORK_BOT_MAXIMUM_COUNT;
+}
+
+/* oxbox: a player in the game, a person's or a bot */
+boolean network_player_is_present(
+	struct network_player *player)
+{
+	return network_player_is_valid(player) || network_player_is_bot(player);
 }
 
 void network_game_invalidate_machine(
@@ -520,9 +555,11 @@ boolean network_game_spawn_player(
 	match_assert(
 		"c:\\halo\\SOURCE\\networking\\network_game_manager.c",
 		0x1BC,
-		network_player_is_valid(player));
+		network_player_is_present(player));
 
-	controller_index = network_game_player_is_local(player) ? player->controller_index : NONE;
+	/* (oxbox: a bot is the host's, at no gamepad) */
+	controller_index = !network_player_is_bot(player) && network_game_player_is_local(player) ?
+		player->controller_index : NONE;
 	/* (the datum at the player's slot, with the identifier datum_new would
 	give it) */
 	if (VALID_INDEX(player->player_list_index, NETWORK_GAME_PLAYER_SLOTS))
@@ -576,7 +613,7 @@ boolean network_game_player_is_valid(
 		0x247,
 		player && game);
 
-	if (network_player_is_valid(player))
+	if (network_player_is_present(player))
 	{
 		current_player = &game->players[0];
 		for (player_index = 0; player_index < NETWORK_GAME_PLAYER_SLOTS; player_index++, current_player++)
@@ -695,7 +732,7 @@ boolean network_game_remove_player(
 	{
 		for (player_index = 0; player_index < NETWORK_GAME_PLAYER_SLOTS; player_index++)
 		{
-			if (network_player_is_valid(&game->players[player_index]) &&
+			if (network_player_is_present(&game->players[player_index]) &&
 				game->players[player_index].machine_index == player->machine_index &&
 				game->players[player_index].controller_index == player->controller_index)
 			{
@@ -743,7 +780,7 @@ boolean network_game_remove_machine(
 			{
 				for (player_index = 0; player_index < NETWORK_GAME_PLAYER_SLOTS; player_index++)
 				{
-					if (network_player_is_valid(&game->players[player_index]) &&
+					if (network_player_is_present(&game->players[player_index]) &&
 						game->players[player_index].machine_index == machine->machine_index)
 					{
 						if (!network_game_remove_player(game, &game->players[player_index]))
@@ -828,7 +865,7 @@ boolean network_game_create_game_objects(
 		network_game_spawn_player) */
 		for (player_index = 0; player_index < NETWORK_GAME_PLAYER_SLOTS; player_index++)
 		{
-			if (!network_player_is_valid(&game->players[player_index]))
+			if (!network_player_is_present(&game->players[player_index]))
 			{
 				/* (the slots of players who left are among them) */
 				continue;

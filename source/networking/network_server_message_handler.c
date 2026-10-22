@@ -636,7 +636,7 @@ static boolean network_game_server_player_name_taken(
 		wchar_t const *other = game->players[index].name;
 		long character;
 
-		if (index == own_index || !network_player_is_valid(&game->players[index]))
+		if (index == own_index || !network_player_is_present(&game->players[index]))
 			continue;
 		for (character = 0; character < (long)NUMBEROF(game->players[index].name); character++)
 		{

@@ -95,6 +95,20 @@ void network_game_assign_players_to_team(
 	char const *prefix);
 boolean network_player_is_valid(
 	struct network_player *player);
+/* oxbox: bots (port/linux/game/bots.c). A bot is a player of the host's
+machine at a controller index no gamepad has, NETWORK_BOT_CONTROLLER_FIRST
+on: network_player_is_valid() says no to it, so the code that walks a
+machine's local players (the menus, the gamepads) passes it by, and the
+code that holds every player in the game asks network_player_is_present() */
+#define NETWORK_BOT_CONTROLLER_FIRST 16
+/* the host's bot mode + 1 in a field the Xbox game left unused (0: off, or
+a host without bots), for the lobby's label on every machine */
+#define NETWORK_GAME_BOT_MODE(game) ((game)->__unknown426)
+#define NETWORK_BOT_MAXIMUM_COUNT 15
+boolean network_player_is_bot(
+	struct network_player const *player);
+boolean network_player_is_present(
+	struct network_player *player);
 boolean network_game_add_machine(
 	struct network_game *game,
 	struct network_machine *machine);
@@ -117,6 +131,8 @@ boolean network_game_add_player(
 	struct network_game *game,
 	struct network_player *player);
 boolean network_game_has_free_player_slot(
+	struct network_game *game);
+boolean network_game_has_open_player_slot(
 	struct network_game *game);
 void network_game_invalidate_machine(
 	struct network_game *game,

@@ -388,6 +388,12 @@ void interface_draw_fullscreen_overlays(
 	hud_render_timer();
 	/* port: a map's download (port/linux/game/map_share.c) */
 	map_share_render();
+	/* oxbox: the lobby's bot label (port/linux/game/bots.c) */
+	{
+		void bots_render(void);
+
+		bots_render();
+	}
 	terminal_draw();
 	main_framerate_render();
 	render_debug_profile();

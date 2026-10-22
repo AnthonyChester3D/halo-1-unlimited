@@ -264,6 +264,7 @@ symbols in this file:
 #include "real_math.h"
 #include "render/render_debug.h"
 #include "players.h"
+#include "networking/network_game_manager.h" /* oxbox: bots */
 #include "player_queues_new.h"
 #include "objects/objects.h"
 #include "saved games/game_state.h"
@@ -1269,7 +1270,13 @@ long player_new(
 			csmemcpy(&player->network_player_data, network_player, sizeof(struct network_player));
 	}
 
-	machine_add_player(machine_index, player_index);
+	/* oxbox: a bot is no machine's local player (network_game_manager.h):
+	the host's list holds its gamepads' four */
+	if (!network_player ||
+		network_player->controller_index < NETWORK_BOT_CONTROLLER_FIRST)
+	{
+		machine_add_player(machine_index, player_index);
+	}
 
 	return player_index;
 }

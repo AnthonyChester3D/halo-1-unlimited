@@ -327,10 +327,82 @@ void game_initialize(
 	return;
 }
 
+#if defined(OXBOX_TEST_TICKPROF) && defined(HALO_XBOX_TARGET)
+/* oxbox test builds: each step of the tick timed (rdtsc), and every 300 ticks
+each step's share and the tick's average logged */
+#undef profile_scope
+int halo_linux_snprintf(char *buffer, size_t count, char const *format, ...);
+unsigned long system_milliseconds(void);
+static unsigned long long oxbox_tick_cycles[24];
+static char const *oxbox_tick_names[24];
+static long oxbox_tick_count;
+static unsigned long long oxbox_tick_total;
+static unsigned long oxbox_tick_report_time;
+static unsigned long long oxbox_tick_report_tsc;
+static unsigned long long oxbox_rdtsc(void)
+{
+	unsigned long lo, hi;
+
+	__asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+	return ((unsigned long long)hi << 32) | lo;
+}
+static void oxbox_tick_add(char const *name, unsigned long long cycles)
+{
+	long index;
+
+	for (index = 0; index < 24 && oxbox_tick_names[index] && oxbox_tick_names[index] != name; index++)
+		;
+	if (index == 24)
+		return;
+	oxbox_tick_names[index] = name;
+	oxbox_tick_cycles[index] += cycles;
+}
+#define profile_scope(variable, statement) { unsigned long long oxbox_t0 = oxbox_rdtsc(); statement oxbox_tick_add(#variable, oxbox_rdtsc() - oxbox_t0); }
+static void oxbox_tick_report(unsigned long long tick_cycles)
+{
+	unsigned long now = system_milliseconds();
+
+	oxbox_tick_total += tick_cycles;
+	if (++oxbox_tick_count < 300)
+		return;
+	{
+		char line[600];
+		int length;
+		long index;
+		unsigned long elapsed = oxbox_tick_report_time ? now - oxbox_tick_report_time : 0;
+		unsigned long long tsc = oxbox_rdtsc();
+		unsigned long long cycles_per_ms = elapsed ? (tsc - oxbox_tick_report_tsc) / elapsed : 0;
+		unsigned long tick_hundredths = cycles_per_ms ?
+			(unsigned long)(oxbox_tick_total * 100 / (cycles_per_ms * oxbox_tick_count)) : 0;
+
+		oxbox_tick_report_tsc = tsc;
+		length = halo_linux_snprintf(line, sizeof(line), "tick profile: %ld ticks in %lu ms, a tick %lu.%02lu ms;",
+			oxbox_tick_count, elapsed, tick_hundredths / 100, tick_hundredths % 100);
+		for (index = 0; index < 24 && oxbox_tick_names[index] && length < (int)sizeof(line) - 40; index++)
+		{
+			char const *name = oxbox_tick_names[index];
+
+			if (!strncmp(name, "game_tick_", 10))
+				name += 10;
+			length += halo_linux_snprintf(line + length, sizeof(line) - length, " %.12s %lu%%", name,
+				(unsigned long)(oxbox_tick_cycles[index] * 100 / (oxbox_tick_total ? oxbox_tick_total : 1)));
+			oxbox_tick_cycles[index] = 0;
+		}
+		error(_error_silent, "%s", line);
+	}
+	oxbox_tick_count = 0;
+	oxbox_tick_total = 0;
+	oxbox_tick_report_time = now;
+}
+#endif
+
 void game_tick(
 	void)
 {
 	real seconds_per_tick;
+#if defined(OXBOX_TEST_TICKPROF) && defined(HALO_XBOX_TARGET)
+	unsigned long long oxbox_tick_start = oxbox_rdtsc();
+#endif
 
 	profile_tick_start();
 	collision_log_begin_period(0);
@@ -398,6 +470,9 @@ void game_tick(
 	profile_exit(game_update_section);
 	collision_log_end_period();
 	profile_tick_end();
+#if defined(OXBOX_TEST_TICKPROF) && defined(HALO_XBOX_TARGET)
+	oxbox_tick_report(oxbox_rdtsc() - oxbox_tick_start);
+#endif
 
 	return;
 }

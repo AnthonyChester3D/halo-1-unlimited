@@ -1779,7 +1779,7 @@ boolean network_game_client_remove_player(
 		network_player_index < MAXIMUM_NUMBER_OF_PLAYERS;
 		network_player_index++)
 	{
-		if (network_player_is_valid(&client->game.players[network_player_index]) &&
+		if (network_player_is_present(&client->game.players[network_player_index]) &&
 			client->game.players[network_player_index].machine_index == player->machine_index &&
 			client->game.players[network_player_index].controller_index == player->controller_index)
 		{
@@ -1963,7 +1963,7 @@ boolean network_game_client_add_player_to_game(
 		0x462,
 		client && player);
 
-	if (network_player_is_valid(player))
+	if (network_player_is_present(player))
 	{
 		success = network_game_add_player(&client->game, player);
 
@@ -1983,7 +1983,7 @@ boolean network_game_client_add_player_to_game(
 						&client->game.players[added->player_list_index] : NULL;
 					for (slot = 0; slot < MAXIMUM_NUMBER_OF_PLAYERS; slot++)
 					{
-						if (network_player_is_valid(&client->game.players[slot]) &&
+						if (network_player_is_present(&client->game.players[slot]) &&
 							client->game.players[slot].machine_index == added->machine_index &&
 							client->game.players[slot].controller_index == added->controller_index)
 						{
@@ -2009,7 +2009,8 @@ boolean network_game_client_add_player_to_game(
 
 						game_engine_player_added(player_index);
 					}
-					if (player->machine_index == client->machine_index)
+					/* (oxbox: a bot is the host's machine's, at no gamepad) */
+					if (player->machine_index == client->machine_index && !network_player_is_bot(player))
 					{
 						local_player_set_player_index(
 							player->controller_index,

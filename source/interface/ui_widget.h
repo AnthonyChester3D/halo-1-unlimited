@@ -121,6 +121,8 @@ boolean main_menu_is_active(
 	void);
 boolean main_menu_screen_is_active(
 	void);
+boolean ui_widget_lobby_showing(
+	void);
 void ui_set_next_level(
 	short level);
 void ui_widget_load_progress_widget(

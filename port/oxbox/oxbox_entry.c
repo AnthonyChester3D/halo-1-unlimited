@@ -276,91 +276,34 @@ static int own_xbe_read(unsigned long offset, void *buffer, unsigned long size)
 	}
 }
 
-/* ---------- what the console runs: the kernel's version, the hardware's revisions, and the BIOS (a name found
-in the flash's top 256 KB, and its checksum, which tells BIOS images apart in logs; the kernel in memory isn't
-searched: its start-up sections are gone once it runs, and reading them faults) */
+/* ---------- what the console runs: the kernel's version and the hardware's revisions. (Builds 24 and 25 also read
+the BIOS flash, to log the BIOS's name and a checksum: real consoles hung there, on a black screen right after the
+memory line, though xemu didn't. The flash is left alone.) */
 
-static unsigned long crc32_update(unsigned long crc, const unsigned char *data, unsigned long length)
-{
-	unsigned long i;
-	int k;
-
-	crc = ~crc;
-	for (i = 0; i < length; i++)
-	{
-		crc ^= data[i];
-		for (k = 0; k < 8; k++)
-			crc = (crc >> 1) ^ (0xEDB88320UL & (0UL - (crc & 1)));
-	}
-	return ~crc;
-}
-
-/* the first of these names found in memory from base (case as written) */
-static const char *find_bios_name(const unsigned char *base, unsigned long length)
-{
-	static const char *const names[] = { "Cerbios", "CERBIOS", "PrometheOS", "Stellar", "STELLAR", "EvoX", "iND-BiOS",
-		"X2 4", "XBlast", "Cromwell", "Xecuter", "M8plus", "Complex" };
-	unsigned long i, n;
-
-	for (n = 0; n < sizeof(names) / sizeof(names[0]); n++)
-	{
-		unsigned long name_length = (unsigned long)strlen(names[n]);
-
-		for (i = 0; i + name_length <= length; i++)
-		{
-			unsigned long k;
-
-			for (k = 0; k < name_length && base[i + k] == (unsigned char)names[n][k]; k++) ;
-			if (k == name_length)
-				return names[n];
-		}
-	}
-	return NULL;
-}
-
-char oxbox_bios_name[16];          /* (a name found, or empty) */
-unsigned long oxbox_bios_checksum;
 unsigned short oxbox_kernel_build;
 
 static void report_system(void)
 {
 	const unsigned short *version = oxbox_kernel_export(324);   /* XboxKrnlVersion */
 	const unsigned char *hardware = oxbox_kernel_export(322);   /* XboxHardwareInfo: flags, GPU and MCP revisions */
-	void *(WINAPI *map_io)(unsigned long, unsigned long, unsigned long) = oxbox_kernel_export(177);   /* MmMapIoSpace */
-	void (WINAPI *unmap_io)(void *, unsigned long) = oxbox_kernel_export(183);   /* MmUnmapIoSpace */
-	const char *name = NULL;
 
 	if (version)
 		oxbox_kernel_build = version[2];
-	if (map_io && unmap_io)
-	{
-		const unsigned char *flash = map_io(0xFFFC0000, 0x40000, 0x02 | 0x200);   /* PAGE_READONLY | PAGE_NOCACHE */
-
-		if (flash)
-		{
-			oxbox_bios_checksum = crc32_update(0, flash, 0x40000);
-			if (!name)
-				name = find_bios_name(flash, 0x40000);
-			unmap_io((void *)flash, 0x40000);
-		}
-	}
-	if (name)
-	{
-		strncpy(oxbox_bios_name, name, sizeof(oxbox_bios_name) - 1);
-		oxbox_bios_name[sizeof(oxbox_bios_name) - 1] = 0;
-	}
-	platform_log("console: kernel %u.%u.%u.%u, hardware flags %08lx, GPU %02x, MCP %02x, BIOS %s (flash crc %08lx)",
+	platform_log("console: kernel %u.%u.%u.%u, hardware flags %08lx, GPU %02x, MCP %02x",
 		version ? version[0] : 0, version ? version[1] : 0, version ? version[2] : 0, version ? version[3] : 0,
-		hardware ? *(const unsigned long *)hardware : 0, hardware ? hardware[4] : 0, hardware ? hardware[5] : 0,
-		name ? name : "(no name found)", oxbox_bios_checksum);
+		hardware ? *(const unsigned long *)hardware : 0, hardware ? hardware[4] : 0, hardware ? hardware[5] : 0);
 }
 
 /* ---------- opence.ini (test build 24): settings a player can change without another XBE, read at start-up from the
 XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini), whose settings win. Lines
 "name = number"; anything else is ignored.
 	audio_effects = 0    no DirectSound effects image (the audio chip's reverb program): for a console whose BIOS
-	                     doesn't take it (a Stellar BIOS's player had to take it out to play) */
+	                     doesn't take it (a Stellar BIOS's player had to take it out to play)
+	fps_counter = 1      the frame rate in the screen's bottom right corner, for testing (test build 27): Halo's own
+	                     counter (display_framerate), frames a second over the last half second, green at 30 and
+	                     up, red under */
 int oxbox_setting_audio_effects = 1;
+extern unsigned char display_framerate;   /* (main.c's, a boolean) */
 
 /* (a byte loop: the compiler makes strcmp against a constant into bcmp, which this build has no copy of) */
 static int same_text(const char *a, const char *b)
@@ -407,6 +350,8 @@ static void read_settings(const char *path)
 			continue;
 		if (same_text(name, "audio_effects"))
 			oxbox_setting_audio_effects = value != 0;
+		else if (same_text(name, "fps_counter"))
+			display_framerate = value != 0;
 		else
 			continue;
 		platform_log("settings: %s from %s", name, path);

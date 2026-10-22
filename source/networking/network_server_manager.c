@@ -475,6 +475,7 @@ symbols in this file:
 #include "interface/player_ui.h"
 #include "tag_files/tag_files.h"
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#include "bots.h" /* oxbox: port/linux/game/bots.c */
 
 /* port: internet play's Discord presence (port/linux/src/p2p.c), and the
 server browser's listing of a public game (p2p_lobby.c) */
@@ -781,6 +782,8 @@ static void network_game_server_variant_options(
 	struct game_variant const *variant,
 	struct game_variant_options *options);
 static void network_game_server_remove_players_gone_while_loading(
+	struct network_game_server *server);
+static void network_game_server_make_room(
 	struct network_game_server *server);
 
 /* ---------- globals */
@@ -2454,7 +2457,7 @@ static void network_game_server_remove_players_gone_while_loading(
 		struct message_server_remove_player_ingame remove_player;
 		void *message;
 
-		if (!network_player_is_valid(player) || network_game_server_player_among(player, server->game.players, count))
+		if (!network_player_is_present(player) || network_game_server_player_among(player, server->game.players, count))
 			continue;
 		remove_player.player = *player;
 		remove_player.reason = game_time_get() + NETWORK_GAME_PLAYER_QUIT_DELAY;
@@ -2527,6 +2530,10 @@ boolean network_game_server_add_player_to_game(
 
 	if (machine->machine_index == player->machine_index)
 	{
+		/* oxbox: a person joining a full game takes a bot's place */
+		if (!network_player_is_bot(player) && !network_game_has_open_player_slot(&server->game))
+			network_game_server_make_room(server);
+
 		/* port: the smaller team (the Xbox game took turns with a counter of
 		its own, which a failed add or an earlier game moved on) */
 		{
@@ -2537,7 +2544,7 @@ boolean network_game_server_add_player_to_game(
 			{
 				struct network_player *other_player = &server->game.players[player_index];
 
-				if (network_player_is_valid(other_player) &&
+				if (network_player_is_present(other_player) &&
 					VALID_INDEX(other_player->team_index, NUMBER_OF_MULTIPLAYER_TEAMS))
 				{
 					player_count_by_team[other_player->team_index]++;
@@ -2582,6 +2589,238 @@ boolean network_game_server_add_player_to_game(
 	}
 
 	return success;
+}
+
+/* ---------- oxbox: bots (port/linux/game/bots.c)
+
+The host's bots are players of its own machine at controller indices no
+gamepad has (network_game_manager.h). They come and go as a person's players
+do: in the lobby in the settings, in game by _message_server_add_player_ingame
+and _message_server_remove_player_ingame, by which every machine (the host's
+own too) spawns them and has them quit. A person joining a full game takes a
+bot's place: in the lobby at once, in game once the bot has quit and its slot
+is free (network_game_server_room_pending_until), the person's join waiting
+for it. */
+
+static unsigned long network_game_server_room_pending_until = 0;
+
+/* whether bots can be added or removed now: in the open lobby, or in a game
+that is running (not while the machines load it, nor after it) */
+static boolean network_game_server_bots_can_change(
+	struct network_game_server *server)
+{
+	/* (system link's games, not split screen's) */
+	return server && !network_game_is_splitscreen_local() && (network_game_server_lobby_is_open(server) ||
+		(server->state == _network_game_server_state_ingame && game_in_progress() && game_engine_running()));
+}
+
+/* the bots and the people in the game */
+short network_game_server_bot_count(
+	short *people)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	short bots = 0;
+	short persons = 0;
+	long index;
+
+	for (index = 0; server && index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
+	{
+		if (network_player_is_bot(&server->game.players[index]))
+			bots++;
+		else if (network_player_is_valid(&server->game.players[index]))
+			persons++;
+	}
+	if (people)
+		*people = persons;
+	return bots;
+}
+
+/* whether the bots are to stay as they are: bots can't change now, or a
+person is waiting to join (whose place a bot gives up), or a bot is leaving
+to make room */
+boolean network_game_server_bots_held(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+
+	return !network_game_server_bots_can_change(server) ||
+		server->queued_player_valid || server->waiting_player_count > 0 ||
+		(network_game_server_room_pending_until && system_milliseconds() < network_game_server_room_pending_until);
+}
+
+/* "BOT " and one of the game's random names short enough to go with it */
+static void network_game_server_bot_name(
+	struct network_game_server *server,
+	wchar_t *name)
+{
+	long attempt;
+	long number;
+
+	for (attempt = 0; attempt < 128; attempt++)
+	{
+		wchar_t const *random_name = network_game_get_random_player_name();
+		long length = random_name ? (long)ustrlen(random_name) : 0;
+
+		if (length < 1 || length > NETWORK_PLAYER_NAME_LENGTH - 1 - 4)
+			continue;
+		name[0] = L'B';
+		name[1] = L'O';
+		name[2] = L'T';
+		name[3] = L' ';
+		csmemcpy(name + 4, random_name, length * sizeof(wchar_t));
+		name[4 + length] = 0;
+		if (player_name_is_unique(server, name))
+			return;
+	}
+	/* (every short name taken: numbered) */
+	for (number = 1; number < 100; number++)
+	{
+		name[0] = L'B';
+		name[1] = L'O';
+		name[2] = L'T';
+		name[3] = L' ';
+		if (number >= 10)
+		{
+			name[4] = (wchar_t)(L'0' + number / 10);
+			name[5] = (wchar_t)(L'0' + number % 10);
+			name[6] = 0;
+		}
+		else
+		{
+			name[4] = (wchar_t)(L'0' + number);
+			name[5] = 0;
+		}
+		if (player_name_is_unique(server, name))
+			return;
+	}
+}
+
+boolean network_game_server_add_bot(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	struct network_game_client *client = global_network_game_client_get();
+	boolean used[NETWORK_BOT_MAXIMUM_COUNT];
+	struct network_player player;
+	long host_machine_index;
+	long index;
+	short bot_index;
+
+	if (!network_game_server_bots_can_change(server) || !client ||
+		!network_game_has_open_player_slot(&server->game))
+	{
+		return FALSE;
+	}
+	host_machine_index = network_game_client_get_machine_index(client);
+	if (!VALID_INDEX(host_machine_index, MAXIMUM_NETWORK_MACHINE_COUNT))
+		return FALSE;
+	csmemset(used, 0, sizeof(used));
+	for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
+	{
+		struct network_player *other = &server->game.players[index];
+
+		if (network_player_is_bot(other))
+			used[other->controller_index - NETWORK_BOT_CONTROLLER_FIRST] = TRUE;
+	}
+	for (bot_index = 0; bot_index < NETWORK_BOT_MAXIMUM_COUNT && used[bot_index]; bot_index++)
+		;
+	if (bot_index == NETWORK_BOT_MAXIMUM_COUNT)
+		return FALSE;
+
+	csmemset(&player, 0, sizeof(player));
+	network_game_server_bot_name(server, player.name);
+	player.primary_color_index = NONE;
+	player.icon_index = 0;
+	player.machine_index = (char)host_machine_index;
+	player.controller_index = (char)(NETWORK_BOT_CONTROLLER_FIRST + bot_index);
+	player.team_index = NONE;
+	player.player_list_index = NONE;
+	if (!network_game_server_add_player_to_game(server, &server->client_machines[host_machine_index], &player))
+		return FALSE;
+	if (server->state == _network_game_server_state_ingame)
+		network_game_server_send_player_joined_info_ingame(server, &player);
+	else
+		network_game_server_send_game_data_pregame(server);
+	network_event("bot %d added at slot %d", (int)bot_index, (int)player.player_list_index);
+	return TRUE;
+}
+
+boolean network_game_server_remove_bot(
+	long slot)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	struct network_player player;
+
+	if (!network_game_server_bots_can_change(server))
+		return FALSE;
+	/* (NONE: the bot bots_pick_leaver picks) */
+	if (slot == NONE)
+		slot = bots_pick_leaver(server->game.players, MAXIMUM_NETWORK_PLAYER_COUNT);
+	if (!VALID_INDEX(slot, MAXIMUM_NETWORK_PLAYER_COUNT))
+		return FALSE;
+	player = server->game.players[slot];
+	if (!network_player_is_bot(&player) || !network_game_remove_player(&server->game, &player))
+		return FALSE;
+	if (server->state == _network_game_server_state_ingame)
+	{
+		struct message_server_remove_player_ingame remove_player;
+		void *message;
+
+		remove_player.player = player;
+		remove_player.reason = game_time_get() + NETWORK_GAME_PLAYER_QUIT_DELAY;
+		message = create_network_game_message(_message_server_remove_player_ingame, &remove_player,
+			sizeof(remove_player));
+		if (message && !network_game_server_send_message_to_all_machines(server, message))
+			network_event("some machines missed a bot's quit");
+	}
+	else
+	{
+		network_game_server_send_game_data_pregame(server);
+	}
+	network_event("bot at slot %d removed", (int)slot);
+	return TRUE;
+}
+
+/* the host's bot mode (NETWORK_GAME_BOT_MODE), sent to the lobby when it
+changes */
+void network_game_server_set_bot_mode(
+	short value)
+{
+	struct network_game_server *server = global_network_game_server_get();
+
+	if (!server || NETWORK_GAME_BOT_MODE(&server->game) == value)
+		return;
+	NETWORK_GAME_BOT_MODE(&server->game) = value;
+	if (network_game_server_lobby_is_open(server))
+		network_game_server_send_game_data_pregame(server);
+}
+
+/* whether this machine hosts a lobby that is open (the bot mode can change) */
+boolean network_game_server_bots_in_lobby(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+
+	return server && !network_game_is_splitscreen_local() && network_game_server_lobby_is_open(server);
+}
+
+/* a full game a person joins: a bot leaves (bots_pick_leaver), in game only
+one at a time */
+static void network_game_server_make_room(
+	struct network_game_server *server)
+{
+	long slot;
+
+	if (server->state == _network_game_server_state_ingame &&
+		network_game_server_room_pending_until && system_milliseconds() < network_game_server_room_pending_until)
+	{
+		return;
+	}
+	slot = bots_pick_leaver(server->game.players, MAXIMUM_NETWORK_PLAYER_COUNT);
+	if (slot == NONE || !network_game_server_remove_bot(slot))
+		return;
+	if (server->state == _network_game_server_state_ingame)
+		network_game_server_room_pending_until = system_milliseconds() + 5000;
 }
 
 void network_game_server_update_ticks(
@@ -2670,6 +2909,8 @@ void network_game_server_update_ticks(
 			}
 			if (server->queued_player_valid)
 			{
+				boolean retry_queued_player = FALSE;
+
 				/* (a machine's slot is its index; the handlers queued only a
 				machine's own players) */
 				client_machine_index = server->queued_player.machine_index;
@@ -2687,6 +2928,7 @@ void network_game_server_update_ticks(
 						client_machine,
 						&server->queued_player))
 				{
+					network_game_server_room_pending_until = 0;
 					if (!network_game_server_client_machine_is_local(server, client_machine))
 					{
 						short *count = network_game_server_ingame_addition_count(
@@ -2711,6 +2953,13 @@ void network_game_server_update_ticks(
 						network_game_server_start_late_joiner(server, client_machine);
 					}
 				}
+				/* oxbox: a bot is leaving to give this person its place: the
+				person waits for its slot */
+				else if (client_machine && network_game_server_room_pending_until &&
+					system_milliseconds() < network_game_server_room_pending_until)
+				{
+					retry_queued_player = TRUE;
+				}
 				else
 				{
 					network_event("server failed to add a network player in-game");
@@ -2729,7 +2978,8 @@ void network_game_server_update_ticks(
 					}
 				}
 
-				server->queued_player_valid = FALSE;
+				if (!retry_queued_player)
+					server->queued_player_valid = FALSE;
 			}
 		}
 		break;
@@ -2847,7 +3097,7 @@ static boolean network_game_server_player_among(
 
 	for (index = 0; index < count; index++)
 	{
-		if (network_player_is_valid(&players[index]) && network_game_server_same_player(&players[index], player))
+		if (network_player_is_present(&players[index]) && network_game_server_same_player(&players[index], player))
 			return TRUE;
 	}
 	return FALSE;
@@ -3090,7 +3340,7 @@ void network_game_server_late_joiner_loaded(
 			struct message_server_remove_player_ingame remove_player;
 			void *message;
 
-			if (!network_player_is_valid(player) || network_game_server_player_among(player, server->game.players, count))
+			if (!network_player_is_present(player) || network_game_server_player_among(player, server->game.players, count))
 				continue;
 			remove_player.player = *player;
 			remove_player.reason = game_time_get();
@@ -3108,7 +3358,7 @@ void network_game_server_late_joiner_loaded(
 			struct network_player message_packet;
 			void *message;
 
-			if (!network_player_is_valid(player) || network_game_server_player_among(player, started, count))
+			if (!network_player_is_present(player) || network_game_server_player_among(player, started, count))
 				continue;
 			message_packet = *player;
 			message = create_network_game_message(_message_server_add_player_ingame, &message_packet,
@@ -3291,7 +3541,7 @@ boolean server_needs_more_teams(
 		{
 			struct network_player *player = &server->game.players[player_index];
 
-			if (network_player_is_valid(player) &&
+			if (network_player_is_present(player) &&
 				player->team_index >= 0 &&
 				player->team_index < NUMBER_OF_MULTIPLAYER_TEAMS)
 			{
@@ -3385,7 +3635,16 @@ a system link or internet game's host, or split screen's first player */
 static boolean server_alone(
 	struct network_game_server *server)
 {
-	return server->game.player_count == 1;
+	/* oxbox: one person, however many bots (port/linux/game/bots.c) */
+	long index;
+	long people = 0;
+
+	for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
+	{
+		if (network_player_is_valid(&server->game.players[index]))
+			people++;
+	}
+	return people == 1;
 }
 
 /* port: a machine joining or leaving is in the game before its player is.
@@ -4205,7 +4464,7 @@ void get_unique_random_name(
 			struct network_player *existing_player =
 				&server->game.players[player_index];
 
-			if (network_player_is_valid(existing_player) &&
+			if (network_player_is_present(existing_player) &&
 				!ustrcmp(existing_player->name, name))
 			{
 				duplicate_count++;
@@ -4271,7 +4530,7 @@ void get_unique_random_color(
 			player_index < MAXIMUM_NETWORK_PLAYER_COUNT;
 			player_index++)
 		{
-			if (network_player_is_valid(&server->game.players[player_index]) &&
+			if (network_player_is_present(&server->game.players[player_index]) &&
 				server->game.players[player_index].primary_color_index == color_index)
 			{
 				unique = FALSE;
@@ -4300,7 +4559,7 @@ static boolean player_name_is_unique(
 	{
 		struct network_player *player = &server->game.players[player_index];
 
-		if (network_player_is_valid(player) && !ustrcmp(player->name, name))
+		if (network_player_is_present(player) && !ustrcmp(player->name, name))
 			return FALSE;
 	}
 
@@ -5005,7 +5264,7 @@ static boolean network_game_server_idle_pregame_tasks(
 				{
 					struct network_player *player = &server->game.players[itr];
 
-					if (network_player_is_valid(player) && VALID_INDEX(player->team_index, 2))
+					if (network_player_is_present(player) && VALID_INDEX(player->team_index, 2))
 					{
 						count[player->team_index]++;
 						last[player->team_index] = itr;
@@ -5273,7 +5532,7 @@ boolean network_game_server_reset_to_pregame(
 			{
 				for (i = 0; i < MAXIMUM_NETWORK_PLAYER_COUNT; i++)
 				{
-					if (network_player_is_valid(&server->game.players[i]))
+					if (network_player_is_present(&server->game.players[i]))
 					{
 						switch (server->game.players[i].team_index)
 						{
@@ -5347,7 +5606,7 @@ boolean network_game_server_reset_to_pregame(
 		{
 			for (i = 0; i < MAXIMUM_NETWORK_PLAYER_COUNT; i++)
 			{
-				if (network_player_is_valid(&server->game.players[i]))
+				if (network_player_is_present(&server->game.players[i]))
 				{
 					switch (server->game.players[i].team_index)
 					{
