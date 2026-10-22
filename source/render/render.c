@@ -85,6 +85,13 @@ symbols in this file:
 #include "objects/object_lights_rendering.h"
 #include "effects/particle_systems.h"
 #include "effects/weather_particle_systems.h"
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the window's steps timed for the developers' perf log (test build 32), when opence.ini loads it: each step's
+end a mark, timed from the mark before it */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_MARK(step)
+#endif
 #include "main/main.h"
 #include "structures/structures.h"
 /* port: static transparent part links for the newly loaded model tags. */
@@ -316,6 +323,7 @@ static void render_window(
 	short rendered_cluster_index;
 
 	profile_render_window_start(TRUE);
+	OXBOX_PERF_MARK(_oxbox_perf_draw_start)
 	render.scene_index++;
 	memset(&parameters, 0, sizeof(parameters));
 
@@ -330,6 +338,7 @@ static void render_window(
 	parameters.fog = render.fog;
 
 	structure_visibility_compute();
+	OXBOX_PERF_MARK(_oxbox_perf_draw_visibility)
 	player_effect_get_screen_flash(local_player_index, &parameters.screen_flash);
 	rasterizer_window_begin(&parameters);
 
@@ -337,14 +346,22 @@ static void render_window(
 	{
 		build_sprite_prepare_for_window();
 		render_sky();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_sky)
 		first_person_weapon_render_update();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_first_person_weapon)
 		lights_preprocess_scene();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_lights)
 		render_objects();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_objects)
 		structure_render_preprocess();
 		structure_render_lightmaps();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_lightmaps)
 		rasterizer_lens_flares_submit_occlusion_tests();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_lens_flares)
 		render_object_shadows();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_object_shadows)
 		lights_render_diffuse();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_diffuse_lights)
 
 		rasterizer_decals_begin(_decal_layer_light);
 		for (rendered_cluster_index = 0;
@@ -363,8 +380,10 @@ static void render_window(
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
 		}
 		rasterizer_decals_end();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_decals)
 
 		structure_render_diffuse_texture();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_diffuse_textures)
 
 		rasterizer_decals_begin(_decal_layer_primary);
 		for (rendered_cluster_index = 0;
@@ -383,20 +402,30 @@ static void render_window(
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
 		}
 		rasterizer_decals_end();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_decals)
 
 		lights_render_specular();
 		structure_render_specular_lightmaps();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_specular_lights)
 		structure_render_reflection_lightmap_masks();
 		structure_render_reflection_mirrors();
 		structure_render_reflections();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_reflections)
 		structure_render_transparent_geometry();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_structure_transparent)
 		structure_render_fog();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_fog)
 		game_engine_post_rasterize_objects();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_other)
 		weather_particle_systems_render();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_weather)
 		render_particles();
 		particle_systems_render();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_particles)
 		render_contrails_normal();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_contrails)
 		rasterizer_transparent_geometry_draw(TRUE);
+		OXBOX_PERF_MARK(_oxbox_perf_draw_transparent)
 
 		rasterizer_decals_begin(_decal_layer_water);
 		for (rendered_cluster_index = 0;
@@ -406,12 +435,17 @@ static void render_window(
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
 		}
 		rasterizer_decals_end();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_decals)
 
 		structure_render_detail_objects();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_detail_objects)
 		rasterizer_transparent_geometry_draw(FALSE);
 		rasterizer_transparent_geometry_stop();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_transparent)
 		structure_render_fog_screen();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_fog)
 		rasterizer_lens_flares_draw();
+		OXBOX_PERF_MARK(_oxbox_perf_draw_lens_flares)
 		/* port: the 3D view antialiased (display.anti_aliasing), before the
 		HUD and menus are drawn over it */
 		if (rasterizer_target == _render_target_primary)
@@ -422,11 +456,13 @@ static void render_window(
 				rasterizer_camera->viewport_bounds.x1,
 				rasterizer_camera->viewport_bounds.y1);
 		}
+		OXBOX_PERF_MARK(_oxbox_perf_draw_other)
 		interface_draw_screen();
 		rasterizer_screen_flash();
 		halo_screen_ui_offset(TRUE);
 		render_ui_widgets(local_player_index, &rasterizer_camera->viewport_bounds);
 		halo_screen_ui_offset(FALSE);
+		OXBOX_PERF_MARK(_oxbox_perf_draw_hud)
 	}
 
 	bink_playback_render();
@@ -435,6 +471,7 @@ static void render_window(
 	editor_render();
 	rasterizer_debug_draw();
 	rasterizer_window_end();
+	OXBOX_PERF_MARK(_oxbox_perf_draw_end)
 	profile_render_window_end();
 
 	return;

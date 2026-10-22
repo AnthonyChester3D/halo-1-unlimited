@@ -112,6 +112,12 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "rasterizer/rasterizer_console_vars.h"
 #include "rasterizer/rasterizer_model_types.h"
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the objects and the first-person weapon timed apart for the developers' perf log (test build 32) */
+#include "oxbox_perf.h"
+#else
+#define OXBOX_PERF_MARK(step)
+#endif
 
 /* ---------- constants */
 
@@ -270,7 +276,12 @@ static struct profile_section render_object_shadows_section =
 
 struct data_array *cached_object_render_states;
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: not static: the perf log reads the objects drawn (port/oxbox/oxbox_perf.c) */
+struct render_object_globals render_object_globals = { 0 };
+#else
 static struct render_object_globals render_object_globals = { 0 };
+#endif
 
 boolean debug_inactive_objects = FALSE;
 
@@ -347,6 +358,7 @@ void render_objects(
 
 	rasterizer_models_begin(FALSE);
 	find_rendered_objects();
+	OXBOX_PERF_MARK(_oxbox_perf_draw_objects)
 
 	data.shadow = FALSE;
 
@@ -355,10 +367,12 @@ void render_objects(
 		if (first_person_pass != rasterizer_debug_options.draw_first_person_weapon_first)
 		{
 			first_person_weapon_draw();
+			OXBOX_PERF_MARK(_oxbox_perf_draw_first_person_weapon)
 		}
 		else
 		{
 			process_rendered_objects(&data);
+			OXBOX_PERF_MARK(_oxbox_perf_draw_objects)
 		}
 
 		first_person_pass = !first_person_pass;

@@ -35,8 +35,12 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     drawing, waiting on the graphics chip and the vertical blank; the graphics chip's busy share; free memory;
     texture reads; the camera's position, BSP and cluster), and a line for each frame over `perf_slow_frame_ms`
     (34 by default). `perf_gpu_sample_ms` (1 by default, 0 for none) sets how often the graphics chip is asked
-    whether it's busy. The log's code and buffers are in an XBE section of their own (OXPERF), loaded only when
-    the setting is on: with it off, the game has the same free memory as without it.
+    whether it's busy. Each second's line also has the time of every step of a game tick and of the render window
+    (the visibility traversals, sky, objects, lightmaps, lights, decals, reflections, fog, particles, transparent
+    geometry, HUD and more) and counts (objects drawn and updated, actors, effects, particles, dynamic lights, the
+    level's triangles and clusters drawn, dynamic triangles used). The log's code and buffers are in an XBE section
+    of their own (OXPERF), loaded only when the setting is on: with it off, the game has the same free memory as
+    without it.
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 

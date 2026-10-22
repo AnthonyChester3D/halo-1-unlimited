@@ -34,6 +34,12 @@ to it), which gives the share of the time it was working, gpu_busy_pct.
 
 The game thread never touches the hard drive: it puts rows in a 32 KB ring, and a writer thread of its own writes
 them out every 2 seconds (at once at round end and on pause), so the log can't make the stutters it measures.
+
+Test build 32 (phase 2): the P rows also have the time of each step of a game tick and of a player's render
+window, in ms a frame (oxbox_perf.h: the marks in game.c game_tick and render.c render_window, and the game's own
+profile sections for the visibility traversals and the level's lights and shadows), and counts a frame (objects
+drawn and updated, actors, effects, particles, dynamic lights, the level's triangles and clusters drawn, the
+dynamic triangles used of 32768). Sums over the row's second: S rows leave them empty.
 */
 
 #include "cseries.h"
@@ -44,6 +50,13 @@ them out every 2 seconds (at once at round end and on pause), so the log can't m
 #include "camera/observer.h"
 #include "memory/data.h"
 #include "memory/lruv_cache.h"
+#include "cseries/profile.h"
+#include "rasterizer/rasterizer.h"
+#include "ai/actors.h"
+#include "effects/effects.h"
+#include "effects/particles.h"
+#include "objects/objects.h"
+#include "render/render.h"
 #include "rasterizer/xbox/rasterizer_xbox.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
@@ -124,6 +137,26 @@ extern unsigned long oxbox_net_bytes_sent, oxbox_net_bytes_received;
 extern unsigned long oxbox_system_live, oxbox_system_peak, oxbox_heap_live, oxbox_heap_peak;
 extern char __oxperf_start[], __oxperf_end[];
 
+/* phase 2's counts: render_objects.c, rasterizer_xbox_draw_primitives.c (their own files define them), effects.c,
+object_lights.c */
+extern struct
+{
+	short rendered_object_count;
+} render_object_globals;
+extern struct
+{
+	struct
+	{
+		long triangle_start_index;
+		long triangle_count;
+		short *triangles;
+	} buffers[RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLE_BUFFERS];
+	long buffer_count;
+	long triangle_count;
+} dynamic_triangles;
+extern struct data_array *effect_data;
+extern short debug_rasterizer_light_count;
+
 /* ---------- the kernel */
 
 /* MmQueryStatistics' record (export 181) */
@@ -157,7 +190,7 @@ enum
 #else
 	RING_SIZE = 0x8000,          /* (a power of two) */
 #endif
-	LINE_SIZE = 512,
+	LINE_SIZE = 1536,
 	WRITER_STACK_SIZE = 0x4000,
 	WRITER_PERIOD_MS = 2000,
 	MAXIMUM_SLOW_LINES_A_SECOND = 30,
@@ -233,6 +266,45 @@ static struct
 	unsigned __int64 session_log_cycles, session_gpu_samples;
 	long seconds_reported;
 } perf;
+
+/* phase 2: the game's profile sections the log times (the others are left alone), the steps the marks end, and the
+counts; summed over a P row's second (window) */
+enum
+{
+	_section_game_update,     /* (a tick's start: its steps are timed from it) */
+	_section_visibility_portal,
+	_section_visibility_subcluster,
+	_section_visibility_surface,
+	_section_structure_diffuse_lights,
+	_section_structure_specular_lights,
+	_section_structure_shadows,
+	NUMBER_OF_SECTIONS,
+
+	/* (a profile section's field_C: this tag and its slot, 0xFFFF for one the log leaves alone) */
+	SECTION_SLOT_TAG = 0x7E3A0000
+};
+static char const *const section_names[NUMBER_OF_SECTIONS] =
+{
+	"game_update",
+	"render_structure_visibility_portal_traversal",
+	"render_structure_visibility_subcluster_traversal",
+	"render_structure_visibility_surface_traversal",
+	"render_structure_diffuse_lights",
+	"render_structure_specular_lights",
+	"render_structure_shadows",
+};
+static struct
+{
+	unsigned __int64 steps[NUMBER_OF_OXBOX_PERF_STEPS];
+	unsigned __int64 sections[NUMBER_OF_SECTIONS];
+	unsigned long mark_last;
+	unsigned long objects_drawn, objects_updated, actors, effects, particles, dynamic_lights, level_triangles,
+		clusters, dynamic_triangles, dynamic_triangles_peak, windows;
+} window;
+
+static void window_reset(void);
+static unsigned long session_hook_calls, session_frames;
+static void frame_counts(long game_ticks);
 
 /* the graphics chip's busy samples (the timer's DPC; only ever counted up) */
 static volatile unsigned long gpu_busy_samples, gpu_samples, gpu_sample_cycles;
@@ -511,6 +583,23 @@ static void put_fixed(
 		put_char(line, (char)('0' + fraction / scales[digit] % 10));
 }
 
+/* value with 2 decimals at most, its trailing zeros dropped ("1.5", "0"): phase 2's many columns, kept short */
+static void put_trimmed(
+	struct perf_line *line,
+	double value)
+{
+	long start = line->length;
+
+	put_fixed(line, value, 2);
+	if (line->length > start + 3 && line->text[line->length - 3] == '.')
+	{
+		while (line->text[line->length - 1] == '0')
+			line->length--;
+		if (line->text[line->length - 1] == '.')
+			line->length--;
+	}
+}
+
 static void put_line(
 	struct perf_line *line)
 {
@@ -626,7 +715,46 @@ static char const memory_fields[] =
 static char const frame_fields[] =
 	"kind,t,frames,avg_ms,worst_ms,tick_ms,draw_ms,present_ms,vsync_ms,other_ms,gpu_busy_pct,game_ticks,free_kb,"
 	"texture_read_kb,texture_reads,texture_waits,sound_read_kb,net_sent_b,net_received_b,x,y,z,yaw,pitch,bsp,"
-	"cluster,local_players,log_ms";
+	"cluster,local_players,log_ms,"
+	/* (phase 2, P rows only: ms a frame) */
+	"tick_units_ms,tick_ai_ms,tick_players_before_ms,tick_effects_ms,tick_antennas_ms,tick_first_person_ms,"
+	"tick_game_engine_ms,tick_hs_ms,tick_recorded_animations_ms,tick_objects_ms,tick_players_after_ms,tick_hud_ms,"
+	"tick_player_effect_ms,tick_other_ms,"
+	"render_visibility_ms,visibility_portal_ms,visibility_subcluster_ms,visibility_surface_ms,render_sky_ms,"
+	"render_first_person_weapon_ms,render_lights_ms,render_objects_ms,render_structure_lightmaps_ms,"
+	"render_lens_flares_ms,render_object_shadows_ms,render_structure_shadows_ms,render_diffuse_lights_ms,"
+	"render_structure_diffuse_lights_ms,render_decals_ms,render_structure_diffuse_textures_ms,"
+	"render_specular_lights_ms,render_structure_specular_lights_ms,render_structure_reflections_ms,"
+	"render_structure_transparent_geometry_ms,render_structure_fog_ms,render_weather_ms,render_particles_ms,"
+	"render_contrails_ms,render_transparent_ms,render_detail_objects_ms,render_hud_ms,render_other_ms,"
+	/* (phase 2, P rows only: counts a frame) */
+	"objects_drawn,objects_updated,actors_active,effects_alive,particles_alive,dynamic_lights,level_triangles,"
+	"clusters_rendered,dynamic_triangles,dynamic_triangles_peak";
+
+/* phase 2's columns (P rows) and the steps or profile sections each one sums (a step is NUMBER_OF_SECTIONS + it) */
+#define STEP_COLUMN(step) (NUMBER_OF_SECTIONS + (step))
+static short const window_time_columns[] =
+{
+	STEP_COLUMN(_oxbox_perf_tick_units), STEP_COLUMN(_oxbox_perf_tick_ai), STEP_COLUMN(_oxbox_perf_tick_players_before),
+	STEP_COLUMN(_oxbox_perf_tick_effects), STEP_COLUMN(_oxbox_perf_tick_antennas),
+	STEP_COLUMN(_oxbox_perf_tick_first_person), STEP_COLUMN(_oxbox_perf_tick_game_engine),
+	STEP_COLUMN(_oxbox_perf_tick_hs), STEP_COLUMN(_oxbox_perf_tick_recorded_animations),
+	STEP_COLUMN(_oxbox_perf_tick_objects), STEP_COLUMN(_oxbox_perf_tick_players_after),
+	STEP_COLUMN(_oxbox_perf_tick_hud), STEP_COLUMN(_oxbox_perf_tick_player_effect), STEP_COLUMN(_oxbox_perf_tick_other),
+	STEP_COLUMN(_oxbox_perf_draw_visibility), _section_visibility_portal, _section_visibility_subcluster,
+	_section_visibility_surface, STEP_COLUMN(_oxbox_perf_draw_sky), STEP_COLUMN(_oxbox_perf_draw_first_person_weapon),
+	STEP_COLUMN(_oxbox_perf_draw_lights), STEP_COLUMN(_oxbox_perf_draw_objects), STEP_COLUMN(_oxbox_perf_draw_lightmaps),
+	STEP_COLUMN(_oxbox_perf_draw_lens_flares), STEP_COLUMN(_oxbox_perf_draw_object_shadows), _section_structure_shadows,
+	STEP_COLUMN(_oxbox_perf_draw_diffuse_lights), _section_structure_diffuse_lights,
+	STEP_COLUMN(_oxbox_perf_draw_decals), STEP_COLUMN(_oxbox_perf_draw_diffuse_textures),
+	STEP_COLUMN(_oxbox_perf_draw_specular_lights), _section_structure_specular_lights,
+	STEP_COLUMN(_oxbox_perf_draw_reflections), STEP_COLUMN(_oxbox_perf_draw_structure_transparent),
+	STEP_COLUMN(_oxbox_perf_draw_fog), STEP_COLUMN(_oxbox_perf_draw_weather), STEP_COLUMN(_oxbox_perf_draw_particles),
+	STEP_COLUMN(_oxbox_perf_draw_contrails), STEP_COLUMN(_oxbox_perf_draw_transparent),
+	STEP_COLUMN(_oxbox_perf_draw_detail_objects), STEP_COLUMN(_oxbox_perf_draw_hud),
+	STEP_COLUMN(_oxbox_perf_draw_other),   /* (and _oxbox_perf_draw_end's) */
+};
+enum { NUMBER_OF_WINDOW_COUNT_COLUMNS = 10 };
 
 static void put_comma(
 	struct perf_line *line)
@@ -793,6 +921,46 @@ static void frame_row(
 	}
 	put_signed(&line, local_player_count()); put_comma(&line);
 	put_fixed(&line, cycles_to_ms((double)sample->log_cycles) / frames, 3);
+	/* phase 2: P rows, the second's sums a frame; S rows, nothing */
+	{
+		long column;
+
+		for (column = 0; column < (long)NUMBEROF(window_time_columns); column++)
+		{
+			put_comma(&line);
+			if (kind == 'P')
+			{
+				long source = window_time_columns[column];
+				unsigned __int64 cycles = source < NUMBER_OF_SECTIONS ? window.sections[source] :
+					window.steps[source - NUMBER_OF_SECTIONS];
+
+				if (source == STEP_COLUMN(_oxbox_perf_draw_other))
+					cycles += window.steps[_oxbox_perf_draw_end];
+				put_trimmed(&line, cycles_to_ms((double)(__int64)cycles) / frames);
+			}
+		}
+		if (kind == 'P')
+		{
+			unsigned long const counts[NUMBER_OF_WINDOW_COUNT_COLUMNS - 1] =
+			{
+				window.objects_drawn, window.objects_updated, window.actors, window.effects, window.particles,
+				window.dynamic_lights, window.level_triangles, window.clusters, window.dynamic_triangles
+			};
+
+			for (column = 0; column < NUMBER_OF_WINDOW_COUNT_COLUMNS - 1; column++)
+			{
+				put_comma(&line);
+				put_trimmed(&line, (double)counts[column] / frames);
+			}
+			put_comma(&line);
+			put_unsigned(&line, window.dynamic_triangles_peak);
+		}
+		else
+		{
+			for (column = 0; column < NUMBER_OF_WINDOW_COUNT_COLUMNS; column++)
+				put_comma(&line);
+		}
+	}
 	put_line(&line);
 }
 
@@ -876,11 +1044,13 @@ static void session_start(
 	perf.session_start = now;
 	perf.session_cycles = cycles64();
 	perf.session_log_cycles = 0;
+	session_hook_calls = session_frames = 0;
 	perf.seconds_reported = 0;
 	perf.session_gpu_samples = gpu_samples;
 	perf.second_start = now;
 	counters_now(&perf.second_counters);
 	memset(&perf.second, 0, sizeof(perf.second));
+	window_reset();
 	perf.slow_lines_this_second = 0;
 	perf.paused = perf.postgame = FALSE;
 	memory_row(0.0);
@@ -909,10 +1079,10 @@ static void cost_report(
 	seconds = ticks_to_ms(now.QuadPart - perf.session_start) / 1000.0;
 	log_ms = cycles_to_ms((double)(__int64)perf.session_log_cycles);
 	hundredths = seconds > 0.0 ? (long)(log_ms / (seconds * 1000.0) * 10000.0 + 0.5) : 0;
-	platform_log("perf: the log has taken %ld ms of the session's %ld s (%ld.%02ld%%), %lu GPU samples; "
-		"QueryPerformanceFrequency %ld, the cycle counter %ld Hz", (long)log_ms, (long)seconds, hundredths / 100,
-		hundredths % 100, gpu_samples - (unsigned long)perf.session_gpu_samples, (long)perf.frequency,
-		(long)perf.cycle_frequency);
+	platform_log("perf: the log has taken %ld ms of the session's %ld s (%ld.%02ld%%), %lu GPU samples, %lu step and "
+		"section hooks a frame; QueryPerformanceFrequency %ld, the cycle counter %ld Hz", (long)log_ms, (long)seconds,
+		hundredths / 100, hundredths % 100, gpu_samples - (unsigned long)perf.session_gpu_samples,
+		session_frames ? session_hook_calls / session_frames : 0, (long)perf.frequency, (long)perf.cycle_frequency);
 }
 
 static void session_end(
@@ -932,6 +1102,119 @@ static void session_end(
 			perf.slow_lines_skipped, MAXIMUM_SLOW_LINES_A_SECOND, ring_dropped_bytes);
 	}
 	perf.slow_lines_skipped = 0;
+}
+
+/* ---------- phase 2's hooks: the profile sections and the steps' marks */
+
+/* the log's slot for a profile section (NONE: one it leaves alone), found by its name the first time */
+static long section_slot(
+	struct profile_section *section)
+{
+	long tag = section->field_C, slot;
+
+	if ((tag & 0xFFFF0000) == SECTION_SLOT_TAG)
+		return (tag & 0xFFFF) == 0xFFFF ? NONE : (tag & 0xFFFF);
+	slot = NONE;
+	if (section->name)
+	{
+		long index;
+
+		for (index = 0; index < NUMBER_OF_SECTIONS; index++)
+		{
+			if (!strcmp(section->name, section_names[index]))
+			{
+				slot = index;
+				break;
+			}
+		}
+	}
+	section->field_C = SECTION_SLOT_TAG | (slot & 0xFFFF);
+	return slot;
+}
+
+static void perf_enter(
+	struct profile_section *section)
+{
+	long slot = section_slot(section);
+
+	session_hook_calls++;
+	if (slot == NONE)
+		return;
+	section->entry_timebase = cycles64();
+	if (slot == _section_game_update)
+		window.mark_last = (unsigned long)section->entry_timebase;
+}
+
+static void perf_exit(
+	struct profile_section *section)
+{
+	long slot = section_slot(section);
+
+	session_hook_calls++;
+	if (slot == NONE || slot == _section_game_update || !section->entry_timebase)
+		return;
+	window.sections[slot] += cycles64() - section->entry_timebase;
+	section->entry_timebase = 0;
+}
+
+static void perf_mark(
+	long step)
+{
+	unsigned long now = cycles_now();
+	unsigned long elapsed = now - window.mark_last;
+
+	window.mark_last = now;
+	session_hook_calls++;
+	if (step == _oxbox_perf_draw_start || step < 0 || step >= NUMBER_OF_OXBOX_PERF_STEPS)
+		return;
+	window.steps[step] += elapsed;
+	if (step == _oxbox_perf_draw_end)
+	{
+		/* (the window's counts, as it left them) */
+		window.objects_drawn += render_object_globals.rendered_object_count;
+		window.clusters += render.rendered_cluster_count;
+		window.level_triangles += render.environment_surface_count;
+		window.dynamic_lights += debug_rasterizer_light_count > 0 ? debug_rasterizer_light_count : 0;
+		window.dynamic_triangles += dynamic_triangles.triangle_count;
+		if ((unsigned long)dynamic_triangles.triangle_count > window.dynamic_triangles_peak)
+			window.dynamic_triangles_peak = dynamic_triangles.triangle_count;
+		window.windows++;
+	}
+}
+
+/* a frame's counts of what's alive (the frame hook), the objects updated a tick times its ticks */
+static void frame_counts(
+	long game_ticks)
+{
+	unsigned long active = 0;
+
+	if (object_header_data && object_header_data->data)
+	{
+		struct object_header_datum const *header = (struct object_header_datum const *)object_header_data->data;
+		long index;
+
+		for (index = 0; index < object_header_data->count; index++, header++)
+		{
+			if (header->identifier && TEST_FLAG(header->flags, _object_header_active_bit) &&
+				!TEST_FLAG(header->flags, _object_header_being_created_bit))
+			{
+				active++;
+			}
+		}
+	}
+	window.objects_updated += active * (game_ticks > 0 ? game_ticks : 0);
+	window.actors += actor_data ? actor_data->actual_count : 0;
+	window.effects += effect_data ? effect_data->actual_count : 0;
+	window.particles += particle_data ? particle_data->actual_count : 0;
+}
+
+static void window_reset(
+	void)
+{
+	unsigned long mark_last = window.mark_last;
+
+	memset(&window, 0, sizeof(window));
+	window.mark_last = mark_last;
 }
 
 /* ---------- the hook */
@@ -1003,6 +1286,8 @@ static void perf_frame(
 		sample.other = 0;
 	counters_since(&sample, &perf.frame_start, &counters);
 	perf.frame_start = counters;
+	frame_counts(sample.game_ticks);
+	session_frames++;
 
 	/* this second */
 	perf.second.frames++;
@@ -1044,6 +1329,7 @@ static void perf_frame(
 		if (++perf.seconds_reported % 60 == 0)
 			cost_report();
 		frame_row('P', ticks_to_ms(now - perf.session_start) / 1000.0, &perf.second);
+		window_reset();
 		perf.second_start = now;
 		perf.second_counters = counters;
 		memset(&perf.second, 0, sizeof(perf.second));
@@ -1060,7 +1346,7 @@ static void perf_frame(
 	perf.last_hook_cycles = cycles_now() - hook_start;
 }
 
-static struct oxbox_perf_hooks perf_hooks = { perf_frame };
+static struct oxbox_perf_hooks perf_hooks = { perf_frame, perf_enter, perf_exit, perf_mark };
 
 /* ---------- start-up */
 

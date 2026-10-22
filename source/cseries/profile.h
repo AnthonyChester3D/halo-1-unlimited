@@ -38,6 +38,15 @@ enum profile_dump_format_mode
 
 /* ---------- macros */
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the retail profiler doesn't run on the Xbox (cseries_initialize turns it off, and its displays are gone): its
+sections feed the developers' perf log instead (test build 32), when opence.ini loads it (oxbox_perf.h), with a
+test of one pointer where the profiler's own test was */
+#include "oxbox_perf.h"
+
+#define profile_enter(section) if (oxbox_perf) { oxbox_perf->enter(&section); }
+#define profile_exit(section) if (oxbox_perf) { oxbox_perf->exit(&section); }
+#else
 #define profile_enter(section)							\
 if (profile_global_enable && section.active)	\
 {														\
@@ -49,6 +58,8 @@ if (profile_global_enable && section.active)	\
 {														\
 	profile_exit_private(&section);						\
 }														\
+
+#endif
 
 /* ---------- structures */
 

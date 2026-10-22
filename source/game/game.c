@@ -186,6 +186,34 @@ struct game_options;
 #include "profile_console.h" /* port: port/linux/game/profile_console.c */
 #endif
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
+#if defined(HALO_XBOX_TARGET) && !defined(OXBOX_TEST_TICKPROF)
+/* oxbox: the tick's steps timed for the developers' perf log (test build 32, oxbox_perf.h), when opence.ini loads it:
+each step's end a mark (the tick's start is game_update's profile section) */
+#include "oxbox_perf.h"
+#undef profile_scope
+#define profile_scope(variable, statement) { statement OXBOX_PERF_MARK(variable##_step) }
+enum
+{
+	game_tick_cheats_enforce_section_step = _oxbox_perf_tick_other,
+	game_tick_remove_quitting_players_section_step = _oxbox_perf_tick_other,
+	game_tick_allegiance_section_step = _oxbox_perf_tick_other,
+	game_tick_units_section_step = _oxbox_perf_tick_units,
+	game_tick_ai_section_step = _oxbox_perf_tick_ai,
+	game_tick_actors_drive_section_step = _oxbox_perf_tick_ai,
+	game_tick_players_before_section_step = _oxbox_perf_tick_players_before,
+	game_tick_effects_section_step = _oxbox_perf_tick_effects,
+	game_tick_antennas_section_step = _oxbox_perf_tick_antennas,
+	game_tick_first_person_section_step = _oxbox_perf_tick_first_person,
+	game_tick_game_engine_section_step = _oxbox_perf_tick_game_engine,
+	game_tick_editor_section_step = _oxbox_perf_tick_other,
+	game_tick_hs_section_step = _oxbox_perf_tick_hs,
+	game_tick_recorded_animations_section_step = _oxbox_perf_tick_recorded_animations,
+	game_tick_objects_section_step = _oxbox_perf_tick_objects,
+	game_tick_players_after_section_step = _oxbox_perf_tick_players_after,
+	game_tick_hud_section_step = _oxbox_perf_tick_hud,
+	game_tick_player_effect_section_step = _oxbox_perf_tick_player_effect,
+};
+#endif
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);

@@ -355,7 +355,12 @@ static D3DPRIMITIVETYPE const d3d_primitive_type_table[NUMBER_OF_TRIANGLE_BUFFER
 
 
 static struct dynamic_vertices_globals dynamic_vertices = {0};
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: not static: the perf log reads the triangles used (port/oxbox/oxbox_perf.c) */
+struct dynamic_triangles_globals dynamic_triangles = {0};
+#else
 static struct dynamic_triangles_globals dynamic_triangles = {0};
+#endif
 static D3DVertexBuffer *aux_dynamic_unlit_vb = NULL;
 static boolean dynamic_triangles_overflow_warning = FALSE;
 static boolean dynamic_vertices_overflow_warning = FALSE;
