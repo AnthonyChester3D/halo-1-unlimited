@@ -17,12 +17,16 @@ Test build 33 (phase 3):
 - Objects (objects.c objects_update, object_update, object_translate): the steps of each object's update end with
   OXBOX_PERF_OBJECT_MARK, inline (the cycle counter, a subtraction and two stores: well under a microsecond an
   object), and the objects' types, the children and the created objects go to the object hook.
-- The weather's counts (weather_particle_systems.c, a type at a time: the weather hook). */
+- The weather's counts (weather_particle_systems.c, a type at a time: the weather hook).
+
+Test build 34: the camera tour. main.c main_game_render asks the camera hook for each local player's view: the
+observer's camera, or the tour's while a tour flies that view. */
 
 #ifndef OXBOX_PERF_H
 #define OXBOX_PERF_H
 
 struct profile_section;
+struct observer_result;
 
 struct oxbox_perf_hooks
 {
@@ -41,6 +45,9 @@ struct oxbox_perf_hooks
 	/* the weather, a particle type drawn: its particles (updated this frame), the sprites built, the boxes and the
 	visible weather polyhedra */
 	void (*weather)(long particles, long sprites, long boxes, long polyhedra);
+	/* a local player's view about to be drawn (test build 34): the camera to draw it from, the observer's or the
+	camera tour's */
+	struct observer_result const *(*camera)(short local_player_index, struct observer_result const *observer);
 	/* (OXBOX_PERF_OBJECT_MARK's and OXBOX_PERF_TRANSLATE's state: the log adds these up a frame and clears them) */
 	unsigned long object_last;
 	unsigned long object_cycles[16];

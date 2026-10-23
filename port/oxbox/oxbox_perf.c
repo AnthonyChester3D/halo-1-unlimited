@@ -23,7 +23,7 @@ can't be written; the time is the console's clock, UTC). Header lines start with
 	# memory_fields <the M row's fields>
 	# fields <the P, S and T rows' fields>
 Then a row a line, its first column the kind: M (memory, once at map load), P (a second's summary), S (a slow
-frame), T (a tour stop: later). P, S and T have the same columns; an empty field isn't available.
+frame), T (a camera tour's view, test build 34). P, S and T have the same columns; an empty field isn't available.
 
 Timing comes from the game loop's probe marks (main.c frame_probe_marks): the game's ticks (game_time_update: the
 simulation), drawing (main_game_render: the CPU building the frame for the graphics chip), present (the CPU blocked
@@ -48,6 +48,20 @@ Test build 33 (phase 3), more columns at the rows' end:
   objects, object_translate, the garbage collection.
 - S rows with a tick over 25 ms fill in the tick steps for that frame.
 - The weather's counts and the HUD's parts (P rows).
+
+Test build 34: the camera tour (T rows). A text file a map, perf\tours\<map>.txt (D:, else T:; <map> as in the CSV's
+name), lists stops: the view flies to each, waits for it to settle, then measures it for a few seconds and writes a T
+row (the P row's columns, summed over the stop's frames, and the stop's number, view and label at the end). A tour
+starts by itself a few seconds after its map loads, and Back + the right stick's click stops it. The same combo when
+no tour runs adds the current view to the map's tour file. The writer thread reads and appends the files: the game
+thread still never touches the disk. The format (tour_parse):
+	# a comment (anything after # on a line)
+	start 5            seconds after the map loads before the tour starts (once, anywhere in the file)
+	settle 1.5         seconds at each view before measuring (for the stops after it)
+	hold 3             seconds measured at each view (for the stops after it)
+	x y z yaw pitch label...   a stop: world units, then degrees (yaw 0 = +x, counterclockwise; pitch up positive),
+	                   as the P rows' columns; a yaw of * looks around (4 views: yaw 0, 90, 180 and 270); pitch and
+	                   the label can be left out. Spaces, tabs, commas or semicolons between the numbers.
 */
 
 #include "cseries.h"
@@ -69,6 +83,8 @@ Test build 33 (phase 3), more columns at the rows' end:
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
 #include "shell/shell.h"
+#include "input/input.h"
+#include "interface/hud_messaging.h"
 #include "oxbox_perf.h"
 
 #include <math.h>
@@ -219,6 +235,9 @@ enum
 /* the in-band commands to the writer: a line starting with one of these bytes */
 #define WRITER_OPEN '\001'      /* then the file's name in perf\ */
 #define WRITER_CLOSE '\002'
+#define WRITER_TOUR_LOAD '\003' /* then the map's name: read its tour file (test build 34) */
+#define WRITER_TOUR_ADD '\004'  /* then the map's name, a tab and a line to add to its tour file */
+#define WRITER_COMMAND(c) ((c) >= WRITER_OPEN && (c) <= WRITER_TOUR_ADD)
 
 /* ---------- structures */
 
@@ -399,9 +418,65 @@ static volatile unsigned long ring_dropped_bytes;
 static volatile long writer_flush_requests;
 static volatile long writer_failures;     /* (the game thread logs them) */
 static volatile unsigned long writer_last_error, writer_last_length, writer_last_written, writer_last_tail;
-/* (for a debugger: what the writer is doing, 1 sleeping, 2 opening, 3 writing, 4 flushing, 5 closing; and its passes) */
+/* (for a debugger and S rows: what the writer is doing, 1 sleeping, 2 opening, 3 writing, 4 flushing, 5 closing, 6 reading
+a tour file, 7 adding to one; and its passes) */
 volatile unsigned long oxbox_perf_writer_state, oxbox_perf_writer_passes, oxbox_perf_frames;
 static volatile char writer_drive;        /* where the files went: 'D', 'T', or 0 */
+
+/* ---------- the camera tour's state (test build 34) */
+
+enum
+{
+	TOUR_MAXIMUM_STOPS = 64,
+	TOUR_LABEL_SIZE = 32,
+	TOUR_FILE_SIZE = 6144,
+	TOUR_LOOK_AROUND_VIEWS = 4,
+	/* the game thread's tour */
+	_tour_none = 0,           /* no tour this session (or its file not read yet) */
+	_tour_waiting,            /* the file's read: until the start time */
+	_tour_settling,           /* at a view, before measuring */
+	_tour_measuring,          /* at a view: the T row's frames */
+	_tour_done
+};
+
+struct tour_stop
+{
+	real_point3d position;
+	real yaw, pitch;          /* (degrees) */
+	real settle, hold;        /* (seconds) */
+	boolean look_around;
+	char label[TOUR_LABEL_SIZE];
+};
+
+/* the writer fills these from the file, then sets loaded_request to the request it answered */
+static struct
+{
+	struct tour_stop stops[TOUR_MAXIMUM_STOPS];
+	long stop_count;
+	long lines_skipped, first_skipped_line, stops_dropped;
+	real start_delay;
+	boolean found, truncated;
+	char path[64];            /* (the file read, or where a stop added this session goes) */
+	volatile long loaded_request;
+} tour_file;
+
+static char tour_text[TOUR_FILE_SIZE];   /* (the writer's) */
+
+/* the game thread's */
+static struct
+{
+	long request;             /* (the last load asked of the writer) */
+	long state;
+	char map[0x20];
+	long stop_index, view_index;
+	__int64 phase_start;
+	short local_player_index;
+	boolean camera_valid;
+	struct observer_result camera;
+	long stops_added;         /* (this session, by the combo) */
+	__int64 started;          /* (QueryPerformanceCounter: GetTickCount ran slow in xemu) */
+	long rows;
+} tour;
 
 /* ---------- the ring and the writer */
 
@@ -468,6 +543,264 @@ static HANDLE writer_open(
 	return INVALID_HANDLE_VALUE;
 }
 
+/* ---------- the camera tour's file (the writer's side, test build 34) */
+
+static boolean tour_separator(
+	char c)
+{
+	return c == ' ' || c == '\t' || c == ',' || c == ';';
+}
+
+/* a number at *text ("-12.5", ".5", "3"): its value, and *text past it; FALSE (and *text as it was) if none */
+static boolean tour_number(
+	char const **text,
+	real *value)
+{
+	char const *p = *text;
+	boolean negative = FALSE, digits = FALSE;
+	double result = 0.0, scale = 1.0;
+
+	if (*p == '-' || *p == '+')
+		negative = *p++ == '-';
+	for (; *p >= '0' && *p <= '9'; p++)
+	{
+		result = result * 10.0 + (*p - '0');
+		digits = TRUE;
+	}
+	if (*p == '.')
+	{
+		for (p++; *p >= '0' && *p <= '9'; p++)
+		{
+			scale *= 0.1;
+			result += (*p - '0') * scale;
+			digits = TRUE;
+		}
+	}
+	if (!digits || (*p && !tour_separator(*p)))
+		return FALSE;
+	*value = (real)(negative ? -result : result);
+	*text = p;
+	return TRUE;
+}
+
+static void tour_skip(
+	char const **text)
+{
+	while (**text && tour_separator(**text))
+		(*text)++;
+}
+
+/* the file's text (the format: this file's header comment) into tour_file's stops */
+static void tour_parse(
+	char *text)
+{
+	real settle = 1.5f, hold = 3.0f;
+	long line_number = 0;
+	char *line = text;
+
+	while (*line)
+	{
+		char *end, *cut;
+		char const *p;
+		real value;
+
+		for (end = line; *end && *end != '\n'; end++) ;
+		if (*end)
+			*end++ = 0;
+		line_number++;
+		if ((cut = strchr(line, '#')) != NULL)
+			*cut = 0;
+		for (cut = line + strlen(line); cut > line && (cut[-1] == '\r' || tour_separator(cut[-1])); )
+			*--cut = 0;
+		p = line;
+		tour_skip(&p);
+		if (!*p)
+		{
+			line = end;
+			continue;
+		}
+		if ((*p | 32) >= 'a' && (*p | 32) <= 'z')
+		{
+			/* an option: start, settle or hold, then seconds */
+			char word[8];
+			long length = 0;
+
+			while ((*p | 32) >= 'a' && (*p | 32) <= 'z' && length < (long)sizeof(word) - 1)
+				word[length++] = (char)(*p++ | 32);
+			word[length] = 0;
+			tour_skip(&p);
+			if (tour_number(&p, &value) && value >= 0.0f && value <= 600.0f)
+			{
+				tour_skip(&p);
+				if (!*p && !strcmp(word, "start"))
+				{
+					tour_file.start_delay = value;
+					line = end;
+					continue;
+				}
+				if (!*p && !strcmp(word, "settle"))
+				{
+					settle = value > 60.0f ? 60.0f : value;
+					line = end;
+					continue;
+				}
+				if (!*p && !strcmp(word, "hold"))
+				{
+					hold = value < 0.5f ? 0.5f : value > 60.0f ? 60.0f : value;
+					line = end;
+					continue;
+				}
+			}
+		}
+		else
+		{
+			/* a stop: x y z, then yaw (or *), pitch, the label */
+			struct tour_stop stop;
+			boolean ok;
+
+			memset(&stop, 0, sizeof(stop));
+			ok = tour_number(&p, &stop.position.x);
+			tour_skip(&p);
+			ok = ok && tour_number(&p, &stop.position.y);
+			tour_skip(&p);
+			ok = ok && tour_number(&p, &stop.position.z);
+			tour_skip(&p);
+			if (ok)
+			{
+				if (*p == '*' && (!p[1] || tour_separator(p[1])))
+				{
+					stop.look_around = TRUE;
+					p++;
+				}
+				else if (!tour_number(&p, &stop.yaw))
+				{
+					ok = FALSE;
+				}
+			}
+			tour_skip(&p);
+			if (ok && tour_number(&p, &value))
+			{
+				stop.pitch = value < -89.0f ? -89.0f : value > 89.0f ? 89.0f : value;
+				tour_skip(&p);
+			}
+			if (ok)
+			{
+				long length = 0;
+
+				/* the label: the rest of the line (a CSV field: no commas) */
+				for (; *p && length < TOUR_LABEL_SIZE - 1; p++)
+					stop.label[length++] = *p == ',' ? ';' : *p == '\t' ? ' ' : *p;
+				stop.label[length] = 0;
+				stop.settle = settle;
+				stop.hold = hold;
+				if (tour_file.stop_count < TOUR_MAXIMUM_STOPS)
+					tour_file.stops[tour_file.stop_count++] = stop;
+				else
+					tour_file.stops_dropped++;
+				line = end;
+				continue;
+			}
+		}
+		if (!tour_file.lines_skipped++)
+			tour_file.first_skipped_line = line_number;
+		line = end;
+	}
+}
+
+/* WRITER_TOUR_LOAD's argument, "<request> <map>": the map's tour file, from D:\perf\tours, else T:\perf\tours */
+static void tour_load(
+	char const *argument)
+{
+	char const *map = argument;
+	long request = 0, index;
+
+	while (*map >= '0' && *map <= '9')
+		request = request * 10 + (*map++ - '0');
+	if (*map == ' ')
+		map++;
+	tour_file.stop_count = tour_file.lines_skipped = tour_file.first_skipped_line = tour_file.stops_dropped = 0;
+	tour_file.start_delay = 5.0f;
+	tour_file.found = tour_file.truncated = FALSE;
+	for (index = 0; index < 2 && !tour_file.found; index++)
+	{
+		HANDLE file;
+		unsigned long got = 0;
+
+		_snprintf(tour_file.path, sizeof(tour_file.path), "%c:\\perf\\tours\\%s.txt", "DT"[index], map);
+		tour_file.path[sizeof(tour_file.path) - 1] = 0;
+		file = CreateFileA(tour_file.path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (file == INVALID_HANDLE_VALUE)
+			continue;
+		if (!ReadFile(file, tour_text, sizeof(tour_text) - 1, &got, NULL))
+			got = 0;
+		tour_file.truncated = got == sizeof(tour_text) - 1 && GetFileSize(file, NULL) > got;
+		CloseHandle(file);
+		tour_text[got] = 0;
+		tour_file.found = TRUE;
+		tour_parse(tour_text);
+	}
+	if (!tour_file.found)
+	{
+		/* (where the combo's stops go: beside the CSV files) */
+		_snprintf(tour_file.path, sizeof(tour_file.path), "%c:\\perf\\tours\\%s.txt", writer_drive ? writer_drive : 'D', map);
+		tour_file.path[sizeof(tour_file.path) - 1] = 0;
+	}
+	PERF_BARRIER();
+	tour_file.loaded_request = request;
+}
+
+/* WRITER_TOUR_ADD's argument: a line for the end of the session's tour file (a new file gets a header first) */
+static void tour_add(
+	char const *line)
+{
+	static char const header[] =
+		"# Halo 1 Unlimited camera tour v1 (README_OpenCE_test_34.txt)\r\n"
+		"# x y z yaw pitch label: a stop (a yaw of * looks around: 4 views); start, settle, hold <seconds>: options\r\n";
+	char folder[16];
+	unsigned long written = 0, size, length = strlen(line);
+	HANDLE file;
+
+	_snprintf(folder, sizeof(folder), "%c:\\perf", tour_file.path[0]);
+	folder[sizeof(folder) - 1] = 0;
+	CreateDirectoryA(folder, NULL);
+	_snprintf(folder, sizeof(folder), "%c:\\perf\\tours", tour_file.path[0]);
+	folder[sizeof(folder) - 1] = 0;
+	CreateDirectoryA(folder, NULL);
+	file = CreateFileA(tour_file.path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS,
+		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+	{
+		writer_last_error = GetLastError();
+		writer_failures++;
+		return;
+	}
+	size = GetFileSize(file, NULL);
+	if (size == 0 || size == 0xFFFFFFFF)
+	{
+		WriteFile(file, header, sizeof(header) - 1, &written, NULL);
+	}
+	else
+	{
+		/* (a file whose last line has no line end gets one first) */
+		char last = '\n';
+
+		SetFilePointer(file, -1, NULL, FILE_END);
+		if (ReadFile(file, &last, 1, &written, NULL) && written == 1 && last != '\n')
+		{
+			SetFilePointer(file, 0, NULL, FILE_END);
+			WriteFile(file, "\r\n", 2, &written, NULL);
+		}
+	}
+	SetFilePointer(file, 0, NULL, FILE_END);
+	if (!WriteFile(file, line, length, &written, NULL) || written != length ||
+		!WriteFile(file, "\r\n", 2, &written, NULL))
+	{
+		writer_last_error = GetLastError();
+		writer_failures++;
+	}
+	CloseHandle(file);
+}
+
 static unsigned long __stdcall writer_thread(
 	void *unused)
 {
@@ -503,9 +836,9 @@ static unsigned long __stdcall writer_thread(
 		{
 			char c = ring[tail & (RING_SIZE - 1)];
 
-			if (c == WRITER_OPEN || c == WRITER_CLOSE)
+			if (WRITER_COMMAND(c))
 			{
-				char name[96];
+				char name[192];
 				long length = 0;
 
 				for (tail++; tail != head && ring[tail & (RING_SIZE - 1)] != '\n'; tail++)
@@ -516,6 +849,18 @@ static unsigned long __stdcall writer_thread(
 				name[length] = 0;
 				if (tail != head)
 					tail++;
+				if (c == WRITER_TOUR_LOAD)
+				{
+					oxbox_perf_writer_state = 6;
+					tour_load(name);
+					continue;
+				}
+				if (c == WRITER_TOUR_ADD)
+				{
+					oxbox_perf_writer_state = 7;
+					tour_add(name);
+					continue;
+				}
 				if (file != INVALID_HANDLE_VALUE)
 				{
 					oxbox_perf_writer_state = 5;
@@ -534,7 +879,7 @@ static unsigned long __stdcall writer_thread(
 
 				if (head - tail > ring_end - tail)
 					limit = ring_end;
-				while (run != limit && ring[run & (RING_SIZE - 1)] != WRITER_OPEN && ring[run & (RING_SIZE - 1)] != WRITER_CLOSE)
+				while (run != limit && !WRITER_COMMAND(ring[run & (RING_SIZE - 1)]))
 					run++;
 				written = 0;
 				oxbox_perf_writer_state = 3;
@@ -847,7 +1192,9 @@ static char const frame_fields[] =
 	/* (phase 3, P rows: the clusters an object_translate call touches, and its cluster queries, a call) */
 	"obj_translate_clusters,obj_translate_cluster_queries,"
 	/* (phase 3, P rows: the three object tags whose top-level updates took the most time, ms a frame each) */
-	"top_object_1,top_object_1_ms,top_object_2,top_object_2_ms,top_object_3,top_object_3_ms";
+	"top_object_1,top_object_1_ms,top_object_2,top_object_2_ms,top_object_3,top_object_3_ms,"
+	/* (test build 34, T rows: the camera tour's stop, view and label) */
+	"tour_stop,tour_view,tour_label";
 
 /* phase 2's columns (P rows) and the steps or profile sections each one sums (a step is NUMBER_OF_SECTIONS + it) */
 #define STEP_COLUMN(step) (NUMBER_OF_SECTIONS + (step))
@@ -979,6 +1326,9 @@ static void memory_row(
 	put_line(&line);
 }
 
+static struct observer_result const *row_camera(void);
+
+/* a P (a second), S (a slow frame) or T (a camera tour's view, test build 34) row: T rows have P rows' columns */
 static void frame_row(
 	char kind,
 	double t,
@@ -986,6 +1336,7 @@ static void frame_row(
 {
 	struct perf_line line;
 	double frames = sample->frames > 0 ? (double)sample->frames : 1.0;
+	boolean summed = kind == 'P' || kind == 'T';
 
 	line.length = 0;
 	put_char(&line, kind); put_comma(&line);
@@ -1011,7 +1362,7 @@ static void frame_row(
 	put_unsigned(&line, sample->net_received); put_comma(&line);
 	if (game_in_progress() && global_structure_bsp_index != NONE)
 	{
-		struct observer_result const *camera = observer_get_camera(0);
+		struct observer_result const *camera = row_camera();
 
 		if (camera)
 		{
@@ -1050,7 +1401,7 @@ static void frame_row(
 			long source = window_time_columns[column];
 
 			put_comma(&line);
-			if (kind == 'P')
+			if (summed)
 			{
 				unsigned __int64 cycles = 0;
 
@@ -1074,7 +1425,7 @@ static void frame_row(
 				put_trimmed(&line, cycles_to_ms((double)(__int64)frame_tick_steps[source - NUMBER_OF_SECTIONS]));
 			}
 		}
-		if (kind == 'P')
+		if (summed)
 		{
 			unsigned long const counts[NUMBER_OF_WINDOW_COUNT_COLUMNS - 1] =
 			{
@@ -1141,8 +1492,8 @@ static void frame_row(
 	{
 		put_text(&line, ",,,,");
 	}
-	/* phase 3: objects_update, the weather, the HUD and the hooks (P rows) */
-	if (kind == 'P')
+	/* phase 3: objects_update, the weather, the HUD and the hooks (P and T rows) */
+	if (summed)
 	{
 		static short const object_step_order[] =
 		{
@@ -1266,8 +1617,319 @@ static void frame_row(
 		for (column = 0; column < 18 + 2 * NUMBER_OF_OBJECT_TYPES + 4 + 13 + 1 + 2 + 6; column++)
 			put_comma(&line);
 	}
+	/* the camera tour (T rows): the stop (1 up, in the file's order), the view (1 up: 1 to 4 looking around), the label */
+	put_comma(&line);
+	if (kind == 'T')
+	{
+		put_signed(&line, tour.stop_index + 1);
+		put_comma(&line);
+		put_signed(&line, tour.view_index + 1);
+		put_comma(&line);
+		put_text(&line, tour_file.stops[tour.stop_index].label);
+	}
+	else
+	{
+		put_text(&line, ",,");
+	}
 	put_line(&line);
 }
+
+/* ---------- the camera tour (the game thread's side, test build 34) */
+
+/* a line in the HUD's messages (at most 62 characters) */
+static void tour_message(
+	char const *text)
+{
+	short player = local_player_get_next(NONE);
+	wchar_t wide[63];
+	long index;
+
+	if (player == NONE || !game_in_progress())
+		return;
+	for (index = 0; text[index] && index < (long)NUMBEROF(wide) - 1; index++)
+		wide[index] = (unsigned char)text[index];
+	wide[index] = 0;
+	hud_print_message(player, wide);
+}
+
+/* the session's start: the writer reads the map's tour file */
+static void tour_session_start(
+	char const *map)
+{
+	static long requests;
+	struct perf_line line;
+
+	tour.state = _tour_none;
+	tour.camera_valid = FALSE;
+	tour.stop_index = tour.view_index = 0;
+	tour.stops_added = 0;
+	tour.rows = 0;
+	tour.started = 0;
+	csstrncpy(tour.map, map, sizeof(tour.map) - 1);
+	tour.map[sizeof(tour.map) - 1] = 0;
+	tour.request = ++requests;
+	line.length = 0;
+	put_char(&line, WRITER_TOUR_LOAD);
+	put_unsigned(&line, (unsigned long)tour.request);
+	put_char(&line, ' ');
+	put_text(&line, tour.map);
+	line.text[line.length++] = '\n';
+	ring_put(line.text, line.length);
+}
+
+static long tour_views(
+	struct tour_stop const *stop)
+{
+	return stop->look_around ? TOUR_LOOK_AROUND_VIEWS : 1;
+}
+
+/* the view at the tour's stop and view: the camera there, and its settling starts */
+static void tour_view_begin(
+	__int64 now)
+{
+	struct tour_stop const *stop = &tour_file.stops[tour.stop_index];
+	real yaw = DEGREES_TO_RADIANS(stop->look_around ? 90.0f * tour.view_index : stop->yaw);
+	real pitch = DEGREES_TO_RADIANS(stop->pitch);
+
+	memset(&tour.camera, 0, sizeof(tour.camera));
+	tour.camera.position = stop->position;
+	tour.camera.forward.i = (real)(cos(pitch) * cos(yaw));
+	tour.camera.forward.j = (real)(cos(pitch) * sin(yaw));
+	tour.camera.forward.k = (real)sin(pitch);
+	tour.camera.up.i = (real)(-sin(pitch) * cos(yaw));
+	tour.camera.up.j = (real)(-sin(pitch) * sin(yaw));
+	tour.camera.up.k = (real)cos(pitch);
+	/* (Halo's own field of view, not the player's: a zoomed weapon, or the combo's click zooming it, doesn't change a
+	tour's views) */
+	tour.camera.field_of_view = DEGREES_TO_RADIANS(70.0f);
+	scenario_location_from_point(&tour.camera.location, &tour.camera.position);
+	tour.camera_valid = TRUE;
+	tour.state = _tour_settling;
+	tour.phase_start = now;
+}
+
+static void tour_finish(
+	char const *how)
+{
+	char text[64];
+	LARGE_INTEGER now;
+	long seconds;
+
+	QueryPerformanceCounter(&now);
+	seconds = tour.started ? (long)(ticks_to_ms(now.QuadPart - tour.started) / 1000.0 + 0.5) : 0;
+
+	tour.camera_valid = FALSE;
+	tour.state = _tour_done;
+	platform_log("perf: camera tour %s after %ld s: %ld T rows", how, seconds, tour.rows);
+	_snprintf(text, sizeof(text), "Camera tour %s: %ld T rows", how, tour.rows);
+	text[sizeof(text) - 1] = 0;
+	tour_message(text);
+}
+
+/* hold Back, click the right stick (any controller): its frame */
+static boolean tour_combo(
+	void)
+{
+	short index;
+
+	for (index = 0; index < MAXIMUM_GAMEPADS; index++)
+	{
+		struct gamepad_state const *state = input_get_gamepad_state(index);
+
+		if (state && state->buttons[_gamepad_binary_button_back] && state->buttons[_gamepad_binary_button_right_thumb] == 1)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* the combo when no tour runs: the first local player's view goes at the end of the map's tour file */
+static void tour_add_stop(
+	void)
+{
+	short player = local_player_get_next(NONE);
+	struct observer_result const *camera = player != NONE ? observer_get_camera(player) : NULL;
+	struct perf_line line;
+	double yaw, k;
+	char text[64];
+
+	if (!camera)
+		return;
+	yaw = atan2(camera->forward.j, camera->forward.i) * (180.0 / 3.14159265358979);
+	if (yaw < 0.0)
+		yaw += 360.0;
+	k = camera->forward.k > 1.0f ? 1.0 : camera->forward.k < -1.0f ? -1.0 : camera->forward.k;
+	tour.stops_added++;
+	line.length = 0;
+	put_char(&line, WRITER_TOUR_ADD);
+	put_fixed(&line, camera->position.x, 2); put_char(&line, ' ');
+	put_fixed(&line, camera->position.y, 2); put_char(&line, ' ');
+	put_fixed(&line, camera->position.z, 2); put_char(&line, ' ');
+	put_fixed(&line, yaw, 1); put_char(&line, ' ');
+	put_fixed(&line, asin(k) * (180.0 / 3.14159265358979), 1);
+	put_text(&line, " added ");
+	put_unsigned(&line, (unsigned long)tour.stops_added);
+	put_text(&line, " (cluster ");
+	put_signed(&line, camera->location.cluster_index);
+	put_char(&line, ')');
+	line.text[line.length] = 0;
+	platform_log("perf: tour stop added to %s: %s", tour_file.path, line.text + 1);
+	line.text[line.length++] = '\n';
+	ring_put(line.text, line.length);
+	writer_flush_requests++;
+	_snprintf(text, sizeof(text), "Tour stop saved (%ld in the file)", tour_file.stop_count + tour.stops_added);
+	text[sizeof(text) - 1] = 0;
+	tour_message(text);
+}
+
+/* the tour file, once the writer has read it */
+static void tour_loaded(
+	void)
+{
+	long index, views = 0;
+	double seconds = tour_file.start_delay;
+	char text[64];
+
+	tour.request = 0;
+	if (!tour_file.found)
+	{
+		platform_log("perf: no camera tour for this map (Back + the right stick's click adds the view to %s)", tour_file.path);
+		tour.state = _tour_done;
+		return;
+	}
+	for (index = 0; index < tour_file.stop_count; index++)
+	{
+		views += tour_views(&tour_file.stops[index]);
+		seconds += (tour_file.stops[index].settle + tour_file.stops[index].hold) * tour_views(&tour_file.stops[index]);
+	}
+	if (tour_file.lines_skipped || tour_file.stops_dropped || tour_file.truncated)
+	{
+		platform_log("perf: tour file %s: %ld lines not understood (the first: line %ld), %ld stops over %d left out%s",
+			tour_file.path, tour_file.lines_skipped, tour_file.first_skipped_line, tour_file.stops_dropped,
+			TOUR_MAXIMUM_STOPS, tour_file.truncated ? ", the file's end (over 6 KB) left out" : "");
+	}
+	if (!tour_file.stop_count)
+	{
+		platform_log("perf: tour file %s has no stops", tour_file.path);
+		tour.state = _tour_done;
+		return;
+	}
+	platform_log("perf: camera tour %s: %ld stops, %ld views, about %ld s, starting %ld s after the map loaded",
+		tour_file.path, tour_file.stop_count, views, (long)(seconds + 0.5), (long)(tour_file.start_delay + 0.5));
+	_snprintf(text, sizeof(text), "Camera tour: %ld views, about %ld s", views, (long)(seconds + 0.5));
+	text[sizeof(text) - 1] = 0;
+	/* (the HUD shows the newest message on top) */
+	tour_message("Hold Back and click the right stick to stop it");
+	tour_message(text);
+	tour.state = _tour_waiting;
+}
+
+static void window_row(char kind, __int64 now, struct perf_counters const *counters);
+
+/* once a frame in a session, after the frame went in the second's sums */
+static void tour_update(
+	__int64 now,
+	struct perf_counters const *counters)
+{
+	boolean blocked = shell_application_is_paused() || game_time_get_paused() || game_engine_showing_postgame();
+	boolean combo = !blocked && tour_combo();
+	struct tour_stop const *stop;
+
+	if (tour.state == _tour_none)
+	{
+		if (tour.request && tour_file.loaded_request == tour.request)
+			tour_loaded();
+		return;
+	}
+	if (combo)
+	{
+		if (tour.state == _tour_done)
+		{
+			tour_add_stop();
+		}
+		else
+		{
+			/* (a view's frames measured so far: a P row, with the view's camera) */
+			if (tour.state == _tour_measuring && perf.second.frames)
+				window_row('P', now, counters);
+			tour_finish("stopped");
+		}
+		return;
+	}
+	switch (tour.state)
+	{
+	case _tour_waiting:
+		if (!blocked && local_player_get_next(NONE) != NONE &&
+			ticks_to_ms(now - perf.session_start) >= tour_file.start_delay * 1000.0)
+		{
+			tour.local_player_index = local_player_get_next(NONE);
+			tour.stop_index = tour.view_index = 0;
+			tour.started = now;
+			tour.rows = 0;
+			tour_view_begin(now);
+		}
+		break;
+
+	case _tour_settling:
+		stop = &tour_file.stops[tour.stop_index];
+		if (blocked)
+		{
+			tour.phase_start = now;
+		}
+		else if (ticks_to_ms(now - tour.phase_start) >= stop->settle * 1000.0)
+		{
+			/* (the frames so far go in a P row of their own: the T row's start here) */
+			if (perf.second.frames)
+				window_row('P', now, counters);
+			tour.state = _tour_measuring;
+			tour.phase_start = now;
+		}
+		break;
+
+	case _tour_measuring:
+		stop = &tour_file.stops[tour.stop_index];
+		if (blocked)
+		{
+			/* (paused or the game's over: these frames go in the next P row, and the view settles again) */
+			tour.state = _tour_settling;
+			tour.phase_start = now;
+		}
+		else if (ticks_to_ms(now - tour.phase_start) >= stop->hold * 1000.0)
+		{
+			window_row('T', now, counters);
+			tour.rows++;
+			if (++tour.view_index >= tour_views(stop))
+			{
+				tour.view_index = 0;
+				tour.stop_index++;
+			}
+			if (tour.stop_index >= tour_file.stop_count)
+				tour_finish("done");
+			else
+				tour_view_begin(now);
+		}
+		break;
+	}
+}
+
+/* the camera hook: a local player's view about to be drawn */
+static struct observer_result const *perf_camera(
+	short local_player_index,
+	struct observer_result const *observer)
+{
+	session_hook_calls++;
+	if (!tour.camera_valid || !perf.active || local_player_index != tour.local_player_index)
+		return observer;
+	return &tour.camera;
+}
+
+/* the camera the rows show: the tour's while it flies the view */
+static struct observer_result const *row_camera(
+	void)
+{
+	return tour.camera_valid ? &tour.camera : observer_get_camera(0);
+}
+
+
 
 /* ---------- the map session */
 
@@ -1383,6 +2045,8 @@ static void session_start(
 		due.QuadPart = -10000 * (__int64)perf.gpu_sample_ms;   /* (in 100 ns, from now) */
 		perf.set_timer(gpu_timer, due, perf.gpu_sample_ms, gpu_dpc);
 	}
+	/* the camera tour: the writer reads the map's tour file (test build 34) */
+	tour_session_start(map);
 	writer_flush_requests++;
 	platform_log("perf: logging %s to perf\\%s", map, name);
 }
@@ -1413,6 +2077,11 @@ static void session_end(
 	if (perf.cancel_timer)
 		perf.cancel_timer(gpu_timer);
 	cost_report();
+	if (tour.state == _tour_waiting || tour.state == _tour_settling || tour.state == _tour_measuring)
+		platform_log("perf: camera tour stopped at the map's end: %ld T rows", tour.rows);
+	tour.camera_valid = FALSE;
+	tour.state = _tour_none;
+	tour.request = 0;
 	ring_put(close_line, sizeof(close_line));
 	writer_flush_requests++;
 	perf.active = FALSE;
@@ -1627,6 +2296,32 @@ static void objects_fold(
 	perf_hooks.translate_clusters = 0;
 }
 
+/* the second's sums (or a tour view's) in a row, and the next ones' start */
+static void window_row(
+	char kind,
+	__int64 now,
+	struct perf_counters const *counters)
+{
+	/* (the cycle counter's rate, from the session so far) */
+	if (now - perf.session_start >= perf.frequency)
+	{
+		perf.cycle_frequency = (double)(__int64)(cycles64() - perf.session_cycles) * (double)perf.frequency /
+			(double)(now - perf.session_start);
+	}
+	counters_since(&perf.second, &perf.second_counters, counters);
+	perf.session_log_cycles += perf.second.log_cycles;
+	if (kind == 'P' && ++perf.seconds_reported % 60 == 0)
+		cost_report();
+	window.hook_calls = session_hook_calls - hook_calls_at_window_start;
+	hook_calls_at_window_start = session_hook_calls;
+	frame_row(kind, ticks_to_ms(now - perf.session_start) / 1000.0, &perf.second);
+	window_reset();
+	perf.second_start = now;
+	perf.second_counters = *counters;
+	memset(&perf.second, 0, sizeof(perf.second));
+	perf.slow_lines_this_second = 0;
+}
+
 static void window_reset(
 	void)
 {
@@ -1756,28 +2451,12 @@ static void perf_frame(
 	}
 	memset(frame_tick_steps, 0, sizeof(frame_tick_steps));
 
-	/* a second's summary */
-	if (now - perf.second_start >= perf.frequency)
-	{
-		/* (the cycle counter's rate, from the session so far) */
-		if (now - perf.session_start >= perf.frequency)
-		{
-			perf.cycle_frequency = (double)(__int64)(cycles64() - perf.session_cycles) * (double)perf.frequency /
-				(double)(now - perf.session_start);
-		}
-		counters_since(&perf.second, &perf.second_counters, &counters);
-		perf.session_log_cycles += perf.second.log_cycles;
-		if (++perf.seconds_reported % 60 == 0)
-			cost_report();
-		window.hook_calls = session_hook_calls - hook_calls_at_window_start;
-		hook_calls_at_window_start = session_hook_calls;
-		frame_row('P', ticks_to_ms(now - perf.session_start) / 1000.0, &perf.second);
-		window_reset();
-		perf.second_start = now;
-		perf.second_counters = counters;
-		memset(&perf.second, 0, sizeof(perf.second));
-		perf.slow_lines_this_second = 0;
-	}
+	/* the camera tour (it may end the second's sums early: a T row's start and end) */
+	tour_update(now, &counters);
+
+	/* a second's summary (not while a tour measures a view: its frames go in its T row) */
+	if (now - perf.second_start >= perf.frequency && tour.state != _tour_measuring)
+		window_row('P', now, &counters);
 
 	/* to the disk at once at round end and on pause */
 	paused = shell_application_is_paused() || game_time_get_paused();
@@ -1789,7 +2468,7 @@ static void perf_frame(
 	perf.last_hook_cycles = cycles_now() - hook_start;
 }
 
-static struct oxbox_perf_hooks perf_hooks = { perf_frame, perf_enter, perf_exit, perf_mark, perf_object, perf_weather };
+static struct oxbox_perf_hooks perf_hooks = { perf_frame, perf_enter, perf_exit, perf_mark, perf_object, perf_weather, perf_camera };
 
 /* ---------- start-up */
 

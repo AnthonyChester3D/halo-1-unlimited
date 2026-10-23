@@ -3259,6 +3259,10 @@ void main_loop_of_death(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+#include "oxbox_perf.h"   /* (the camera tour's hook, test build 34) */
+#endif
+
 static void main_game_render(
 	double time_delta_since_tick_sec)
 {
@@ -3316,6 +3320,11 @@ static void main_game_render(
 			window->local_player_index = last_local_player_index;
 			observer = observer_get_camera(window->local_player_index);
 			observer = render_interpolation_camera(window->local_player_index, observer);
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox (test build 34): the perf log's camera tour flies this view (oxbox_perf.h) */
+			if (oxbox_perf)
+				observer = oxbox_perf->camera(window->local_player_index, observer);
+#endif
 		}
 		else
 		{
