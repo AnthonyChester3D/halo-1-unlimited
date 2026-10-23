@@ -49,8 +49,10 @@ Test build 33 (phase 3), more columns at the rows' end:
 - S rows with a tick over 25 ms fill in the tick steps for that frame.
 - The weather's counts and the HUD's parts (P rows).
 
-Test build 34: the camera tour (T rows). A text file a map, perf\tours\<map>.txt (D:, else T:; <map> as in the CSV's
-name), lists stops: the view flies to each, waits for it to settle, then measures it for a few seconds and writes a T
+Test build 34: the camera tour (T rows). A text file a map in perf\tours (D:, else T:), named as the map is found
+under maps\: a stock map's name (maps\sidewinder.map: perf\tours\sidewinder.txt), a folder map's folder
+(maps\Precipice\: perf\tours\Precipice.txt; a pack's, maps\unsorted\Precipice\: perf\tours\unsorted\Precipice.txt),
+lists stops: the view flies to each, waits for it to settle, then measures it for a few seconds and writes a T
 row (the P row's columns, summed over the stop's frames, and the stop's number, view and label at the end). A tour
 starts by itself a few seconds after its map loads, and Back + the right stick's click stops it. The same combo when
 no tour runs adds the current view to the map's tour file. The writer thread reads and appends the files: the game
@@ -59,6 +61,8 @@ thread still never touches the disk. The format (tour_parse):
 	start 5            seconds after the map loads before the tour starts (once, anywhere in the file)
 	settle 1.5         seconds at each view before measuring (for the stops after it)
 	hold 3             seconds measured at each view (for the stops after it)
+	player x y z yaw   where the player stands during the tour (default: the map's first spawn point; yaw in
+	                   degrees, optional); "player none" leaves the player where it is
 	x y z yaw pitch label...   a stop: world units, then degrees (yaw 0 = +x, counterclockwise; pitch up positive),
 	                   as the P rows' columns; a yaw of * looks around (4 views: yaw 0, 90, 180 and 270); pitch and
 	                   the label can be left out. Spaces, tabs, commas or semicolons between the numbers.
@@ -85,6 +89,7 @@ thread still never touches the disk. The format (tour_parse):
 #include "shell/shell.h"
 #include "input/input.h"
 #include "interface/hud_messaging.h"
+#include "units/units.h"
 #include "oxbox_perf.h"
 
 #include <math.h>
@@ -456,6 +461,9 @@ static struct
 	long lines_skipped, first_skipped_line, stops_dropped;
 	real start_delay;
 	boolean found, truncated;
+	boolean player_set, player_none;  /* (the player line: a spot, or none) */
+	real_point3d player_position;
+	real player_yaw;                  /* (degrees) */
 	char path[64];            /* (the file read, or where a stop added this session goes) */
 	volatile long loaded_request;
 } tour_file;
@@ -474,6 +482,13 @@ static struct
 	boolean camera_valid;
 	struct observer_result camera;
 	long stops_added;         /* (this session, by the combo) */
+	/* the player's spot during the tour (pin: moving it at all) */
+	boolean pin, pin_settled, pin_set_invulnerable;
+	real_point3d pin_position, pin_actual;
+	real pin_yaw;             /* (radians) */
+	long pin_unit;
+	__int64 pin_time;
+	long pins;                /* (the times it was put back) */
 	__int64 started;          /* (QueryPerformanceCounter: GetTickCount ran slow in xemu) */
 	long rows;
 } tour;
@@ -629,7 +644,36 @@ static void tour_parse(
 				word[length++] = (char)(*p++ | 32);
 			word[length] = 0;
 			tour_skip(&p);
-			if (tour_number(&p, &value) && value >= 0.0f && value <= 600.0f)
+			if (!strcmp(word, "player"))
+			{
+				/* the player's spot during the tour: x y z [yaw], or none */
+				real_point3d position;
+				real yaw = 0.0f;
+
+				if ((p[0] | 32) == 'n' && (p[1] | 32) == 'o' && (p[2] | 32) == 'n' && (p[3] | 32) == 'e' &&
+					(!p[4] || tour_separator(p[4])))
+				{
+					tour_file.player_none = TRUE;
+					tour_file.player_set = FALSE;
+					line = end;
+					continue;
+				}
+				if (tour_number(&p, &position.x) && (tour_skip(&p), tour_number(&p, &position.y)) &&
+					(tour_skip(&p), tour_number(&p, &position.z)))
+				{
+					tour_skip(&p);
+					if (!*p || (tour_number(&p, &yaw) && (tour_skip(&p), !*p)))
+					{
+						tour_file.player_position = position;
+						tour_file.player_yaw = yaw;
+						tour_file.player_set = TRUE;
+						tour_file.player_none = FALSE;
+						line = end;
+						continue;
+					}
+				}
+			}
+			else if (tour_number(&p, &value) && value >= 0.0f && value <= 600.0f)
 			{
 				tour_skip(&p);
 				if (!*p && !strcmp(word, "start"))
@@ -707,7 +751,8 @@ static void tour_parse(
 	}
 }
 
-/* WRITER_TOUR_LOAD's argument, "<request> <map>": the map's tour file, from D:\perf\tours, else T:\perf\tours */
+/* WRITER_TOUR_LOAD's argument, "<request> <name>": the map's tour file, <name>.txt (a folder map's: a path) in
+D:\perf\tours, else T:\perf\tours */
 static void tour_load(
 	char const *argument)
 {
@@ -721,6 +766,7 @@ static void tour_load(
 	tour_file.stop_count = tour_file.lines_skipped = tour_file.first_skipped_line = tour_file.stops_dropped = 0;
 	tour_file.start_delay = 5.0f;
 	tour_file.found = tour_file.truncated = FALSE;
+	tour_file.player_set = tour_file.player_none = FALSE;
 	for (index = 0; index < 2 && !tour_file.found; index++)
 	{
 		HANDLE file;
@@ -756,16 +802,21 @@ static void tour_add(
 	static char const header[] =
 		"# Halo 1 Unlimited camera tour v1 (README_OpenCE_test_34.txt)\r\n"
 		"# x y z yaw pitch label: a stop (a yaw of * looks around: 4 views); start, settle, hold <seconds>: options\r\n";
-	char folder[16];
+	char folder[sizeof(tour_file.path)];
 	unsigned long written = 0, size, length = strlen(line);
+	long index;
 	HANDLE file;
 
-	_snprintf(folder, sizeof(folder), "%c:\\perf", tour_file.path[0]);
-	folder[sizeof(folder) - 1] = 0;
-	CreateDirectoryA(folder, NULL);
-	_snprintf(folder, sizeof(folder), "%c:\\perf\\tours", tour_file.path[0]);
-	folder[sizeof(folder) - 1] = 0;
-	CreateDirectoryA(folder, NULL);
+	/* (the folders on the way: perf, perf\tours, a pack's) */
+	for (index = 3; tour_file.path[index]; index++)
+	{
+		if (tour_file.path[index] == '\\')
+		{
+			memcpy(folder, tour_file.path, index);
+			folder[index] = 0;
+			CreateDirectoryA(folder, NULL);
+		}
+	}
 	file = CreateFileA(tour_file.path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS,
 		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
 	if (file == INVALID_HANDLE_VALUE)
@@ -1194,7 +1245,7 @@ static char const frame_fields[] =
 	/* (phase 3, P rows: the three object tags whose top-level updates took the most time, ms a frame each) */
 	"top_object_1,top_object_1_ms,top_object_2,top_object_2_ms,top_object_3,top_object_3_ms,"
 	/* (test build 34, T rows: the camera tour's stop, view and label) */
-	"tour_stop,tour_view,tour_label";
+	"tour_stop,tour_view,tour_label,tour_player_x,tour_player_y,tour_player_z";
 
 /* phase 2's columns (P rows) and the steps or profile sections each one sums (a step is NUMBER_OF_SECTIONS + it) */
 #define STEP_COLUMN(step) (NUMBER_OF_SECTIONS + (step))
@@ -1617,19 +1668,37 @@ static void frame_row(
 		for (column = 0; column < 18 + 2 * NUMBER_OF_OBJECT_TYPES + 4 + 13 + 1 + 2 + 6; column++)
 			put_comma(&line);
 	}
-	/* the camera tour (T rows): the stop (1 up, in the file's order), the view (1 up: 1 to 4 looking around), the label */
+	/* the camera tour (T rows): the stop (1 up, in the file's order), the view (1 up: 1 to 4 looking around), the label,
+	and where the player was (empty if it had no body) */
 	put_comma(&line);
 	if (kind == 'T')
 	{
+		long player_index = local_player_get_player_index(tour.local_player_index);
+		long unit_index = player_index != NONE ? player_get(player_index)->unit_index : NONE;
+
 		put_signed(&line, tour.stop_index + 1);
 		put_comma(&line);
 		put_signed(&line, tour.view_index + 1);
 		put_comma(&line);
 		put_text(&line, tour_file.stops[tour.stop_index].label);
+		put_comma(&line);
+		if (unit_index != NONE)
+		{
+			real_point3d origin;
+
+			object_get_origin(unit_index, &origin);
+			put_fixed(&line, origin.x, 2); put_comma(&line);
+			put_fixed(&line, origin.y, 2); put_comma(&line);
+			put_fixed(&line, origin.z, 2);
+		}
+		else
+		{
+			put_text(&line, ",,");
+		}
 	}
 	else
 	{
-		put_text(&line, ",,");
+		put_text(&line, ",,,,,");
 	}
 	put_line(&line);
 }
@@ -1665,8 +1734,21 @@ static void tour_session_start(
 	tour.stops_added = 0;
 	tour.rows = 0;
 	tour.started = 0;
-	csstrncpy(tour.map, map, sizeof(tour.map) - 1);
-	tour.map[sizeof(tour.map) - 1] = 0;
+	/* the tour file's name under perf\tours: a stock map's name, or a folder map's key (hmp_maps.c: '+', then its
+	folder under maps\, a pack's as "pack/map") as that folder's path */
+	{
+		long from = map[0] == '+', to = 0;
+
+		for (; map[from] && to < (long)sizeof(tour.map) - 1; from++)
+		{
+			char c = map[from];
+
+			tour.map[to++] = c == '/' ? '\\' : (c < ' ' || strchr(":*?\"<>|", c)) ? '_' : c;
+		}
+		tour.map[to] = 0;
+		if (!to)
+			csstrcpy(tour.map, "map");
+	}
 	tour.request = ++requests;
 	line.length = 0;
 	put_char(&line, WRITER_TOUR_LOAD);
@@ -1708,6 +1790,135 @@ static void tour_view_begin(
 	tour.phase_start = now;
 }
 
+/* the player's spot for the tour: the file's player line, else the map's first spawn point; the same every run, so the
+game's cost around the player (its update, the objects it keeps active, the bots near it) is too */
+static void tour_pin_choose(
+	void)
+{
+	struct scenario *scenario = global_scenario_try_and_get();
+
+	tour.pin = FALSE;
+	tour.pin_unit = NONE;
+	tour.pin_set_invulnerable = FALSE;
+	tour.pin_settled = FALSE;
+	tour.pins = 0;
+	if (tour_file.player_none)
+		return;
+	if (game_connection() == _game_connection_network_client)
+	{
+		platform_log("perf: camera tour: the player stays where it is (this console joined a game: only the host moves players)");
+		return;
+	}
+	if (tour_file.player_set)
+	{
+		tour.pin_position = tour_file.player_position;
+		tour.pin_yaw = DEGREES_TO_RADIANS(tour_file.player_yaw);
+	}
+	else if (scenario && scenario->players.count > 0)
+	{
+		struct player_starting_location const *spawn =
+			TAG_BLOCK_GET_ELEMENT(&scenario->players, 0, struct player_starting_location);
+
+		tour.pin_position = spawn->position;
+		tour.pin_yaw = spawn->facing;
+	}
+	else
+	{
+		return;
+	}
+	tour.pin = TRUE;
+}
+
+/* the first local player's body (NONE: none, dead) and its player */
+static long tour_player_unit(
+	long *player_index)
+{
+	*player_index = local_player_get_player_index(tour.local_player_index);
+	return *player_index != NONE ? player_get(*player_index)->unit_index : NONE;
+}
+
+/* the player to its spot (as the scripts' object_teleport does), facing the spot's way, and unhurt by anything */
+static void tour_pin_place(
+	__int64 now,
+	long player_index,
+	long unit_index)
+{
+	struct unit_datum *unit = unit_try_and_get(unit_index);
+	real_vector3d forward;
+
+	if (!unit)
+		return;
+	if (unit_index == tour.pin_unit)
+	{
+		tour.pins++;
+	}
+	else
+	{
+		tour.pin_set_invulnerable = !TEST_FLAG(unit->object.damage_flags, _object_cannot_take_damage_bit);
+		SET_FLAG(unit->object.damage_flags, _object_cannot_take_damage_bit, TRUE);
+	}
+	forward.i = (real)cos(tour.pin_yaw);
+	forward.j = (real)sin(tour.pin_yaw);
+	forward.k = 0.0f;
+	object_reset(unit_index);
+	unit->unit.desired_facing_vector = forward;
+	unit->unit.desired_aiming_vector = forward;
+	unit->unit.desired_looking_vector = forward;
+	/* (once it has landed on its spot, back to where it landed: no fall each time) */
+	player_teleport(player_index, NONE, tour.pin_settled ? &tour.pin_actual : &tour.pin_position);
+	player_control_set_facing(tour.local_player_index, &forward);
+	object_set_position(unit_index, NULL, NULL, NULL);
+	tour.pin_unit = unit_index;
+	tour.pin_time = now;
+}
+
+/* once a frame while the tour runs: the player stays on its spot (a second after it's put there, where it landed is
+the spot; moved 0.2 units from it, by the controller, a bot or an explosion, it goes back; a new body goes there too) */
+static void tour_pin_update(
+	__int64 now)
+{
+	long player_index, unit_index;
+	real_point3d origin;
+
+	if (!tour.pin || (unit_index = tour_player_unit(&player_index)) == NONE)
+		return;
+	if (unit_index != tour.pin_unit)
+	{
+		tour_pin_place(now, player_index, unit_index);
+		return;
+	}
+	object_get_origin(unit_index, &origin);
+	if (!tour.pin_settled)
+	{
+		if (ticks_to_ms(now - tour.pin_time) >= 1000.0)
+		{
+			tour.pin_settled = TRUE;
+			tour.pin_actual = origin;
+		}
+	}
+	else if (distance_squared3d(&origin, &tour.pin_actual) > 0.2f * 0.2f)
+	{
+		tour_pin_place(now, player_index, unit_index);
+	}
+}
+
+/* the tour's end: the player can be hurt again (it stays on the spot) */
+static void tour_pin_release(
+	void)
+{
+	if (tour.pin && tour.pin_unit != NONE && tour.pin_set_invulnerable && game_in_progress())
+	{
+		struct object_datum *object = object_try_and_get(tour.pin_unit);
+
+		if (object)
+			SET_FLAG(object->object.damage_flags, _object_cannot_take_damage_bit, FALSE);
+	}
+	if (tour.pin && tour.pins)
+		platform_log("perf: camera tour: the player was put back on its spot %ld time%s", tour.pins, tour.pins == 1 ? "" : "s");
+	tour.pin = FALSE;
+	tour.pin_unit = NONE;
+}
+
 static void tour_finish(
 	char const *how)
 {
@@ -1720,6 +1931,7 @@ static void tour_finish(
 
 	tour.camera_valid = FALSE;
 	tour.state = _tour_done;
+	tour_pin_release();
 	platform_log("perf: camera tour %s after %ld s: %ld T rows", how, seconds, tour.rows);
 	_snprintf(text, sizeof(text), "Camera tour %s: %ld T rows", how, tour.rows);
 	text[sizeof(text) - 1] = 0;
@@ -1861,16 +2073,43 @@ static void tour_update(
 		if (!blocked && local_player_get_next(NONE) != NONE &&
 			ticks_to_ms(now - perf.session_start) >= tour_file.start_delay * 1000.0)
 		{
+			long player_index, unit_index;
+
 			tour.local_player_index = local_player_get_next(NONE);
+			tour_pin_choose();
+			unit_index = tour_player_unit(&player_index);
+			if (tour.pin && unit_index == NONE)
+				break;   /* (the player's dead: the tour starts when it's back) */
 			tour.stop_index = tour.view_index = 0;
 			tour.started = now;
 			tour.rows = 0;
 			tour_view_begin(now);
+			if (tour.pin)
+			{
+				char text[64];
+				struct perf_line spot;
+
+				tour_pin_place(now, player_index, unit_index);
+				/* (a second more for the first view: the player lands on its spot) */
+				tour.phase_start += perf.frequency;
+				spot.length = 0;
+				put_fixed(&spot, tour.pin_position.x, 2); put_char(&spot, ' ');
+				put_fixed(&spot, tour.pin_position.y, 2); put_char(&spot, ' ');
+				put_fixed(&spot, tour.pin_position.z, 2);
+				spot.text[spot.length] = 0;
+				platform_log("perf: camera tour: the player stands at %s during the tour (%s)", spot.text,
+					tour_file.player_set ? "the tour file's player line" : "the map's first spawn point");
+				_snprintf(text, sizeof(text), "Camera tour: the player waits at %s",
+					tour_file.player_set ? "the tour's spot" : "spawn point 1");
+				text[sizeof(text) - 1] = 0;
+				tour_message(text);
+			}
 		}
 		break;
 
 	case _tour_settling:
 		stop = &tour_file.stops[tour.stop_index];
+		tour_pin_update(now);
 		if (blocked)
 		{
 			tour.phase_start = now;
@@ -1887,6 +2126,7 @@ static void tour_update(
 
 	case _tour_measuring:
 		stop = &tour_file.stops[tour.stop_index];
+		tour_pin_update(now);
 		if (blocked)
 		{
 			/* (paused or the game's over: these frames go in the next P row, and the view settles again) */
@@ -2045,8 +2285,8 @@ static void session_start(
 		due.QuadPart = -10000 * (__int64)perf.gpu_sample_ms;   /* (in 100 ns, from now) */
 		perf.set_timer(gpu_timer, due, perf.gpu_sample_ms, gpu_dpc);
 	}
-	/* the camera tour: the writer reads the map's tour file (test build 34) */
-	tour_session_start(map);
+	/* the camera tour: the writer reads the map's tour file (test build 34; named by the map's key, not the CSV's name) */
+	tour_session_start(cache_file_globals.header.name);
 	writer_flush_requests++;
 	platform_log("perf: logging %s to perf\\%s", map, name);
 }
@@ -2079,6 +2319,7 @@ static void session_end(
 	cost_report();
 	if (tour.state == _tour_waiting || tour.state == _tour_settling || tour.state == _tour_measuring)
 		platform_log("perf: camera tour stopped at the map's end: %ld T rows", tour.rows);
+	tour_pin_release();
 	tour.camera_valid = FALSE;
 	tour.state = _tour_none;
 	tour.request = 0;

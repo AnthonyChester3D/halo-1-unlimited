@@ -45,12 +45,14 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     count, object_translate and the clusters it touches) and the HUD's parts; it names the three object tags that
     took the most update time; and it counts the weather's particles. Slow frames' lines also say what the log's
     writer thread was doing, and fill in the game tick's steps when the tick took over 25 ms.
-    A camera tour measures the same views every run: a text file a map, `perf\tours\<map>.txt`, lists stops
-    (position, direction or "look around", optional label). A few seconds after the map loads, the view flies to
-    each stop, waits for it to settle, measures it and writes a line for it (T) with the same columns. Holding Back
-    and clicking the right stick stops a tour, or, when none is running, adds the current view to the map's tour
-    file. The log's code and buffers are in an XBE section of their own (OXPERF), loaded only when the setting is
-    on: with it off, the game has the same free memory as without it.
+    A camera tour measures the same views every run: a text file a map in `perf\tours`, named after the map's place
+    in `maps` (`perf\tours\sidewinder.txt`, `perf\tours\unsorted\Precipice.txt` for `maps\unsorted\Precipice\`),
+    lists stops (position, direction or "look around", optional label). A few seconds after the map loads, the view
+    flies to each stop, waits for it to settle, measures it and writes a line for it (T) with the same columns.
+    Meanwhile the player stands on the map's first spawn point (or a spot the file names), unhurt, so the game's cost
+    around it is the same every run. Holding Back and clicking the right stick stops a tour, or, when none is
+    running, adds the current view to the map's tour file. The log's code and buffers are in an XBE section of their
+    own (OXPERF), loaded only when the setting is on: with it off, the game has the same free memory as without it.
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 
