@@ -378,6 +378,41 @@ static void read_settings(const char *path)
 			continue;
 		while (*p == ' ' || *p == '\t')
 			p++;
+#if defined(OXBOX_NET_TEST)
+		/* (the online test's addresses: a.b.c.d, oxbox_nettest.c) */
+		if (same_text(name, "net_test_host") || same_text(name, "net_test_dns"))
+		{
+			extern unsigned long oxbox_net_test_host, oxbox_net_test_dns;
+			unsigned long address = 0, part = 0;
+			int parts = 0, part_digits = 0;
+
+			for (;; p++)
+			{
+				if (*p >= '0' && *p <= '9' && part_digits < 3)
+				{
+					part = part * 10 + (unsigned long)(*p - '0');
+					part_digits++;
+					continue;
+				}
+				if (!part_digits || part > 255)
+					break;
+				address |= part << (8 * parts++);
+				part = 0;
+				part_digits = 0;
+				if (*p != '.' || parts == 4)
+					break;
+			}
+			if (parts == 4)
+			{
+				if (same_text(name, "net_test_host"))
+					oxbox_net_test_host = address;
+				else
+					oxbox_net_test_dns = address;
+				platform_log("settings: %s from %s", name, path);
+			}
+			continue;
+		}
+#endif
 		for (; *p >= '0' && *p <= '9' && digits < 6; p++, digits++)
 			value = value * 10 + (*p - '0');
 		if (!digits)
@@ -390,6 +425,23 @@ static void read_settings(const char *path)
 			oxbox_setting_bot_log = value != 0;
 		else if (same_text(name, "perf_log"))
 			oxbox_setting_perf_log = value != 0;
+#if defined(OXBOX_NET_TEST)
+		else if (same_text(name, "net_test"))
+		{
+			extern int oxbox_net_test;
+			oxbox_net_test = value != 0;
+		}
+		else if (same_text(name, "net_test_bypass"))
+		{
+			extern int oxbox_net_test_bypass;
+			oxbox_net_test_bypass = value != 0;
+		}
+		else if (same_text(name, "net_test_port"))
+		{
+			extern int oxbox_net_test_port;
+			oxbox_net_test_port = value;
+		}
+#endif
 		else
 			continue;
 		platform_log("settings: %s from %s", name, path);

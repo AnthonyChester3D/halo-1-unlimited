@@ -409,6 +409,37 @@ void interface_draw_fullscreen_overlays(
 	terminal_draw();
 	main_framerate_render();
 	render_debug_profile();
+#if defined(OXBOX_NET_TEST)
+	/* oxbox: the online test's result (port/oxbox/oxbox_nettest.c), in the menus */
+	{
+		extern char oxbox_net_test_lines[8][64];
+		extern volatile int oxbox_net_test_line_count;
+		real_argb_color color = { 1.0f, 1.0f, 0.9f, 0.3f };
+		long font = tag_loaded('font', "ui\\large_ui");
+		int count = oxbox_net_test_line_count, line;
+
+		if (font != NONE && !game_engine && count > 0)
+		{
+			draw_string_set_draw_mode(font, NONE, 0, 0, &color);   /* (left-justified) */
+			draw_string_set_tab_stops(NULL, 0);
+			for (line = 0; line < count; line++)
+			{
+				wchar_t wide[64];
+				rectangle2d bounds;
+				int index;
+
+				for (index = 0; oxbox_net_test_lines[line][index] && index < 63; index++)
+					wide[index] = (wchar_t)(unsigned char)oxbox_net_test_lines[line][index];
+				wide[index] = 0;
+				bounds.x0 = 24;
+				bounds.x1 = 636;
+				bounds.y0 = (short)(12 + line * 21);
+				bounds.y1 = (short)(bounds.y0 + 22);
+				rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, wide);
+			}
+		}
+	}
+#endif
 
 	return;
 }

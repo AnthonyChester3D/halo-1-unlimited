@@ -304,6 +304,18 @@ short transport_initialize(
 			startup_params.cfgFlags |= XNET_STARTUP_BYPASS_SECURITY;
 			fclose(bypass_file);
 		}
+#if defined(OXBOX_NET_TEST)
+		/* oxbox: the online branch's first test (port/oxbox/oxbox_nettest.c): does retail XNet honour the switch? */
+		{
+			extern int oxbox_net_test, oxbox_net_test_bypass;
+
+			if (oxbox_net_test && oxbox_net_test_bypass)
+			{
+				error(_error_silent, "XNET_STARTUP_BYPASS_SECURITY [ON] (net test)");
+				startup_params.cfgFlags |= XNET_STARTUP_BYPASS_SECURITY;
+			}
+		}
+#endif
 
 		if (XNetStartup(&startup_params) != 0)
 			return _transport_error_not_initialized;
@@ -323,6 +335,13 @@ short transport_initialize(
 			if (system_milliseconds() > deadline ||
 				address_status == XNET_GET_XNADDR_NONE)
 			{
+#if defined(OXBOX_NET_TEST)
+				{
+					void oxbox_net_test_no_network(unsigned long status);
+
+					oxbox_net_test_no_network(address_status);
+				}
+#endif
 				WSACleanup();
 				XNetCleanup();
 				return _transport_error_not_initialized;
@@ -332,6 +351,13 @@ short transport_initialize(
 
 		XNetRandom(global_nonce, sizeof(global_nonce));
 		transport_initialized = TRUE;
+#if defined(OXBOX_NET_TEST)
+		{
+			void oxbox_net_test_start(void);
+
+			oxbox_net_test_start();
+		}
+#endif
 	}
 
 	return _transport_error_none;
