@@ -7818,9 +7818,11 @@ static void widget_instance_process_one_event_recursive(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		3067,
 		widget && definition && event && return_widget_deleted);
-	/* oxbox: the lobby's bot buttons, the host's (Y the mode, LT / RT Custom's count; port/linux/game/bots.c) */
+	/* oxbox: the lobby's bot buttons, the host's (Y the mode, LT / RT Custom's count, Black how well they fight;
+	port/linux/game/bots.c) */
 	if (event->type == _event_type_button && event->data.button.value == 1 &&
 		(event->data.button.index == _gamepad_analog_button_y ||
+			event->data.button.index == _gamepad_analog_button_black ||
 			event->data.button.index == _gamepad_analog_button_left_trigger ||
 			event->data.button.index == _gamepad_analog_button_right_trigger))
 	{

@@ -1226,3 +1226,28 @@ boolean game_engine_king_read_network_state(
 	}
 	return TRUE;
 }
+
+/* port: the bots' (port/linux/game/bots.c): the hill the game counts now, its center and how far its points are
+from it; FALSE when there's none */
+boolean game_engine_king_bot_hill(
+	real_point3d *center,
+	real *radius)
+{
+	long index;
+	real farthest = 0.f;
+
+	if (king_globals.hill_point_count <= 0)
+		return FALSE;
+	*center = king_globals.hill_center;
+	for (index = 0; index < king_globals.hill_point_count && index < NUMBEROF(king_globals.hill_points); index++)
+	{
+		real dx = king_globals.hill_points[index].x - center->x;
+		real dy = king_globals.hill_points[index].y - center->y;
+		real distance = square_root(dx * dx + dy * dy);
+
+		if (distance > farthest)
+			farthest = distance;
+	}
+	*radius = farthest;
+	return TRUE;
+}

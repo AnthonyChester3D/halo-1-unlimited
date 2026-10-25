@@ -2754,3 +2754,12 @@ animate:
 
 	return TRUE;
 }
+
+/* port: the bots' (port/linux/game/bots.c): a vehicle's type (a tank, a jeep, ... a turret) */
+short vehicle_bot_type(
+	long vehicle_index)
+{
+	struct vehicle_definition *definition = vehicle_specific_definition_get(object_get(vehicle_index)->definition_index);
+
+	return definition->vehicle_type;
+}

@@ -15,10 +15,14 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
   three connections. The countdown waits for it. A console joining a game in progress downloads the map first,
   then joins.
 - **Bots.** In the system link lobby the host presses Y to pick a bot mode: Off, Suggested (the map's
-  suggested player count, or 8), Max (16 players) or Custom (RT and LT set the count). Bots are named BOT plus
-  one of Halo's random names. They walk the whole map with Halo's own AI pathfinding, take teleporters, fight
-  (spotting, aiming, bursts, weapon choice and pickups, grenades, melee; only the other team in team games), and
-  leave to make room when a person joins. No vehicles or objectives yet.
+  suggested player count, or 8), Max (16 players) or Custom (RT and LT set the count), and Black for how well
+  they fight (Easy, Normal, Hard, Legendary). Bots are named BOT plus one of Halo's random names. They walk the
+  whole map with Halo's own AI pathfinding, take teleporters, crouch under low gaps, jump and crouch-jump onto
+  ledges, fight (spotting, aiming, bursts, weapon choice and pickups, grenades, melee; only the other team in team
+  games), switch to their other weapon and reload, scan with a sniper's scope, dodge vehicles coming at them, go
+  for power weapons and powerups, back off when hurt, play the objective (CTF, Oddball, King of the Hill, Race),
+  drive vehicles (a Warthog's driver waits for a gunner), man guns and turrets, ride along in teammates' vehicles,
+  and leave to make room when a person joins.
 - **END GAME.** The host has an END GAME item in the pause menu.
 - **Memory.** The texture cache borrows whatever part of Halo's 22 MB of tag memory the map leaves unused, from
   map load until the map closes. That's 12 to 14 MB on stock-sized maps. On a 128 MB console the texture cache

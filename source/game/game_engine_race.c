@@ -1685,3 +1685,12 @@ boolean game_engine_race_read_network_state(
 	csmemcpy(race_events.best_laps, state.best_laps, sizeof(race_events.best_laps));
 	return TRUE;
 }
+
+/* port: the bots' (port/linux/game/bots.c): whether the player can touch the race flag with this number now (the
+next one, or any one not touched this lap, by the race's type) */
+boolean game_engine_race_bot_can_touch(
+	long player_index,
+	long flag_number)
+{
+	return flag_number >= 0 && can_touch_team(player_index, flag_number);
+}

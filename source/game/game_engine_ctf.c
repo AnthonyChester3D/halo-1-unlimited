@@ -1673,3 +1673,28 @@ boolean game_engine_ctf_read_network_state(
 	}
 	return TRUE;
 }
+
+/* port: the bots' (port/linux/game/bots.c): a team's flag spot (where its flag goes home to, and where the team
+scores), its flag (NONE: none, as the attackers' in a one-flag game), and whether the flag's at home (untouched
+since it was put there); FALSE when the team has no spot */
+boolean game_engine_ctf_bot_flag(
+	long team_index,
+	real_point3d *spot,
+	long *weapon_index,
+	boolean *at_home)
+{
+	struct weapon_datum *weapon;
+
+	*weapon_index = NONE;
+	*at_home = FALSE;
+	if (team_index < 0 || team_index >= NUMBER_OF_CTF_TEAMS || !ctf_globals.flags[team_index])
+		return FALSE;
+	*spot = ctf_globals.flags[team_index]->position;
+	weapon = ctf_globals.weapon_indices[team_index] != NONE ? weapon_try_and_get(ctf_globals.weapon_indices[team_index]) : NULL;
+	if (weapon)
+	{
+		*weapon_index = ctf_globals.weapon_indices[team_index];
+		*at_home = !TEST_FLAG(weapon->weapon.flags, _ctf_weapon_handled_bit) && weapon->object.parent_object_index == NONE;
+	}
+	return TRUE;
+}
