@@ -7751,10 +7751,111 @@ real game_engine_get_starting_location_rating(
 /* port: the gametype's vehicles of each team (game_variant_options) */
 static byte game_engine_vehicles_placed[2][NUMBER_OF_VARIANT_VEHICLES];
 
+#if defined(OXBOX_STRIP)
+/* oxbox (test build 35): a vehicle placement, one of the scenario's vehicles (0x78 bytes: object_types.c's
+vehicle_data_definition). After the object's and the unit's fields come Halo PC's multiplayer team and spawn
+flags (port/linux/game/custom_edition_objects.c's custom_edition_vehicle_placement). The spawn flags' low byte
+names the game types the vehicle is placed in by default (slayer, ctf, king, oddball; race has none), the high
+byte the ones it's allowed in. Halo PC and Custom Edition place a map's vehicles by them; the Xbox's own maps
+have none (all 0), and Halo Map Porter keeps a ported map's. */
+struct game_engine_vehicle_placement
+{
+	struct scenario_object_datum object;
+	byte unit[0x30];
+	char multiplayer_team_index;
+	byte pad59;
+	word multiplayer_spawn_flags;
+	byte unused[0x1C];
+};
+
+typedef char verify_game_engine_vehicle_placement_spawn_flags_offset[
+	offsetof(struct game_engine_vehicle_placement, multiplayer_spawn_flags) == 0x5A ? 1 : -1];
+typedef char verify_game_engine_vehicle_placement_size[
+	sizeof(struct game_engine_vehicle_placement) == 0x78 ? 1 : -1];
+
+/* whether any of the map's vehicle placements has spawn flags (game_engine_vehicle_placement_begin) */
+static boolean game_engine_vehicle_spawn_flags_present;
+
+/* the spawn flag that places a vehicle by default in the running game type; NONE for race, which has none */
+static short game_engine_vehicle_default_spawn_bit(
+	void)
+{
+	switch (global_variant.game_engine_index)
+	{
+	case game_engine_slayer: return 0;
+	case game_engine_ctf: return 1;
+	case game_engine_king: return 2;
+	case game_engine_oddball: return 3;
+	}
+	return NONE;
+}
+
+/* the Vehicles option's ALL (_game_engine_vehicles_default): the map's placement is placed when its spawn flags
+place it in this game type, as on Halo PC; every placement when the map has no spawn flags (the Xbox's maps)
+or the game type has no flag (race) */
+static boolean game_engine_vehicle_spawn_allowed(
+	struct scenario_object_datum const *placement)
+{
+	short bit = game_engine_vehicle_default_spawn_bit();
+
+	return !game_engine_vehicle_spawn_flags_present || bit == NONE ||
+		TEST_FLAG(((struct game_engine_vehicle_placement const *)placement)->multiplayer_spawn_flags, bit);
+}
+#endif
+
 void game_engine_vehicle_placement_begin(
 	void)
 {
 	csmemset(game_engine_vehicles_placed, 0, sizeof(game_engine_vehicles_placed));
+#if defined(OXBOX_STRIP)
+	{
+		void platform_log(char const *format, ...);
+		struct scenario *scenario = global_scenario_get();
+		struct game_variant_options const *options;
+		static char const *const game_type_names[] = { "none", "ctf", "slayer", "oddball", "king", "race" };
+		char const *game_type;
+		short count, index, placed = 0;
+
+		game_engine_vehicle_spawn_flags_present = FALSE;
+		if (!game_engine || !scenario)
+			return;
+		count = (short)MIN(scenario->vehicles.count, SHORT_MAX);
+		for (index = 0; index < count && !game_engine_vehicle_spawn_flags_present; index++)
+		{
+			if (TAG_BLOCK_GET_ELEMENT(&scenario->vehicles, index,
+				struct game_engine_vehicle_placement)->multiplayer_spawn_flags)
+			{
+				game_engine_vehicle_spawn_flags_present = TRUE;
+			}
+		}
+		options = game_variant_options_get();
+		if (!count || options->vehicle_set[0] != _game_engine_vehicles_default ||
+			options->vehicle_set[1] != _game_engine_vehicles_default)
+		{
+			return;
+		}
+		/* (the log says what ALL places, a line a game) */
+		for (index = 0; index < count; index++)
+		{
+			if (game_engine_vehicle_spawn_allowed(&TAG_BLOCK_GET_ELEMENT(&scenario->vehicles, index,
+				struct game_engine_vehicle_placement)->object))
+			{
+				placed++;
+			}
+		}
+		game_type = VALID_INDEX(global_variant.game_engine_index, NUMBEROF(game_type_names)) ?
+			game_type_names[global_variant.game_engine_index] : "?";
+		if (!game_engine_vehicle_spawn_flags_present)
+			platform_log("vehicles: ALL places all %d of the map's vehicles (the map has no spawn flags)", count);
+		else if (game_engine_vehicle_default_spawn_bit() == NONE)
+			platform_log("vehicles: ALL places all %d of the map's vehicles (%s has no spawn flag)", count, game_type);
+		else
+		{
+			platform_log("vehicles: ALL places %d of the map's %d vehicles: those its spawn flags place in %s",
+				placed, count, game_type);
+		}
+	}
+#endif
 }
 
 /* a vehicle definition's type: the globals' multiplayer vehicles (warthog,
@@ -7842,6 +7943,13 @@ boolean game_engine_vehicle_placement_allowed(
 	set = options->vehicle_set[side];
 	if (set == VARIANT_VEHICLE_SET_PC)
 		return TRUE;
+#if defined(OXBOX_STRIP)
+	/* oxbox (test build 35): ALL places every vehicle the map places for the game type, as
+	game_engine_remap_vehicle keeps them (Halo Universal's Vehicles: All): a ported map's banshees, rocket
+	warthogs, turrets and vehicles of its own too, not only the three of its globals, whatever their names */
+	if (set == _game_engine_vehicles_default)
+		return game_engine_vehicle_spawn_allowed(placement);
+#endif
 	type = game_engine_variant_vehicle_type(TAG_BLOCK_GET_ELEMENT(palette, placement->palette_entry_index,
 		struct scenario_object_palette_entry)->reference.index);
 	/* (the map's own: the multiplayer ones of the globals, as the Xbox
