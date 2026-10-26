@@ -81,9 +81,17 @@ enum
 		P2P_SIGNATURE_SIZE,
 	MINIMUM_LISTING_SIZE = 2 + 1 + 2 + 1 + 4 + 4 + P2P_KEY_SIZE + P2P_TOKEN_SIZE + 3 + 3 + STAMP_SIZE +
 		P2P_SIGNATURE_SIZE,
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the Xbox's games alone are listed for it (their own topics:
+	p2p_internal.h), in its memory (port/oxbox) */
+	MAXIMUM_GAMES = 32,
+	MAXIMUM_TOMBSTONES = 32,
+	MAXIMUM_QUEUED = 16,
+#else
 	MAXIMUM_GAMES = 256,
 	MAXIMUM_TOMBSTONES = 256,
 	MAXIMUM_QUEUED = 64,
+#endif
 
 	/* milliseconds */
 	REPUBLISH_INTERVAL = 30000,
@@ -97,6 +105,16 @@ enum
 };
 
 static const char signature_label[] = "hceu-lobby-1";
+
+/* the version a listing has, and browsers take: the game's network version
+(HALO_PORT_NETWORK_VERSION) */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: an Xbox's own ("X" and 1), which no OpenCE build will have: the
+Xbox's games speak our 16-machine layout (port/oxbox) */
+#define LOBBY_VERSION 0x5801
+#else
+#define LOBBY_VERSION HALO_PORT_NETWORK_VERSION
+#endif
 
 /* (p2p.h's sizes of a locked listing's are p2p_internal.h's) */
 typedef char check_listing_sizes[P2P_LISTING_SIGNING_KEY_SIZE == P2P_KEY_SIZE &&
@@ -264,8 +282,8 @@ static int listing_make(unsigned char *bytes, int flags)
 	bytes[size++] = 'H';
 	bytes[size++] = 'L';
 	bytes[size++] = LISTING_FORMAT;
-	bytes[size++] = (unsigned char)(HALO_PORT_NETWORK_VERSION >> 8);
-	bytes[size++] = (unsigned char)HALO_PORT_NETWORK_VERSION;
+	bytes[size++] = (unsigned char)(LOBBY_VERSION >> 8);
+	bytes[size++] = (unsigned char)LOBBY_VERSION;
 	bytes[size++] = (unsigned char)flags;
 	put_long(bytes + size, ++lobby.sequence);
 	size += 4;
@@ -662,7 +680,7 @@ static void update_browsing(void)
 		int good;
 
 		memmove(lobby.queue, lobby.queue + 1, sizeof(*lobby.queue) * (size_t)(--lobby.queue_count));
-		if (!listing_read(queued.payload, queued.size, &listing) || listing.version != HALO_PORT_NETWORK_VERSION ||
+		if (!listing_read(queued.payload, queued.size, &listing) || listing.version != LOBBY_VERSION ||
 			!signing_key_hash(listing.key, key_hash) || memcmp(key_hash, queued.key_hash, P2P_KEY_HASH_SIZE))
 		{
 			continue;

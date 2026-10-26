@@ -210,6 +210,10 @@ void transport_push_key(
 XNADDR *transport_get_xnaddr(
 	XNADDR *address)
 {
+#if defined(OXBOX_NET_LWIP)
+	/* oxbox: the address now (the online builds' address can come after start-up) */
+	XNetGetTitleXnAddr(&global_address);
+#endif
 	*address = global_address;
 	return address;
 }
@@ -252,6 +256,11 @@ void transport_pop_key(
 short transport_initialize(
 	void)
 {
+#if defined(OXBOX_NET_LWIP)
+	/* oxbox: the online builds' XNet is our own (port/oxbox/net/oxbox_lwip_ws.c, on lwIP): XNetStartup below starts
+	it, and XNetGetTitleXnAddr never says "pending" (the address comes when DHCP, or the link-local fallback, gives
+	it: transport_get_xnaddr gets it again) */
+#endif
 	if (!transport_initialized)
 	{
 		WSADATA info = { 0 };

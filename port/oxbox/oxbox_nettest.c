@@ -54,6 +54,7 @@ int oxbox_net_test = 1;
 int oxbox_net_test_bypass = 1;
 unsigned long oxbox_net_test_host;      /* a.b.c.d as the bytes in memory order (network order), 0: none */
 unsigned long oxbox_net_test_dns;
+unsigned long oxbox_net_test_static;   /* (test 2: a fixed address, net/oxbox_lwip.c) */
 int oxbox_net_test_port = 5555;
 
 /* what the main menu shows (interface.c) */
@@ -94,6 +95,33 @@ static void show(const char *format, ...)
 	}
 }
 
+/* a result line from the online test 2's own stack (net/oxbox_lwip.c) */
+void oxbox_net_test_show(const char *line)
+{
+	show("%s", line);
+}
+
+/* the line below them that changes (test 3: internet play, net/p2p/oxbox_p2p_glue.c), logged when it does */
+void oxbox_net_test_status(const char *line)
+{
+	static int index = -1;
+
+	if (index < 0)
+	{
+		if (oxbox_net_test_line_count >= 8)
+			return;
+		index = oxbox_net_test_line_count;
+		oxbox_net_test_lines[index][0] = 0;
+		oxbox_net_test_line_count = index + 1;
+	}
+	if (strcmp(oxbox_net_test_lines[index], line))
+	{
+		platform_log("nettest: %s", line);
+		strncpy(oxbox_net_test_lines[index], line, sizeof(oxbox_net_test_lines[index]) - 1);
+	}
+}
+
+#if !defined(OXBOX_NET_LWIP)
 static void make_address(struct sockaddr_in *address, unsigned long host, unsigned short port)
 {
 	memset(address, 0, sizeof(*address));
@@ -543,6 +571,8 @@ static unsigned long __stdcall net_test_thread(void *parameter)
 	return 0;
 }
 
+#endif /* !OXBOX_NET_LWIP */
+
 /* transport_initialize's, when the network didn't start (no address in 10 seconds, or none to be had) */
 void oxbox_net_test_no_network(unsigned long status)
 {
@@ -559,7 +589,16 @@ void oxbox_net_test_start(void)
 	if (started || !oxbox_net_test)
 		return;
 	started = 1;
+#if defined(OXBOX_NET_LWIP)
+	{
+		/* (test 2: the own stack's test, net/oxbox_lwip.c) */
+		unsigned long __stdcall oxbox_lwip_test_thread(void *parameter);
+
+		thread = CreateThread(NULL, 0x4000, oxbox_lwip_test_thread, NULL, 0, NULL);
+	}
+#else
 	thread = CreateThread(NULL, 0x4000, net_test_thread, NULL, 0, NULL);
+#endif
 	if (thread)
 		CloseHandle(thread);
 	else

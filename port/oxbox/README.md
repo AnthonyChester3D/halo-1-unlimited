@@ -60,6 +60,24 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 
+## Online (the online branch's test builds)
+
+Built with `OXBOX_EXTRA="-DOXBOX_NET_TEST -DOXBOX_NET_LWIP -DOXBOX_NET_P2P"`:
+
+- **Its own network stack.** lwIP (`port/third_party/lwip`) runs on the Xbox's network card (nxdk's driver,
+  `port/third_party/nxdk_net`) in place of Halo's XNet, which can't reach the internet. System link and map sharing
+  run on it too, so these consoles play each other only, not XNet builds or retail Halo.
+- **Internet play, Xbox to Xbox.** OpenCE's internet play as our fork has it (`port/linux/src/p2p*.c`): MQTT brokers
+  for finding each other, STUN and hole punching through home routers, an encrypted UDP tunnel, and KCP carrying
+  connections. Its platform calls are in `net/`. A System Link game an online console hosts is listed for other
+  Xboxes (on their own topics and version: PC builds don't see them). The System Link list shows those games as
+  "@ name"; A reaches the host, and its game then joins as on a LAN. Map sharing works through the tunnel.
+- **Settings** in `opence.ini`: `online = 0` turns internet play off; `online_brokers`, `online_stun` (host:port
+  lists) and `online_tunnel_port` change where it goes.
+- The network test's lines (address, DNS, STUN, MQTT, ONLINE) show on the main menu in these test builds.
+- Third-party licences: lwIP (BSD-3-Clause), nxdk's driver and port (MIT, BSD-3-Clause) and KCP (MIT), each beside
+  its code and in the test builds' `OpenCE_online_licenses.txt`; Monocypher under its CC0 option.
+
 ## What isn't here
 
 The game data isn't in this repository, and the Halo XBE the build starts from isn't either. That's the same
@@ -108,4 +126,4 @@ How the pieces fit:
 This builds on [OpenCE](https://github.com/OpenCommunityEdition/OpenCE), the port of the Halo: Combat Evolved
 decompilation by [bnunu/halo-1](https://github.com/bnunu/halo-1), which was forked from
 [punpckhdq/halo](https://github.com/punpckhdq/halo). The map features come from the Halo Universal XBE. Maps for
-it are made with [Halo Map Porter](https://github.com/YOUR-GITHUB-NAME/halo-map-porter).
+it are made with [Halo Map Porter](https://github.com/AnthonyChester3D/halo-map-porter).

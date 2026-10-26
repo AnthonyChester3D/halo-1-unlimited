@@ -83,15 +83,27 @@ enum
 	/* a host needs a UDP stand-in for two or three ports of every other
 	machine, and a stream for each one's connection; one peer can have no
 	more than these */
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a 16-machine game's, in the Xbox's 64 MB (port/oxbox) */
+	MAXIMUM_PROXIES = 64,
+	MAXIMUM_PEER_PROXIES = 4,
+	MAXIMUM_LISTENERS = 32,
+	MAXIMUM_STREAMS = 32,
+#else
 	MAXIMUM_PROXIES = 512,
 	MAXIMUM_PEER_PROXIES = 4,
 	MAXIMUM_LISTENERS = 64,
 	MAXIMUM_STREAMS = 160,
+#endif
 	MAXIMUM_PEER_STREAMS = 4,
 	MAXIMUM_PEER_OPENING_STREAMS = 2,
 	/* the game's sockets' ports (xnet.c), and the ports it sent peers
 	datagrams from */
+#if defined(HALO_XBOX_TARGET)
+	MAXIMUM_GAME_PORTS = 16,
+#else
 	MAXIMUM_GAME_PORTS = 64,
+#endif
 	MAXIMUM_SENT_PORTS = 16,
 	/* sessions that ended, which do not come back */
 	MAXIMUM_RETIRED_SESSIONS = 16,
@@ -101,16 +113,29 @@ enum
 	MAXIMUM_OPENING_PEERS = 8,
 	/* stand-ins closed lately, whose traffic the game may not have read yet
 	(p2p_incoming) */
+#if defined(HALO_XBOX_TARGET)
+	MAXIMUM_CLOSED_PORTS = 32,
+#else
 	MAXIMUM_CLOSED_PORTS = 128,
+#endif
 	CLOSED_PORT_TIME = 5000,
 	/* a peer's stand-in used this lately is not closed for another: a peer
 	sending from ever new ports has a few a second, not one a datagram */
 	PROXY_REPLACE_TIME = 1000,
 	MAXIMUM_STUN_SERVERS = 4,
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: what a stream holds for the game (the rest waits in KCP), and
+	sends ahead: in the Xbox's memory, KCP's queues take a stream's window
+	from the heap */
+	STREAM_BUFFER_SIZE = 2048,
+	STREAM_CHUNK_SIZE = 1024,
+	STREAM_WINDOW = 32,
+#else
 	STREAM_BUFFER_SIZE = 16384,
 	STREAM_CHUNK_SIZE = 1024,
 	/* the most unacknowledged messages a stream sends ahead */
 	STREAM_WINDOW = 128,
+#endif
 	KCP_MTU = 1200,
 
 	/* milliseconds */
@@ -412,7 +437,23 @@ static struct
 
 /* the proxy (its index + 1) with each local port (all of theirs are on
 p2p.local_address) */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: looked for among the few (port/oxbox: 128 KB is an eighth of what
+a heavy map leaves free) */
+static int proxy_with_port(unsigned short port)
+{
+	int index;
+
+	for (index = 0; port && index < MAXIMUM_PROXIES; index++)
+	{
+		if (p2p.proxies[index].socket >= 0 && p2p.proxies[index].local_port == port)
+			return index + 1;
+	}
+	return 0;
+}
+#else
 static unsigned short proxy_by_port[65536];
+#endif
 
 static unsigned char identifier[P2P_IDENTIFIER_SIZE];
 /* this run's X25519 keys, which the identifier comes from: from an Ed25519
@@ -1540,7 +1581,9 @@ static void proxy_close(struct proxy *proxy)
 	if (proxy->socket < 0)
 		return;
 	close_socket(&proxy->socket);
+#if !defined(HALO_XBOX_TARGET)
 	proxy_by_port[proxy->local_port] = 0;
+#endif
 	remember_closed(0, proxy->local_port, proxy->peer, proxy->remote_port);
 	for (entry = 0; entry < peer->proxy_count; entry++)
 	{
@@ -1605,7 +1648,9 @@ static struct proxy *find_proxy(int peer_index, unsigned short remote_port, int 
 	free_proxy->used_time = p2p_now();
 	free_proxy->pinned_socket = -1;
 	peer->proxies[peer->proxy_count++] = (short)(free_proxy - p2p.proxies);
+#if !defined(HALO_XBOX_TARGET)
 	proxy_by_port[free_proxy->local_port] = (unsigned short)(free_proxy - p2p.proxies + 1);
+#endif
 	forget_closed(0, free_proxy->local_port);
 	return free_proxy;
 }
@@ -1737,9 +1782,15 @@ int p2p_incoming(int stream, unsigned long *address, unsigned short *port)
 			}
 		}
 	}
+#if defined(HALO_XBOX_TARGET)
+	else if (proxy_with_port(*port))
+	{
+		struct proxy const *proxy = &p2p.proxies[proxy_with_port(*port) - 1];
+#else
 	else if (proxy_by_port[*port])
 	{
 		struct proxy const *proxy = &p2p.proxies[proxy_by_port[*port] - 1];
+#endif
 
 		*address = p2p.peers[proxy->peer].virtual_address;
 		*port = proxy->remote_port;
@@ -1875,7 +1926,13 @@ void p2p_socket_port(int socket, int stream, int listening, unsigned short port)
 	}
 	/* the game listens for connections while it hosts (on any port but map
 	sharing's, which every player of a game listens on) */
-	if (stream && listening && port != network_short(P2P_MAP_SHARE_PORT))
+	if (stream && listening && port != network_short(P2P_MAP_SHARE_PORT)
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: nor Halo Universal's, which the Xbox's host shares maps on
+		(port/linux/game/hmp_share.c) */
+		&& port != network_short(5152)
+#endif
+		)
 		p2p.hosting_socket = socket;
 	/* (and no stand-in that closed has the port now) */
 	forget_closed(stream != 0, port);
@@ -2039,7 +2096,15 @@ static struct stream *stream_new(int peer_index, IUINT32 conversation)
 		stream->created_time = p2p_now();
 		ikcp_setoutput(stream->kcp, kcp_output);
 		ikcp_nodelay(stream->kcp, 1, LOOP_INTERVAL, 2, 1);
+#if defined(HALO_XBOX_TARGET)
+		ikcp_wndsize(stream->kcp, STREAM_WINDOW, STREAM_WINDOW);
+		/* (oxbox: KCP takes no receive window under 128 messages, which
+		three map downloads held from the heap, 430 KB, while the game read
+		them slower than they came) */
+		stream->kcp->rcv_wnd = STREAM_WINDOW;
+#else
 		ikcp_wndsize(stream->kcp, 256, 256);
+#endif
 		ikcp_setmtu(stream->kcp, KCP_MTU);
 		return stream;
 	}

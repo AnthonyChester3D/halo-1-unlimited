@@ -380,9 +380,9 @@ static void read_settings(const char *path)
 			p++;
 #if defined(OXBOX_NET_TEST)
 		/* (the online test's addresses: a.b.c.d, oxbox_nettest.c) */
-		if (same_text(name, "net_test_host") || same_text(name, "net_test_dns"))
+		if (same_text(name, "net_test_host") || same_text(name, "net_test_dns") || same_text(name, "net_test_static"))
 		{
-			extern unsigned long oxbox_net_test_host, oxbox_net_test_dns;
+			extern unsigned long oxbox_net_test_host, oxbox_net_test_dns, oxbox_net_test_static;
 			unsigned long address = 0, part = 0;
 			int parts = 0, part_digits = 0;
 
@@ -406,10 +406,44 @@ static void read_settings(const char *path)
 			{
 				if (same_text(name, "net_test_host"))
 					oxbox_net_test_host = address;
+				else if (same_text(name, "net_test_static"))
+					oxbox_net_test_static = address;
 				else
 					oxbox_net_test_dns = address;
 				platform_log("settings: %s from %s", name, path);
 			}
+			continue;
+		}
+#endif
+#if defined(OXBOX_NET_P2P)
+		/* (internet play's lists: host:port, host:port ...; port/oxbox/net/p2p/oxbox_p2p_glue.c, port/linux/src/p2p.c) */
+		if (same_text(name, "online_brokers") || same_text(name, "online_stun"))
+		{
+			extern char oxbox_online_brokers[256];
+			extern void oxbox_config_set(const char *name, const char *value);
+			char list[192];
+			int length = 0;
+
+			while (*p && *p != '\r' && length < (int)sizeof(list) - 3)
+				list[length++] = *p++;
+			while (length && (list[length - 1] == ' ' || list[length - 1] == '\t'))
+				length--;
+			list[length] = 0;
+			if (same_text(name, "online_brokers"))
+			{
+				memcpy(oxbox_online_brokers, list, (size_t)length + 1);
+			}
+			else
+			{
+				char quoted[194];
+
+				quoted[0] = '"';
+				memcpy(quoted + 1, list, (size_t)length);
+				quoted[length + 1] = '"';
+				quoted[length + 2] = 0;
+				oxbox_config_set("network.stun_servers", quoted);
+			}
+			platform_log("settings: %s = %s from %s", name, list, path);
 			continue;
 		}
 #endif
@@ -440,6 +474,44 @@ static void read_settings(const char *path)
 		{
 			extern int oxbox_net_test_port;
 			oxbox_net_test_port = value;
+		}
+#endif
+#if defined(OXBOX_NET_P2P)
+		else if (same_text(name, "online"))
+		{
+			extern int oxbox_online;
+			oxbox_online = value != 0;
+		}
+#if defined(OXBOX_NET_TEST)
+		else if (same_text(name, "net_test_join"))
+		{
+			extern int oxbox_net_test_join;
+			oxbox_net_test_join = value != 0;
+		}
+#endif
+		else if (same_text(name, "online_tunnel_port"))
+		{
+			extern void oxbox_config_set(const char *name, const char *value);
+			char number[8];
+			int length = 0, rest = value;
+
+			do
+				number[length++] = (char)('0' + rest % 10), rest /= 10;
+			while (rest && length < 6);
+			/* (the digits the other way round) */
+			{
+				int index;
+
+				for (index = 0; index < length / 2; index++)
+				{
+					char swap = number[index];
+
+					number[index] = number[length - 1 - index];
+					number[length - 1 - index] = swap;
+				}
+			}
+			number[length] = 0;
+			oxbox_config_set("network.tunnel_port", number);
 		}
 #endif
 		else
@@ -475,7 +547,7 @@ int oxbox_entry(int argc, char **argv, char **envp)
 	/* OpenCE's larger globals live over the retail game's code and globals, which nothing runs or reads: zero
 	them before anything uses them (they are .bss) */
 	/* (only the .bss parts: the rest of the regions holds OpenCE code and data the XBE loaded there,
-	port/oxbox/tools/gen_overlay.py) */
+	mine/gen_overlay.py) */
 	for (i = 0; i < sizeof(oxbox_overlay_zero) / sizeof(oxbox_overlay_zero[0]); i++)
 		if (oxbox_overlay_zero[i][1] > oxbox_overlay_zero[i][0])
 			memset(oxbox_overlay_zero[i][0], 0, oxbox_overlay_zero[i][1] - oxbox_overlay_zero[i][0]);
@@ -512,7 +584,7 @@ int oxbox_entry(int argc, char **argv, char **envp)
 
 /* ---------- DirectSound's effects image, from the XBE's file
 
-port/oxbox/tools/mkxbe.py puts it after the sections (the loader leaves it on the disc) and its offset and size in this
+mine/mkxbe.py puts it after the sections (the loader leaves it on the disc) and its offset and size in this
 marker; sound_dsound_xbox.c reads it for IDirectSound_DownloadEffectsImage, which copies it to the audio
 processor, and frees it: 15 KB that a game no longer carries. */
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_effects_marker = { "OXFXIMG1", 0, 0 };
@@ -549,7 +621,7 @@ void oxbox_effects_image_free(void *image)
 }
 
 /* OpenCE's pictures (16 KB each: the main menu's OPTIONS and PROFILES words, normal and highlighted, then the
-postgame's 5 gametype pictures), after the effects image in the file (port/oxbox/tools/mkxbe.py): picture `index` read into
+postgame's 5 gametype pictures), after the effects image in the file (mine/mkxbe.py): picture `index` read into
 buffer (a texture's memory) when it's loaded; nothing of them in memory otherwise. TRUE when read */
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_words_marker = { "OXWORDS1", 0, 0 };
 

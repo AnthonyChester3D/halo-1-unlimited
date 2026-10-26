@@ -22,10 +22,40 @@ static const struct { const char *name; int type; const char *value; } config_se
 #include "../oxbox_config_table.h"
 };
 
+#if defined(OXBOX_NET_P2P)
+/* settings opence.ini sets (oxbox_entry.c: the online test builds' online, online_stun ...), as the table has them:
+true / false, a number, or a string in quotes */
+static struct { const char *name; char value[192]; } config_overrides[8];
+
+void oxbox_config_set(const char *name, const char *value)
+{
+	unsigned int index;
+
+	for (index = 0; index < sizeof(config_overrides) / sizeof(config_overrides[0]); index++)
+	{
+		if (!config_overrides[index].name || !strcmp(config_overrides[index].name, name))
+		{
+			config_overrides[index].name = name;
+			strncpy(config_overrides[index].value, value, sizeof(config_overrides[index].value) - 1);
+			return;
+		}
+	}
+}
+
+#endif
+
 static const char *config_value(const char *name)
 {
 	unsigned int index;
 
+#if defined(OXBOX_NET_P2P)
+	for (index = 0; index < sizeof(config_overrides) / sizeof(config_overrides[0]) && config_overrides[index].name;
+		index++)
+	{
+		if (!strcmp(config_overrides[index].name, name))
+			return config_overrides[index].value;
+	}
+#endif
 	for (index = 0; index < sizeof(config_settings) / sizeof(config_settings[0]); index++)
 		if (!strcmp(config_settings[index].name, name))
 			return config_settings[index].value;
@@ -212,18 +242,22 @@ void platform_show_message(char const *title, char const *message) { platform_lo
 /* positioned stereo for streams: the Xbox's DirectSound positions them itself */
 void dsound_sdl_stream_set_stereo_position(void *stream, BOOL positioned, float pan, float gain) { }
 
-/* ---------- internet play (p2p.c) and voice chat (voice_audio.c): system link only, no voice */
+/* ---------- internet play (p2p.c) and voice chat (voice_audio.c): system link only, no voice (the online test
+builds with OXBOX_NET_P2P have internet play: OpenCE's, port/oxbox/net) */
 
+#if !defined(OXBOX_NET_P2P)
 void p2p_blake2b_256(const void *data, unsigned long size, unsigned char *digest) { memset(digest, 0, 32); }
 void p2p_discord_identity(char *id, int id_size, char *name, int name_size)
 {
 	if (id_size > 0) id[0] = 0;
 	if (name_size > 0) name[0] = 0;
 }
+#endif
 void p2p_discord_sanitize(char *destination, int size, const char *source, int name)
 {
 	if (size > 0) { strncpy(destination, source, size - 1); destination[size - 1] = 0; }
 }
+#if !defined(OXBOX_NET_P2P)
 void p2p_hardware_id(char *hex, int size) { if (size > 0) hex[0] = 0; }
 void p2p_hardware_id_sanitize(char *destination, int size, const char *source)
 {
@@ -248,6 +282,7 @@ void p2p_set_game_player_counts(int count, int maximum) { }
 void p2p_set_hosting_allowed(int allowed) { }
 void p2p_set_hosting_password(const char *password) { }
 void p2p_set_hosting_public(int is_public) { }
+#endif
 
 int voice_audio_encode(const float *frame, int bitrate, unsigned char *packet, int maximum) { return 0; }
 void voice_audio_forget(int speaker) { }
@@ -259,10 +294,13 @@ void voice_audio_play(int speaker, unsigned short sequence, const unsigned char 
 int voice_audio_read_frame(float *frame) { return 0; }
 void voice_audio_set_volume(float volume) { }
 
-/* random bytes for voice keys (unused: no voice); XNet's generator */
+#if !defined(OXBOX_NET_P2P)
+/* random bytes for voice keys (unused: no voice); XNet's generator (internet play's builds: their own,
+port/oxbox/net/oxbox_p2p_posix.c) */
 INT WINAPI XNetRandom(BYTE *buffer, UINT size);
 
 void posix_random_bytes(void *buffer, unsigned long size)
 {
 	XNetRandom(buffer, size);
 }
+#endif

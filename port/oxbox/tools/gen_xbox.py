@@ -44,9 +44,23 @@ plat_cflags = ' '.join(abi + ['-std=gnu11', '-D_GNU_SOURCE', '-DHALO_LINUX_PLATF
 zlib_cflags = ' '.join(abi + ['-std=gnu11', '-DZ_PREFIX', '-Dz_errmsg=z_port_errmsg', '-w'])
 musl_cflags = ' '.join(abi + ['-std=gnu11', '-w', '-Iport/third_party/musl-math/include',
                               '-include port/third_party/musl-math/include/libm.h'])
+# (the online branch's own network stack: lwIP, nxdk's network card driver and our glue in port/oxbox/net; only the
+# online test builds reference it: --gc-sections leaves it out of the others)
+net_cflags = ' '.join(abi + ['-std=gnu11', '-w', '-Os', '-Wno-error=int-conversion', '-Wno-error=incompatible-pointer-types',
+                             f'-I{X}/net', '-Iport/third_party/nxdk_net', '-Iport/third_party/lwip/src/include',
+                             '-Iport/third_party/monocypher'])
+# (internet play, the online test builds with OXBOX_NET_P2P alone: OpenCE's p2p layer as our fork has it
+# (port/linux/src/p2p*.c), Monocypher and KCP, compiled beside our platform.h and pthread.h (port/oxbox/net/p2p); its
+# platform calls are port/oxbox/net/oxbox_p2p_posix.c's)
+P2P = '-DOXBOX_NET_P2P' in os.environ.get('OXBOX_EXTRA', '').split()
+p2p_cflags = ' '.join(abi + ['-std=gnu11', '-w', '-Os', '-D_GNU_SOURCE', '-DHALO_LINUX_PLATFORM_LAYER', f'-I{X}/net/p2p',
+                             '-include port/linux/include/halo_linux_prefix.h', f'-include {X}/include/halo_msvc_semantics.h',
+                             f'-I{X}/include', '-Iport/include', '-Iport/linux/include', '-Iport/linux/src',
+                             '-Iport/third_party/kcp', '-Iport/third_party/monocypher', '-idirafter port/include/xdk'])
 
 print(f'game_cflags = {game_cflags}\nplat_cflags = {plat_cflags}\nzlib_cflags = {zlib_cflags}\nmusl_cflags = {musl_cflags}')
-for r in ('game', 'plat', 'zlib', 'musl'):
+print(f'net_cflags = {net_cflags}\np2p_cflags = {p2p_cflags}')
+for r in ('game', 'plat', 'zlib', 'musl', 'net', 'p2p'):
     print(f'rule cc_{r}\n  command = clang -MMD -MF $out.d ${r}_cflags -c $in -o $out 2> $out.err || (cat $out.err; exit 1)'
           f'\n  depfile = $out.d\n  deps = gcc\n  description = CC $in')
 print('rule copy\n  command = cp $in $out')
@@ -87,6 +101,20 @@ for name in ('adler32.c', 'crc32.c', 'inffast.c', 'inflate.c', 'inftrees.c', 'un
     add(f'port/third_party/zlib/{name}', 'zlib', 'zlib')
 for s in sorted(Path('port/third_party/musl-math/src').glob('*.c')):
     add(s, 'musl')
+LWIP = 'port/third_party/lwip/src'
+for s in (sorted(Path(LWIP, 'core').glob('*.c')) + sorted(Path(LWIP, 'core/ipv4').glob('*.c')) +
+          sorted(Path(LWIP, 'api').glob('*.c')) + [Path(LWIP, 'netif/ethernet.c')] +
+          sorted(Path('port/third_party/nxdk_net').glob('*.c')) + sorted(Path(X, 'net').glob('*.c'))):
+    add(s, 'net', 'net')
+if P2P:
+    # (copied beside nothing, as the port units above are: their own folder's platform.h is the PC's)
+    for name in ('p2p.c', 'p2p_crypto.c', 'p2p_lobby.c', 'p2p_signal.c'):
+        c = f'{B}/portcopy/{name}'
+        print(f'build {c}: copy port/linux/src/{name}')
+        add(c, 'p2p', 'p2p')
+    for s in ([Path('port/third_party/kcp/ikcp.c'), Path('port/third_party/monocypher/monocypher.c'),
+               Path('port/third_party/monocypher/monocypher-ed25519.c')] + sorted(Path(X, 'net/p2p').glob('*.c'))):
+        add(s, 'p2p', 'p2p')
 for s in sorted(Path(X).glob('*.c')):
     # (the perf log reads the game's structures: a game unit; link.ld puts it in its own section, OXPERF)
     add(s, 'game' if s.name == 'oxbox_perf.c' else 'plat', 'xbox')

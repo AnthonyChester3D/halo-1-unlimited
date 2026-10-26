@@ -1,0 +1,4 @@
+lwIP 2.2.1 (STABLE-2_2_1_RELEASE, commit 77dcd25a), the TCP/IP stack of the Xbox's online play (port/oxbox/net).
+From https://github.com/lwip-tcpip/lwip: src/core, src/core/ipv4, src/api, src/netif/ethernet.c and their headers (with netif/ppp/ppp_opts.h and ppp_impl.h, which the core includes; PPP is off),
+unchanged (no IPv6, PPP, SLIP, 6LoWPAN or the apps). Licence: COPYING (BSD-3-Clause), whose notice the builds
+that use it carry.

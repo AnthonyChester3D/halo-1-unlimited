@@ -1,0 +1,16 @@
+The Xbox network card driver (nvnetdrv) and lwIP's Xbox port (sys_arch, arch/), from nxdk
+(https://github.com/XboxDev/nxdk, lib/net, commit a6c31ee). Licences: LICENSE (MIT for nvnetdrv.c and nvnetdrv.h,
+BSD-3-Clause for the rest), whose notices the builds that use them carry.
+
+Changes for Halo 1 Unlimited's online branch (each marked "oxbox:"):
+- The kernel calls come from port/oxbox/net/oxbox_kernel.h (the kernel's export table by ordinal: Halo's XBE imports
+  only what Halo used) in place of nxdk's xboxkrnl.h, and the card's registers from port/oxbox/net/nvnet_regs.h in
+  place of nvnetdrv_regs.h.
+- arch/cc.h: our log for lwIP's messages; lwIP's own mem_ptr_t; the C library's struct timeval.
+- sys_arch.c: threads get the priority lwIP asks for (its own thread above the game's).
+- nvnetdrv_lwip.c, with OXBOX_RX_COPY (lwipopts.h): a received frame is copied into an lwIP buffer and the card's
+  buffer given back at once (zero-copy let a few full TCP windows hold every card buffer, and the card stopped
+  receiving); a frame in more pieces than the card takes (4) is sent from a one-buffer copy (it was dropped, and a
+  TCP connection could stop for good). No PPPoE include.
+- nvnetdrv_lwip.c, with OXBOX_NET_P2P (internet play's builds): each received frame's arrival time, at the cycle, goes
+  to the pool its keys' random bytes come from (port/oxbox/net/oxbox_p2p_posix.c).

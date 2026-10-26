@@ -1897,6 +1897,10 @@ static boolean create_and_begin_editing_new_gametype_profile(
 	return result;
 }
 
+#if defined(OXBOX_NET_P2P)
+boolean oxbox_online_row_join(void const *server);
+#endif
+
 static boolean network_game_join_game_from_server_list(
 	struct widget_instance *widget,
 	struct event_record *event,
@@ -1920,6 +1924,15 @@ static boolean network_game_join_game_from_server_list(
 			if ((word)generated_count > (word)zero)
 			{
 				server = ((byte **)widget->generated_list)[widget->data3C.selected_index];
+#if defined(OXBOX_NET_P2P)
+				/* oxbox: a game listed online: its host is reached first, then its own row takes this one's
+				place (port/linux/game/hmp_online.c) */
+				if (oxbox_online_row_join(server))
+				{
+					ui_play_audio_feedback_sound(2);   /* (forward) */
+					return FALSE;
+				}
+#endif
 				if (server[0xE0] == TRUE)
 				{
 					if (*(short *)(server + 0xDE) == zero)

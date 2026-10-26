@@ -30,7 +30,12 @@ enum
 	P2P_LINK_SIZE = 12 + 2 * (P2P_KEY_HASH_SIZE + P2P_TOKEN_SIZE) + 1,
 	/* the most machines one tunnels to: a host and the rest of a system
 	link game's 128 machines (include/halo_port_limits.h) */
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the Xbox's games have 16 machines (port/oxbox) */
+	P2P_MAXIMUM_PEERS = 15,
+#else
 	P2P_MAXIMUM_PEERS = 127,
+#endif
 	/* the other players of its game a machine asks to reach at once
 	(p2p_reach_player) */
 	P2P_MAXIMUM_PLAYER_JOINS = 8,
@@ -53,8 +58,15 @@ typedef char p2p_listing_invite_size_assert[P2P_LISTING_INVITE_SIZE == P2P_LINK_
 
 /* the prefix of a public game's slot (a key hash in hex follows), and the
 topic of queries (p2p_lobby.c) */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the Xbox's games are listed apart (port/oxbox: they speak our
+16-machine layout, which OpenCE's builds don't) */
+#define P2P_LOBBY_SLOT_PREFIX "hceu/3/xbox/lobby/s/"
+#define P2P_LOBBY_QUERY_TOPIC "hceu/3/xbox/lobby/q"
+#else
 #define P2P_LOBBY_SLOT_PREFIX "hceu/3/lobby/s/"
 #define P2P_LOBBY_QUERY_TOPIC "hceu/3/lobby/q"
+#endif
 
 /* internet play's state (p2p.c), which the game's threads and the p2p
 thread share */

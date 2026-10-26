@@ -936,6 +936,11 @@ static void difficulty_select_menu_update_extended_description(
 	return;
 }
 
+#if defined(OXBOX_NET_P2P)
+int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *available, int available_count,
+	short *select);
+#endif
+
 static void server_list_menu_update(
 	struct widget_instance *widget)
 {
@@ -995,6 +1000,17 @@ static void server_list_menu_update(
 			}
 		}
 
+#if defined(OXBOX_NET_P2P)
+		/* oxbox: other Xboxes' games listed online, after this LAN's (port/linux/game/hmp_online.c) */
+		{
+			short reached_row = NONE;
+
+			displayed_server_count = oxbox_online_add_rows((void **)displayed_servers, (int)displayed_server_count,
+				MAXIMUM_NETWORK_ADVERTISED_GAMES, available_games, MAXIMUM_NETWORK_ADVERTISED_GAMES, &reached_row);
+			if (reached_row != NONE)
+				widget->parameters.list.selected_list_item_index = reached_row;
+		}
+#endif
 		widget->parameters.list.list_items = displayed_servers;
 		widget->parameters.list.number_of_items = (word)displayed_server_count;
 		widget->parameters.list.selected_list_item_index = (short)CEILING(

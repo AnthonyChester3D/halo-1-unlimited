@@ -93,11 +93,20 @@ enum
 	push out (one each UNPROVEN_ANSWER_INTERVAL at most, after the first
 	few: about 11 seconds), so a joiner's proof, which follows its answer at
 	once, finds its own */
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: fewer kept, in the Xbox's memory (port/oxbox) */
+	MAXIMUM_ASKERS = 32,
+#else
 	MAXIMUM_ASKERS = 256,
+#endif
 	/* the requests a session was made from, which make none again (a
 	host takes at most a few new players a minute: this is hours of them;
 	one is not forgotten while its host nonce lasts: USED_REQUEST_TIME) */
+#if defined(HALO_XBOX_TARGET)
+	MAXIMUM_USED_REQUESTS = 128,
+#else
 	MAXIMUM_USED_REQUESTS = 1024,
+#endif
 	/* (a slot's: hceu/3/lobby/s/ and a key hash in hex) */
 	TOPIC_SIZE = 64,
 	NONCE_SIZE = 8,
@@ -150,7 +159,13 @@ enum
 	/* a host's work of the keys of requests from keys it has not met (a
 	millisecond or more each, on the thread the tunnels run on): this many
 	at once, and one more each this often */
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a key's work takes a 733 MHz Pentium III several
+	milliseconds, on a thread above the game's: a few at once */
+	MAXIMUM_KEY_WORK = 4,
+#else
 	MAXIMUM_KEY_WORK = 32,
+#endif
 	KEY_WORK_INTERVAL = 50,
 	/* a host's answers to requests not proven yet, which anyone with the
 	invite can send from any number of keys: this many at once, and one more

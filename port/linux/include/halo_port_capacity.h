@@ -56,7 +56,7 @@ window (port/linux/src/platform.h), whose pages are backed as they are used.
 Android's window is 128 MB, as the web build's, and its cache the Xbox's. */
 
 #if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
-/* oxbox: the stripped build with its .bss over the retail game's unused code and globals (port/oxbox/tools/gen_overlay.py)
+/* oxbox: the stripped build with its .bss over the retail game's unused code and globals (mine/gen_overlay.py)
 has 7.6 MB free in a game with 0x280; 0x4AC (18.7 MB, test build 06: plus the PC-sized heap buffers and a 256 KB XNet pool) leaves about 0.7 MB in a system link game, retail Halo leaves 0.5 MB */
 /* (test build 18: 0x536, 20.8 MB: Halo Universal's map features in (~94 KB), and 370 KB of sizes trimmed: script
 help texts, the profiler's per-section history, the update rings, vehicle homes, light and lens flare caches, damage
@@ -69,7 +69,13 @@ more debug buffers left out: 448 KB more)
    (test build 08: 0x4EC, 19.7 MB: asserts without their text, cold code compiled for size, smaller debug
 buffers, and OpenCE code and data placed over the retail game's unused code as well: 1.1 MB more) */
 /* (test build 30: 0x556, 21.3 MB: the AI's pools trimmed and the game state as big as its pools: 512 KB more) */
+#if defined(OXBOX_NET_P2P)
+/* (the online test builds with internet play: 17 pages, 272 KB, to OpenCE's p2p layer, Monocypher and KCP, so that a game
+has build 40's free memory) */
+#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x545
+#else
 #define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x556
+#endif
 #elif defined(HALO_ARM64_GUEST) || defined(HALO_WEB)
 #define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x280 /* (xbox: 0x580; the proof of concept frees 12 MB for its larger image) */
 #else
