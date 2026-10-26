@@ -1295,7 +1295,7 @@ void hmp_menu_memory_release(void)
 }
 
 /* the main menu's words OpenCE changes (hmp_game.c): GAME DEMOS shown as OPTIONS, SETTINGS as PROFILES (pictures
-made from ui.map's letters by port/oxbox/tools/mkword.py, kept in the XBE's file past what the loader loads: xbox/oxbox_entry.c
+made from ui.map's letters by mine/mkword.py, kept in the XBE's file past what the loader loads: xbox/oxbox_entry.c
 oxbox_picture_read). TRUE when this bitmap is one of them, read */
 static boolean menu_word_read(struct bitmap_data *bitmap, unsigned char *buffer, long size)
 {
@@ -1319,6 +1319,9 @@ boolean hmp_texture_read(struct bitmap_data *bitmap, void *buffer, long size)
 	unsigned long got = 0;
 	HANDLE file = INVALID_FILE;
 	if ((bitmap->tag_index & 0xffff0000) != FAKE_TAG) return menu_word_read(bitmap, (unsigned char *)buffer, size);
+#if defined(OXBOX_NET_P2P)
+	if (hmp_online_picture_read(i, buffer, size)) return TRUE;   /* (ONLINE GAMES: 0xfe00) */
+#endif
 	if (i >= FAKE_ICON_BASE)
 	{
 		if (!hmp_browse_icon_read(i - FAKE_ICON_BASE, buffer, size)) memset(buffer, 0, size);
@@ -1489,6 +1492,10 @@ static wchar_t *live_name(void)
 struct bitmap_data *custom_edition_maps_picture(long bitmap_tag_index, short *frame_index)
 {
 	long i = *frame_index - HMP_NAME_BASE;
+#if defined(OXBOX_NET_P2P)
+	struct bitmap_data *online_picture = hmp_online_picture(bitmap_tag_index, frame_index);   /* (ONLINE GAMES) */
+	if (online_picture) return online_picture;
+#endif
 	if (*frame_index < HMP_NAME_BASE || bitmap_tag_index == NONE || csstrcasecmp(tag_get_name(bitmap_tag_index), LEVEL_PICTURES_TAG_NAME))
 		return NULL;
 	*frame_index = HMP_UNKNOWN_PICTURE;

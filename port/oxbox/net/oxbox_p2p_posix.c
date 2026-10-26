@@ -14,7 +14,8 @@ play (OXBOX_NET_P2P), which have our own network stack (OXBOX_NET_LWIP).
   the processor's cycle counter around memory reads that the GPU's screen refresh and the interrupts slow at random,
   and the arrival times of the card's frames (oxbox_entropy_frame, from nvnetdrv_lwip.c), at the cycle. Each request
   is answered from ChaCha20 with a key made from the pool and the last key, then replaced (fast key erasure).
-- No UPnP yet (the router isn't asked to forward the tunnel's port), no invite links (no clipboard, no command line).
+- UPnP (the router asked to forward the tunnel's port) is oxbox_upnp.c's. No invite links (no clipboard, no command
+  line).
 */
 
 #include "lwip/opt.h"
@@ -616,23 +617,7 @@ unsigned int oxbox_lwip_random(void)
 
 /* ---------- what the Xbox doesn't have */
 
-/* the router isn't asked to forward the tunnel's port (UPnP): no miniupnpc on the Xbox yet */
-int posix_upnp_forward_udp(unsigned short port, unsigned short preferred_port, unsigned long *external_address,
-	unsigned short *external_port, char *error, int error_size)
-{
-	(void)port;
-	(void)preferred_port;
-	(void)external_address;
-	(void)external_port;
-	if (error && error_size > 0)
-		halo_linux_snprintf(error, (size_t)error_size, "no UPnP on the Xbox yet");
-	return 0;
-}
-
-void posix_upnp_stop_forwarding_udp(unsigned short external_port)
-{
-	(void)external_port;
-}
+/* (UPnP: oxbox_upnp.c) */
 
 int posix_command_line_argument(int index, char *buffer, unsigned long size)
 {

@@ -158,6 +158,22 @@ assert mark > 0 and d.find(b'OXWORDS1', mark + 1) < 0, 'menu words marker'
 while len(d) % 16: d.append(0)
 struct.pack_into('<II', d, mark + 8, len(d), len(words))
 d += words
+# the online test builds' ONLINE GAMES header (DXT3 512 x 64, port/oxbox/tools/mkheader.py), if the build has its marker
+# (OXONLIN1: oxbox_entry.c, OXBOX_NET_P2P only), the same way
+mark = d.find(b'OXONLIN1')
+if mark > 0:
+    _header = os.path.join(ROOT, 'port', 'oxbox', 'online_games.dxt3')
+    if os.path.exists(_header):
+        header = open(_header, 'rb').read()
+    else:
+        # (not in the repository: made from the game's own ui.map art by mkheader.py. Without it ONLINE PLAY's games
+        # list has no header)
+        print('note: port/oxbox/online_games.dxt3 not found: the ONLINE GAMES header will be blank')
+        header = bytes(32768)
+    assert len(header) == 32768 and d.find(b'OXONLIN1', mark + 1) < 0
+    while len(d) % 16: d.append(0)
+    struct.pack_into('<II', d, mark + 8, len(d), len(header))
+    d += header
 cert = struct.unpack_from('<I', d, 0x118)[0] - base
 # Halo's own title ID, name and keys, as in the retail XBE (test build 19): the profiles and gametypes are the retail
 # game's, read and written in its formats and signed with its keys. What retail Halo can't share is kept apart:

@@ -538,6 +538,9 @@ long hmp_options_dispatch(struct widget_instance *root, struct event_record *eve
 	if (!root || event->type != 3) return 0;
 	for (local = 0; local < 4 && ui_widget_get_active_widget(local) != root; local++) ;   /* (the main menu is anyone's: its slot) */
 	if (local > 3) return 0;
+#if defined(OXBOX_NET_P2P)
+	hmp_online_dispatch(root, event);                 /* (SYSTEM LINK PLAY or ONLINE PLAY: the LAN or the internet) */
+#endif
 	if (gametypes_dispatch(root, event)) return 1;
 	press = event->data.button.value == 1;
 	if (is_options(local, root))
@@ -585,6 +588,9 @@ wchar_t *hmp_game_string(short index)
 	wchar_t *d;
 	char const *a;
 	if (index == _string_options_text) return hmp_game_globals.options_text;
+#if defined(OXBOX_NET_P2P)
+	if (index >= HMP_ONLINE_STRING_BASE && index < HMP_ONLINE_STRING_BASE + 0x10) return hmp_online_string(index);
+#endif
 	if (index < _string_item || index >= _string_item + NUMBER_OF_GAME_STRINGS) return NULL;
 	d = hmp_game_globals.strings[index - _string_item];
 	if (!d[0]) for (a = game_strings[index - _string_item]; (*d++ = (unsigned char)*a++) != 0; ) ;
@@ -687,6 +693,9 @@ void hmp_game_tick(void)
 	short k;
 	saves_backup();
 	for (k = 0; k < 4; k++) { is_dialog(k, NULL); is_options(k, NULL); main_menu_check(k); }
+#if defined(OXBOX_NET_P2P)
+	for (k = 0; k < 4; k++) if (!game_engine) hmp_online_tick(k);   /* (ONLINE PLAY in the Multiplayer menu) */
+#endif
 }
 
 #endif /* HALO_XBOX_TARGET */

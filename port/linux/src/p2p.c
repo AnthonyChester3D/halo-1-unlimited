@@ -1207,7 +1207,11 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short 
 				p2p.joining = 0;
 				p2p_signal_stop_joining();
 			}
+#if defined(HALO_XBOX_TARGET)
+			platform_log("Internet play: the host's game is listed under Multiplayer, Online Play");
+#else
 			platform_log("Internet play: the host's game is listed under Multiplayer, System Link");
+#endif
 		}
 	}
 	else if (same)

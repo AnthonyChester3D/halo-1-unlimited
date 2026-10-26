@@ -881,6 +881,17 @@ static void multiplayer_type_menu_update_extended_description(
 			animation.current_frame_index = index;
 		list_widget->parameters.list.extended_description->child->next->
 			parameters.text_box.string_list_index = index;
+#if defined(OXBOX_NET_P2P)
+		/* oxbox: ONLINE PLAY's in the Multiplayer list, and the items' after it (port/linux/game/hmp_online.c) */
+		{
+			extern void hmp_online_multiplayer_description(struct widget_instance *list, short index, short *picture,
+				short *text);
+
+			hmp_online_multiplayer_description(list_widget, index,
+				&list_widget->parameters.list.extended_description->child->animation.current_frame_index,
+				&list_widget->parameters.list.extended_description->child->next->parameters.text_box.string_list_index);
+		}
+#endif
 	}
 	return;
 }

@@ -9,6 +9,7 @@ Halo Universal's map features, ported to OpenCE on the Xbox (hmp_*.c, the Xbox b
 	              the postgame's favorite button and its "<gametype> on <map>" line
 	hmp_stats.c   play stats, favorites, hidden maps and the remembered sort (T:\hmp_stats.txt)
 	hmp_game.c    the host's END GAME in the pause menu
+	hmp_online.c  ONLINE PLAY in the Multiplayer menu (the online test builds, OXBOX_NET_P2P)
 	hmp_share.c   map sharing: a client missing the host's folder map (or holding another build of it) downloads it
 	              from the host (TCP 5152), and the background thread that writes files
 
@@ -45,6 +46,7 @@ enum
 	HMP_DESCRIPTION_BASE = 0x6000,  /* its description, wrapped, with the browser's lines on top */
 	HMP_LIVE_NAME = 0x7008,         /* (past ui_widget.c's kills-to-win descriptions, 0x7000-0x7005) the lobby's map name: map sharing's status while it runs, else the map's name */
 	HMP_STRING_BASE = 0x7010,       /* hmp_game.c's and hmp_browse.c's own texts (0x7010-0x70ff) */
+	HMP_ONLINE_STRING_BASE = 0x7090, /* hmp_online.c's (the online test builds: 0x7090-0x709f) */
 	HMP_STOCK_DESCRIPTION_BASE = 0x7100, /* a stock map's description with the browser's lines on top */
 	HMP_MISSING_NAME_BASE = 0x7200, /* a map this console hasn't (a game in the browser): its folder's name */
 	HMP_MISSING_NAMES = 8,
@@ -174,6 +176,15 @@ boolean hmp_game_dispatch(struct widget_instance *root, struct event_record *eve
 void hmp_game_after_dispatch(struct widget_instance *root);
 wchar_t *hmp_game_string(short string_index);
 void hmp_game_tick(void);
+
+/* ---------- prototypes/HMP_ONLINE.C (the online test builds, OXBOX_NET_P2P) */
+
+void hmp_online_tick(short local_player_index);
+void hmp_online_dispatch(struct widget_instance *root, struct event_record *event);
+void hmp_online_multiplayer_description(struct widget_instance *list, short index, short *picture, short *text);
+wchar_t *hmp_online_string(short string_index);
+struct bitmap_data *hmp_online_picture(long bitmap_tag_index, short *frame_index);
+boolean hmp_online_picture_read(long fake_index, void *buffer, long size);
 
 /* ---------- prototypes/HMP_SHARE.C */
 

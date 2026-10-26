@@ -69,11 +69,16 @@ Built with `OXBOX_EXTRA="-DOXBOX_NET_TEST -DOXBOX_NET_LWIP -DOXBOX_NET_P2P"`:
   run on it too, so these consoles play each other only, not XNet builds or retail Halo.
 - **Internet play, Xbox to Xbox.** OpenCE's internet play as our fork has it (`port/linux/src/p2p*.c`): MQTT brokers
   for finding each other, STUN and hole punching through home routers, an encrypted UDP tunnel, and KCP carrying
-  connections. Its platform calls are in `net/`. A System Link game an online console hosts is listed for other
-  Xboxes (on their own topics and version: PC builds don't see them). The System Link list shows those games as
-  "@ name"; A reaches the host, and its game then joins as on a LAN. Map sharing works through the tunnel.
-- **Settings** in `opence.ini`: `online = 0` turns internet play off; `online_brokers`, `online_stun` (host:port
-  lists) and `online_tunnel_port` change where it goes.
+  connections. Its platform calls are in `net/`.
+- **ONLINE PLAY** (`port/linux/game/hmp_online.c`): a Multiplayer item under SYSTEM LINK PLAY that opens the same
+  screens, with ONLINE GAMES at the top of the games list. A game hosted there is listed for other online Xboxes (on
+  their own topics and version: PC builds don't see them); the list shows those games as "@ name", A reaches the
+  host, and its game then joins as on a LAN. Map sharing works through the tunnel. SYSTEM LINK PLAY is the LAN alone:
+  it lists no internet games, and a game hosted there isn't listed online.
+- **UPnP** (`net/oxbox_upnp.c`): a console the internet reaches through its router asks the router to forward the
+  tunnel's port, so consoles behind strict NATs can still reach it.
+- **Settings** in `opence.ini`: `online = 0` turns internet play off (no ONLINE PLAY item); `online_upnp = 0` doesn't
+  ask the router; `online_brokers`, `online_stun` (host:port lists) and `online_tunnel_port` change where it goes.
 - The network test's lines (address, DNS, STUN, MQTT, ONLINE) show on the main menu in these test builds.
 - Third-party licences: lwIP (BSD-3-Clause), nxdk's driver and port (MIT, BSD-3-Clause) and KCP (MIT), each beside
   its code and in the test builds' `OpenCE_online_licenses.txt`; Monocypher under its CC0 option.
@@ -81,11 +86,13 @@ Built with `OXBOX_EXTRA="-DOXBOX_NET_TEST -DOXBOX_NET_LWIP -DOXBOX_NET_P2P"`:
 ## What isn't here
 
 The game data isn't in this repository, and the Halo XBE the build starts from isn't either. That's the same
-as upstream OpenCE, which asks for your own disc image. Two other files are also left out:
+as upstream OpenCE, which asks for your own disc image. Other files are also left out:
 
 - **`port/oxbox/pictures.bin`** holds the main menu's OPTIONS and PROFILES words and the postgame's gametype pictures.
   They're made from the art in your own `ui.map` by `tools/mkword.py` and `tools/mkicons.py`. Without the
   file, those pictures are blank.
+- **`port/oxbox/online_games.dxt3`** (online test builds only) is ONLINE PLAY's ONLINE GAMES header, made from the
+  letters of the SYSTEM LINK GAMES and SELECT PROFILE headers in your own `ui.map` by `tools/mkheader.py`.
 - **DirectSound's effects program** is taken at build time from OpenCE's own copy of it, in
   `source/sound/sound_dsound_xbox.c`.
 

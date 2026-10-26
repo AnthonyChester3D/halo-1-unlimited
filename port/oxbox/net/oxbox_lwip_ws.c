@@ -310,6 +310,7 @@ int oxbox_lwip_wait_up(unsigned long milliseconds);
 
 /* opence.ini's online (oxbox_entry.c): on unless it says 0 */
 int oxbox_online = 1;
+int oxbox_online_upnp = 1;
 
 #define PEER_BROADCAST_TARGETS 15
 
@@ -390,7 +391,8 @@ static void peer_incoming(int stream, struct sockaddr_in *address)
 }
 
 /* once, as the game starts its networking (XNetStartup, WSAStartup): lwIP up, then internet play (opence.ini's online,
-on unless 0: every system link game this console hosts is listed for other Xboxes online, port/linux/src/p2p_lobby.c) */
+on unless 0). A game hosted is the LAN's alone until ONLINE PLAY is chosen in the Multiplayer menu, which lists it for
+other Xboxes online (port/linux/game/hmp_online.c, port/linux/src/p2p_lobby.c) */
 static void internet_play_start(void)
 {
 	static int started;
@@ -408,10 +410,13 @@ static void internet_play_start(void)
 	{
 		oxbox_config_set("network.online", "true");
 		oxbox_config_set("network.public_lobby", "true");
+		/* (the router asked to forward the tunnel's port: oxbox_upnp.c; opence.ini online_upnp = 0: not) */
+		if (oxbox_online_upnp)
+			oxbox_config_set("network.allow_upnp", "true");
 	}
 	p2p_initialize(loopback_address());
-	p2p_set_hosting_allowed(1);
-	p2p_set_hosting_public(1);
+	p2p_set_hosting_allowed(0);
+	p2p_set_hosting_public(0);
 	platform_log("p2p: internet play %s",
 		oxbox_online ? "on (opence.ini online = 0 turns it off)" : "off (opence.ini online = 0)");
 }

@@ -482,6 +482,11 @@ static void read_settings(const char *path)
 			extern int oxbox_online;
 			oxbox_online = value != 0;
 		}
+		else if (same_text(name, "online_upnp"))
+		{
+			extern int oxbox_online_upnp;
+			oxbox_online_upnp = value != 0;
+		}
 #if defined(OXBOX_NET_TEST)
 		else if (same_text(name, "net_test_join"))
 		{
@@ -624,6 +629,22 @@ void oxbox_effects_image_free(void *image)
 postgame's 5 gametype pictures), after the effects image in the file (mine/mkxbe.py): picture `index` read into
 buffer (a texture's memory) when it's loaded; nothing of them in memory otherwise. TRUE when read */
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_words_marker = { "OXWORDS1", 0, 0 };
+
+#if defined(OXBOX_NET_P2P)
+/* the online test builds' ONLINE GAMES header (32 KB, DXT3 512 x 64: mine/mkheader.py), the same way, after the
+pictures (port/linux/game/hmp_online.c). TRUE when read */
+static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_online_marker = { "OXONLIN1", 0, 0 };
+
+int oxbox_xbe_online_header_read(void *buffer, unsigned long size)
+{
+	if (!oxbox_online_marker.offset || size != oxbox_online_marker.size)
+	{
+		platform_log("pictures: the ONLINE GAMES header isn't in %s", oxbox_image_name);
+		return 0;
+	}
+	return own_xbe_read(oxbox_online_marker.offset, buffer, size);
+}
+#endif
 
 int oxbox_picture_read(long index, void *buffer, unsigned long size)
 {
