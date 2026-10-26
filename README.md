@@ -6,6 +6,33 @@ maps with in-lobby map sharing, and more texture memory than the retail game eve
 [port/oxbox/README.md](port/oxbox/README.md) for what it does and how to build it. The project's page is at
 https://anthonychester3d.github.io/.
 
+## Licence (this branch)
+
+The online branch of Halo 1 Unlimited is free software: you can give it to others and change it under the terms of
+the GNU Affero General Public License as published by the Free Software Foundation, version 3 of the License or (at
+your option) any later version (`AGPL-3.0-or-later`). It comes with no warranty. The full text is in
+[LICENSE](LICENSE).
+
+- **This branch only.** The `main` branch stays under [CC0 1.0](LICENSES/CC0-1.0.txt). The online branch is AGPL
+  because it carries OpenCE's netcode from after OpenCE's own move to the AGPL (commit `4b09168`, 19 October 2026),
+  which is what lets an Xbox play with OpenCE on PC.
+- **From the change.** The AGPL applies to the online branch from the commit that switched it ("Online branch:
+  AGPL-3.0-or-later"), and to each build made from that commit or a later one. Earlier commits, on every branch, were
+  released under CC0 1.0 and stay that way.
+- **What this builds on.** [OpenCE](https://github.com/OpenCommunityEdition/OpenCE) is under the AGPL 3.0 from
+  19 October 2026, and under CC0 1.0 before that date. Its decompilation sources keep their own terms as OpenCE's
+  README describes them.
+- **Contributions** to the online branch are under `AGPL-3.0-or-later`.
+- **Playing over a network.** If you change the game and let other people play with your version over a network (as
+  the host of an internet game, for example), the AGPL asks you to offer them the source of your version (section
+  13). Each online test build names the source it was built from.
+- **Third-party code** keeps its own licence, in its folder in `port/third_party`: on the Xbox, lwIP (BSD 3-clause),
+  nxdk's network driver (MIT and BSD 3-clause), KCP (MIT) and Monocypher (CC0 / BSD 2-clause). See
+  [NOTICE.md](NOTICE.md).
+- **Halo is not covered.** The licence covers the work of this project's and OpenCE's authors. It gives no rights in
+  Halo, its maps, the retail game's code in an XBE, or anything else Microsoft owns. No game data or Microsoft code is
+  included or distributed here.
+
 Everything below is upstream OpenCE's README.
 
 ---
