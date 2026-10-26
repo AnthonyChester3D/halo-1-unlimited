@@ -783,6 +783,55 @@ boolean network_game_server_send_message_to_client_machine(
 	return network_game_server_write(connection, buffer, size, NULL, 1);
 }
 
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox: the crossplay experiment: the Xbox's game settings record (16 machines and players, gametype options of 0x1C
+bytes) in the PC builds' layout (128 and 128, options of 0x2C bytes: an OpenCE mode of none) */
+enum
+{
+	PC_NETWORK_MAXIMUM = 128,
+	PC_GAME_PLAYER_COUNT_OFFSET = HALO_PORT_NETWORK_GAME_MACHINES_OFFSET + PC_NETWORK_MAXIMUM * HALO_PORT_NETWORK_MACHINE_SIZE,
+	PC_GAME_PLAYERS_OFFSET = PC_GAME_PLAYER_COUNT_OFFSET + 2,
+	PC_GAME_PLAYERS_END = PC_GAME_PLAYERS_OFFSET + PC_NETWORK_MAXIMUM * HALO_PORT_NETWORK_PLAYER_SIZE,
+	PC_GAME_VARIANT_OPTIONS_OFFSET = PC_GAME_PLAYERS_END + 0xA,
+	PC_GAME_LOCAL_DATA_OFFSET = PC_GAME_PLAYERS_END + 0x36,
+	PC_GAME_SIZE = PC_GAME_PLAYERS_END + 0x3A,
+};
+static byte crossplay_settings_out[PC_GAME_SIZE];
+
+/* the record to send (game, *game_size): the PC layout's, when the game this Xbox hosts is a crossplay game
+(network_server_manager.c's oxbox_crossplay_hosting: crossplay on, a stock map, no bots) */
+static void const *crossplay_settings_to_send(void const *game, long *game_size)
+{
+	extern boolean oxbox_crossplay_hosting(void);
+	byte const *record = (byte const *)game;
+	byte *pc = crossplay_settings_out;
+
+	if (!oxbox_crossplay_hosting() || *game_size != HALO_PORT_NETWORK_GAME_SIZE)
+		return game;
+	csmemset(pc, 0, sizeof(crossplay_settings_out));
+	csmemcpy(pc, record, HALO_PORT_NETWORK_GAME_MACHINES_OFFSET);
+	csmemcpy(pc + HALO_PORT_NETWORK_GAME_MACHINES_OFFSET, record + HALO_PORT_NETWORK_GAME_MACHINES_OFFSET,
+		HALO_PORT_MAXIMUM_NETWORK_MACHINES * HALO_PORT_NETWORK_MACHINE_SIZE);
+	csmemcpy(pc + PC_GAME_PLAYER_COUNT_OFFSET, record + HALO_PORT_NETWORK_GAME_PLAYER_COUNT_OFFSET, 2);
+	csmemcpy(pc + PC_GAME_PLAYERS_OFFSET, record + HALO_PORT_NETWORK_GAME_PLAYERS_OFFSET,
+		HALO_PORT_MAXIMUM_NETWORK_PLAYERS * HALO_PORT_NETWORK_PLAYER_SIZE);
+	/* (the PC slots past the Xbox's: no player, as network_game_invalidate_player leaves one: its machine, controller,
+	team and list indices NONE. A zeroed slot would be machine 0's controller 0, again, which a PC refuses) */
+	{
+		long index;
+
+		for (index = HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index < PC_NETWORK_MAXIMUM; index++)
+			csmemset(pc + PC_GAME_PLAYERS_OFFSET + index * HALO_PORT_NETWORK_PLAYER_SIZE + 0x1C, 0xFF, 4);
+	}
+	csmemcpy(pc + PC_GAME_PLAYERS_END, record + HALO_PORT_NETWORK_GAME_PLAYERS_END, 0xA);
+	csmemcpy(pc + PC_GAME_VARIANT_OPTIONS_OFFSET, record + HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET,
+		HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET - HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET);
+	csmemcpy(pc + PC_GAME_LOCAL_DATA_OFFSET, record + HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET, 4);
+	*game_size = PC_GAME_SIZE;
+	return pc;
+}
+#endif
+
 boolean network_game_server_send_game_settings_to_client_machine(
 	struct network_game_server *server,
 	struct network_game_server_client_machine *machine,
@@ -791,6 +840,10 @@ boolean network_game_server_send_game_settings_to_client_machine(
 {
 	struct message_server_game_settings_update message;
 	long offset;
+
+#if defined(OXBOX_CROSSPLAY)
+	game = crossplay_settings_to_send(game, &game_size);
+#endif
 
 	for (offset = 0; offset < game_size; offset += sizeof(message.data))
 	{
@@ -1074,6 +1127,9 @@ boolean network_game_server_send_game_settings_to_all_machines(
 		"c:\\halo\\SOURCE\\networking\\network_server_message_handler.c",
 		0x1C8,
 		server);
+#if defined(OXBOX_CROSSPLAY)
+	game = crossplay_settings_to_send(game, &game_size);
+#endif
 
 	/* every piece goes out even if one fails for a machine: the others
 	would otherwise keep the old settings (a machine whose connection failed
@@ -1765,8 +1821,27 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 			older builds had: network_client_manager.c) */
 			advertisement.reserved[HALO_PORT_ADVERTISED_VERSION_OFFSET] = (byte)(HALO_PORT_NETWORK_VERSION & 0xFF);
 			advertisement.reserved[HALO_PORT_ADVERTISED_VERSION_OFFSET + 1] = (byte)(HALO_PORT_NETWORK_VERSION >> 8);
+#if defined(OXBOX_CROSSPLAY)
+			/* oxbox: the crossplay experiment (opence.ini crossplay = 1): this Xbox's crossplay games (a stock map,
+			no bots: network_server_manager.c's oxbox_crossplay_hosting) say the PC builds' version, so PCs (and Xboxes
+			with crossplay = 1) join them; the game settings go out in the PC layout. Its other games, the Xboxes'
+			alone, say this Xbox's own */
+			{
+				extern boolean oxbox_crossplay_hosting(void);
+
+				if (oxbox_crossplay_hosting())
+				{
+					advertisement.reserved[HALO_PORT_ADVERTISED_VERSION_OFFSET] = (byte)(OXBOX_CROSSPLAY_VERSION & 0xFF);
+					advertisement.reserved[HALO_PORT_ADVERTISED_VERSION_OFFSET + 1] = (byte)(OXBOX_CROSSPLAY_VERSION >> 8);
+				}
+			}
+#endif
 			advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] =
 				HALO_PORT_ADVERTISED_DISTRIBUTED_FLAG;
+#if defined(OXBOX_CROSSPLAY)
+			/* oxbox: an Xbox's game (halo_port_limits.h) */
+			advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= OXBOX_ADVERTISED_XBOX_FLAG;
+#endif
 			if (network_game_server_get_state(server, NULL) != _network_game_server_state_pregame ||
 				network_game_server_game_is_loading(server))
 			{

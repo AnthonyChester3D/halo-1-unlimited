@@ -63,6 +63,15 @@ topic of queries (p2p_lobby.c) */
 16-machine layout, which OpenCE's builds don't) */
 #define P2P_LOBBY_SLOT_PREFIX "hceu/3/xbox/lobby/s/"
 #define P2P_LOBBY_QUERY_TOPIC "hceu/3/xbox/lobby/q"
+#if defined(OXBOX_CROSSPLAY)
+/* (the crossplay experiment: the PC builds' server browser read too, its games shown as PC games; their network
+version, which their listings carry) */
+#define P2P_PC_LOBBY_SLOT_PREFIX "hceu/3/lobby/s/"
+#define P2P_PC_LOBBY_QUERY_TOPIC "hceu/3/lobby/q"
+/* (38 and 39: 39 only adds a dedicated server's flag) */
+#define P2P_PC_LOBBY_VERSION_FIRST 38
+#define P2P_PC_LOBBY_VERSION_LAST 39
+#endif
 #else
 #define P2P_LOBBY_SLOT_PREFIX "hceu/3/lobby/s/"
 #define P2P_LOBBY_QUERY_TOPIC "hceu/3/lobby/q"
@@ -352,6 +361,10 @@ int p2p_lobby_browsing(void);
 /* a message on a slot (its key hash in hex) through a broker; retained: the
 slot's retained copy, sent on subscribing */
 void p2p_lobby_slot_heard(const char *hash_text, const unsigned char *payload, int size, int retained);
+#if defined(OXBOX_CROSSPLAY)
+/* ... a PC game's slot (P2P_PC_LOBBY_SLOT_PREFIX) */
+void p2p_lobby_pc_slot_heard(const char *hash_text, const unsigned char *payload, int size, int retained);
+#endif
 /* a query was heard */
 void p2p_lobby_query_heard(void);
 /* the game is quitting: a listed game's tombstone, and its slot cleared,

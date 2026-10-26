@@ -122,7 +122,11 @@ enum
 	/* the publishes awaiting acknowledgement on a broker */
 	MAXIMUM_IN_FLIGHT = 4,
 	/* the topics a broker is subscribed to (_topic_*) */
+#if defined(OXBOX_CROSSPLAY)
+	NUMBER_OF_TOPICS = 6,
+#else
 	NUMBER_OF_TOPICS = 5,
+#endif
 	/* a broker's publishes: at most PUBLISH_BURST at once, one more each
 	PUBLISH_INTERVAL milliseconds (EMQX drops a connection's publishes past
 	about 10 a second, without a word) */
@@ -193,6 +197,10 @@ enum
 	_topic_own_slot,
 	_topic_query,
 	_topic_slots,
+#if defined(OXBOX_CROSSPLAY)
+	/* (the crossplay experiment: the PC builds' slots too) */
+	_topic_pc_slots,
+#endif
 };
 
 /* MQTT 5's properties */
@@ -696,8 +704,24 @@ static void broker_sync_topics(struct broker *broker)
 	wanted[_topic_host] = signalling.hosting ? signalling.host_topic : "";
 	wanted[_topic_join] = joins_active() ? signalling.join_topic : "";
 	wanted[_topic_own_slot] = lobby && signalling.lobby_listed ? signalling.own_slot : "";
+#if defined(OXBOX_CROSSPLAY)
+	{
+		extern int oxbox_crossplay;
+
+		wanted[_topic_query] = lobby && signalling.lobby_listed ?
+			(oxbox_crossplay ? P2P_PC_LOBBY_QUERY_TOPIC : P2P_LOBBY_QUERY_TOPIC) : "";
+	}
+#else
 	wanted[_topic_query] = lobby && signalling.lobby_listed ? P2P_LOBBY_QUERY_TOPIC : "";
+#endif
 	wanted[_topic_slots] = lobby && signalling.lobby_browsing ? P2P_LOBBY_SLOT_PREFIX "+" : "";
+#if defined(OXBOX_CROSSPLAY)
+	{
+		extern int oxbox_crossplay;
+
+		wanted[_topic_pc_slots] = lobby && signalling.lobby_browsing && oxbox_crossplay ? P2P_PC_LOBBY_SLOT_PREFIX "+" : "";
+	}
+#endif
 	for (index = 0; index < NUMBER_OF_TOPICS; index++)
 	{
 		char *had = broker->topics[index];
@@ -770,6 +794,11 @@ static void broker_update_lobby(struct broker *broker)
 
 		posix_random_bytes(nonce, sizeof(nonce));
 		broker_publish(broker, P2P_LOBBY_QUERY_TOPIC, nonce, sizeof(nonce));
+#if defined(OXBOX_CROSSPLAY)
+		/* (the PC hosts asked too) */
+		if (broker->topics[_topic_pc_slots][0])
+			broker_publish(broker, P2P_PC_LOBBY_QUERY_TOPIC, nonce, sizeof(nonce));
+#endif
 		broker->query_pending = 0;
 	}
 }
@@ -1447,7 +1476,18 @@ static void publish_received(struct broker *broker, const char *topic, const uns
 		p2p_lobby_slot_heard(topic + sizeof(P2P_LOBBY_SLOT_PREFIX) - 1, payload, size, retained);
 		return;
 	}
+#if defined(OXBOX_CROSSPLAY)
+	if (!strncmp(topic, P2P_PC_LOBBY_SLOT_PREFIX, sizeof(P2P_PC_LOBBY_SLOT_PREFIX) - 1))
+	{
+		p2p_lobby_pc_slot_heard(topic + sizeof(P2P_PC_LOBBY_SLOT_PREFIX) - 1, payload, size, retained);
+		return;
+	}
+#endif
+#if defined(OXBOX_CROSSPLAY)
+	if (!strcmp(topic, P2P_LOBBY_QUERY_TOPIC) || !strcmp(topic, P2P_PC_LOBBY_QUERY_TOPIC))
+#else
 	if (!strcmp(topic, P2P_LOBBY_QUERY_TOPIC))
+#endif
 	{
 		p2p_lobby_query_heard();
 		return;

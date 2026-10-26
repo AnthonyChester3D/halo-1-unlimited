@@ -623,7 +623,13 @@ struct message_server_pregame_countdown
 
 struct message_server_pregame_keep_alive
 {
+#if defined(OXBOX_CROSSPLAY)
+	/* (a short on the Xbox, a long on the wire: network_messages.c; oxbox: OpenCE's fix, 904fbbfc, in the crossplay
+	builds) */
+	long unused;
+#else
 	short unused;
+#endif
 };
 
 struct message_server_postgame_keep_alive
@@ -1534,6 +1540,36 @@ static boolean network_game_server_network_lost(
 	return now - down_time > NETWORK_GAME_SERVER_CLIENT_TIMEOUT;
 }
 
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox, lobby kinds: whether the game this Xbox hosts is a crossplay game (oxbox_crossplay_hosting), as last
+worked out, for the server browser's listing (p2p_lobby.c, on its own thread) */
+int oxbox_crossplay_hosted = 1;
+
+/* oxbox, lobby kinds: whether the game this Xbox hosts is a crossplay game, which PCs see and join: crossplay on
+(opence.ini), on one of the Xbox's 13 multiplayer levels, with bots off. A game on a folder map (maps\Pack\...) or with
+bots, which no PC can play, is the Xboxes' alone: their own network version and layout (listed for Xboxes alone,
+which join it with crossplay on or off). It follows the lobby: a crossplay lobby that turns to a folder map or bots
+drops its PCs (their game settings no longer fit them), and an Xbox in it goes on, as it takes either layout */
+boolean oxbox_crossplay_hosting(
+	void)
+{
+	extern int oxbox_crossplay;
+	extern int oxbox_online_stock_map(char const *map);
+	struct network_game_server *server = global_network_game_server_get();
+	boolean crossplay = oxbox_crossplay != 0;
+
+	if (crossplay && server)
+	{
+		struct network_game const *game = &server->game;
+
+		/* (the bot mode + 1, 0 for none: bots off is 1) */
+		crossplay = (NETWORK_GAME_BOT_MODE(game) & 0xFF) <= 1 && oxbox_online_stock_map(game->map.name);
+	}
+	oxbox_crossplay_hosted = crossplay;
+	return crossplay;
+}
+#endif
+
 /* port: wide text as the listing has it: ASCII, a Latin letter with a mark
 its plain letter ('?' for the rest: player_name_character_ascii, as the
 server browser validates the name as a player's) */
@@ -1571,6 +1607,20 @@ static void network_game_server_list(
 
 		snprintf(gametype + length, sizeof(gametype) - length, " %s", difficulty_names[game->difficulty]);
 	}
+#if defined(OXBOX_CROSSPLAY)
+	/* (oxbox: the lobby's kind, for the listing: crossplay, or the Xboxes' alone) */
+	{
+		static int logged_kind = -1;
+		int kind = oxbox_crossplay_hosting();
+
+		if (kind != logged_kind)
+		{
+			network_event("lobby kind: %s", kind ? "crossplay (PCs see and join it)" :
+				"the Xboxes' alone (a folder map, bots, or crossplay off)");
+			logged_kind = kind;
+		}
+	}
+#endif
 	/* (the scenario's name, not its path: the listing has 32 characters) */
 	p2p_set_game_listing(name, tag_name_strip_path(game->map.name), gametype, game->variant.game_engine_index, open,
 		in_progress, game->variant.universal_variant.teams);

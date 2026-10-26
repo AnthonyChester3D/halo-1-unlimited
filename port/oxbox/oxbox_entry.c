@@ -349,7 +349,12 @@ static int same_text(const char *a, const char *b)
 
 static void read_settings(const char *path)
 {
+#if defined(OXBOX_NET_P2P)
+	/* (an opence.ini with the online settings and their comments runs past 1 KB: its lines past it were ignored) */
+	char text[8192], *p, *e;
+#else
 	char text[1024], *p, *e;
+#endif
 	unsigned long got = 0;
 	HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
@@ -487,6 +492,13 @@ static void read_settings(const char *path)
 			extern int oxbox_online_upnp;
 			oxbox_online_upnp = value != 0;
 		}
+#if defined(OXBOX_CROSSPLAY)
+		else if (same_text(name, "crossplay"))
+		{
+			extern int oxbox_crossplay;
+			oxbox_crossplay = value != 0;
+		}
+#endif
 #if defined(OXBOX_NET_TEST)
 		else if (same_text(name, "net_test_join"))
 		{

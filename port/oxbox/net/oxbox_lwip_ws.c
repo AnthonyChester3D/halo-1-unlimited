@@ -311,6 +311,12 @@ int oxbox_lwip_wait_up(unsigned long milliseconds);
 /* opence.ini's online (oxbox_entry.c): on unless it says 0 */
 int oxbox_online = 1;
 int oxbox_online_upnp = 1;
+#if defined(OXBOX_CROSSPLAY)
+/* the crossplay experiment (on unless opence.ini crossplay = 0): PC games in ONLINE PLAY, joined though their network
+version is newer, and this Xbox's games in the PC layout (port/linux/src/p2p_signal.c, source/networking/
+network_client_manager.c, network_server_message_handler.c) */
+int oxbox_crossplay = 1;
+#endif
 
 #define PEER_BROADCAST_TARGETS 15
 

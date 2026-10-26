@@ -102,6 +102,29 @@ void oxbox_net_test_show(const char *line)
 }
 
 /* the line below them that changes (test 3: internet play, net/p2p/oxbox_p2p_glue.c), logged when it does */
+#if defined(OXBOX_CROSSPLAY)
+/* a second line that changes: what the last join refused said (the crossplay experiment: network_client_manager.c,
+network_client_message_handler.c), where the Xbox shows no message box */
+void oxbox_net_test_notice(const char *line)
+{
+	static int index = -1;
+
+	if (index < 0)
+	{
+		if (oxbox_net_test_line_count >= 8)
+			return;
+		index = oxbox_net_test_line_count;
+		oxbox_net_test_lines[index][0] = 0;
+		oxbox_net_test_line_count = index + 1;
+	}
+	if (strcmp(oxbox_net_test_lines[index], line))
+	{
+		platform_log("nettest: %s", line);
+		strncpy(oxbox_net_test_lines[index], line, sizeof(oxbox_net_test_lines[index]) - 1);
+	}
+}
+#endif
+
 void oxbox_net_test_status(const char *line)
 {
 	static int index = -1;

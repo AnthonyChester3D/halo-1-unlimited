@@ -950,6 +950,7 @@ static void difficulty_select_menu_update_extended_description(
 #if defined(OXBOX_NET_P2P)
 int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *available, int available_count,
 	short *select);
+void oxbox_online_row_text(wchar_t *text, int length);
 #endif
 
 static void server_list_menu_update(
@@ -1012,7 +1013,8 @@ static void server_list_menu_update(
 		}
 
 #if defined(OXBOX_NET_P2P)
-		/* oxbox: other Xboxes' games listed online, after this LAN's (port/linux/game/hmp_online.c) */
+		/* oxbox: other Xboxes' games listed online (and PCs' with crossplay), after this LAN's, Xboxes' first; a
+		screenful of them from where the list is scrolled to (port/linux/game/hmp_online.c) */
 		{
 			short reached_row = NONE;
 
@@ -1062,6 +1064,10 @@ static void server_list_menu_update(
 						displayed_servers[item_index]->game_name);
 				}
 				item->parameters.text_box.text[0x1F] = 0;
+#if defined(OXBOX_NET_P2P)
+				/* oxbox: the name a few spaces in, an Xbox there for an Xbox host's (port/linux/game/hmp_online.c) */
+				oxbox_online_row_text(item->parameters.text_box.text, 0x1F);
+#endif
 			}
 		}
 

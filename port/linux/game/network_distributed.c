@@ -19,8 +19,9 @@ rest as the host has it:
   (player_queues_new.c).
 - Every tick, a client sends the host where its own players' units are (it
   predicts them from its own input); the host takes that as they are,
-  within a tolerance, as later Halo engines do, at its next tick (on a
-  moving elevator, only across: its own elevator takes them up and down).
+  within a tolerance, as later Halo engines do, at its next tick (riding
+  an elevator, moving or underfoot at rest, only across: its own elevator
+  takes them up and down).
 - Every tick, the host sends every client every player's unit: which unit
   the player has, alive or not, the seat it rides, its shields and health
   (down, recharging, the damage they show), and where it is (dead: who
@@ -255,6 +256,13 @@ host has it (no further than that: between the two they would disagree for
 good, the host's player somewhere its own is not) */
 #define HOST_ACCEPT_TOLERANCE 3.5f
 #define LOCAL_CORRECTION_TOLERANCE 3.0f
+/* world units: how far below or above the host's echo of its prediction a
+client's own player standing on the same elevator may be and keep its own
+floor's height (distributed_correct_own_unit). The two machines' elevators
+are apart by what the platform travels in a round trip (the history below
+holds 64 ticks, two seconds); a greater difference is not that lag but a
+teleport, a fall or a platform out of step, and is corrected. */
+#define ELEVATOR_PHASE_TOLERANCE 4.0f
 /* how fast a client's own player's unit moves at most (world units a tick) */
 #define MAXIMUM_PREDICTED_SPEED 2.0f
 /* ... on foot: this many times as fast as a player runs and jumps, or as
@@ -564,6 +572,11 @@ static struct distributed_own_position
 	long time;
 	long unit_index;
 	real_point3d position;
+#if defined(OXBOX_CROSSPLAY)
+	/* local history only: NONE after jumping or walking off the platform (oxbox: OpenCE's elevator rule from network
+	version 30, the crossplay builds': device_machines.c) */
+	long elevator_index;
+#endif
 } distributed_own_positions[MAXIMUM_LOCAL_PLAYERS][OWN_POSITION_TICKS];
 static real distributed_own_round_trip;
 /* the host: the players each machine had when it last told the host that it
@@ -1650,6 +1663,28 @@ static boolean distributed_apply_state(
 	return TRUE;
 }
 
+#if defined(OXBOX_CROSSPLAY)
+/* the elevator a unit stands on this tick, or NONE. A remembered elevator
+lasts after a jump. Only a current floor contact allows ignoring a height
+difference caused by the platforms' different phases. biped_update_moving
+(bipeds.c) sets elevator_ticks to 60 each tick the biped's physics finds it
+on an elevator, and counts it down from then on. */
+static long distributed_supported_elevator(
+	long unit_index)
+{
+	struct biped_datum *biped = (struct biped_datum *)object_try_and_get_and_verify_type(unit_index,
+		_object_mask_biped);
+	struct device_datum *elevator;
+
+	if (!biped || TEST_FLAG(biped->biped.flags, _biped_airborne_bit) ||
+		biped->biped.support_surface_index == NONE || biped->biped.elevator_ticks != 60)
+		return NONE;
+	elevator = (struct device_datum *)object_try_and_get_and_verify_type(biped->biped.elevator_object_index,
+		_object_mask_machine);
+	return elevator ? biped->biped.elevator_object_index : NONE;
+}
+#endif
+
 /* (a client) where its own players' units are this tick, noted */
 static void distributed_note_own_positions(
 	void)
@@ -1669,6 +1704,9 @@ static void distributed_note_own_positions(
 			unit_index = NONE;
 		own->time = game_time_get();
 		own->unit_index = unit_index;
+#if defined(OXBOX_CROSSPLAY)
+		own->elevator_index = unit_index != NONE ? distributed_supported_elevator(unit_index) : NONE;
+#endif
 		if (unit_index != NONE)
 			own->position = object_get(unit_index)->object.position;
 	}
@@ -1718,6 +1756,19 @@ static void distributed_correct_own_unit(
 			error.i = state->position.x - own->position.x;
 			error.j = state->position.y - own->position.y;
 			error.k = state->position.z - own->position.z;
+#if defined(OXBOX_CROSSPLAY)
+			/* The host echoes our prediction on its own elevator's floor. If
+			we still stand on that platform, a small height error is its phase
+			lag, not player motion. Keep local floor contact; teleports across,
+			a height error past the lag, a jump, a different platform and
+			unpredicted states correct normally. */
+			if (own->elevator_index != NONE &&
+				own->elevator_index == distributed_supported_elevator(unit_index) &&
+				error.i * error.i + error.j * error.j <=
+					LOCAL_CORRECTION_TOLERANCE * LOCAL_CORRECTION_TOLERANCE &&
+				error.k >= -ELEVATOR_PHASE_TOLERANCE && error.k <= ELEVATOR_PHASE_TOLERANCE)
+				error.k = 0.0f;
+#endif
 			if (!(error.i * error.i + error.j * error.j + error.k * error.k >
 				LOCAL_CORRECTION_TOLERANCE * LOCAL_CORRECTION_TOLERANCE))
 			{
@@ -2048,9 +2099,12 @@ static boolean distributed_on_foot_move_valid(
 	return dx * dx + dy * dy + rise * rise <= reach * reach && -dz <= fall_reach;
 }
 
-/* (the host) whether a unit rides an elevator that is moving (bipeds.c's
-elevator, kept a moment after the unit leaves its floor, as in a jump) */
-static boolean distributed_riding_moving_elevator(
+/* (the host) whether a unit rides an elevator: one that is moving (bipeds.c's
+elevator, kept a moment after the unit leaves its floor, as in a jump), or
+one at rest whose floor it stands on, since a stop or reversal must not
+admit a delayed height under the floor. The remembered elevator alone, after
+leaving a stopped one, is not riding it. */
+static boolean distributed_riding_elevator(
 	long unit_index)
 {
 	struct biped_datum *biped = (struct biped_datum *)object_try_and_get_and_verify_type(unit_index,
@@ -2059,20 +2113,29 @@ static boolean distributed_riding_moving_elevator(
 
 	if (!biped || biped->biped.elevator_object_index == NONE)
 		return FALSE;
+#if defined(OXBOX_CROSSPLAY)
+	elevator = (struct device_datum *)object_try_and_get_and_verify_type(biped->biped.elevator_object_index,
+		_object_mask_machine);
+	return elevator && (elevator->device.position_velocity != 0.0f ||
+		distributed_supported_elevator(unit_index) != NONE);
+#else
+	/* (the other builds: a moving elevator alone, as before OpenCE's network version 30) */
 	elevator = (struct device_datum *)object_try_and_get_and_verify_type(biped->biped.elevator_object_index,
 		_object_mask_device);
 	return elevator && elevator->device.position_velocity != 0.0f;
+#endif
 }
 
 /* (the host) a client's player's prediction of its unit on foot, taken
-where it says within a tolerance (distributed_apply_predictions). Riding a
-moving elevator, only across: a client's elevator follows the host's
-(network_coop.c), behind it by the time the host's word takes to come, and
-the client's prediction a round trip behind the host's elevator when it
-comes. Taken up and down too, it would put the host's unit under its own
-elevator's floor going up, to fall through it, and the client's after it
-(distributed_correct_own_unit); each machine's elevator carries its own
-unit up and down as it moves, and they meet where it stops. */
+where it says within a tolerance (distributed_apply_predictions). Riding an
+elevator (distributed_riding_elevator), only across: a client's elevator
+follows the host's (network_coop.c), behind it by the time the host's word
+takes to come, and the client's prediction a round trip behind the host's
+elevator when it comes. Taken up and down too, it would put the host's unit
+under its own elevator's floor going up, to fall through it, and the
+client's after it (distributed_correct_own_unit); each machine's elevator
+carries its own unit up and down as it moves, and they meet where it
+stops. */
 static void distributed_take_prediction(
 	short player_index,
 	long unit_index,
@@ -2084,7 +2147,7 @@ static void distributed_take_prediction(
 	real_point3d position = state->position;
 	real dx, dy, dz;
 
-	if (distributed_riding_moving_elevator(unit_index))
+	if (distributed_riding_elevator(unit_index))
 		position.z = object->object.position.z;
 	dx = position.x - object->object.position.x;
 	dy = position.y - object->object.position.y;
@@ -3273,6 +3336,159 @@ static void distributed_send_all_statistics(
 
 /* ---------- the game type's state */
 
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox: the crossplay experiment: the game type's state (game_engine_write_network_state: the postgame state, a long,
+then the game type's own) as the PC builds lay it out. Their game types keep their per-player and per-team arrays at
+128 entries (HALO_PORT_MAXIMUM_NETWORK_PLAYERS) where the Xbox's have 16; the rest is the same, field for field. A PC
+host's state is made the Xbox's before it is read (its size alone says which it is), and an Xbox host whose games
+are crossplay games sends its own as a PC's: else neither side takes the other's, and its scores never change there
+(Capture the Flag's has no such array: the same on both). Each game type's state is a list of fields, an element's
+size and a count of them (CROSSPLAY_PER_PLAYER: one per player, 16 or 128) */
+enum
+{
+	CROSSPLAY_PC_PLAYERS = 128,
+	CROSSPLAY_PER_PLAYER = -1,
+};
+
+struct crossplay_state_field
+{
+	short size;
+	short count;
+};
+
+/* (game_engine_slayer.c's slayer_network_state: slayer_globals' team and individual scores, the kill-in-order targets,
+the speeds) */
+static struct crossplay_state_field const crossplay_slayer_state[] =
+{
+	{ 4, CROSSPLAY_PER_PLAYER }, { 4, CROSSPLAY_PER_PLAYER }, { 1, CROSSPLAY_PER_PLAYER }, { 2, CROSSPLAY_PER_PLAYER },
+	{ 0, 0 }
+};
+/* (game_engine_oddball.c's oddball_network_state: team and individual scores, the balls' spawn timers and carriers,
+four event bytes) */
+static struct crossplay_state_field const crossplay_oddball_state[] =
+{
+	{ 4, CROSSPLAY_PER_PLAYER }, { 4, CROSSPLAY_PER_PLAYER }, { 4, MAXIMUM_ODDBALLS }, { 1, MAXIMUM_ODDBALLS }, { 1, 4 },
+	{ 0, 0 }
+};
+/* (game_engine_king.h's king_globals: score, score_tick, on_the_hill, then the hill: its point count, 12 points, 12
+hull points, its center, and seven longs and reals) */
+static struct crossplay_state_field const crossplay_king_state[] =
+{
+	{ 4, CROSSPLAY_PER_PLAYER }, { 4, CROSSPLAY_PER_PLAYER }, { 1, CROSSPLAY_PER_PLAYER }, { 4, 1 }, { 12, 12 },
+	{ 8, 12 }, { 12, 1 }, { 4, 7 }, { 0, 0 }
+};
+/* (game_engine_race.c's race_network_state: race_globals (the lap value, first flags, lap bits, the rally flag, team
+laps, the persistent team score, the vehicles flag and its padding), then the events and the lap times) */
+static struct crossplay_state_field const crossplay_race_state[] =
+{
+	{ 4, 1 }, { 4, CROSSPLAY_PER_PLAYER }, { 4, CROSSPLAY_PER_PLAYER }, { 4, 1 }, { 4, CROSSPLAY_PER_PLAYER }, { 4, 1 },
+	{ 4, 1 }, { 1, CROSSPLAY_PER_PLAYER }, { 1, CROSSPLAY_PER_PLAYER }, { 1, CROSSPLAY_PER_PLAYER },
+	{ 2, CROSSPLAY_PER_PLAYER }, { 2, CROSSPLAY_PER_PLAYER }, { 2, CROSSPLAY_PER_PLAYER }, { 0, 0 }
+};
+
+/* the current game type's fields, NULL for one whose state is the same on both */
+static struct crossplay_state_field const *crossplay_state_fields(
+	void)
+{
+	switch (game_engine ? game_engine->type : NONE)
+	{
+	case game_engine_slayer: return crossplay_slayer_state;
+	case game_engine_oddball: return crossplay_oddball_state;
+	case game_engine_king: return crossplay_king_state;
+	case game_engine_race: return crossplay_race_state;
+	default: return NULL;
+	}
+}
+
+/* the game type's own state's size, with players entries per player */
+static long crossplay_state_size(
+	struct crossplay_state_field const *fields,
+	long players)
+{
+	long size = 0;
+
+	for (; fields->size; fields++)
+		size += fields->size * (fields->count == CROSSPLAY_PER_PLAYER ? players : fields->count);
+	return size;
+}
+
+/* a whole state (the postgame state's long, then the game type's), laid out for from_players players, into one for
+to_players (the first entries of each array, or each array's with zeros after it); the size made, 0 if the state
+isn't of that size or doesn't fit */
+static long crossplay_state_convert(
+	byte const *from,
+	long from_size,
+	long from_players,
+	byte *to,
+	long to_maximum,
+	long to_players)
+{
+	struct crossplay_state_field const *fields = crossplay_state_fields();
+	long to_size;
+	long from_offset = sizeof(long);
+	long to_offset = sizeof(long);
+
+	if (!fields || from_size != (long)sizeof(long) + crossplay_state_size(fields, from_players))
+		return 0;
+	to_size = sizeof(long) + crossplay_state_size(fields, to_players);
+	if (to_size > to_maximum)
+		return 0;
+	csmemcpy(to, from, sizeof(long));
+	for (; fields->size; fields++)
+	{
+		long from_count = fields->count == CROSSPLAY_PER_PLAYER ? from_players : fields->count;
+		long to_count = fields->count == CROSSPLAY_PER_PLAYER ? to_players : fields->count;
+		long kept = MIN(from_count, to_count);
+
+		csmemcpy(to + to_offset, from + from_offset, kept * fields->size);
+		if (to_count > kept)
+			csmemset(to + to_offset + kept * fields->size, 0, (to_count - kept) * fields->size);
+		from_offset += from_count * fields->size;
+		to_offset += to_count * fields->size;
+	}
+	return to_size;
+}
+
+/* (one state made at a time: the host's sent, or a client's read) */
+static byte crossplay_state_buffer[MAXIMUM_GAME_STATE_SIZE];
+
+/* the state to send (data, *size): the PC layout's, when the game this Xbox hosts is a crossplay game
+(network_server_manager.c's oxbox_crossplay_hosting) */
+static byte const *crossplay_state_to_send(
+	byte const *data,
+	long *size)
+{
+	extern boolean oxbox_crossplay_hosting(void);
+	byte *pc = crossplay_state_buffer;
+	long pc_size;
+
+	if (!oxbox_crossplay_hosting())
+		return data;
+	pc_size = crossplay_state_convert(data, *size, HALO_PORT_MAXIMUM_NETWORK_PLAYERS, pc,
+		sizeof(crossplay_state_buffer), CROSSPLAY_PC_PLAYERS);
+	if (!pc_size)
+		return data;
+	*size = pc_size;
+	return pc;
+}
+
+/* a state had from the host (data, size), as this Xbox reads it: a PC host's made the Xbox's */
+static void crossplay_read_state(
+	byte const *data,
+	long size)
+{
+	byte *made = crossplay_state_buffer;
+	long made_size = crossplay_state_convert(data, size, CROSSPLAY_PC_PLAYERS, made,
+		sizeof(crossplay_state_buffer), HALO_PORT_MAXIMUM_NETWORK_PLAYERS);
+
+	if (made_size)
+		game_engine_read_network_state(made, made_size);
+	else
+		game_engine_read_network_state(data, size);
+}
+#endif
+
+
 /* the game type's state (larger than a datagram: reliably) to a machine
 that has loaded, or (NONE) to every client when it changed (at most every
 other look, unless the game ended) */
@@ -3291,6 +3507,12 @@ static void distributed_send_game_state(
 		return;
 	if (machine_index != NONE)
 	{
+#if defined(OXBOX_CROSSPLAY)
+		byte const *sent = crossplay_state_to_send(message.data, &size);
+
+		if (sent != message.data)
+			csmemcpy(message.data, sent, size);
+#endif
 		distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_game_state, 0,
 			(word)(sizeof(message.header) + size));
 		return;
@@ -3308,6 +3530,15 @@ static void distributed_send_game_state(
 		csmemcpy(&distributed_game_state_postgame, message.data, sizeof(long));
 	distributed_game_state_checksum = checksum;
 	distributed_game_state_time = game_time_get();
+#if defined(OXBOX_CROSSPLAY)
+	/* oxbox: a crossplay game's in the PC layout (the checksum and the postgame state above are the Xbox's) */
+	{
+		byte const *sent = crossplay_state_to_send(message.data, &size);
+
+		if (sent != message.data)
+			csmemcpy(message.data, sent, size);
+	}
+#endif
 	distributed_send(&message, _distributed_message_game_state, 0, (word)(sizeof(message.header) + size),
 		_distributed_to_clients_reliably);
 }
@@ -3929,6 +4160,11 @@ static void distributed_note_client_clock(
 		long ahead = clock->latest_tick - game_time_get();
 
 		clock->fast = rate > CLIENT_CLOCK_FAST_RATE && ahead > CLIENT_CLOCK_AHEAD_TICKS;
+#if defined(OXBOX_TEST_XEMU_CLOCK)
+		/* oxbox: test builds for xemu alone, whose guest's clock runs slower than the PCs' it plays with (never in a
+		build for a console) */
+		clock->fast = FALSE;
+#endif
 		if (!clock->fast)
 		{
 			clock->fast_windows = 0;
@@ -4264,7 +4500,11 @@ void network_distributed_handle_message(
 		network_objects_handle_states(entries, header.count);
 		break;
 	case _distributed_message_game_state:
+#if defined(OXBOX_CROSSPLAY)
+		crossplay_read_state((byte const *)entries, size - sizeof(header));
+#else
 		game_engine_read_network_state((byte const *)entries, size - sizeof(header));
+#endif
 		break;
 	case _distributed_message_objects_synchronized:
 		network_objects_handle_synchronized();

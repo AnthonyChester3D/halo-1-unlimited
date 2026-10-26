@@ -5794,6 +5794,33 @@ void game_engine_clear_goal_position(
 	return;
 }
 
+#if defined(OXBOX_CROSSPLAY)
+/* port (OpenCE 956387d8): a flag or ball deleted on a client of the
+distributed netcode, on the host's word (port/linux/game/network_objects.c):
+the goals its game type's objective_weapon_update set at it each tick, which
+nothing else clears (ctf: its team's, and its carrier's goal; oddball: its
+team's) */
+void game_engine_objective_weapon_deleted(
+	long weapon_index)
+{
+	short team_index = weapon_get(weapon_index)->object.owner_team_index;
+
+	if (!game_engine || team_index == NONE)
+		return;
+	if (global_variant.game_engine_index == game_engine_ctf)
+	{
+		game_engine_clear_goal_position(team_index);
+		game_engine_clear_goal_position(team_index + 2);
+	}
+	else if (global_variant.game_engine_index == game_engine_oddball)
+	{
+		game_engine_clear_goal_position(team_index);
+	}
+
+	return;
+}
+#endif
+
 long get_flag_definition_index(
 	void)
 {

@@ -315,7 +315,13 @@ struct message_server_pregame_countdown
 
 struct message_server_pregame_keep_alive
 {
+#if defined(OXBOX_CROSSPLAY)
+	/* (a short on the Xbox, a long on the wire: network_messages.c; oxbox: OpenCE's fix, 904fbbfc, in the crossplay
+	builds) */
+	long unused;
+#else
 	short unused;
+#endif
 };
 
 struct message_server_postgame_keep_alive
@@ -949,12 +955,125 @@ piece is in */
 static struct network_game network_game_client_settings_staging;
 static long network_game_client_settings_staging_size = 0;
 
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox: the crossplay experiment: a PC host's game settings record (128 machines and players, network version 38's
+gametype options of 0x2C bytes), taken in whole and made the Xbox's (16 machines and players, options of 0x1C bytes)
+if the game fits: at most 16 machines and players, each machine and player index under 16, and no OpenCE gametype */
+enum
+{
+	PC_NETWORK_MAXIMUM = 128,
+	PC_GAME_PLAYER_COUNT_OFFSET = HALO_PORT_NETWORK_GAME_MACHINES_OFFSET + PC_NETWORK_MAXIMUM * HALO_PORT_NETWORK_MACHINE_SIZE,
+	PC_GAME_PLAYERS_OFFSET = PC_GAME_PLAYER_COUNT_OFFSET + 2,
+	PC_GAME_PLAYERS_END = PC_GAME_PLAYERS_OFFSET + PC_NETWORK_MAXIMUM * HALO_PORT_NETWORK_PLAYER_SIZE,
+	PC_GAME_VARIANT_OPTIONS_OFFSET = PC_GAME_PLAYERS_END + 0xA,
+	PC_GAME_VARIANT_OPTIONS_SIZE = 0x2C,
+	PC_GAME_LOCAL_DATA_OFFSET = PC_GAME_PLAYERS_END + 0x36,
+	PC_GAME_SIZE = PC_GAME_PLAYERS_END + 0x3A,
+};
+static byte crossplay_settings_staging[PC_GAME_SIZE];
+static long crossplay_settings_staging_size = 0;
+
+/* the PC record in crossplay_settings_staging, as the Xbox's: FALSE if it doesn't fit */
+static boolean crossplay_settings_to_xbox(struct network_game *game)
+{
+	byte const *pc = crossplay_settings_staging;
+	byte *record = (byte *)game;
+	short machine_count = *(short const *)(pc + HALO_PORT_NETWORK_GAME_MACHINES_OFFSET - 2);
+	short player_count = *(short const *)(pc + PC_GAME_PLAYER_COUNT_OFFSET);
+	byte const *options = pc + PC_GAME_VARIANT_OPTIONS_OFFSET;
+	long index;
+
+	if (machine_count < 0 || machine_count > HALO_PORT_MAXIMUM_NETWORK_MACHINES ||
+		player_count < 0 || player_count > HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+	{
+		network_event("crossplay experiment: the PC game has %d machines and %d players: more than the Xbox's 16",
+			machine_count, player_count);
+		return FALSE;
+	}
+	if (options[0x1C] || options[0x1D])
+	{
+		network_event("crossplay experiment: the PC game plays an OpenCE gametype (mode %d, hardcore %d)", options[0x1C],
+			options[0x1D]);
+		return FALSE;
+	}
+	for (index = 0; index < player_count; index++)
+	{
+		byte const *player = pc + PC_GAME_PLAYERS_OFFSET + index * HALO_PORT_NETWORK_PLAYER_SIZE;
+		struct network_player const *as_player = (struct network_player const *)player;
+
+		if (as_player->machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES ||
+			as_player->player_list_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		{
+			network_event("crossplay experiment: a PC player's machine or list index (%d, %d) is past the Xbox's 16",
+				as_player->machine_index, as_player->player_list_index);
+			return FALSE;
+		}
+	}
+	csmemset(record, 0, sizeof(*game));
+	/* (the record to the machines; the first 16 machines; the player count; the first 16 players) */
+	csmemcpy(record, pc, HALO_PORT_NETWORK_GAME_MACHINES_OFFSET);
+	csmemcpy(record + HALO_PORT_NETWORK_GAME_MACHINES_OFFSET, pc + HALO_PORT_NETWORK_GAME_MACHINES_OFFSET,
+		HALO_PORT_MAXIMUM_NETWORK_MACHINES * HALO_PORT_NETWORK_MACHINE_SIZE);
+	/* (the machines' download marks are ours, not the PC's: the lobby would show a PC's own as a percentage) */
+	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; index++)
+		NETWORK_MACHINE_DOWNLOAD_MARK(&game->machines[index]) = 0;
+	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYER_COUNT_OFFSET, pc + PC_GAME_PLAYER_COUNT_OFFSET, 2);
+	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYERS_OFFSET, pc + PC_GAME_PLAYERS_OFFSET,
+		HALO_PORT_MAXIMUM_NETWORK_PLAYERS * HALO_PORT_NETWORK_PLAYER_SIZE);
+	/* (after the players: to the options, the options' first 0x1C bytes, the local data) */
+	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYERS_END, pc + PC_GAME_PLAYERS_END, 0xA);
+	csmemcpy(record + HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET, options, sizeof(struct game_variant_options));
+	csmemcpy(record + HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET, pc + PC_GAME_LOCAL_DATA_OFFSET, 4);
+	/* (a PC game's most players, up to 128: the Xbox's 16 here; it leaves if the game grows past them) */
+	if (game->maximum_players > HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		game->maximum_players = HALO_PORT_MAXIMUM_NETWORK_PLAYERS;
+	return TRUE;
+}
+
+/* a piece of a PC host's record (piece->total_size PC_GAME_SIZE) */
+static boolean crossplay_receive_game_settings_piece(
+	struct network_game_client *client,
+	struct message_server_game_settings_update const *piece)
+{
+	if (piece->length > sizeof(piece->data) || piece->offset + piece->length > PC_GAME_SIZE)
+		return FALSE;
+	if (piece->offset == 0)
+		crossplay_settings_staging_size = 0;
+	if (piece->offset != crossplay_settings_staging_size)
+	{
+		crossplay_settings_staging_size = 0;
+		return TRUE;
+	}
+	csmemcpy(crossplay_settings_staging + piece->offset, piece->data, piece->length);
+	crossplay_settings_staging_size += piece->length;
+	if (crossplay_settings_staging_size < PC_GAME_SIZE)
+		return TRUE;
+	crossplay_settings_staging_size = 0;
+	if (!crossplay_settings_to_xbox(&network_game_client_settings_staging))
+	{
+#if defined(OXBOX_NET_TEST)
+		extern void oxbox_net_test_notice(const char *line);
+
+		oxbox_net_test_notice("JOIN REFUSED: PC game too big or OpenCE mode");
+#endif
+		return FALSE;
+	}
+	network_event("crossplay experiment: took a PC host's game settings (%d machines, %d players)",
+		network_game_client_settings_staging.machine_count, network_game_client_settings_staging.player_count);
+	return network_game_client_game_settings_updated(client, &network_game_client_settings_staging);
+}
+#endif
+
 static boolean network_game_client_receive_game_settings_piece(
 	struct network_game_client *client,
 	struct message_server_game_settings_update const *piece)
 {
 	boolean result = TRUE;
 
+#if defined(OXBOX_CROSSPLAY)
+	if (piece->total_size == PC_GAME_SIZE)
+		return crossplay_receive_game_settings_piece(client, piece);
+#endif
 	if (piece->total_size != sizeof(network_game_client_settings_staging) ||
 		piece->length > sizeof(piece->data) ||
 		piece->offset + piece->length > sizeof(network_game_client_settings_staging))

@@ -539,7 +539,7 @@ long hmp_options_dispatch(struct widget_instance *root, struct event_record *eve
 	for (local = 0; local < 4 && ui_widget_get_active_widget(local) != root; local++) ;   /* (the main menu is anyone's: its slot) */
 	if (local > 3) return 0;
 #if defined(OXBOX_NET_P2P)
-	hmp_online_dispatch(root, event);                 /* (SYSTEM LINK PLAY or ONLINE PLAY: the LAN or the internet) */
+	if (hmp_online_dispatch(root, event)) return 1;   /* (SYSTEM LINK PLAY or ONLINE PLAY; the games list's scrolling) */
 #endif
 	if (gametypes_dispatch(root, event)) return 1;
 	press = event->data.button.value == 1;

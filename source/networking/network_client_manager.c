@@ -1355,6 +1355,54 @@ boolean network_game_client_game_settings_updated(
 	return FALSE;
 }
 
+#if defined(OXBOX_NET_P2P)
+/* oxbox: whether the games list shows an advertised game: only one this Xbox can join (a game it can't is in the way:
+"we can't use it, don't show it"). One of this machine's network version, or with crossplay on (OXBOX_CROSSPLAY) one of
+the PC builds' 38 or 39 that an Xbox hosts (OXBOX_ADVERTISED_XBOX_FLAG), or a PC hosts on a stock map, for at most 16
+players, playing no OpenCE gametype (port/linux/game/hmp_online.c) */
+static boolean oxbox_advertised_game_listed(
+	struct message_server_game_advertise const *advertisement)
+{
+	unsigned int version = advertisement->__unknown5A[HALO_PORT_ADVERTISED_VERSION_OFFSET] |
+		advertisement->__unknown5A[HALO_PORT_ADVERTISED_VERSION_OFFSET + 1] << 8;
+	byte flags = advertisement->__unknown5A[HALO_PORT_ADVERTISED_FLAGS_OFFSET];
+
+	if (!(flags & HALO_PORT_ADVERTISED_DISTRIBUTED_FLAG))
+		return FALSE;
+	if (version == HALO_PORT_NETWORK_VERSION)
+		return TRUE;
+#if defined(OXBOX_CROSSPLAY)
+	{
+		extern int oxbox_crossplay;
+		extern int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind);
+
+		if (oxbox_crossplay && version >= 38 && version <= 39)
+		{
+			/* (the kind: the advertisement's byte after the flags, from version 37) */
+			return (flags & OXBOX_ADVERTISED_XBOX_FLAG) ||
+				oxbox_online_pc_game_listed(advertisement->map.name, advertisement->maximum_player_count,
+					advertisement->__unknown5A[HALO_PORT_ADVERTISED_FLAGS_OFFSET + 1]);
+		}
+	}
+#endif
+	return FALSE;
+}
+
+/* oxbox: whether an Xbox hosts the advertised game (by its place in the client's available_games): one of this
+machine's network version, or an Xbox's crossplay game (the games list shows an Xbox beside it: hmp_online.c) */
+boolean network_game_client_advertised_index_on_xbox(
+	long game_index)
+{
+	if (game_index < 0 || game_index >= MAXIMUM_NETWORK_ADVERTISED_GAMES)
+		return FALSE;
+#if defined(OXBOX_CROSSPLAY)
+	if (network_game_client_advertised_versions[game_index].flags & OXBOX_ADVERTISED_XBOX_FLAG)
+		return TRUE;
+#endif
+	return network_game_client_advertised_versions[game_index].version == HALO_PORT_NETWORK_VERSION;
+}
+#endif
+
 void network_game_client_new_advertised_game(
 	struct network_game_client *client,
 	struct message_server_game_advertise *message_packet)
@@ -1364,6 +1412,10 @@ void network_game_client_new_advertised_game(
 		0x2FC,
 		client && message_packet);
 
+#if defined(OXBOX_NET_P2P)
+	if (!oxbox_advertised_game_listed(message_packet))
+		return;
+#endif
 	add_advertised_game(client->available_games, message_packet);
 
 	return;
@@ -3169,6 +3221,21 @@ boolean network_game_client_advertised_game_compatible(
 		network_event("joining a host of network version %u", theirs);
 		return TRUE;
 	}
+#if defined(OXBOX_CROSSPLAY)
+	/* oxbox: the crossplay experiment (opence.ini crossplay = 1): a PC host of version 38 or 39 joined anyway; its game
+	settings record is made the Xbox's (network_client_message_handler.c) */
+	{
+		extern int oxbox_crossplay;
+
+		/* (38 and 39: 39 only adds a dedicated server's flag) */
+		if (theirs >= 38 && theirs <= 39 && distributed && oxbox_crossplay)
+		{
+			network_event("crossplay experiment: joining a host of network version %u anyway (this machine's is %u)",
+				theirs, ours);
+			return TRUE;
+		}
+	}
+#endif
 	if (theirs == ours)
 	{
 		csprintf(message,
@@ -3196,6 +3263,18 @@ boolean network_game_client_advertised_game_compatible(
 		network_event("not joining a host of network version %u%s (this machine's is %u)", theirs,
 			distributed ? "" : " with the lockstep netcode", ours);
 		platform_show_message("Halo: cannot join this game", message);
+#if defined(OXBOX_CROSSPLAY) && defined(OXBOX_NET_TEST)
+		/* oxbox: said on screen too (the Xbox shows no message box: the join just doesn't happen) */
+		{
+			extern void oxbox_net_test_notice(const char *line);
+			extern int oxbox_crossplay;
+			char line[64];
+
+			csprintf(line, "JOIN REFUSED: host v%u, this Xbox v%u%s", theirs, ours,
+				oxbox_crossplay ? "" : " (crossplay off)");
+			oxbox_net_test_notice(line);
+		}
+#endif
 	}
 	return FALSE;
 }

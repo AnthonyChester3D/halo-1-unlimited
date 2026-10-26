@@ -1291,6 +1291,9 @@ void hmp_menu_memory_release(void)
 	hmp_maps_globals.table_count = hmp_maps_globals.table_capacity = 0;
 	hmp_browse_scan(NONE);                      /* (the browser's tables too) */
 	previews_forget(NONE);
+#if defined(OXBOX_NET_P2P)
+	hmp_online_release();                       /* (and ONLINE PLAY's games list's listed games) */
+#endif
 	if (before) hmp_log("maps: the menus' memory freed for the game (%d KB of map list and text)", (before + 1023) / 1024);
 }
 

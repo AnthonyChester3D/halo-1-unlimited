@@ -223,8 +223,15 @@ void oxbox_p2p_test_status(char *line, int size, int join)
 	}
 	else
 	{
+#if defined(OXBOX_CROSSPLAY)
+		extern int oxbox_crossplay;
+
+		snprintf(line, (size_t)size, "ONLINE: broker %s, %d listed, CROSSPLAY %s", p2p_signal_connected() ? "ok" : "not yet",
+			count, oxbox_crossplay ? "ON" : "OFF");
+#else
 		snprintf(line, (size_t)size, "ONLINE: broker %s, %d Xbox game%s listed", p2p_signal_connected() ? "ok" : "not yet",
 			count, count == 1 ? "" : "s");
+#endif
 	}
 }
 

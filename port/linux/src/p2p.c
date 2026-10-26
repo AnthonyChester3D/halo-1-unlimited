@@ -149,6 +149,14 @@ enum
 	/* another player of the game joined, asked for (p2p_reach_player) */
 	PLAYER_REACH_TIMEOUT = 30000,
 	STREAM_LINGER_TIME = 10000,
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the tunnel's health in the log (health_report): a line for each
+	machine reached this often; a silence this long noted when it ends, and
+	one this long noted while it lasts */
+	HEALTH_REPORT_INTERVAL = 10000,
+	HEALTH_SILENCE_NOTED = 1500,
+	HEALTH_SILENCE_LOGGED = 3000,
+#endif
 	PROXY_IDLE_TIME = 60000,
 	STUN_RETRY_INTERVAL = 500,
 	STUN_REFRESH_INTERVAL = 25000,
@@ -229,6 +237,20 @@ struct peer
 	unsigned long endpoint_heard_time;
 	unsigned long sent_time;
 	unsigned long round_trip;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: its tunnel's health since the last report (health_report):
+	packets and bytes each way, sends the network refused, packets of its
+	that did not open (stale, replayed or damaged), the longest silence; and
+	whether the silence now has been logged */
+	unsigned long health_in;
+	unsigned long health_out;
+	unsigned long health_in_bytes;
+	unsigned long health_out_bytes;
+	unsigned long health_send_errors;
+	unsigned long health_stale;
+	unsigned long health_longest_silence;
+	int health_silence_logged;
+#endif
 };
 
 /* a UDP stand-in for one port of a peer */
@@ -298,6 +320,14 @@ struct stream
 	int remote_closed;
 	unsigned long created_time;
 	unsigned long closed_time;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: why it ended (stream_end_cause's letters, the first one set),
+	whether it was this machine's game that opened it, and its resends at
+	the last health report */
+	char end_cause;
+	char outgoing;
+	unsigned long reported_resends;
+#endif
 	unsigned char pending[STREAM_BUFFER_SIZE];
 	int pending_size;
 };
@@ -908,7 +938,19 @@ static void peer_send_to(struct peer *peer, const struct p2p_candidate *to, cons
 		return;
 	}
 	make_address(&address, to->address, to->port);
+#if defined(HALO_XBOX_TARGET)
+	if (posix_socket_sendto(p2p.tunnel_socket, packet, TUNNEL_HEADER_SIZE + sealed, 0, &address, sizeof(address)) < 0)
+	{
+		peer->health_send_errors++;
+	}
+	else
+	{
+		peer->health_out++;
+		peer->health_out_bytes += (unsigned long)(TUNNEL_HEADER_SIZE + sealed);
+	}
+#else
 	posix_socket_sendto(p2p.tunnel_socket, packet, TUNNEL_HEADER_SIZE + sealed, 0, &address, sizeof(address));
+#endif
 }
 
 /* to a peer the tunnel has reached; dropped otherwise */
@@ -1189,6 +1231,23 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short 
 	unsigned long now = p2p_now();
 	int same = peer->endpoint.address == address && peer->endpoint.port == port;
 
+#if defined(HALO_XBOX_TARGET)
+	/* (oxbox: how long it was silent, for the log) */
+	if (peer->connected)
+	{
+		unsigned long silence = now - peer->heard_time;
+
+		if (silence > peer->health_longest_silence)
+			peer->health_longest_silence = silence;
+		if (silence >= HEALTH_SILENCE_NOTED)
+		{
+			platform_log("Internet play: %s %s: heard again after %lu.%lu s of silence (round trip %lu ms)",
+				peer->is_host && !peer->is_player ? "host" : "player", peer->name, silence / 1000,
+				silence / 100 % 10, peer->round_trip);
+		}
+		peer->health_silence_logged = 0;
+	}
+#endif
 	peer->heard_time = now;
 	if (!peer->connected)
 	{
@@ -1227,6 +1286,63 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short 
 	}
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a line in the log for each machine reached, every
+HEALTH_REPORT_INTERVAL: what went each way since the last, the longest
+silence, sends the network refused, packets that did not open, and its game
+connections' state (messages not yet acknowledged, waiting to go, sent
+again) */
+static void health_report(void)
+{
+	static unsigned long reported;
+	unsigned long now = p2p_now();
+	int index;
+
+	if (!elapsed(reported, HEALTH_REPORT_INTERVAL))
+		return;
+	reported = now;
+	for (index = 0; index < P2P_MAXIMUM_PEERS; index++)
+	{
+		struct peer *peer = &p2p.peers[index];
+		char streams[160];
+		int length = 0, count = 0, stream_index;
+
+		if (!peer->used || !peer->connected)
+			continue;
+		streams[0] = 0;
+		for (stream_index = 0; stream_index < MAXIMUM_STREAMS; stream_index++)
+		{
+			struct stream *stream = &p2p.streams[stream_index];
+			unsigned long resends;
+
+			if (!stream->used || stream->peer != index || stream->state != _stream_open_state || !stream->kcp)
+				continue;
+			resends = stream->kcp->xmit;
+			if (count++ < 2 && length < (int)sizeof(streams) - 1)
+			{
+				length += snprintf(streams + length, sizeof(streams) - (size_t)length,
+					"; game connection: unacknowledged %u, waiting %u, sent again %lu (+%lu), smoothed round trip %d ms",
+					(unsigned)stream->kcp->nsnd_buf, (unsigned)stream->kcp->nsnd_que, resends,
+					resends - stream->reported_resends, (int)stream->kcp->rx_srtt);
+				if (length > (int)sizeof(streams) - 1)
+					length = (int)sizeof(streams) - 1;
+			}
+			stream->reported_resends = resends;
+		}
+		platform_log("Internet play: %s %s: in %lu packets (%lu KB), out %lu (%lu KB), longest silence %lu ms, "
+			"round trip %lu ms, refused by the network %lu, did not open %lu%s",
+			peer->is_host && !peer->is_player ? "host" : "player", peer->name, peer->health_in,
+			peer->health_in_bytes / 1024, peer->health_out, peer->health_out_bytes / 1024,
+			peer->health_longest_silence > now - peer->heard_time ? peer->health_longest_silence : now - peer->heard_time,
+			peer->round_trip, peer->health_send_errors, peer->health_stale, streams);
+		peer->health_in = peer->health_out = 0;
+		peer->health_in_bytes = peer->health_out_bytes = 0;
+		peer->health_send_errors = peer->health_stale = 0;
+		peer->health_longest_silence = 0;
+	}
+}
+#endif
+
 static void update_peers(void)
 {
 	int index;
@@ -1241,6 +1357,22 @@ static void update_peers(void)
 		{
 			if (elapsed(peer->heard_time, PEER_TIMEOUT))
 				drop_peer(peer, "lost the connection");
+#if defined(HALO_XBOX_TARGET)
+			/* (oxbox: a silence, logged while it lasts: after PEER_TIMEOUT
+			the tunnel gives up on the machine) */
+			else if (!peer->health_silence_logged && elapsed(peer->heard_time, HEALTH_SILENCE_LOGGED))
+			{
+				int streams = 0, index2;
+
+				for (index2 = 0; index2 < MAXIMUM_STREAMS; index2++)
+					streams += p2p.streams[index2].used && p2p.streams[index2].peer == index;
+				platform_log("Internet play: %s %s: nothing heard from it for %d s (%d game connection%s open; "
+					"sent to it since the last report: %lu packets, %lu refused by the network)",
+					peer->is_host && !peer->is_player ? "host" : "player", peer->name, HEALTH_SILENCE_LOGGED / 1000,
+					streams, streams == 1 ? "" : "s", peer->health_out, peer->health_send_errors);
+				peer->health_silence_logged = 1;
+			}
+#endif
 			else if (elapsed(peer->sent_time, PING_INTERVAL))
 			{
 				peer_ping(peer, &peer->endpoint);
@@ -2077,6 +2209,29 @@ static int kcp_output(const char *buffer, int size, ikcpcb *kcp, void *user)
 	return 0;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: why a stream ended, for the log (the first cause noted stands) */
+#define STREAM_END(stream, cause) ((stream)->end_cause ? 0 : ((stream)->end_cause = (cause)))
+
+static const char *stream_end_cause(char cause)
+{
+	switch (cause)
+	{
+	case 'r': return "the other machine's game closed it";
+	case 'l': return "this machine's game closed it";
+	case 'e': return "this machine's game's socket failed";
+	case 'w': return "this machine's game stopped taking its data";
+	case 't': return "the tunnel gave up on it (a message sent again and again, never acknowledged)";
+	case 'o': return "a message too large for it came";
+	case 'p': return "the tunnel to that machine closed";
+	case 'c': return "it could not connect to this machine's game";
+	}
+	return "unknown";
+}
+#else
+#define STREAM_END(stream, cause) ((void)0)
+#endif
+
 static struct stream *stream_new(int peer_index, IUINT32 conversation)
 {
 	int index;
@@ -2117,6 +2272,24 @@ static struct stream *stream_new(int peer_index, IUINT32 conversation)
 
 static void stream_free(struct stream *stream)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* (oxbox: a game connection that was open, how it ended and how the
+	tunnel was doing then, for the log) */
+	if (stream->state == _stream_open_state)
+	{
+		struct peer *peer = &p2p.peers[stream->peer];
+		unsigned long now = p2p_now();
+
+		STREAM_END(stream, stream->kcp && stream->kcp->state == (IUINT32)-1 ? 't' : 'p');
+		platform_log("Internet play: %s %s: %s game connection ended after %lu s: %s (heard from it %lu ms before; "
+			"round trip %lu ms; unacknowledged %u, waiting %u, sent again %u, smoothed round trip %d ms)",
+			peer->is_host && !peer->is_player ? "host" : "player", peer->name,
+			stream->outgoing ? "this machine's" : "its", (now - stream->created_time) / 1000,
+			stream_end_cause(stream->end_cause), now - peer->heard_time, peer->round_trip,
+			stream->kcp ? (unsigned)stream->kcp->nsnd_buf : 0, stream->kcp ? (unsigned)stream->kcp->nsnd_que : 0,
+			stream->kcp ? (unsigned)stream->kcp->xmit : 0, stream->kcp ? (int)stream->kcp->rx_srtt : 0);
+	}
+#endif
 	/* (the game may not have taken the connection made for it yet) */
 	if (stream->local_port)
 		remember_closed(1, stream->local_port, stream->peer, stream->remote_port);
@@ -2140,6 +2313,7 @@ static void stream_message(struct stream *stream, unsigned char type, const void
 
 static void stream_local_closed(struct stream *stream)
 {
+	STREAM_END(stream, stream->remote_closed ? 'r' : 'l');
 	close_socket(&stream->socket);
 	/* (its port the system gives again now, not when the stream is let go
 	once the peer has all it sent: remembered from now, and no longer the
@@ -2190,6 +2364,9 @@ static void listener_readable(struct listener *listener)
 		}
 		stream->socket = socket;
 		stream->state = _stream_open_state;
+#if defined(HALO_XBOX_TARGET)
+		stream->outgoing = 1;
+#endif
 		put_short(open, listener->remote_port);
 		put_short(open + 2, from.sin_port);
 		stream_message(stream, _stream_open, open, sizeof(open));
@@ -2216,6 +2393,7 @@ static void stream_opened(struct stream *stream, const unsigned char *data, int 
 	if (stream->socket < 0 || (posix_socket_connect(stream->socket, &to, sizeof(to)) < 0 && !would_block()))
 	{
 		stream->local_port = 0;
+		STREAM_END(stream, 'c');
 		stream_local_closed(stream);
 		return;
 	}
@@ -2271,7 +2449,10 @@ static void stream_flush_pending(struct stream *stream)
 		if (sent < 0)
 		{
 			if (!would_block())
+			{
+				STREAM_END(stream, 'w');
 				stream_local_closed(stream);
+			}
 			return;
 		}
 		memmove(stream->pending, stream->pending + sent, (size_t)(stream->pending_size - sent));
@@ -2293,6 +2474,7 @@ static void stream_update(struct stream *stream)
 		{
 			/* larger than any this sends: nothing behind it would get
 			through */
+			STREAM_END(stream, 'o');
 			stream_local_closed(stream);
 			stream->remote_closed = 1;
 			break;
@@ -2317,6 +2499,7 @@ static void stream_update(struct stream *stream)
 			}
 			break;
 		case _stream_close:
+			STREAM_END(stream, 'r');
 			stream->remote_closed = 1;
 			if (!stream->closed_time)
 				stream->closed_time = p2p_now();
@@ -2348,6 +2531,7 @@ static void stream_readable(struct stream *stream)
 
 		if (size == 0 || (size < 0 && !would_block()))
 		{
+			STREAM_END(stream, size == 0 ? 'l' : 'e');
 			stream_local_closed(stream);
 			return;
 		}
@@ -2392,12 +2576,26 @@ static void tunnel_received(const unsigned char *packet, int size, const struct 
 	and all */
 	counter = packet_counter(packet);
 	if (!packet_fresh(peer, counter))
+	{
+#if defined(HALO_XBOX_TARGET)
+		peer->health_stale++;
+#endif
 		return;
+	}
 	packet_nonce(packet, nonce);
 	inner_size = p2p_aead_open(peer->receive_key, nonce, packet, TUNNEL_HEADER_SIZE, packet + TUNNEL_HEADER_SIZE,
 		size - TUNNEL_HEADER_SIZE, inner);
 	if (inner_size < 1)
+	{
+#if defined(HALO_XBOX_TARGET)
+		peer->health_stale++;
+#endif
 		return;
+	}
+#if defined(HALO_XBOX_TARGET)
+	peer->health_in++;
+	peer->health_in_bytes += (unsigned long)size;
+#endif
 	newest = counter > peer->receive_highest;
 	packet_received(peer, counter);
 	peer_heard(peer, from->sin_addr.s_addr, from->sin_port, newest);
@@ -3383,7 +3581,10 @@ static void *p2p_thread(void *unused)
 			struct stream *stream = &p2p.streams[index];
 
 			if (stream->used && stream->state == _stream_connecting && elapsed(stream->created_time, 5000))
+			{
+				STREAM_END(stream, 'c');
 				stream_local_closed(stream);
+			}
 		}
 #ifdef HALO_PROFILE
 		profile_trace_end(p2p_profile_names.streams);
@@ -3402,6 +3603,9 @@ static void *p2p_thread(void *unused)
 		profile_trace_end(p2p_profile_names.kcp_update);
 #endif
 		update_peers();
+#if defined(HALO_XBOX_TARGET)
+		health_report();
+#endif
 		webrtc_busy = p2p_webrtc_update();
 		expire_proxies();
 		stun_update();

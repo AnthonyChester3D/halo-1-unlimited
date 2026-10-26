@@ -142,6 +142,12 @@ struct p2p_listing
 	unsigned char key_hash[P2P_LISTING_KEY_HASH_SIZE];
 	unsigned char signing_key[P2P_LISTING_SIGNING_KEY_SIZE];
 	unsigned char sealed_token[P2P_LISTING_SEALED_TOKEN_SIZE];
+#if defined(OXBOX_CROSSPLAY)
+	/* listed on the PC builds' topics (the crossplay experiment), and an Xbox hosts it (an Xbox's crossplay game is
+	listed there too) */
+	unsigned char pc;
+	unsigned char on_xbox;
+#endif
 };
 /* a copy of the public games found, in the order shown (the most players
 first; then those not failed, the open ones, by name); returns their count */

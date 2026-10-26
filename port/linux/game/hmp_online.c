@@ -6,18 +6,26 @@ screens, with ONLINE GAMES at the top of the games list, for internet play (port
 
 - The item: a copy of SYSTEM LINK PLAY's, made from the same definition by its index alone (without the datum's salt:
   tag lookups take either, and the copy has its own, as END GAME's item in hmp_game.c), linked after it, a row lower,
-  with EDIT GAMETYPES a row lower too. Its text and its description (the list's extended description) are ours.
+  with EDIT GAMETYPES and the line above it a row lower too. Its text and its description (the list's extended
+  description) are ours.
 - A on either item sets the mode before the item's own handler (display_error_if_no_network_connection) opens the
   start-to-join screen: SYSTEM LINK PLAY is the LAN alone (no online games listed, a hosted game isn't listed
   online), ONLINE PLAY the internet alone (no LAN games; a hosted game is listed for other online Xboxes).
 - The games list in ONLINE PLAY: the header is ONLINE GAMES (a picture made of ui.map's header letters,
   mine/mkheader.py, from the XBE's file: hmp_online_picture). Other Xboxes' games listed online (p2p_lobby.c, through
-  OpenCE's brokers, on the Xboxes' own topics) are rows named "@ <name>". Choosing one reaches its host through
-  internet play (p2p_join_invite: the invite its listing holds), and the row says "@ JOINING..."; once the tunnel
-  reaches the host, its game answers the list's searches as a game on the LAN does, its own row takes the online
-  one's place (selected), and A joins it as any system link game. A host not reached in 90 seconds is marked failed
-  (its row comes back, last). Games of consoles reached through internet play show in ONLINE PLAY alone; the LAN's in
-  SYSTEM LINK PLAY alone.
+  OpenCE's brokers, on the Xboxes' own topics; with crossplay, OXBOX_CROSSPLAY, the PC builds' games too) are rows
+  of their own. Choosing one reaches its host through internet play (p2p_join_invite: the invite its listing holds),
+  and the row says "JOINING..."; once the tunnel reaches the host, its game answers the list's searches as a game on
+  the LAN does, its own row takes the online one's place (selected), and A joins it as any system link game. A host
+  not reached in 90 seconds is marked failed ("(failed) <name>"). Games of consoles reached through internet play
+  show in ONLINE PLAY alone; the LAN's in SYSTEM LINK PLAY alone.
+- Either list shows only games this Xbox can join (network_client_manager.c's advertisements, p2p_lobby.c's
+  listings: another network version, a password, or a PC's game on a map the Xbox doesn't have, for more than 16
+  players or playing an OpenCE gametype isn't kept: oxbox_online_pc_game_listed). Xboxes' games come first, then PCs'.
+  Each row's name is a few spaces in; an Xbox host's row has an Xbox there (the system link lobby's connected console,
+  smaller: hmp_online_text_drawn). The list has Halo's nine rows; with more games, up and down past its first or last
+  row scroll it (games_list_scroll), and the games listed online are kept while the menus are up
+  (hmp_online_release).
 
 opence.ini online = 0 turns internet play off (port/oxbox/net/oxbox_lwip_ws.c): no ONLINE PLAY item then.
 */
@@ -29,6 +37,7 @@ opence.ini online = 0 turns internet play off (port/oxbox/net/oxbox_lwip_ws.c): 
 #include "interface/ui_widget.h"
 #include "interface/event_manager.h"
 #include "bitmaps/bitmap_group.h"
+#include "text/draw_string.h"
 #include "hmp.h"
 #include "../src/p2p.h"
 
@@ -41,8 +50,27 @@ void platform_log(char const *format, ...);
 
 enum
 {
-	/* the list's rows (MAXIMUM_NETWORK_ADVERTISED_GAMES) */
-	MAXIMUM_ROWS = 9,
+	/* the list's rows (MAXIMUM_NETWORK_ADVERTISED_GAMES); the games listed online it scrolls through (p2p_lobby.c's
+	MAXIMUM_GAMES); all its rows */
+	VISIBLE_ROWS = 9,
+	MAXIMUM_LISTED = 32,
+	MAXIMUM_ROWS = VISIBLE_ROWS + MAXIMUM_LISTED,
+	/* a row's name is this many spaces in: an Xbox host's has an Xbox there */
+	ROW_INDENT = 7,
+	/* the Xbox: the system link lobby's connected console (XBOX_PICTURE's second picture, its 110 x 58 at the top
+	left), drawn smaller beside a row's name */
+	XBOX_PICTURE_INDEX = 1,
+	XBOX_PICTURE_WIDTH = 110,
+	XBOX_PICTURE_HEIGHT = 58,
+	XBOX_ICON_WIDTH = 38,
+	XBOX_ICON_HEIGHT = 20,
+	/* milliseconds: rows scrolled while up or down is held, one each */
+	SCROLL_REPEAT = 180,
+	/* the menus' button events (input.h's d-pad, then the left stick's directions) */
+	BUTTON_DPAD_UP = 8,
+	BUTTON_DPAD_DOWN = 9,
+	BUTTON_STICK_UP = 16,
+	BUTTON_STICK_DOWN = 17,
 	/* milliseconds: how long a host is reached for (p2p.c's JOIN_TIMEOUT) */
 	JOIN_TIMEOUT = 90000,
 	/* our texts (hmp.h's HMP_ONLINE_STRING_BASE on) */
@@ -61,8 +89,13 @@ enum
 
 #define MULTIPLAYER_SCREEN "multiplayer_type_select_screen"
 #define SYSTEM_LINK_ITEM "multiplayer_type_conn_item"
-#define GAMETYPES_ITEM "edit_gametypes"
+/* (a widget's name is its definition's own: EDIT GAMETYPES' and the line's, not the names the screen gives them,
+"edit_gametypes" and "blue line") */
+#define GAMETYPES_ITEM "multiplayer_type_gametypes_item"
+#define DIVIDER "blueline"
 #define FOUND_GAMES_HEADER "ui\\shell\\main_menu\\multiplayer_type_select\\connected\\server_list\\header_found_games"
+#define SERVER_LIST_SCREEN "server_list_screen"
+#define XBOX_PICTURE "ui\\shell\\bitmaps\\console_grafix"
 
 static char const *const online_strings[NUMBER_OF_ONLINE_STRINGS] =
 {
@@ -105,12 +138,23 @@ struct widget_instance
 	struct widget_instance *parent;
 	struct widget_instance *child;
 	struct widget_instance *focused_child;
-	struct
+	union
 	{
-		wchar_t *text;
-		short string_list_index;
-	} text_box;
-	byte list_parameters[0x50 - 0x44];
+		struct
+		{
+			wchar_t *text;
+			short string_list_index;
+		} text_box;
+		struct
+		{
+			short selected_index;
+			short last_list_tab_direction;
+			void *list_items;
+			word number_of_items;
+			struct widget_instance *extended_description;
+			wchar_t *item_text;
+		} list;
+	} parameters;
 	struct widget_animation_data animation;
 };
 typedef char verify_hmp_online_widget_instance_size[sizeof(struct widget_instance) == 0x58 ? 1 : -1];
@@ -157,11 +201,23 @@ int oxbox_xbe_online_header_read(void *buffer, unsigned long size);   /* (oxbox_
 void p2p_set_hosting_allowed(int allowed);
 
 extern int oxbox_online;                                               /* (opence.ini online, oxbox_lwip_ws.c) */
+boolean network_game_client_advertised_index_on_xbox(long game_index);   /* (network_client_manager.c) */
+struct bitmap_data *bitmap_group_try_and_get_bitmap(long bitmap_group_index, short bitmap_index);
+unsigned long system_milliseconds(void);
+char const *tag_get_name(long tag_index);
+void ui_play_audio_feedback_sound(short audio_feedback);
+void *__stdcall LocalAlloc(unsigned int flags, unsigned int bytes);
+void *__stdcall LocalFree(void *memory);
 
 /* ---------- globals */
 
-static struct online_row online_rows[MAXIMUM_ROWS];
-static struct p2p_listing online_games[MAXIMUM_ROWS];
+/* the games listed online as the list has them, while the menus are up (hmp_online_release frees them for a game) */
+struct online_listed
+{
+	struct online_row rows[MAXIMUM_LISTED];
+	struct p2p_listing games[MAXIMUM_LISTED];
+};
+static struct online_listed *online_listed;
 
 static struct
 {
@@ -180,6 +236,19 @@ static struct
 	boolean focus[4];
 	wchar_t strings[NUMBER_OF_ONLINE_STRINGS][128];
 	struct bitmap_data header;
+	/* the games list: all its rows (the LAN's or the reached hosts', then those listed online; Xboxes' first), which
+	an Xbox hosts, the first shown, and the list's own rows (Halo's displayed servers) and how many are shown */
+	void *rows[MAXIMUM_ROWS];
+	boolean on_xbox[MAXIMUM_ROWS];
+	int row_count;
+	int top;
+	void **shown;
+	int shown_count;
+	/* each controller's last row scrolled (up or down held) */
+	unsigned long scrolled[4];
+	/* the Xbox's picture: its tag, as found for the list made then */
+	long picture_tag;
+	unsigned long picture_time;
 } online;
 
 /* ---------- private code */
@@ -217,6 +286,8 @@ static void multiplayer_patch(short local, struct widget_instance *root)
 	online.screen[local] = root;
 	online.screen_time[local] = root->creation_time;
 	online.item[local] = 0;
+	/* (the games list opened from here starts at its top) */
+	online.top = 0;
 	if (!oxbox_online)
 		return;
 	for (c = root->child; c && !list; c = c->next)
@@ -254,9 +325,13 @@ static void multiplayer_patch(short local, struct widget_instance *root)
 		step = 33;
 	item->horizontal_offset = link->horizontal_offset;
 	item->vertical_offset = (short)(link->vertical_offset + step);
-	item->text_box.string_list_index = _string_online_item;
+	item->parameters.text_box.string_list_index = _string_online_item;
 	if (gametypes)
 		gametypes->vertical_offset += step;
+	/* (and the line between SYSTEM LINK PLAY and EDIT GAMETYPES, the screen's own child: under ONLINE PLAY now) */
+	for (c = root->child; c; c = c->next)
+		if (name_is(c, DIVIDER))
+			c->vertical_offset += step;
 	online.item[local] = item->definition_tag_index;
 	if (online.focus[local])
 	{
@@ -279,24 +354,85 @@ void hmp_online_tick(short local)
 	multiplayer_patch(local, root);
 }
 
+/* the games list's screen gets up or down: past its first or last row the list scrolls (TRUE: the event is taken),
+and from the very last (or first) row it goes round to the first (last) as Halo's lists do (Halo's own handler then
+moves the focus) */
+static boolean games_list_scroll(struct widget_instance *root, struct event_record *event)
+{
+	short button = event->data.button.index;
+	boolean up = button == BUTTON_DPAD_UP || button == BUTTON_STICK_UP;
+	boolean down = button == BUTTON_DPAD_DOWN || button == BUTTON_STICK_DOWN;
+	short controller = event->controller_index >= 0 && event->controller_index < 4 ? event->controller_index : 0;
+	unsigned long now = system_milliseconds();
+	struct widget_instance *list;
+	short selected;
+	int step;
+
+	if ((!up && !down) || online.row_count <= VISIBLE_ROWS || event->data.button.value < 1)
+		return FALSE;
+	for (list = root->child; list && list->type != 3; list = list->next)
+		;
+	if (!list || !online.shown || list->parameters.list.list_items != (void *)online.shown)
+		return FALSE;
+	selected = list->parameters.list.selected_index;
+	if (down && selected == VISIBLE_ROWS - 1)
+	{
+		if (online.top + VISIBLE_ROWS >= online.row_count)
+		{
+			/* (round to the first: on a press, not while held) */
+			if (event->data.button.value != 1)
+				return TRUE;
+			online.top = 0;
+			return FALSE;
+		}
+		step = 1;
+	}
+	else if (up && selected == 0)
+	{
+		if (online.top <= 0)
+		{
+			if (event->data.button.value != 1)
+				return TRUE;
+			online.top = online.row_count - VISIBLE_ROWS;
+			return FALSE;
+		}
+		step = -1;
+	}
+	else
+		return FALSE;
+	if (event->data.button.value == 1 || now - online.scrolled[controller] >= SCROLL_REPEAT)
+	{
+		online.top += step;
+		online.scrolled[controller] = now;
+		ui_play_audio_feedback_sound(1);
+	}
+	return TRUE;
+}
+
 /* a local player's top menu is about to get an event (hmp_options_dispatch): A or Start on SYSTEM LINK PLAY or ONLINE
-PLAY sets the mode; the item's own handler runs after (never taken here) */
-void hmp_online_dispatch(struct widget_instance *root, struct event_record *event)
+PLAY sets the mode (the item's own handler runs after); up and down in the games list scroll it. TRUE: taken */
+boolean hmp_online_dispatch(struct widget_instance *root, struct event_record *event)
 {
 	struct widget_instance *list, *item;
 	short local;
 
-	if (!root || event->type != 3 || event->data.button.value != 1 ||
-		(event->data.button.index != 0 && event->data.button.index != 12) || !name_is(root, MULTIPLAYER_SCREEN))
-		return;
+	if (!root || event->type != 3)
+		return FALSE;
+	if (name_is(root, SERVER_LIST_SCREEN))
+		return games_list_scroll(root, event);
+	if (event->data.button.value != 1 || (event->data.button.index != 0 && event->data.button.index != 12) ||
+		!name_is(root, MULTIPLAYER_SCREEN))
+	{
+		return FALSE;
+	}
 	for (local = 0; local < 4 && online.screen[local] != root; local++)
 		;
 	if (local > 3)
-		return;
+		return FALSE;
 	list = root->focused_child;
 	item = list ? list->focused_child : NULL;
 	if (!item)
-		return;
+		return FALSE;
 	if (online.item[local] && item->definition_tag_index == online.item[local])
 	{
 		set_mode(TRUE);
@@ -309,6 +445,7 @@ void hmp_online_dispatch(struct widget_instance *root, struct event_record *even
 	}
 	else
 		online.focus[local] = FALSE;
+	return FALSE;
 }
 
 /* the Multiplayer list's extended description (multiplayer_type_menu_update_extended_description, after it set the
@@ -384,17 +521,140 @@ boolean hmp_online_picture_read(long fake_index, void *buffer, long size)
 
 /* ---------- public code: the games list's rows */
 
+/* the Xbox's stock multiplayer levels (hmp_maps.c's), by name: the maps of PC games it can play */
+static char const *const stock_maps[] =
+{
+	"beavercreek", "sidewinder", "damnation", "ratrace", "prisoner", "hangemhigh", "chillout", "carousel",
+	"boardingaction", "bloodgulch", "wizard", "putput", "longest",
+};
+
+/* whether a PC build's game (version 38 or 39) is one this Xbox can join, so the games list shows it (a listing's or
+an advertisement's): on one of the Xbox's stock levels (by its name, or its path's last part: not a Custom Edition map,
+nor one of the PC's own levels), for at most 16 players, playing no OpenCE gametype (the game's kind: its mode and
+Hardcore, 0 for none) */
+int oxbox_online_stock_map(char const *map);
+
+int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind)
+{
+	return map && kind == 0 && maximum_players <= 16 && oxbox_online_stock_map(map);
+}
+
+/* whether a map is one of the Xbox's 13 multiplayer levels (by its name, or its path's last part), and no folder map
+("+folder", "+pack/folder": hmp_maps.c), whatever its name: one a PC has too. The lobby kinds
+(network_server_manager.c's oxbox_crossplay_hosting) and the games list (oxbox_online_pc_game_listed) */
+int oxbox_online_stock_map(char const *map)
+{
+	char const *name = map, *c;
+	int index;
+
+	if (!map || map[0] == '+')
+		return FALSE;
+	for (c = map; *c; c++)
+		if (*c == '\\' || *c == '/')
+			name = c + 1;
+	for (index = 0; index < (int)NUMBEROF(stock_maps); index++)
+		if (!csstrcasecmp(name, stock_maps[index]))
+			return TRUE;
+	return FALSE;
+}
+
+/* the games listed online, freed with the menus' memory (hmp_menu_memory_release: a game map loaded) */
+void hmp_online_release(void)
+{
+	if (online_listed)
+		LocalFree(online_listed);
+	online_listed = NULL;
+	online.row_count = 0;
+	online.shown = NULL;
+	online.shown_count = 0;
+}
+
+/* a row of the games listed online (the list's rows, as an advertised game's record) */
+static int listed_rows(int known_count, void **known)
+{
+	int game_count, index, row_count = 0;
+
+	if (!online_listed)
+	{
+		online_listed = (struct online_listed *)LocalAlloc(0x40 /* LMEM_ZEROINIT */, sizeof(*online_listed));
+		if (!online_listed)
+			return 0;
+	}
+	game_count = p2p_lobby_games(online_listed->games, MAXIMUM_LISTED);
+	for (index = 0; index < game_count; index++)
+	{
+		struct p2p_listing *game = &online_listed->games[index];
+		struct online_row *row = &online_listed->rows[row_count];
+		int known_index;
+
+		/* (not this console's own game, nor one with a password: an Xbox has no way to give one) */
+		if (game->locked || !memcmp(game->identifier, p2p_identifier(), sizeof(game->identifier)))
+			continue;
+		/* (a host reached already: its own row is in the list. Only a row the list shows: a host on this LAN that
+		is listed online too is the LAN's in SYSTEM LINK PLAY, and its online row stands in ONLINE PLAY) */
+		for (known_index = 0; known_index < known_count; known_index++)
+		{
+			struct online_row const *shown = (struct online_row const *)known[known_index];
+
+			if (shown->valid && !memcmp(shown->identifier, game->identifier, sizeof(game->identifier)))
+				break;
+		}
+		if (known_index < known_count)
+			continue;
+		/* (kept where its row is: game i's row is row i) */
+		if (row_count != index)
+			online_listed->games[row_count] = *game;
+		game = &online_listed->games[row_count];
+		memset(row, 0, sizeof(*row));
+		row->xnaddr_size = 12;
+		memcpy(row->identifier, game->identifier, sizeof(row->identifier));
+		row->update_time = system_milliseconds();
+		if (online.joining && !memcmp(game->identifier, online.identifier, sizeof(online.identifier)))
+			row_name(row->game_name, NUMBEROF(row->game_name), "JOINING...", NULL);
+		else
+			row_name(row->game_name, NUMBEROF(row->game_name), game->failed ? "(failed) " : "", game->name);
+		strncpy(row->map_name, game->map, sizeof(row->map_name) - 1);
+		row->engine_type = game->engine_type;
+		row->machine_count = game->player_count;
+		row->player_count = game->player_count;
+		row->maximum_player_count = game->maximum_player_count;
+		/* (the Xbox's platform; "open": joinable now) */
+		row->platform = 0;
+		row->open = game->open ? TRUE : FALSE;
+		row->valid = TRUE;
+		row->has_teams = game->has_teams ? TRUE : FALSE;
+		row_count++;
+	}
+	return row_count;
+}
+
+/* whether an Xbox hosts the game of one of the list's rows: an advertised game's (by its place among available, the
+client's), or one listed online */
+static boolean row_on_xbox(void const *row, void const *available, int available_count)
+{
+	struct online_row const *advertised = (struct online_row const *)available;
+	struct online_row const *as_row = (struct online_row const *)row;
+
+	if (as_row >= advertised && as_row < advertised + available_count)
+		return network_game_client_advertised_index_on_xbox((long)(as_row - advertised));
+#if defined(OXBOX_CROSSPLAY)
+	if (online_listed && as_row >= online_listed->rows && as_row < online_listed->rows + MAXIMUM_LISTED)
+		return online_listed->games[as_row - online_listed->rows].on_xbox != 0;
+#endif
+	/* (the Xboxes' own games alone are listed without crossplay) */
+	return TRUE;
+}
+
 /* the list's rows for the mode (displayed: the advertised games the list shows, count of them, of maximum; available:
 all of them, available_count): SYSTEM LINK PLAY keeps the LAN's games, ONLINE PLAY those of consoles reached through
-internet play, then the games listed online. Returns the row count. select: set to the row of a game whose host was
-just reached (its own row now), else left as it is */
+internet play, then the games listed online; Xboxes' games first, then PCs' (crossplay). The list shows maximum of them
+from online.top (games_list_scroll), into displayed. Returns the count shown. select: set to the row (as shown) of a
+game whose host was just reached (its own row now), else left as it is */
 int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *available, int available_count,
 	short *select)
 {
-	int game_count, index, kept, row_count = 0;
-
-	(void)available;
-	(void)available_count;
+	void *all[MAXIMUM_ROWS];
+	int index, kept, all_count, reached = NONE;
 
 	/* (the list's own rows: the LAN's, or the internet's) */
 	for (index = 0, kept = 0; index < count; index++)
@@ -407,107 +667,176 @@ int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *
 			displayed[kept++] = displayed[index];
 	}
 	count = kept;
-	if (!online.mode)
-		return count;
-	if (!online.browsing)
+	for (index = 0; index < count; index++)
+		all[index] = displayed[index];
+	all_count = count;
+	if (online.mode)
 	{
-		/* (the listings are gathered from now on: ONLINE PLAY's first list) */
-		p2p_lobby_browse(TRUE);
-		online.browsing = TRUE;
-	}
-	if (online.joining)
-	{
-		unsigned long address;
-
-		/* the host reached: its own row, selected */
-		for (index = 0; index < count; index++)
+		if (!online.browsing)
 		{
-			struct online_row const *row = (struct online_row const *)displayed[index];
+			/* (the listings are gathered from now on: ONLINE PLAY's first list) */
+			p2p_lobby_browse(TRUE);
+			online.browsing = TRUE;
+		}
+		if (online.joining)
+		{
+			unsigned long address;
 
-			if (row->valid && !memcmp(row->identifier, online.identifier, sizeof(online.identifier)))
+			/* the host reached: its own row, selected */
+			for (index = 0; index < count; index++)
 			{
-				if (select)
-					*select = (short)index;
+				struct online_row const *row = (struct online_row const *)displayed[index];
+
+				if (row->valid && !memcmp(row->identifier, online.identifier, sizeof(online.identifier)))
+				{
+					reached = index;
+					online.joining = FALSE;
+					break;
+				}
+			}
+			if (online.joining && !p2p_peer_reached(online.identifier, &address) &&
+				system_milliseconds() - online.time > JOIN_TIMEOUT)
+			{
+				p2p_lobby_mark_failed(online.identifier);
 				online.joining = FALSE;
-				break;
 			}
 		}
-		if (online.joining && !p2p_peer_reached(online.identifier, &address) &&
-			system_milliseconds() - online.time > JOIN_TIMEOUT)
-		{
-			p2p_lobby_mark_failed(online.identifier);
-			online.joining = FALSE;
-		}
+		kept = listed_rows(count, displayed);
+		for (index = 0; index < kept && all_count < MAXIMUM_ROWS; index++)
+			all[all_count++] = &online_listed->rows[index];
 	}
-	game_count = p2p_lobby_games(online_games, MAXIMUM_ROWS);
-	for (index = 0; index < game_count && count < maximum; index++)
+	/* Xboxes' games first, each in its place (the reached host's row followed) */
+	online.row_count = 0;
+	for (index = 0; index < all_count; index++)
 	{
-		struct p2p_listing const *game = &online_games[index];
-		struct online_row *row = &online_rows[row_count];
-		int known;
-
-		/* (not this console's own game, nor one with a password: an Xbox hosts none) */
-		if (game->locked || !memcmp(game->identifier, p2p_identifier(), sizeof(game->identifier)))
-			continue;
-		/* (a host reached already: its own row is in the list. Only a row the list shows: a host on this LAN that
-		is listed online too is the LAN's in SYSTEM LINK PLAY, and its online row stands in ONLINE PLAY) */
-		for (known = 0; known < count; known++)
+		if (row_on_xbox(all[index], available, available_count))
 		{
-			struct online_row const *shown = (struct online_row const *)displayed[known];
-
-			if (shown->valid && !memcmp(shown->identifier, game->identifier, sizeof(game->identifier)))
-				break;
+			if (index == reached)
+				reached = online.row_count + MAXIMUM_ROWS;
+			online.on_xbox[online.row_count] = TRUE;
+			online.rows[online.row_count++] = all[index];
 		}
-		if (known < count)
-			continue;
-		memset(row, 0, sizeof(*row));
-		row->xnaddr_size = 12;
-		memcpy(row->identifier, game->identifier, sizeof(row->identifier));
-		row->update_time = system_milliseconds();
-		if (online.joining && !memcmp(game->identifier, online.identifier, sizeof(online.identifier)))
-			row_name(row->game_name, NUMBEROF(row->game_name), "@ JOINING...", NULL);
-		else
-			row_name(row->game_name, NUMBEROF(row->game_name), game->failed ? "@ (failed) " : "@ ", game->name);
-		strncpy(row->map_name, game->map, sizeof(row->map_name) - 1);
-		row->engine_type = game->engine_type;
-		row->machine_count = game->player_count;
-		row->player_count = game->player_count;
-		row->maximum_player_count = game->maximum_player_count;
-		/* (the Xbox's platform; "open": joinable now) */
-		row->platform = 0;
-		row->open = game->open ? TRUE : FALSE;
-		row->valid = TRUE;
-		row->has_teams = game->has_teams ? TRUE : FALSE;
-		displayed[count++] = row;
-		row_count++;
 	}
-	return count;
+	for (index = 0; index < all_count; index++)
+	{
+		if (!row_on_xbox(all[index], available, available_count))
+		{
+			if (index == reached)
+				reached = online.row_count + MAXIMUM_ROWS;
+			online.on_xbox[online.row_count] = FALSE;
+			online.rows[online.row_count++] = all[index];
+		}
+	}
+	/* (the first shown: the reached host's row in sight; never past the last screenful) */
+	if (reached != NONE)
+	{
+		reached -= MAXIMUM_ROWS;
+		if (reached < online.top)
+			online.top = reached;
+		else if (reached >= online.top + maximum)
+			online.top = reached - maximum + 1;
+		if (select)
+			*select = (short)(reached - online.top);
+	}
+	if (online.top > online.row_count - maximum)
+		online.top = online.row_count - maximum;
+	if (online.top < 0)
+		online.top = 0;
+	online.shown = displayed;
+	online.shown_count = MIN(maximum, online.row_count - online.top);
+	for (index = 0; index < online.shown_count; index++)
+		displayed[index] = online.rows[online.top + index];
+	return online.shown_count;
+}
+
+/* a row's text as the list writes it (text: up to length characters): its name ROW_INDENT spaces in, where an Xbox
+host's has an Xbox (hmp_online_text_drawn) */
+void oxbox_online_row_text(wchar_t *text, int length)
+{
+	int size, index;
+
+	if (!text)
+		return;
+	for (size = 0; text[size] && size < length; size++)
+		;
+	if (size + ROW_INDENT > length)
+		size = length - ROW_INDENT;
+	for (index = size - 1; index >= 0; index--)
+		text[index + ROW_INDENT] = text[index];
+	for (index = 0; index < ROW_INDENT; index++)
+		text[index] = L' ';
+	text[size + ROW_INDENT] = 0;
+}
+
+/* a text box was drawn (ui_widget.c, in bounds, its font and colour still set): a games list row's Xbox, if an Xbox
+hosts its game, in its indent, in the text's alpha */
+void hmp_online_text_drawn(struct widget_instance *widget, rectangle2d const *bounds)
+{
+	struct widget_instance *list = widget ? widget->parent : NULL, *c;
+	struct bitmap_data *bitmap;
+	rectangle2d text, cursor, icon, picture;
+	real_argb_color color;
+	unsigned long a8;
+	wchar_t const *string;
+	short middle;
+	int index = 0;
+
+	if (!list || !online.shown || list->type != 3 || list->parameters.list.list_items != (void *)online.shown)
+		return;
+	for (c = list->child; c && c != widget; c = c->next)
+		index++;
+	if (!c || index >= online.shown_count || online.top + index >= online.row_count || !online.on_xbox[online.top + index])
+		return;
+	string = widget->parameters.text_box.text;
+	if (!string || !string[0])
+		return;
+	if (list->creation_time != (long)online.picture_time || !online.picture_tag)
+	{
+		online.picture_tag = tag_loaded('bitm', XBOX_PICTURE);
+		online.picture_time = (unsigned long)list->creation_time;
+	}
+	if (online.picture_tag == NONE ||
+		!(bitmap = bitmap_group_try_and_get_bitmap(online.picture_tag, XBOX_PICTURE_INDEX)))
+	{
+		return;
+	}
+	draw_unicode_string_compute_bounds(bounds, string, &text, &cursor);
+	middle = draw_unicode_string_capital_middle(bounds, string);
+	/* (the text's bounds start at its first letter's ink, past the spaces) */
+	icon.x1 = (short)(text.x0 - 4);
+	icon.x0 = (short)(icon.x1 - XBOX_ICON_WIDTH);
+	icon.y0 = (short)(middle - XBOX_ICON_HEIGHT / 2);
+	icon.y1 = (short)(icon.y0 + XBOX_ICON_HEIGHT);
+	picture.x0 = 0;
+	picture.y0 = 0;
+	picture.x1 = XBOX_PICTURE_WIDTH;
+	picture.y1 = XBOX_PICTURE_HEIGHT;
+	draw_string_get_color(&color);
+	a8 = (unsigned long)(long)(color.alpha * 255.0f + 0.5f);
+	draw_bitmap_in_rect(bitmap, &icon, &picture, NULL, (a8 > 255 ? 255 : a8) << 24 | 0xffffff, NULL, TRUE);
 }
 
 /* A on a row: an online game's host is reached (TRUE: the row was an online game's, handled here) */
 boolean oxbox_online_row_join(void const *server)
 {
 	struct online_row const *row = (struct online_row const *)server;
-	int index;
+	struct p2p_listing const *game;
 
-	if (row < online_rows || row >= online_rows + MAXIMUM_ROWS)
+	if (!online_listed || row < online_listed->rows || row >= online_listed->rows + MAXIMUM_LISTED)
 		return FALSE;
-	for (index = 0; index < MAXIMUM_ROWS; index++)
+	game = &online_listed->games[row - online_listed->rows];
+	if (!memcmp(game->identifier, row->identifier, sizeof(row->identifier)) && game->invite[0] &&
+		p2p_join_invite(game->invite))
 	{
-		struct p2p_listing const *game = &online_games[index];
-
-		if (!memcmp(game->identifier, row->identifier, sizeof(row->identifier)) && game->invite[0])
-		{
-			if (p2p_join_invite(game->invite))
-			{
-				memcpy(online.identifier, row->identifier, sizeof(online.identifier));
-				online.joining = TRUE;
-				online.time = system_milliseconds();
-				platform_log("online: reaching \"%s\" (%s, %d of %d players)", game->name, game->map,
-					game->player_count, game->maximum_player_count);
-			}
-			return TRUE;
-		}
+		memcpy(online.identifier, row->identifier, sizeof(online.identifier));
+		online.joining = TRUE;
+		online.time = system_milliseconds();
+		platform_log("online: reaching \"%s\" (%s, %d of %d players)%s", game->name, game->map,
+			game->player_count, game->maximum_player_count,
+#if defined(OXBOX_CROSSPLAY)
+			!game->on_xbox ? " (a PC game: crossplay experiment)" :
+#endif
+			"");
 	}
 	return TRUE;
 }

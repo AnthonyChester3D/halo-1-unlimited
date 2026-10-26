@@ -18,6 +18,9 @@ OBJECTS.C
 #include "cseries/errors.h"
 #include "cseries/profile.h"
 #include "devices/device_definitions.h"
+#if defined(OXBOX_CROSSPLAY)
+#include "devices/device_machines.h" /* port: elevator movement and rider carry */
+#endif
 #include "devices/devices.h"
 #include "editor/editor_stubs.h"
 #include "effects/contrail_definitions.h"
@@ -157,6 +160,9 @@ on the host's word */
 long network_objects_new_object_index(void);
 boolean network_objects_creating_host_object(void);
 boolean network_objects_may_delete(long object_index);
+#if defined(OXBOX_CROSSPLAY)
+boolean network_objects_client_deleting(void);
+#endif
 /* port/linux/game/network_coop.c's: the scripts' attaching, on co-op's clients */
 void network_coop_note_attach(long parent_index, char const *parent_marker_name, long child_index,
 	char const *child_marker_name);
@@ -1805,7 +1811,15 @@ static void object_delete_initial_recursive(
 	struct object_header_datum *header = object_header_get(object_index);
 	struct object_datum *object = object_get(object_index);
 
+#if defined(OXBOX_CROSSPLAY)
+	/* (port: but on a client of the distributed netcode, which deletes the
+	host's objects on the host's word, a flag or ball among them: the game
+	deletes none, but a host may, and the client lets go of it first,
+	network_objects.c's distributed_client_delete. OpenCE 956387d8) */
+	if (game_engine_running() && object->object.type == _object_type_weapon && !network_objects_client_deleting())
+#else
 	if (game_engine_running() && object->object.type == _object_type_weapon)
+#endif
 	{
 		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 829, !(weapon_is_flag(object_index)));
 	}
@@ -3838,6 +3852,12 @@ boolean object_force_inside_bsp(
 static boolean object_update(
 	long object_index)
 {
+#if defined(OXBOX_CROSSPLAY)
+	/* port: the floor transform before this tick's device motion (oxbox: OpenCE's network version 30 rule, the
+	crossplay builds': device_machines.c) */
+	real_point3d elevator_position;
+	boolean elevator;
+#endif
 	struct object_header_datum *header = object_header_get(object_index);
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
@@ -3860,6 +3880,12 @@ static boolean object_update(
 			}
 		}
 
+#if defined(OXBOX_CROSSPLAY)
+		/* port: preserve the floor before device_update advances its phase. */
+		elevator = object->object.type == _object_type_machine &&
+			machine_get_elevator_position(object_index, &elevator_position);
+#endif
+
 		object_type_update(object_index);
 		OXBOX_PERF_OBJECT_MARK_COUNTED(_oxbox_perf_object_type_update)
 		if (object_definition->object.collision_model.index!=NONE)
@@ -3874,6 +3900,11 @@ static boolean object_update(
 		if (!TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
 		{
 			object_compute_node_matrices(object_index);
+#if defined(OXBOX_CROSSPLAY)
+			/* port: carry by this tick's movement, after its collision nodes. */
+			if (elevator)
+				machine_move_elevator_riders(object_index, &elevator_position);
+#endif
 		}
 		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_node_matrices)
 

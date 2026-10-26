@@ -75,6 +75,11 @@ enum
 	/* its token sealed with a password's key */
 	_listing_password = 16,
 	STAMP_SIZE = 8,
+#if defined(OXBOX_CROSSPLAY)
+	/* oxbox: the stamp's last two bytes in an Xbox's listing, "OX" (the PC builds read only its first, the game's
+	kind): an Xbox's crossplay game, which is listed as the PC builds' version, is still told for an Xbox's */
+	STAMP_XBOX_OFFSET = STAMP_SIZE - 2,
+#endif
 	/* the signed part's end: everything but the signature */
 	MAXIMUM_LISTING_SIZE = 2 + 1 + 2 + 1 + 4 + 4 + P2P_KEY_SIZE + P2P_SEALED_TOKEN_SIZE + 3 +
 		(1 + P2P_LISTING_NAME_SIZE) + (1 + P2P_LISTING_MAP_SIZE) + (1 + P2P_LISTING_GAMETYPE_SIZE) + STAMP_SIZE +
@@ -135,6 +140,11 @@ struct listing
 	char name[P2P_LISTING_NAME_SIZE + 1];
 	char map[P2P_LISTING_MAP_SIZE + 1];
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
+#if defined(OXBOX_CROSSPLAY)
+	/* oxbox: its stamp (the PC builds': the game's kind first, an OpenCE gametype's; the rest reserved, zero, but
+	this Xbox's STAMP_XBOX) */
+	unsigned char stamp[STAMP_SIZE];
+#endif
 	/* the signed part's size */
 	int signed_size;
 };
@@ -164,6 +174,9 @@ struct queued
 	unsigned char payload[MAXIMUM_LISTING_SIZE];
 	int size;
 	int retained;
+#if defined(OXBOX_CROSSPLAY)
+	int pc;
+#endif
 };
 
 static struct
@@ -229,7 +242,16 @@ void p2p_lobby_slot_topic(const unsigned char *key_hash, char *topic, int size)
 	char text[2 * P2P_KEY_HASH_SIZE + 1];
 
 	p2p_hex(key_hash, P2P_KEY_HASH_SIZE, text);
+#if defined(OXBOX_CROSSPLAY)
+	{
+		extern int oxbox_crossplay;
+
+		/* (the crossplay experiment: this Xbox's games listed in the PC browser) */
+		snprintf(topic, (size_t)size, "%s%s", oxbox_crossplay ? P2P_PC_LOBBY_SLOT_PREFIX : P2P_LOBBY_SLOT_PREFIX, text);
+	}
+#else
 	snprintf(topic, (size_t)size, "%s%s", P2P_LOBBY_SLOT_PREFIX, text);
+#endif
 }
 
 /* the hash of an Ed25519 key's X25519 form (an invite's host part); 0 if
@@ -269,6 +291,11 @@ static int put_text(unsigned char *bytes, const char *text, int maximum)
 	return 1 + length;
 }
 
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox: the version the next listing made says, if not 0 (p2p_set_game_listing's tombstone for the PC builds) */
+static int listing_version_override;
+#endif
+
 /* the listing of the game hosted, signed: flags (_listing_closed for a
 tombstone) */
 static int listing_make(unsigned char *bytes, int flags)
@@ -282,8 +309,21 @@ static int listing_make(unsigned char *bytes, int flags)
 	bytes[size++] = 'H';
 	bytes[size++] = 'L';
 	bytes[size++] = LISTING_FORMAT;
+#if defined(OXBOX_CROSSPLAY)
+	/* (an Xbox's crossplay game, the PC builds' version; the Xboxes' alone, theirs: on the same slot, where the PC
+	builds pass it by. The lobby's kind: network_server_manager.c's oxbox_crossplay_hosting) */
+	{
+		extern int oxbox_crossplay, oxbox_crossplay_hosted;
+		int version = listing_version_override ? listing_version_override :
+			oxbox_crossplay && oxbox_crossplay_hosted ? P2P_PC_LOBBY_VERSION_LAST : LOBBY_VERSION;
+
+		bytes[size++] = (unsigned char)(version >> 8);
+		bytes[size++] = (unsigned char)version;
+	}
+#else
 	bytes[size++] = (unsigned char)(LOBBY_VERSION >> 8);
 	bytes[size++] = (unsigned char)LOBBY_VERSION;
+#endif
 	bytes[size++] = (unsigned char)flags;
 	put_long(bytes + size, ++lobby.sequence);
 	size += 4;
@@ -312,6 +352,10 @@ static int listing_make(unsigned char *bytes, int flags)
 	size += put_text(bytes + size, lobby.map, P2P_LISTING_MAP_SIZE);
 	size += put_text(bytes + size, lobby.gametype, P2P_LISTING_GAMETYPE_SIZE);
 	memset(bytes + size, 0, STAMP_SIZE);
+#if defined(OXBOX_CROSSPLAY)
+	bytes[size + STAMP_XBOX_OFFSET] = 'O';
+	bytes[size + STAMP_XBOX_OFFSET + 1] = 'X';
+#endif
 	size += STAMP_SIZE;
 	memcpy(data, signature_label, sizeof(signature_label) - 1);
 	memcpy(data + sizeof(signature_label) - 1, signed_part, (size_t)size);
@@ -376,6 +420,10 @@ static int listing_read(const unsigned char *bytes, int size, struct listing *li
 	{
 		return 0;
 	}
+#if defined(OXBOX_CROSSPLAY)
+	if (offset + STAMP_SIZE <= size)
+		memcpy(listing->stamp, bytes + offset, STAMP_SIZE);
+#endif
 	offset += STAMP_SIZE;
 	if (offset + P2P_SIGNATURE_SIZE != size)
 		return 0;
@@ -531,7 +579,23 @@ static int identifier_failed(const unsigned char *identifier)
 	return 0;
 }
 
+#if defined(OXBOX_CROSSPLAY)
+static void slot_heard(const char *hash_text, const unsigned char *payload, int size, int retained, int pc);
+
 void p2p_lobby_slot_heard(const char *hash_text, const unsigned char *payload, int size, int retained)
+{
+	slot_heard(hash_text, payload, size, retained, 0);
+}
+
+void p2p_lobby_pc_slot_heard(const char *hash_text, const unsigned char *payload, int size, int retained)
+{
+	slot_heard(hash_text, payload, size, retained, 1);
+}
+
+static void slot_heard(const char *hash_text, const unsigned char *payload, int size, int retained, int pc)
+#else
+void p2p_lobby_slot_heard(const char *hash_text, const unsigned char *payload, int size, int retained)
+#endif
 {
 	unsigned char key_hash[P2P_KEY_HASH_SIZE];
 	struct game *game;
@@ -576,7 +640,18 @@ void p2p_lobby_slot_heard(const char *hash_text, const unsigned char *payload, i
 	memcpy(queued->payload, payload, (size_t)size);
 	queued->size = size;
 	queued->retained = retained;
+#if defined(OXBOX_CROSSPLAY)
+	queued->pc = pc;
+#endif
 }
+
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox: whether an Xbox's crossplay game's listing (its stamp's STAMP_XBOX) */
+static int listing_from_xbox(const struct listing *listing)
+{
+	return listing->stamp[STAMP_XBOX_OFFSET] == 'O' && listing->stamp[STAMP_XBOX_OFFSET + 1] == 'X';
+}
+#endif
 
 /* a queued listing, its signature checked: taken or not */
 static void listing_take(const struct queued *queued, const struct listing *listing)
@@ -659,6 +734,11 @@ static void listing_take(const struct queued *queued, const struct listing *list
 	shown->in_progress = (listing->flags & _listing_in_progress) != 0;
 	shown->has_teams = (listing->flags & _listing_has_teams) != 0;
 	shown->ping = -1;
+#if defined(OXBOX_CROSSPLAY)
+	shown->pc = queued->pc ? 1 : 0;
+	/* (an Xbox's: on the Xboxes' own topics, or an Xbox's crossplay game on the PC builds') */
+	shown->on_xbox = !queued->pc || listing_from_xbox(listing) ? 1 : 0;
+#endif
 }
 
 static void update_browsing(void)
@@ -680,11 +760,37 @@ static void update_browsing(void)
 		int good;
 
 		memmove(lobby.queue, lobby.queue + 1, sizeof(*lobby.queue) * (size_t)(--lobby.queue_count));
+#if defined(OXBOX_CROSSPLAY)
+		/* (on the PC builds' slots: a PC build's version, or an Xbox's game of the Xboxes' alone, which a crossplay
+		Xbox lists there with its own) */
+		if (!listing_read(queued.payload, queued.size, &listing) ||
+			(queued.pc ? (listing.version < P2P_PC_LOBBY_VERSION_FIRST || listing.version > P2P_PC_LOBBY_VERSION_LAST) &&
+			!(listing.version == LOBBY_VERSION && listing_from_xbox(&listing)) :
+			listing.version != LOBBY_VERSION) ||
+#else
 		if (!listing_read(queued.payload, queued.size, &listing) || listing.version != LOBBY_VERSION ||
+#endif
 			!signing_key_hash(listing.key, key_hash) || memcmp(key_hash, queued.key_hash, P2P_KEY_HASH_SIZE))
 		{
 			continue;
 		}
+#if defined(OXBOX_CROSSPLAY)
+		/* oxbox: only a game this Xbox can join is kept (the rest would be in the way: "we can't use it, don't show
+		it"): none with a password (it has no way to give one), and of the PC builds' games one an Xbox hosts, or one
+		on a stock map for at most 16 players playing no OpenCE gametype (port/linux/game/hmp_online.c); not checked
+		further, the rest are dropped here, before their signatures are */
+		if (!(listing.flags & _listing_closed))
+		{
+			extern int oxbox_online_pc_game_listed(const char *map, long maximum_players, long kind);
+
+			if ((listing.flags & _listing_password) ||
+				(queued.pc && !listing_from_xbox(&listing) &&
+					!oxbox_online_pc_game_listed(listing.map, listing.maximum_player_count, listing.stamp[0])))
+			{
+				continue;
+			}
+		}
+#endif
 		/* a slot's retained copy: only one of about now (a host that died
 		left it, and nothing cleared it) */
 		if (queued.retained)
@@ -786,8 +892,41 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 		P2P_LISTING_GAMETYPE_SIZE);
 	/* (only the game's server writes these: unchanged, it need not wait for
 	the lock) */
+#if defined(OXBOX_CROSSPLAY)
+	/* (oxbox: and the lobby's kind, which the listing's version says: network_server_manager.c sets it before) */
+	extern int oxbox_crossplay, oxbox_crossplay_hosted;
+	static int listed_kind = -1;
+	int kind_changed = listed_kind != oxbox_crossplay_hosted;
+	int was_crossplay = listed_kind == 1;
+
+	listed_kind = oxbox_crossplay_hosted;
+	/* (a crossplay lobby turned the Xboxes' alone: a tombstone in the PC builds' version first, so a PC browsing now
+	drops the game at once (the listing after it, in the Xbox's version, it passes by); the listing follows once
+	TRIGGER_INTERVAL has passed, leaving the brokers time to pass the tombstone on) */
+	if (kind_changed && was_crossplay && oxbox_crossplay)
+	{
+		pthread_mutex_lock(&p2p_lock);
+		if (lobby.listed)
+		{
+			unsigned char tombstone[MAXIMUM_LISTING_SIZE];
+			int size;
+
+			listing_version_override = P2P_PC_LOBBY_VERSION_LAST;
+			size = listing_make(tombstone, _listing_closed);
+			listing_version_override = 0;
+			p2p_signal_lobby_publish(tombstone, size, 0);
+			lobby.published_time = p2p_now();
+			lobby.republish_wanted = 0;
+		}
+		pthread_mutex_unlock(&p2p_lock);
+	}
+	if (!kind_changed &&
+		!strcmp(new_name, lobby.name) && !strcmp(new_map, lobby.map) && !strcmp(new_gametype, lobby.gametype) &&
+		engine_type == lobby.engine_type && flags == lobby.flags)
+#else
 	if (!strcmp(new_name, lobby.name) && !strcmp(new_map, lobby.map) && !strcmp(new_gametype, lobby.gametype) &&
 		engine_type == lobby.engine_type && flags == lobby.flags)
+#endif
 	{
 		return;
 	}

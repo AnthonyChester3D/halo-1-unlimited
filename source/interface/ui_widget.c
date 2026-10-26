@@ -7205,6 +7205,14 @@ static void widget_instance_render_recursive(
 				hmp_lobby_text_drawn(widget, &text_bounds);
 			}
 #endif
+#if defined(OXBOX_NET_P2P)
+			/* oxbox: the games list's rows: an Xbox beside an Xbox host's game (port/linux/game/hmp_online.c) */
+			{
+				extern void hmp_online_text_drawn(struct widget_instance *widget, rectangle2d const *bounds);
+
+				hmp_online_text_drawn(widget, &text_bounds);
+			}
+#endif
 		}
 		break;
 
