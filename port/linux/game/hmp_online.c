@@ -12,7 +12,7 @@ screens, with ONLINE GAMES at the top of the games list, for internet play (port
   start-to-join screen: SYSTEM LINK PLAY is the LAN alone (no online games listed, a hosted game isn't listed
   online), ONLINE PLAY the internet alone (no LAN games; a hosted game is listed for other online Xboxes).
 - The games list in ONLINE PLAY: the header is ONLINE GAMES (a picture made of ui.map's header letters,
-  mine/mkheader.py, from the XBE's file: hmp_online_picture). Other Xboxes' games listed online (p2p_lobby.c, through
+  pictures.c, from the XBE's file: hmp_online_picture). Other Xboxes' games listed online (p2p_lobby.c, through
   OpenCE's brokers, on the Xboxes' own topics; with crossplay, OXBOX_CROSSPLAY, the PC builds' games too) are rows
   of their own. Choosing one reaches its host through internet play (p2p_join_invite: the invite its listing holds),
   and the row says "JOINING..."; once the tunnel reaches the host, its game answers the list's searches as a game on
@@ -509,7 +509,7 @@ wchar_t *hmp_online_string(short index)
 /* ---------- public code: the games list's header */
 
 /* a widget's picture (custom_edition_maps_picture): ONLINE GAMES in place of SYSTEM LINK GAMES in ONLINE PLAY (the XBE
-has the picture: mine/mkheader.py); NULL: the widget's own */
+has the picture: installer/pictures.c); NULL: the widget's own */
 struct bitmap_data *hmp_online_picture(long bitmap_tag_index, short *frame_index)
 {
 	if (!online.mode || bitmap_tag_index == NONE || *frame_index != 0 ||

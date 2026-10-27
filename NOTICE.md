@@ -31,7 +31,13 @@ builds use:
 
 The rest (miniupnpc, mbedtls, opus, zlib, expat and others) belong to OpenCE's PC, Android and web builds.
 
+The installer (`port/oxbox/installer`) is built with [nxdk](https://github.com/XboxDev/nxdk), which isn't in this
+repository; its XBE contains nxdk's libraries (MIT; the kernel imports CC0 1.0), nxdk's USB stack libusbohci
+(Apache 2.0), PDCLib (CC0 1.0), nxdk's SDL 2.0.9 (zlib licence) and zlib 1.3.1 (zlib licence). Their notices are in
+`port/oxbox/installer/THIRD_PARTY.txt`, which goes beside the installer in a release.
+
 ## Not covered
 
 Halo, its maps and art, and the retail game's code in an XBE belong to Microsoft. None of them is included in this
-repository or covered by any licence here.
+repository, in the installer or in its packages, or covered by any licence here: the installer makes OpenCE from the
+player's own retail XBE, and its pictures from the player's own `ui.map`.

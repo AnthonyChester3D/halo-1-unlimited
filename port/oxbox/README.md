@@ -88,11 +88,10 @@ Built with `OXBOX_EXTRA="-DOXBOX_NET_TEST -DOXBOX_NET_LWIP -DOXBOX_NET_P2P"`:
 The game data isn't in this repository, and the Halo XBE the build starts from isn't either. That's the same
 as upstream OpenCE, which asks for your own disc image. Other files are also left out:
 
-- **`port/oxbox/pictures.bin`** holds the main menu's OPTIONS and PROFILES words and the postgame's gametype pictures.
-  They're made from the art in your own `ui.map` by `tools/mkword.py` and `tools/mkicons.py`. Without the
-  file, those pictures are blank.
-- **`port/oxbox/online_games.dxt3`** (online test builds only) is ONLINE PLAY's ONLINE GAMES header, made from the
-  letters of the SYSTEM LINK GAMES and SELECT PROFILE headers in your own `ui.map` by `tools/mkheader.py`.
+- **`port/oxbox/pictures.bin`** holds the main menu's OPTIONS and PROFILES words and the postgame's gametype pictures,
+  and **`port/oxbox/online_games.dxt3`** (online builds only) ONLINE PLAY's ONLINE GAMES header. They're made from the
+  letters and pictures in your own `ui.map` by `installer/mkpictures.c` (`UI_MAP=path/to/ui.map` when you build).
+  Without them, those pictures are blank.
 - **DirectSound's effects program** is taken at build time from OpenCE's own copy of it, in
   `source/sound/sound_dsound_xbox.c`.
 
@@ -101,17 +100,22 @@ as upstream OpenCE, which asks for your own disc image. Other files are also lef
 You need Linux (or WSL), plus clang, ld.lld, llvm-objcopy, ninja, python3 and a 32-bit libgcc (on Debian or
 Ubuntu, the `gcc-multilib` package provides it).
 
-The input is the Halo XBE with the 16-console system link patch, `default_16Xbox.xbe`. Its SHA-256 is
-`473b2c3ae3d503edd27f48e5844fe32209904cd0f505a76845860f08f4e13d89`. The build keeps that XBE's sections
-where they are. It uses the XBE's own libraries (Direct3D, DirectSound, XNet), links the game code against
+The input is your own clean retail Halo XBE, the `default.xbe` from the disc: NTSC version 8 (SHA-256
+`8d19f6fa407c86978f93cc28aeeb44447e7449f49c0f7c079286a2c163b865c3`) or version 9 (SHA-256
+`d183cc8f9a27604df78ce0f898278d648682d0bae00fdd768856f25d59c79d4f`). (The early builds started from a Halo XBE with
+a 16-console system link patch, `default_16Xbox.xbe`, SHA-256
+`473b2c3ae3d503edd27f48e5844fe32209904cd0f505a76845860f08f4e13d89`, which still works.) The build keeps that XBE's
+sections where they are. It uses the XBE's own libraries (Direct3D, DirectSound, XNet), links the game code against
 them, adds that code after its last section, and points the startup at it.
 
 ```sh
-./port/oxbox/build.sh path/to/default_16Xbox.xbe
+UI_MAP=path/to/maps/ui.map ./port/oxbox/build.sh path/to/default.xbe
 ```
 
 The output is `build-xbox/halo1unlimited.xbe`. Copy it to the Xbox in place of the game's `default.xbe`,
-next to the game's `maps` folder.
+next to the game's `maps` folder. It holds the retail game's code, so it isn't something to share: a release is the
+installer and a package instead (`installer/README.md`), which make the same XBE on the player's Xbox from their
+own retail XBE.
 
 Most of the game is compiled for size (`-Os`); the drawing, physics, collision, objects and maths folders are compiled
 for speed (`-O2`). To compile more folders for speed, name them in `OXBOX_HOT_EXTRA`, for example
@@ -125,8 +129,9 @@ How the pieces fit:
 - `link.ld` puts the image after the retail XBE's last section (`.cap16`, ending at 0x3B9000). `retail.ld`
   (made by `tools/gen_retail_ld.py` from `retail_syms.txt`) names the retail libraries' functions and data.
 - `tools/gen_overlay.py` places OpenCE's larger globals over retail game code that nothing runs.
-- `tools/mkxbe.py` writes the XBE: it adds the image, redirects `main`, appends the effects program and the
-  pictures, and fixes up the section digests.
+- `tools/mkxbe.py` writes the XBE: it adds the image (and the empty `.cap16` section, on a retail XBE), redirects
+  `main`, appends the effects program and the pictures, and fixes up the section digests.
+- `installer/` is the installer XBE, and `tools/mkpackage.py` makes its packages.
 
 ## Credits
 

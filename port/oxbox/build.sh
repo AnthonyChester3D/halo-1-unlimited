@@ -1,8 +1,8 @@
 #!/bin/sh
 # port/oxbox/build.sh [HALO_XBE]: builds build-xbox/halo1unlimited.xbe: the game code and the Xbox layer (this folder),
 # compiled for the Xbox's CPU, linked against the libraries of the Halo XBE given, and added to it (port/oxbox/README.md).
-# HALO_XBE defaults to default_16Xbox.xbe in the repository's root. Needs clang, ld.lld, llvm-objcopy, ninja,
-# python3 and a 32-bit libgcc (LIBGCC=... to name one).
+# HALO_XBE (a clean retail Halo: NTSC version 8 or 9) defaults to default_16Xbox.xbe in the repository's root. Needs
+# clang, ld.lld, llvm-objcopy, ninja, python3 and a 32-bit libgcc (LIBGCC=... to name one).
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 XBE_IN=$(cd "$(dirname "${1:-$ROOT/default_16Xbox.xbe}")" && pwd)/$(basename "${1:-default_16Xbox.xbe}")
@@ -11,6 +11,13 @@ cd "$ROOT"
 LIBGCC=${LIBGCC:-$(ls /usr/lib/gcc/x86_64-linux-gnu/*/32/libgcc.a 2>/dev/null | tail -1)}
 [ -f "$LIBGCC" ] || { echo "no 32-bit libgcc.a found: install gcc-multilib, or set LIBGCC"; exit 1; }
 mkdir -p build-xbox
+# OpenCE's own pictures (the menu's OPTIONS and PROFILES, the gametype pictures, ONLINE PLAY's header), made from your
+# own ui.map if UI_MAP names it (port/oxbox/installer/mkpictures.c: needs a C compiler and zlib's headers for the PC)
+if [ -n "$UI_MAP" ]; then
+  ${HOSTCC:-cc} -O2 -ffp-contract=off -o build-xbox/mkpictures port/oxbox/installer/mkpictures.c \
+    port/oxbox/installer/pictures.c -lz -lm
+  build-xbox/mkpictures "$UI_MAP" port/oxbox
+fi
 python3 -I port/oxbox/tools/gen_xbox.py > build-xbox/build.ninja
 ninja -f build-xbox/build.ninja -j "${JOBS:-$(nproc)}"
 link() {

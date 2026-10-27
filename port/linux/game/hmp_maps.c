@@ -1298,7 +1298,7 @@ void hmp_menu_memory_release(void)
 }
 
 /* the main menu's words OpenCE changes (hmp_game.c): GAME DEMOS shown as OPTIONS, SETTINGS as PROFILES (pictures
-made from ui.map's letters by mine/mkword.py, kept in the XBE's file past what the loader loads: xbox/oxbox_entry.c
+made from ui.map's letters by pictures.c, kept in the XBE's file past what the loader loads: xbox/oxbox_entry.c
 oxbox_picture_read). TRUE when this bitmap is one of them, read */
 static boolean menu_word_read(struct bitmap_data *bitmap, unsigned char *buffer, long size)
 {

@@ -643,7 +643,7 @@ buffer (a texture's memory) when it's loaded; nothing of them in memory otherwis
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_words_marker = { "OXWORDS1", 0, 0 };
 
 #if defined(OXBOX_NET_P2P)
-/* the online test builds' ONLINE GAMES header (32 KB, DXT3 512 x 64: mine/mkheader.py), the same way, after the
+/* the online test builds' ONLINE GAMES header (32 KB, DXT3 512 x 64: installer/pictures.c), the same way, after the
 pictures (port/linux/game/hmp_online.c). TRUE when read */
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_online_marker = { "OXONLIN1", 0, 0 };
 

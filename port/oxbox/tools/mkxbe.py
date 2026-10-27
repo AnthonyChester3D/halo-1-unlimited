@@ -169,13 +169,13 @@ struct.pack_into('<II', d, mark + 8, len(d), len(fx))
 d += fx
 # OpenCE's pictures, the same way: read from the file straight into their textures when they're drawn, never in
 # memory otherwise (oxbox_entry.c oxbox_picture_read). 16 KB each: the main menu's OPTIONS and PROFILES words (normal,
-# highlighted: DXT3 256 x 64, port/oxbox/tools/mkword.py), then the postgame's gametype pictures (CTF, King, Slayer, Oddball, Race:
-# A8R8G8B8 64 x 64 swizzled, port/oxbox/tools/mkicons.py)
+# highlighted: DXT3 256 x 64), then the postgame's gametype pictures (CTF, King, Slayer, Oddball, Race: A8R8G8B8 64 x 64
+# swizzled): port/oxbox/installer/pictures.c, which the installer runs on the Xbox too
 _pictures = os.path.join(ROOT, 'port', 'oxbox', 'pictures.bin')
 if os.path.exists(_pictures):
     words = open(_pictures, 'rb').read()
 else:
-    # (not in the repository: made from the game's own ui.map art by mkword.py and mkicons.py, see port/oxbox/README.md.
+    # (not in the repository: made from the game's own ui.map art by installer/mkpictures, see port/oxbox/README.md.
     # Without it the main menu's OPTIONS and PROFILES and the postgame's gametype pictures are blank)
     print('note: port/oxbox/pictures.bin not found: the menu words and gametype pictures will be blank')
     words = bytes(9 * 16384)
@@ -185,7 +185,7 @@ assert mark > 0 and d.find(b'OXWORDS1', mark + 1) < 0, 'menu words marker'
 while len(d) % 16: d.append(0)
 struct.pack_into('<II', d, mark + 8, len(d), len(words))
 d += words
-# the online test builds' ONLINE GAMES header (DXT3 512 x 64, port/oxbox/tools/mkheader.py), if the build has its marker
+# the online test builds' ONLINE GAMES header (DXT3 512 x 64, port/oxbox/installer/pictures.c), if the build has its marker
 # (OXONLIN1: oxbox_entry.c, OXBOX_NET_P2P only), the same way
 mark = d.find(b'OXONLIN1')
 if mark > 0:
@@ -193,7 +193,7 @@ if mark > 0:
     if os.path.exists(_header):
         header = open(_header, 'rb').read()
     else:
-        # (not in the repository: made from the game's own ui.map art by mkheader.py. Without it ONLINE PLAY's games
+        # (not in the repository: made from the game's own ui.map art by installer/mkpictures. Without it ONLINE PLAY's games
         # list has no header)
         print('note: port/oxbox/online_games.dxt3 not found: the ONLINE GAMES header will be blank')
         header = bytes(32768)

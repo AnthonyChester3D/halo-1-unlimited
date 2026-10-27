@@ -37,3 +37,9 @@ dist/
 *.xbe
 /port/oxbox/pictures.bin
 /port/oxbox/online_games.dxt3
+# the installer's build (nxdk puts its objects beside the sources)
+/port/oxbox/installer/bin/
+/port/oxbox/installer/main.exe
+/port/oxbox/installer/*.obj
+/port/oxbox/installer/*.c.d
+*.oxpk
