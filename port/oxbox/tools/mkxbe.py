@@ -22,6 +22,64 @@ assert len(image) == end - start, (hex(len(image)), hex(end - start))
 d = bytearray(open(src, 'rb').read())
 base = 0x10000
 
+def add_section(d, name, flags, va, vsize, raw, rsize):
+    """a section header added after the last one (the loader takes the section's raw data from raw, rsize bytes, and
+    maps vsize bytes at va). The XBE header (one page, 0x10000-0x10FFF, under .text) has no room after its section
+    headers: what follows them (the shared page counts, the section names, the library versions, the debug names and
+    the logo) moves up by one header, and the new section's page counts (its own pages: none shared) and name go
+    after it, in the page's unused end, which the header's size grows to take"""
+    u = lambda o: struct.unpack_from('<I', d, o)[0]
+    nsec, sh = u(0x11c), u(0x120) - base
+    at = sh + nsec * 0x38                      # the new section header's place
+    ends = [at]                                # the header's used end: as far as its pointers reach
+    for i in range(nsec):
+        hh = sh + i * 0x38
+        ends += [d.index(b'\0', u(hh + 0x14) - base) + 1, u(hh + 0x1c) - base + 2, u(hh + 0x20) - base + 2]
+    ends += [u(0x164) - base + 16 * u(0x160), u(0x168) - base + 16, u(0x16c) - base + 16, u(0x170) - base + u(0x174),
+             d.index(b'\0', u(0x14c) - base) + 1, d.index(b'\0', u(0x150) - base) + 1]
+    e = u(0x154) - base
+    while d[e:e + 2] != b'\0\0': e += 2
+    used = max(ends + [e + 2])
+    assert not any(d[used:u(0x108)]), 'the XBE header past its used end'
+    counts = (used + 0x38 + 3) & ~3
+    name_at = counts + 4
+    room = min(u(sh + i * 0x38 + 0xc) for i in range(nsec))   # (the first section's raw data)
+    assert name_at + len(name) + 1 <= room, f'no room in the XBE header for {name}'
+    assert not any(d[used:name_at + len(name) + 1]), 'the XBE header page past its used end'
+    d[at + 0x38:used + 0x38] = d[at:used]
+    d[at:at + 0x38] = bytes(0x38)
+    def moved(o):
+        p = u(o)
+        if base + at <= p < base + used: struct.pack_into('<I', d, o, p + 0x38)
+    for i in range(nsec):
+        for f in (0x14, 0x1c, 0x20): moved(sh + i * 0x38 + f)
+    for o in (0x14c, 0x150, 0x154, 0x164, 0x168, 0x16c, 0x170): moved(o)
+    d[counts:counts + 4] = bytes(4)
+    d[name_at:name_at + len(name) + 1] = name.encode() + b'\0'
+    struct.pack_into('<IIIIIIIII', d, at, flags, va, vsize, raw, rsize, base + name_at, 0, base + counts, base + counts + 2)
+    struct.pack_into('<I', d, 0x11c, nsec + 1)
+    if u(0x108) < name_at + len(name) + 1:
+        struct.pack_into('<I', d, 0x108, (name_at + len(name) + 1 + 3) & ~3)   # size of headers
+
+def section_name(d, i):
+    sh = struct.unpack_from('<I', d, 0x120)[0] - base
+    nm = struct.unpack_from('<I', d, sh + i * 0x38 + 0x14)[0] - base
+    return bytes(d[nm:d.index(b'\0', nm)]).decode('latin-1')
+
+# a clean retail XBE (NTSC, version 8 or 9), or one without the 16-player XBE's .cap16 (16 KB at 0x3B5000, the section
+# this port first went into): an empty .cap16 added, as that XBE has it, so the image goes at 0x3B9000 either way.
+# Every retail section stays where it was; the retail certificate (title, keys, media, region) is kept
+if section_name(d, struct.unpack_from('<I', d, 0x11c)[0] - 1) != '.cap16':
+    nsec0 = struct.unpack_from('<I', d, 0x11c)[0]
+    last = struct.unpack_from('<I', d, 0x120)[0] - base + (nsec0 - 1) * 0x38
+    assert section_name(d, nsec0 - 1) == '$$XSIMAGE' and \
+        struct.unpack_from('<IIII', d, last + 4) == (0x3b37a0, 0x1000, 0x269000, 0x1000), \
+        'not a retail Halo XBE (NTSC, version 8 or 9) nor the 16-player one'
+    assert len(d) == 0x26b000 and not any(d[0x26a000:]), 'not a retail Halo XBE: its end'
+    d = d[:0x26a000] + bytearray(0x4000 + 0x1000)   # .cap16's raw data, then the empty page the 16-player XBE has
+    add_section(d, '.cap16', 7, 0x3b5000, 0x4000, 0x26a000, 0x4000)   # writable (1), preload (2), executable (4)
+    struct.pack_into('<I', d, 0x10c, 0x3b9000 - base)                   # size of image
+
 # OpenCE code and data placed over the retail game's (port/oxbox/tools/gen_overlay.py): written into the retail sections' raw
 # data, which the XBE loader loads at those addresses
 lovl = []
@@ -59,10 +117,7 @@ struct.pack_into('<I', d, 0x10c, 0x3b5000 + vsz - base)          # size of image
 
 # the developers' perf log (port/oxbox/oxbox_perf.c: link.ld's .oxperf and .oxperf.bss) as a section of its own, OXPERF,
 # after .cap16: not loaded at boot (no preload flag), so with perf_log off it takes no memory; oxbox_sdk.c loads it
-# with the kernel's XeLoadSection when opence.ini turns the log on. The XBE header (one page, 0x10000-0x10FFF,
-# under .text) has no room after its 25 section headers: what follows them (the shared page counts, the section
-# names, the library versions, the debug names and the logo) moves up by one header, and the new section's page
-# counts and name go after it, in the page's unused end.
+# with the kernel's XeLoadSection when opence.ini turns the log on (add_section).
 perf_start, perf_load_end, perf_end = sym['__oxperf_start'], sym['__oxperf_load_end'], sym['__oxperf_end']
 perf_size = 0
 if perf_end > perf_start:
@@ -72,37 +127,9 @@ if perf_end > perf_start:
     assert perf_start == 0x3b5000 + vsz and not perf_start & 0xFFF
     perf_raw = len(d)
     d += perf + bytes((-len(perf)) % 0x1000)
-    u = lambda o: struct.unpack_from('<I', d, o)[0]
-    nsec, sh = u(0x11c), u(0x120) - base
-    at = sh + nsec * 0x38                      # the new section header's place
-    ends = [at]                                # the header's used end: as far as its pointers reach
-    for i in range(nsec):
-        hh = sh + i * 0x38
-        ends += [d.index(b'\0', u(hh + 0x14) - base) + 1, u(hh + 0x1c) - base + 2, u(hh + 0x20) - base + 2]
-    ends += [u(0x164) - base + 16 * u(0x160), u(0x168) - base + 16, u(0x16c) - base + 16, u(0x170) - base + u(0x174),
-             d.index(b'\0', u(0x14c) - base) + 1, d.index(b'\0', u(0x150) - base) + 1]
-    e = u(0x154) - base
-    while d[e:e + 2] != b'\0\0': e += 2
-    used = max(ends + [e + 2])
-    assert not any(d[used:u(0x108)]), 'the XBE header past its used end'
-    counts = (used + 0x38 + 3) & ~3            # the new section's head and tail page counts (its own pages: none shared)
-    name = counts + 4
-    assert name + 7 <= u(0x108), 'no room in the XBE header for OXPERF'
-    d[at + 0x38:used + 0x38] = d[at:used]
-    d[at:at + 0x38] = bytes(0x38)
-    def moved(o):
-        p = u(o)
-        if base + at <= p < base + used: struct.pack_into('<I', d, o, p + 0x38)
-    for i in range(nsec):
-        for f in (0x14, 0x1c, 0x20): moved(sh + i * 0x38 + f)
-    for o in (0x14c, 0x150, 0x154, 0x164, 0x168, 0x16c, 0x170): moved(o)
-    d[counts:counts + 4] = bytes(4)
-    d[name:name + 7] = b'OXPERF\0'
     perf_size = ((perf_end + 0xFFF) & ~0xFFF) - perf_start
     # flags: writable (1), executable (4); not preload (2)
-    struct.pack_into('<IIIIIIIII', d, at, 5, perf_start, perf_end - perf_start, perf_raw, len(perf),
-                     base + name, 0, base + counts, base + counts + 2)
-    struct.pack_into('<I', d, 0x11c, nsec + 1)
+    add_section(d, 'OXPERF', 5, perf_start, perf_end - perf_start, perf_raw, len(perf))
     struct.pack_into('<I', d, 0x10c, perf_start + perf_size - base)   # size of image
     nsec += 1
 
