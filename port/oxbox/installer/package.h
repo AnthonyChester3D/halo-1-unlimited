@@ -32,6 +32,24 @@ void package_free(struct package *package);
 /* the build made from the retail XBE with this SHA-256, or NULL */
 struct package_xbe const *package_find(struct package const *package, unsigned char const *retail_sha256);
 
+/* the certificate's allowed media and regions as the retail discs' XBEs have them. A copy patched to run from the
+hard disk or in any region (a common change, which many tools make) is matched as the disc's: the build is made from
+the disc's bytes, and the copy itself is what's kept and put back */
+#define PACKAGE_DISC_MEDIA 0x00000002ul
+#define PACKAGE_DISC_REGIONS 0x00000001ul
+struct package_patch
+{
+	int patched;
+	unsigned long cert, media, regions;
+};
+
+/* the build for this retail XBE (whole, in memory), as it is or patched (patch->patched: then data is left as the
+disc's, and package_unpatch puts the copy's own media and regions back), or NULL */
+struct package_xbe const *package_match(struct package const *package, unsigned char *data, unsigned long size,
+	struct package_patch *patch);
+void package_unpatch(unsigned char *data, struct package_patch const *patch);
+void package_repatch(unsigned char *data, struct package_patch const *patch);
+
 /* makes the build from the retail XBE (whole, in memory), its pictures from pictures.h's (NULL: blank), each part to
 write() as it's made (nonzero: stop); 0 when it's made and its SHA-256 (pictures as zeros) is the package's.
 Every step was checked by package_load */

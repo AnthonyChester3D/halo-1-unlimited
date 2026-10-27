@@ -1,13 +1,14 @@
 /* main.c: the Halo 1 Unlimited installer, an XBE of its own (nxdk; port/oxbox/installer/README.md). It makes OpenCE
-from the player's own clean retail Halo XBE, with the package beside it (opence.oxpk: tools/mkpackage.py) and the
-pictures from the game's own ui.map (pictures.c), keeping the retail XBE as default_retail.xbe. Nothing of
-Microsoft's code or of Halo's art is in the installer or the package.
+from the player's own retail Halo XBE, with the package beside it (opence.oxpk: tools/mkpackage.py) and the pictures
+from the game's own ui.map (pictures.c), keeping the retail XBE as default_retail.xbe. Nothing of Microsoft's code or
+of Halo's art is in the installer or the package.
 
-	A      install (or update) OpenCE in the Halo folder chosen
+The list shows every Halo it finds: the ones it can install to first, in green; the others in grey.
+	A      install (or update) OpenCE in the folder chosen
 	X      put the retail Halo back (from default_retail.xbe)
-	START  play what's in the folder
-	B      back to the dashboard */
-#include <hal/debug.h>
+	START  play what's in the folder (green ones only)
+	B      back to the dashboard
+	LT/RT  a page up or down */
 #include <hal/video.h>
 #include <hal/xbox.h>
 #include <nxdk/mount.h>
@@ -22,6 +23,7 @@ Microsoft's code or of Halo's art is in the installer or the package.
 
 #include "package.h"
 #include "pictures.h"
+#include "screen.h"
 #include "sha256.h"
 #include "text.h"
 
@@ -30,32 +32,22 @@ Microsoft's code or of Halo's art is in the installer or the package.
 #define LOG_PATH "D:\\installer_log.txt"
 #define HALO_TITLE_ID 0x4D530004ul
 #define MAX_XBE (16 * 1024 * 1024)
+static struct package package;
+static int package_ok;
+static char package_error[256];
 
-/* ---- the screen: 24 lines of 62 (nxdk's debugPrint wraps a line after 63 characters, and starts again at the top
-after 24 lines) ---- */
-
-#define ROWS 24
-#define COLUMNS 62
-static char screen[ROWS][COLUMNS + 1];
-static int log_top; /* (the lines below this one are the log, which scrolls) */
-
-static void draw(void)
+static unsigned long u32(unsigned char const *p)
 {
-	int r;
-	debugClearScreen();
-	for (r = 0; r < ROWS; r++)
-		debugPrint("%s\n", screen[r]);
+	return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24);
 }
 
-static void line(int row, char const *format, ...)
-{
-	va_list list;
-	if (row < 0 || row >= ROWS)
-		return;
-	va_start(list, format);
-	text_vprint(screen[row], COLUMNS + 1, format, list);
-	va_end(list);
-}
+/* ---- the log: the screen below the heading while working, and installer_log.txt ---- */
+
+#define LOG_TOP 5
+#define LOG_ROWS (SCREEN_ROWS - LOG_TOP)
+static char log_lines[LOG_ROWS][SCREEN_COLUMNS + 1];
+static unsigned long log_colours[LOG_ROWS];
+static int log_count;
 
 static void log_file(char const *text)
 {
@@ -67,8 +59,13 @@ static void log_file(char const *text)
 	}
 }
 
-/* a line in the log at the bottom (and the log file), drawn at once */
-static void say(char const *format, ...)
+static void log_clear(void)
+{
+	memset(log_lines, 0, sizeof(log_lines));
+	log_count = 0;
+}
+
+static void say_in(unsigned long colour, char const *format, ...)
 {
 	char text[256];
 	va_list list;
@@ -77,65 +74,129 @@ static void say(char const *format, ...)
 	text_vprint(text, sizeof(text), format, list);
 	va_end(list);
 	log_file(text);
-	for (r = log_top; r < ROWS - 1; r++)
-		memcpy(screen[r], screen[r + 1], sizeof(screen[r]));
-	text_print(screen[ROWS - 1], COLUMNS + 1, "%s", text);
-	draw();
+	if (log_count == LOG_ROWS)
+	{
+		memmove(log_lines[0], log_lines[1], sizeof(log_lines[0]) * (LOG_ROWS - 1));
+		memmove(&log_colours[0], &log_colours[1], sizeof(log_colours[0]) * (LOG_ROWS - 1));
+		log_count--;
+	}
+	text_print(log_lines[log_count], sizeof(log_lines[0]), "%s", text);
+	log_colours[log_count++] = colour;
+	for (r = 0; r < LOG_ROWS; r++)
+	{
+		screen_row(LOG_TOP + r, COLOUR_BLACK);
+		screen_text(LOG_TOP + r, 0, log_colours[r], "%s", log_lines[r]);
+	}
+	screen_show();
 }
 
-static void clear_log(void)
-{
-	int r;
-	for (r = log_top; r < ROWS; r++)
-		screen[r][0] = 0;
-}
+#define say(...) say_in(COLOUR_WHITE, __VA_ARGS__)
 
 static void pictures_step(char const *step)
 {
 	say("  %s", step);
 }
 
-/* ---- the controllers ---- */
+static void heading(char const *what)
+{
+	screen_clear();
+	screen_text(0, 0, COLOUR_YELLOW, TITLE);
+	screen_text(1, 0, COLOUR_GREY, "Package: ");
+	screen_text(1, 9, COLOUR_WHITE, "%s", package_ok ? package.name : "none");
+	screen_text(2, 0, COLOUR_DIM, "------------------------------------------------------------------------");
+	if (what)
+		screen_text(3, 0, COLOUR_WHITE, "%s", what);
+	screen_show();
+}
 
-enum { NONE, UP, DOWN, A, B, X, START };
+/* ---- the controllers: every pad, d-pad or left stick (held: repeats), triggers a page ---- */
 
-static int button(void)
+enum { NONE, UP, DOWN, PAGE_UP, PAGE_DOWN, A, B, X, START };
+
+static SDL_GameController *pads[4];
+static unsigned held_buttons = ~0u; /* (none counts as pressed until it's been seen up) */
+static int held_direction;
+static DWORD held_since, last_repeat;
+
+static int poll_input(void)
 {
 	SDL_Event e;
+	unsigned buttons = 0, pressed;
+	int direction = NONE, i;
+	DWORD now;
 	while (SDL_PollEvent(&e))
 	{
 		if (e.type == SDL_CONTROLLERDEVICEADDED)
-			SDL_GameControllerOpen(e.cdevice.which);
-		else if (e.type == SDL_CONTROLLERBUTTONDOWN)
 		{
-			switch (e.cbutton.button)
+			for (i = 0; i < 4 && pads[i]; i++)
+				;
+			if (i < 4)
+				pads[i] = SDL_GameControllerOpen(e.cdevice.which);
+		}
+		else if (e.type == SDL_CONTROLLERDEVICEREMOVED)
+		{
+			for (i = 0; i < 4; i++)
 			{
-			case SDL_CONTROLLER_BUTTON_DPAD_UP: return UP;
-			case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return DOWN;
-			case SDL_CONTROLLER_BUTTON_A: return A;
-			case SDL_CONTROLLER_BUTTON_B: case SDL_CONTROLLER_BUTTON_BACK: return B;
-			case SDL_CONTROLLER_BUTTON_X: return X;
-			case SDL_CONTROLLER_BUTTON_START: return START;
+				if (pads[i] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pads[i])) == e.cdevice.which)
+				{
+					SDL_GameControllerClose(pads[i]);
+					pads[i] = NULL;
+				}
 			}
 		}
+	}
+	for (i = 0; i < 4; i++)
+	{
+		SDL_GameController *p = pads[i];
+		int y;
+		if (!p)
+			continue;
+		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_A) << A;
+		buttons |= (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_B) |
+			SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_BACK)) << B;
+		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_X) << X;
+		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_START) << START;
+		y = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_LEFTY);
+		if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_UP) || y < -16000)
+			direction = UP;
+		else if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_DOWN) || y > 16000)
+			direction = DOWN;
+		else if (SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000)
+			direction = PAGE_UP;
+		else if (SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000)
+			direction = PAGE_DOWN;
+	}
+	pressed = buttons & ~held_buttons;
+	held_buttons = buttons;
+	for (i = A; i <= START; i++)
+	{
+		if (pressed & (1u << i))
+			return i;
+	}
+	now = GetTickCount();
+	if (direction != held_direction)
+	{
+		held_direction = direction;
+		held_since = last_repeat = now;
+		return direction;
+	}
+	if (direction != NONE && now - held_since > 400 && now - last_repeat > 90)
+	{
+		last_repeat = now;
+		return direction;
 	}
 	return NONE;
 }
 
-static int wait_button(void)
+static int wait_input(void)
 {
 	int b;
-	while ((b = button()) == NONE)
+	while ((b = poll_input()) == NONE)
 		Sleep(16);
 	return b;
 }
 
 /* ---- files ---- */
-
-static unsigned long u32(unsigned char const *p)
-{
-	return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24);
-}
 
 static int exists(char const *path)
 {
@@ -221,33 +282,120 @@ static int finish(HANDLE file)
 	return CloseHandle(file) && ok;
 }
 
+/* ---- XBEs ---- */
+
+/* what an XBE's headers say */
+struct xbe_head
+{
+	int present, halo, opence;
+	unsigned long size;
+};
+
+static void read_head(char const *path, struct xbe_head *head)
+{
+	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	static unsigned char h[16384];
+	unsigned long base, cert, count, sections, i;
+	DWORD got = 0;
+	memset(head, 0, sizeof(*head));
+	if (file == INVALID_HANDLE_VALUE)
+		return;
+	head->present = 1;
+	head->size = GetFileSize(file, NULL);
+	ReadFile(file, h, sizeof(h), &got, NULL);
+	CloseHandle(file);
+	if (got < 0x180 || memcmp(h, "XBEH", 4))
+		return;
+	base = u32(h + 0x104);
+	cert = u32(h + 0x118) - base;
+	head->halo = cert + 12 <= got && u32(h + cert + 8) == HALO_TITLE_ID;
+	/* (an OpenCE build: the perf log's section, OXPERF, which mkxbe.py adds) */
+	count = u32(h + 0x11c);
+	sections = u32(h + 0x120) - base;
+	for (i = 0; i < count && i < 64 && sections + (i + 1) * 0x38 <= got; i++)
+	{
+		unsigned long name = u32(h + sections + i * 0x38 + 0x14) - base;
+		if (name + 7 <= got && !memcmp(h + name, "OXPERF", 7))
+			head->opence = 1;
+	}
+}
+
+static int retail_size(unsigned long size)
+{
+	int i;
+	for (i = 0; package_ok && i < package.count; i++)
+	{
+		if (package.xbes[i].retail_size == size)
+			return 1;
+	}
+	return 0;
+}
+
+/* a retail XBE read whole, and the package's build for it (package_match: its data is the disc's while it's
+matched as a patched copy; retail_original() puts the copy's own bytes back) */
+struct retail
+{
+	unsigned char *data;
+	unsigned long size;
+	struct package_patch patch;
+	struct package_xbe const *xbe;
+};
+
+static void retail_original(struct retail *r)
+{
+	package_unpatch(r->data, &r->patch);
+}
+
+/* reads path as a retail XBE; r->xbe NULL if the package doesn't know it */
+static int retail_read(char const *path, struct retail *r)
+{
+	memset(r, 0, sizeof(*r));
+	r->data = read_whole(path, &r->size);
+	if (!r->data)
+		return 1;
+	if (package_ok)
+		r->xbe = package_match(&package, r->data, r->size, &r->patch);
+	return 0;
+}
+
+static void retail_free(struct retail *r)
+{
+	free(r->data);
+	r->data = NULL;
+}
+
 /* ---- the Halo folders ---- */
 
 enum
 {
-	RETAIL,    /* default.xbe is a clean retail Halo the package knows */
-	INSTALLED, /* default.xbe is OpenCE, and default_retail.xbe a clean retail Halo */
-	OTHER,     /* default.xbe is another XBE, and default_retail.xbe a clean retail Halo */
-	MISSING,   /* no default.xbe, and default_retail.xbe a clean retail Halo */
-	UNKNOWN    /* no clean retail Halo the package knows */
+	RETAIL,    /* default.xbe is a retail Halo the package knows */
+	INSTALLED, /* default.xbe is OpenCE, and default_retail.xbe a retail Halo the package knows */
+	OTHER,     /* default.xbe is another XBE, and default_retail.xbe a retail Halo */
+	MISSING,   /* no default.xbe, and default_retail.xbe a retail Halo */
+	UNKNOWN    /* no retail Halo the package knows (or default_retail.xbe is in the way) */
 };
 
 struct halo
 {
-	char path[200];   /* "E:\Games\Halo" */
-	char device[240]; /* "\Device\Harddisk0\Partition1\Games\Halo" */
+	char path[160];   /* "E:\Games\Halo" */
+	char device[200]; /* "\Device\Harddisk0\Partition1\Games\Halo" */
 	int state;
-	struct package_xbe const *retail; /* (the package's build for its clean retail XBE) */
-	int backup_in_the_way;            /* default_retail.xbe is there and isn't a clean retail Halo */
-	char what[COLUMNS + 1];
+	struct package_xbe const *retail; /* (the package's build for its retail XBE) */
+	int patched;                      /* that retail XBE is a disc's patched for media or regions */
+	int backup_in_the_way;            /* default_retail.xbe is there and isn't a retail Halo it knows */
+	int opence, up_to_date;
+	char note[40];
+	char detail[2][SCREEN_COLUMNS + 1];
 };
 
-#define MAX_HALOS 12
+#define MAX_HALOS 128
 static struct halo halos[MAX_HALOS];
 static int halo_count;
-static struct package package;
-static int package_ok;
-static char package_error[256];
+
+static int ready(struct halo const *h)
+{
+	return h->state != UNKNOWN;
+}
 
 static char const *const partitions[] = {"E:\\Partition1", "F:\\Partition6", "G:\\Partition7"};
 
@@ -284,110 +432,158 @@ static int from_device(char const *device, char *path, size_t size)
 	return 0;
 }
 
-static int is_halo_xbe(char const *path)
+static void examine(struct halo *h)
 {
-	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	unsigned char header[4096];
-	unsigned long base, cert;
-	DWORD got;
-	if (file == INVALID_HANDLE_VALUE)
-		return 0;
-	got = 0;
-	ReadFile(file, header, sizeof(header), &got, NULL);
-	CloseHandle(file);
-	if (got < 0x180 || memcmp(header, "XBEH", 4))
-		return 0;
-	base = u32(header + 0x104);
-	cert = u32(header + 0x118) - base;
-	return cert + 12 <= got && u32(header + cert + 8) == HALO_TITLE_ID;
-}
+	char main[200], backup[200];
+	struct xbe_head main_head, backup_head;
+	struct retail r;
+	struct package_xbe const *main_retail = NULL, *backup_retail = NULL;
+	int main_patched = 0, backup_patched = 0;
 
-/* the package's build for this file's retail XBE, if it's one (and whether it's an OpenCE build) */
-static struct package_xbe const *look_at(char const *path, int *present, int *opence)
-{
-	unsigned long size;
-	unsigned char *data = read_whole(path, &size), digest[32];
-	struct package_xbe const *xbe = NULL;
-	*present = data != NULL || exists(path);
-	*opence = 0;
-	if (!data)
-		return NULL;
-	sha256(data, size, digest);
-	if (package_ok)
-		xbe = package_find(&package, digest);
-	if (!xbe)
+	text_print(main, sizeof(main), "%s\\default.xbe", h->path);
+	text_print(backup, sizeof(backup), "%s\\default_retail.xbe", h->path);
+	read_head(main, &main_head);
+	read_head(backup, &backup_head);
+	if (main_head.halo && retail_size(main_head.size) && !retail_read(main, &r))
 	{
-		unsigned long i;
-		for (i = 0; i + 8 <= size && !*opence; i++)
-			*opence = data[i] == 'O' && !memcmp(data + i, "OXWORDS1", 8);
+		main_retail = r.xbe, main_patched = r.patch.patched;
+		retail_free(&r);
 	}
-	free(data);
-	return xbe;
-}
-
-static void examine(struct halo *halo)
-{
-	char path[260];
-	int present, opence, backup_present, backup_opence;
-	struct package_xbe const *main_retail, *backup_retail;
-	text_print(path, sizeof(path), "%s\\default.xbe", halo->path);
-	main_retail = look_at(path, &present, &opence);
-	text_print(path, sizeof(path), "%s\\default_retail.xbe", halo->path);
-	backup_retail = look_at(path, &backup_present, &backup_opence);
-	halo->backup_in_the_way = backup_present && !backup_retail;
-	if (main_retail)
+	if (backup_head.present && retail_size(backup_head.size) && !retail_read(backup, &r))
 	{
-		halo->state = RETAIL;
-		halo->retail = main_retail;
-		text_print(halo->what, sizeof(halo->what), "  clean retail %s", main_retail->name);
+		backup_retail = r.xbe, backup_patched = r.patch.patched;
+		retail_free(&r);
+	}
+	h->opence = main_head.opence;
+	h->up_to_date = 0;
+	h->backup_in_the_way = backup_head.present && !backup_retail;
+	if (main_retail && !h->backup_in_the_way)
+	{
+		h->state = RETAIL;
+		h->retail = main_retail, h->patched = main_patched;
 	}
 	else if (backup_retail)
 	{
-		halo->state = !present ? MISSING : opence ? INSTALLED : OTHER;
-		halo->retail = backup_retail;
-		text_print(halo->what, sizeof(halo->what), "  %s (retail kept: %s)",
-			halo->state == INSTALLED ? "OpenCE" : halo->state == OTHER ? "another XBE" : "no default.xbe",
-			backup_retail->name);
+		h->state = !main_head.present ? MISSING : h->opence ? INSTALLED : OTHER;
+		h->retail = backup_retail, h->patched = backup_patched;
+		if (h->state == INSTALLED)
+		{
+			unsigned long at[4], size[4], made;
+			unsigned char digest[32];
+			int zeros = package_pictures(&package, h->retail, at, size, 4);
+			h->up_to_date = !file_sha256(main, at, size, zeros, digest, &made) && made == h->retail->build_size &&
+				!memcmp(digest, h->retail->build_sha256, 32);
+		}
 	}
 	else
 	{
-		halo->state = UNKNOWN;
-		halo->retail = NULL;
-		text_print(halo->what, sizeof(halo->what), "  %s", !package_ok ? "(no package to install)" :
-			opence ? "an OpenCE build, but no clean retail XBE kept" :
-			"not a clean retail Halo XBE this package knows");
+		h->state = UNKNOWN;
+		h->retail = NULL;
+	}
+	switch (h->state)
+	{
+	case RETAIL:
+		text_print(h->note, sizeof(h->note), "retail Halo: ready to install");
+		text_print(h->detail[0], sizeof(h->detail[0]), "default.xbe: retail %s%s.", h->retail->name,
+			h->patched ? ", region/media patched" : "");
+		text_print(h->detail[1], sizeof(h->detail[1]), "A installs OpenCE (keeping it as default_retail.xbe).");
+		break;
+	case INSTALLED:
+		text_print(h->note, sizeof(h->note), h->up_to_date ? "OpenCE (this package's)" : "OpenCE (another build)");
+		text_print(h->detail[0], sizeof(h->detail[0]), "default.xbe: OpenCE (%s). Kept: %s.",
+			h->up_to_date ? "this package's" : "another build", h->retail->name);
+		text_print(h->detail[1], sizeof(h->detail[1]), "%s", h->up_to_date ?
+			"A installs it again; X puts the retail Halo back." : "A updates it to this package's; X: retail Halo.");
+		break;
+	case OTHER:
+		text_print(h->note, sizeof(h->note), "another XBE (retail kept)");
+		text_print(h->detail[0], sizeof(h->detail[0]), "default.xbe: another XBE. Kept: retail %s.", h->retail->name);
+		text_print(h->detail[1], sizeof(h->detail[1]), "A installs OpenCE (keeping that XBE as default_old.xbe).");
+		break;
+	case MISSING:
+		text_print(h->note, sizeof(h->note), "no default.xbe (retail kept)");
+		text_print(h->detail[0], sizeof(h->detail[0]), "No default.xbe. Kept: retail %s.", h->retail->name);
+		text_print(h->detail[1], sizeof(h->detail[1]), "A installs OpenCE; X puts the retail Halo back.");
+		break;
+	default:
+		if (h->backup_in_the_way)
+		{
+			text_print(h->note, sizeof(h->note), "default_retail.xbe in the way");
+			text_print(h->detail[0], sizeof(h->detail[0]),
+				"default_retail.xbe is here, but isn't a retail Halo XBE this package knows.");
+			text_print(h->detail[1], sizeof(h->detail[1]), "Move it out of the folder, then start the installer again.");
+		}
+		else
+		{
+			text_print(h->note, sizeof(h->note), h->opence ? "OpenCE, but no retail kept" : "modified or unknown XBE");
+			text_print(h->detail[0], sizeof(h->detail[0]), "%s",
+				!package_ok ? "There's no package to install." :
+				"default.xbe isn't a retail Halo XBE this package knows (from a disc).");
+			text_print(h->detail[1], sizeof(h->detail[1]),
+				"To install here, copy your disc's default.xbe in as default_retail.xbe.");
+		}
 	}
 }
 
-static void add_halo(char const *folder)
+static int skipped_folder(char const *name)
 {
-	char path[260];
-	int i;
-	if (halo_count == MAX_HALOS)
-		return;
+	static char const *const skip[] = {"TDATA", "UDATA", "CACHE", "$RECYCLE.BIN", "System Volume Information"};
+	size_t i;
+	if (name[0] == '.')
+		return 1;
+	for (i = 0; i < sizeof(skip) / sizeof(*skip); i++)
+	{
+		if (!_stricmp(name, skip[i]))
+			return 1;
+	}
+	return 0;
+}
+
+static void scan_note(char const *folder)
+{
+	screen_row(5, COLOUR_BLACK);
+	screen_text(4, 0, COLOUR_WHITE, "Looking for Halo: %d found", halo_count);
+	screen_text(5, 0, COLOUR_DIM, "%.72s", folder);
+	screen_show();
+}
+
+/* folder, if it has a Halo XBE in it (as default.xbe, or default_retail.xbe alone); 1 if it has a default.xbe */
+static int add_halo(char const *folder)
+{
+	char path[200];
+	struct xbe_head head;
+	int i, has_main;
+	text_print(path, sizeof(path), "%s\\default.xbe", folder);
+	read_head(path, &head);
+	has_main = head.present;
+	if (!head.halo)
+	{
+		text_print(path, sizeof(path), "%s\\default_retail.xbe", folder);
+		read_head(path, &head);
+		if (!head.halo)
+			return has_main;
+	}
 	for (i = 0; i < halo_count; i++)
 	{
 		if (!_stricmp(halos[i].path, folder))
-			return;
+			return has_main;
 	}
-	text_print(path, sizeof(path), "%s\\default.xbe", folder);
-	if (!is_halo_xbe(path))
-	{
-		text_print(path, sizeof(path), "%s\\default_retail.xbe", folder);
-		if (!is_halo_xbe(path))
-			return;
-	}
+	if (halo_count == MAX_HALOS)
+		return has_main;
+	scan_note(folder);
 	text_print(halos[halo_count].path, sizeof(halos[halo_count].path), "%s", folder);
 	to_device(folder, halos[halo_count].device, sizeof(halos[halo_count].device));
 	examine(&halos[halo_count]);
 	halo_count++;
+	return 1;
 }
 
-/* each folder in this one with a Halo in it */
-static void scan(char const *folder)
+/* the folders in this one: each with a Halo is added; one without any XBE is looked in too, `depth` more levels
+(E:\Games, E:\Games\Halo mods) */
+static void scan(char const *folder, int depth)
 {
 	WIN32_FIND_DATAA found;
-	char pattern[260], path[260];
+	char pattern[200], path[200];
 	HANDLE find;
 	text_print(pattern, sizeof(pattern), "%s\\*", folder);
 	find = FindFirstFileA(pattern, &found);
@@ -395,37 +591,52 @@ static void scan(char const *folder)
 		return;
 	do
 	{
-		if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && found.cFileName[0] != '.')
+		if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !skipped_folder(found.cFileName))
 		{
 			text_print(path, sizeof(path), "%s\\%s", folder, found.cFileName);
-			add_halo(path);
+			if (!add_halo(path) && depth > 0)
+				scan(path, depth - 1);
 		}
 	} while (FindNextFileA(find, &found));
 	FindClose(find);
 }
 
+/* the ones it can install to first (each group as found) */
+static void sort_halos(void)
+{
+	static struct halo sorted[MAX_HALOS];
+	int i, n = 0;
+	for (i = 0; i < halo_count; i++)
+	{
+		if (ready(&halos[i]))
+			sorted[n++] = halos[i];
+	}
+	for (i = 0; i < halo_count; i++)
+	{
+		if (!ready(&halos[i]))
+			sorted[n++] = halos[i];
+	}
+	memcpy(halos, sorted, sizeof(halos[0]) * halo_count);
+}
+
 static void find_halos(void)
 {
-	char own[260], *slash;
+	char own[260], *slash, path[260];
 	int i;
 	halo_count = 0;
+	heading(NULL);
 	/* the folder the installer is in, if it's in Halo's (E:\Games\Halo\OpenCE installer: E:\Games\Halo) */
 	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
 	for (i = 0; i < 2 && (slash = strrchr(own, '\\')); i++)
 		*slash = 0;
-	{
-		char path[260];
-		if (from_device(own, path, sizeof(path)))
-			add_halo(path);
-	}
+	if (from_device(own, path, sizeof(path)))
+		add_halo(path);
 	for (i = 0; i < 3; i++)
 	{
-		char root[8], games[16];
-		text_print(root, sizeof(root), "%c:", partitions[i][0]);
-		text_print(games, sizeof(games), "%c:\\Games", partitions[i][0]);
-		scan(games);
-		scan(root);
+		char root[4] = {partitions[i][0], ':', 0};
+		scan(root, 2);
 	}
+	sort_halos();
 }
 
 /* ---- installing ---- */
@@ -477,7 +688,7 @@ static int free_space(char const *path, unsigned long long need)
 /* writes data to path (through path.new, checked as written), replacing what's there */
 static int write_checked(char const *path, unsigned char const *data, unsigned long size)
 {
-	char temp[280];
+	char temp[220];
 	unsigned char want[32], got[32];
 	unsigned long got_size;
 	struct writer w;
@@ -500,20 +711,20 @@ static int write_checked(char const *path, unsigned char const *data, unsigned l
 }
 
 /* the old default.xbe out of the way: an XBE this didn't make is kept (default_old.xbe, default_old2.xbe...) */
-static int set_aside(struct halo *halo, char const *main)
+static int set_aside(struct halo *h, char const *main)
 {
-	char old[280];
+	char old[220];
 	int n;
 	if (!exists(main))
 		return 0;
-	if (halo->state != OTHER)
+	if (h->state != OTHER)
 		return !DeleteFileA(main);
 	for (n = 1; n < 100; n++)
 	{
 		if (n == 1)
-			text_print(old, sizeof(old), "%s\\default_old.xbe", halo->path);
+			text_print(old, sizeof(old), "%s\\default_old.xbe", h->path);
 		else
-			text_print(old, sizeof(old), "%s\\default_old%d.xbe", halo->path, n);
+			text_print(old, sizeof(old), "%s\\default_old%d.xbe", h->path, n);
 		if (!exists(old))
 		{
 			say("Kept the XBE that was there as %s", strrchr(old, '\\') + 1);
@@ -523,45 +734,35 @@ static int set_aside(struct halo *halo, char const *main)
 	return 1;
 }
 
-static int install(struct halo *halo)
+static int install(struct halo *h)
 {
-	char main[260], backup[260], temp[280], ui_map[260], error[256];
-	unsigned long size, zero_at[4], zero_size[4], made_size;
-	unsigned char *retail, digest[32];
+	char main[200], backup[200], temp[220], ui_map[200], error[256], line[SCREEN_COLUMNS + 8];
+	unsigned long zero_at[4], zero_size[4], made_size;
+	unsigned char digest[32];
 	int zeros, have_pictures;
+	struct retail r;
 	struct writer w;
 
-	text_print(main, sizeof(main), "%s\\default.xbe", halo->path);
-	text_print(backup, sizeof(backup), "%s\\default_retail.xbe", halo->path);
-	text_print(temp, sizeof(temp), "%s\\default.xbe.new", halo->path);
-	text_print(ui_map, sizeof(ui_map), "%s\\maps\\ui.map", halo->path);
-	clear_log();
+	text_print(main, sizeof(main), "%s\\default.xbe", h->path);
+	text_print(backup, sizeof(backup), "%s\\default_retail.xbe", h->path);
+	text_print(temp, sizeof(temp), "%s\\default.xbe.new", h->path);
+	text_print(ui_map, sizeof(ui_map), "%s\\maps\\ui.map", h->path);
+	text_print(line, sizeof(line), "Installing OpenCE in %s", h->path);
+	heading(line);
+	log_clear();
 	say("Installing %s", package.name);
-	say("in %s", halo->path);
-	if (halo->state == RETAIL && halo->backup_in_the_way)
+	say("in %s", h->path);
+	/* the retail XBE, checked again */
+	if (retail_read(h->state == RETAIL ? main : backup, &r) || r.xbe != h->retail)
 	{
-		say("default_retail.xbe is already there, and isn't a clean");
-		say("retail Halo: move it out of the folder first.");
+		say_in(COLOUR_RED, "The retail XBE couldn't be read, or changed: look again.");
+		retail_free(&r);
 		return 1;
 	}
-	/* the clean retail XBE, checked again */
-	retail = read_whole(halo->state == RETAIL ? main : backup, &size);
-	if (!retail)
+	if (!free_space(h->path, (unsigned long long)h->retail->build_size + r.size + 1024 * 1024))
 	{
-		say("Couldn't read the retail XBE.");
-		return 1;
-	}
-	sha256(retail, size, digest);
-	if (memcmp(digest, halo->retail->retail_sha256, 32))
-	{
-		say("The retail XBE changed: look again (B).");
-		free(retail);
-		return 1;
-	}
-	if (!free_space(halo->path, (unsigned long long)halo->retail->build_size + size + 1024 * 1024))
-	{
-		say("Not enough room on the drive (%lu KB needed).", (halo->retail->build_size + size) / 1024 + 1024);
-		free(retail);
+		say_in(COLOUR_RED, "Not enough room on the drive (%lu KB needed).", (h->retail->build_size + r.size) / 1024 + 1024);
+		retail_free(&r);
 		return 1;
 	}
 	/* the pictures, from the game's own ui.map */
@@ -569,212 +770,255 @@ static int install(struct halo *halo)
 	pictures_progress = pictures_step;
 	have_pictures = !pictures_make(ui_map, pictures, header, error);
 	if (!have_pictures)
-		say("  no pictures (%s): they'll be blank", error);
-	/* the build, beside the old XBE */
-	say("Making OpenCE from %s...", halo->retail->name);
+		say_in(COLOUR_YELLOW, "  no pictures (%s): they'll be blank", error);
+	/* the build, beside the old XBE (from the disc's bytes) */
+	say("Making OpenCE from %s%s...", h->retail->name, r.patch.patched ? " (region/media patched)" : "");
 	w.file = create(temp);
 	if (w.file == INVALID_HANDLE_VALUE)
 	{
-		say("Couldn't create default.xbe.new.");
-		free(retail);
+		say_in(COLOUR_RED, "Couldn't create default.xbe.new.");
+		retail_free(&r);
 		return 1;
 	}
-	if (package_make(&package, halo->retail, retail, have_pictures ? pictures : NULL, have_pictures ? header : NULL,
+	if (package_make(&package, h->retail, r.data, have_pictures ? pictures : NULL, have_pictures ? header : NULL,
 		write_part, &w, error))
 	{
 		CloseHandle(w.file);
 		DeleteFileA(temp);
-		say("%s", error);
-		free(retail);
+		say_in(COLOUR_RED, "%s", error);
+		retail_free(&r);
 		return 1;
 	}
 	if (!finish(w.file))
 	{
 		DeleteFileA(temp);
-		say("Couldn't finish writing default.xbe.new.");
-		free(retail);
+		say_in(COLOUR_RED, "Couldn't finish writing default.xbe.new.");
+		retail_free(&r);
 		return 1;
 	}
-	zeros = package_pictures(&package, halo->retail, zero_at, zero_size, 4);
-	if (file_sha256(temp, zero_at, zero_size, zeros, digest, &made_size) || made_size != halo->retail->build_size ||
-		memcmp(digest, halo->retail->build_sha256, 32))
+	zeros = package_pictures(&package, h->retail, zero_at, zero_size, 4);
+	if (file_sha256(temp, zero_at, zero_size, zeros, digest, &made_size) || made_size != h->retail->build_size ||
+		memcmp(digest, h->retail->build_sha256, 32))
 	{
 		DeleteFileA(temp);
-		say("default.xbe.new didn't read back right: nothing changed.");
-		free(retail);
+		say_in(COLOUR_RED, "default.xbe.new didn't read back right: nothing changed.");
+		retail_free(&r);
 		return 1;
 	}
 	say("  written and checked (%lu KB)", made_size / 1024);
-	/* the retail XBE kept */
-	if (halo->state == RETAIL && !exists(backup))
+	/* the retail XBE kept, as it was */
+	if (h->state == RETAIL && !exists(backup))
 	{
-		if (write_checked(backup, retail, size))
+		retail_original(&r);
+		if (write_checked(backup, r.data, r.size))
 		{
 			DeleteFileA(temp);
-			say("Couldn't keep the retail XBE: nothing changed.");
-			free(retail);
+			say_in(COLOUR_RED, "Couldn't keep the retail XBE: nothing changed.");
+			retail_free(&r);
 			return 1;
 		}
 		say("Kept the retail XBE as default_retail.xbe");
 	}
-	free(retail);
+	retail_free(&r);
 	/* and the new one in its place */
-	if (set_aside(halo, main) || !MoveFileA(temp, main))
+	if (set_aside(h, main) || !MoveFileA(temp, main))
 	{
-		say("Couldn't put default.xbe.new in place of default.xbe.");
+		say_in(COLOUR_RED, "Couldn't put default.xbe.new in place of default.xbe.");
 		say("(The retail XBE is safe in default_retail.xbe.)");
 		return 1;
 	}
-	say("Done: OpenCE is this folder's default.xbe.");
+	say_in(COLOUR_GREEN, "Done: OpenCE is this folder's default.xbe.");
 	return 0;
 }
 
-static int restore(struct halo *halo)
+static int restore(struct halo *h)
 {
-	char main[260], backup[260];
-	unsigned char *retail, digest[32];
-	unsigned long size;
-	text_print(main, sizeof(main), "%s\\default.xbe", halo->path);
-	text_print(backup, sizeof(backup), "%s\\default_retail.xbe", halo->path);
-	clear_log();
-	say("Putting the retail Halo back in %s", halo->path);
-	retail = read_whole(backup, &size);
-	if (!retail)
+	char main[200], backup[200], line[SCREEN_COLUMNS + 8];
+	struct retail r;
+	text_print(main, sizeof(main), "%s\\default.xbe", h->path);
+	text_print(backup, sizeof(backup), "%s\\default_retail.xbe", h->path);
+	text_print(line, sizeof(line), "Putting the retail Halo back in %s", h->path);
+	heading(line);
+	log_clear();
+	say("Putting the retail Halo back in %s", h->path);
+	if (retail_read(backup, &r) || r.xbe != h->retail)
 	{
-		say("Couldn't read default_retail.xbe.");
+		say_in(COLOUR_RED, "default_retail.xbe couldn't be read, or changed: look again.");
+		retail_free(&r);
 		return 1;
 	}
-	sha256(retail, size, digest);
-	if (memcmp(digest, halo->retail->retail_sha256, 32))
+	retail_original(&r);
+	if (h->state == OTHER && set_aside(h, main))
 	{
-		say("default_retail.xbe changed: look again (B).");
-		free(retail);
+		say_in(COLOUR_RED, "Couldn't move the XBE that's there out of the way.");
+		retail_free(&r);
 		return 1;
 	}
-	if (halo->state == OTHER && set_aside(halo, main))
+	if (write_checked(main, r.data, r.size))
 	{
-		say("Couldn't move the XBE that's there out of the way.");
-		free(retail);
+		say_in(COLOUR_RED, "Couldn't write default.xbe: try again.");
+		retail_free(&r);
 		return 1;
 	}
-	if (write_checked(main, retail, size))
-	{
-		say("Couldn't write default.xbe: try again.");
-		free(retail);
-		return 1;
-	}
-	free(retail);
-	say("Done: the retail Halo is back (default_retail.xbe is kept).");
+	retail_free(&r);
+	say_in(COLOUR_GREEN, "Done: the retail Halo is back (default_retail.xbe is kept).");
 	return 0;
 }
 
-static void launch(struct halo *halo)
+static void launch(char const *device)
 {
-	char device[280];
-	text_print(device, sizeof(device), "%s\\default.xbe", halo->device);
-	say("Starting %s\\default.xbe", halo->path);
+	screen_hand_over();
 	XLaunchXBE(device);
-	say("Couldn't start it.");
+	/* (only if the path didn't convert) */
+	screen_init();
+	heading("Couldn't start it.");
 }
 
-/* ---- the menu ---- */
-
-static int selected;
-
-/* the menu's lines (above the log) */
-static void menu_top(void)
+static void launch_halo(struct halo *h)
 {
-	int row = 0, i;
-	for (i = 0; i < log_top && i < ROWS; i++)
-		screen[i][0] = 0;
-	line(row++, TITLE);
-	line(row++, "Package: %s", package_ok ? package.name : "none");
-	line(row++, "--------------------------------------------------------------");
+	char device[240];
+	text_print(device, sizeof(device), "%s\\default.xbe", h->device);
+	log_file("starting");
+	log_file(device);
+	launch(device);
+}
+
+/* ---- the list ---- */
+
+#define LIST_TOP 3
+#define LIST_ROWS 16
+static int selected, first_shown;
+
+static void show_list(void)
+{
+	int i, ready_count = 0, row;
+	heading(NULL);
+	for (i = 0; i < halo_count; i++)
+		ready_count += ready(&halos[i]);
+	{
+		char counts[40];
+		text_print(counts, sizeof(counts), "%d Halo found, %d ready", halo_count, ready_count);
+		screen_text(0, SCREEN_COLUMNS - (int)strlen(counts), COLOUR_GREY, "%s", counts);
+	}
 	if (!package_ok)
 	{
-		line(row++, "%s", package_error);
-		line(row++, "Put opence.oxpk beside this installer.");
+		screen_text(LIST_TOP, 0, COLOUR_RED, "%s", package_error);
+		screen_text(LIST_TOP + 1, 0, COLOUR_WHITE, "Put opence.oxpk beside this installer.");
 	}
-	if (!halo_count)
-		line(row++, "No Halo found in E:, F:, G: or their Games folders.");
-	for (i = 0; i < halo_count && row < 16; i++)
+	else if (!halo_count)
 	{
-		line(row++, "%s %s", i == selected ? ">" : " ", halos[i].path);
-		line(row++, "%s", halos[i].what);
+		screen_text(LIST_TOP, 0, COLOUR_WHITE, "No Halo found in E:, F: or G: (in their folders, or Games folders).");
 	}
-	row++;
-	if (halo_count)
+	if (selected < first_shown)
+		first_shown = selected;
+	if (selected >= first_shown + LIST_ROWS)
+		first_shown = selected - LIST_ROWS + 1;
+	for (row = 0; package_ok && row < LIST_ROWS && first_shown + row < halo_count; row++)
+	{
+		struct halo *h = &halos[first_shown + row];
+		int r = LIST_TOP + row, is_selected = first_shown + row == selected;
+		unsigned long colour = ready(h) ? COLOUR_GREEN : COLOUR_GREY;
+		size_t n = strlen(h->path);
+		screen_row(r, is_selected ? COLOUR_BAR : COLOUR_BLACK);
+		if (n > 40)
+			screen_text(r, 1, colour, "...%s", h->path + n - 37);
+		else
+			screen_text(r, 1, colour, "%s", h->path);
+		screen_text(r, 42, colour, "%.30s", h->note);
+	}
+	if (halo_count > LIST_ROWS)
+		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d-%d of %d   (LT/RT: a page)", first_shown + 1,
+			first_shown + row, halo_count);
+	if (halo_count && package_ok)
 	{
 		struct halo *h = &halos[selected];
-		int can_install = package_ok && h->state != UNKNOWN;
-		int can_restore = h->state == INSTALLED || h->state == OTHER || h->state == MISSING;
-		line(row++, "%s%s%sB: dashboard", can_install ? (h->state == INSTALLED ? "A: update  " : "A: install  ") : "",
-			can_restore ? "X: retail Halo back  " : "", h->state != MISSING ? "START: play  " : "");
+		char actions[SCREEN_COLUMNS + 1];
+		int at = 0;
+		screen_text(21, 0, COLOUR_WHITE, "%s", h->detail[0]);
+		screen_text(22, 0, COLOUR_WHITE, "%s", h->detail[1]);
+		actions[0] = 0;
+		if (ready(h))
+			at += text_print(actions + at, sizeof(actions) - at, "A: %s   ", h->state == INSTALLED ?
+				(h->up_to_date ? "install again" : "update") : "install");
+		if (h->state == INSTALLED || h->state == OTHER || h->state == MISSING)
+			at += text_print(actions + at, sizeof(actions) - at, "X: retail Halo back   ");
+		if (ready(h) && h->state != MISSING)
+			at += text_print(actions + at, sizeof(actions) - at, "START: play   ");
+		text_print(actions + at, sizeof(actions) - at, "B: dashboard");
+		screen_text(24, 0, COLOUR_YELLOW, "%s", actions);
 	}
 	else
-		line(row++, "B: dashboard");
-	log_top = row + 1;
+		screen_text(24, 0, COLOUR_YELLOW, "B: dashboard");
+	screen_show();
 }
 
-static void menu(void)
+/* after an install or a restore: the folder looked at again, the list kept on it */
+static void look_again(struct halo *h)
 {
-	memset(screen, 0, sizeof(screen));
-	menu_top();
-	draw();
+	char path[160];
+	int i;
+	flush_drive(h->path);
+	examine(h);
+	text_print(path, sizeof(path), "%s", h->path);
+	sort_halos();
+	for (i = 0; i < halo_count; i++)
+	{
+		if (!strcmp(halos[i].path, path))
+			selected = i;
+	}
 }
 
 int main(void)
 {
-	int b;
-	XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
 	nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
 	nxMountDrive('F', "\\Device\\Harddisk0\\Partition6\\");
 	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
+	screen_init();
 	SDL_Init(SDL_INIT_GAMECONTROLLER);
-	memset(screen, 0, sizeof(screen));
-	line(0, TITLE);
-	line(2, "Reading the package and looking for Halo...");
-	draw();
+	heading("Reading the package...");
 	log_file("---- " TITLE);
 	package_ok = !package_load(PACKAGE_PATH, &package, package_error);
 	log_file(package_ok ? package.name : package_error);
 	find_halos();
 	for (;;)
 	{
-		struct halo *h;
-		menu();
-		b = wait_button();
-		h = halo_count ? &halos[selected] : NULL;
+		struct halo *h = halo_count ? &halos[selected] : NULL;
+		int b;
+		show_list();
+		b = wait_input();
 		if (b == UP && selected > 0)
 			selected--;
 		else if (b == DOWN && selected + 1 < halo_count)
 			selected++;
+		else if (b == PAGE_UP)
+			selected = selected > LIST_ROWS ? selected - LIST_ROWS : 0;
+		else if (b == PAGE_DOWN && halo_count)
+			selected = selected + LIST_ROWS < halo_count ? selected + LIST_ROWS : halo_count - 1;
 		else if (b == B)
-			XLaunchXBE(NULL);
-		else if (h && b == A && package_ok && h->state != UNKNOWN)
+		{
+			log_file("to the dashboard");
+			launch(NULL);
+		}
+		else if (h && package_ok && b == A && ready(h))
 		{
 			int failed = install(h);
-			flush_drive(h->path);
-			examine(h);
-			menu_top();
-			say(failed ? "B: back" : "START: play it   B: back");
-			while ((b = wait_button()) != B && !(b == START && !failed))
+			look_again(h);
+			say_in(COLOUR_YELLOW, failed ? "B: back" : "START: play it   B: back");
+			while ((b = wait_input()) != B && !(b == START && !failed))
 				;
 			if (b == START)
-				launch(h);
+				launch_halo(&halos[selected]);
 		}
 		else if (h && b == X && (h->state == INSTALLED || h->state == OTHER || h->state == MISSING))
 		{
 			restore(h);
-			flush_drive(h->path);
-			examine(h);
-			menu_top();
-			say("B: back");
-			while (wait_button() != B)
+			look_again(h);
+			say_in(COLOUR_YELLOW, "B: back");
+			while (wait_input() != B)
 				;
 		}
-		else if (h && b == START && h->state != MISSING)
-			launch(h);
+		else if (h && b == START && ready(h) && h->state != MISSING)
+			launch_halo(h);
 	}
 	return 0;
 }

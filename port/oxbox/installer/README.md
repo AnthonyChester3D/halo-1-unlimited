@@ -1,12 +1,13 @@
 # Halo 1 Unlimited installer
 
 An XBE of this project's own, built with [nxdk](https://github.com/XboxDev/nxdk), that makes OpenCE on the Xbox
-from the player's own clean retail Halo XBE. It's the first step of the online branch's updater: a release is the
+from the player's own retail Halo XBE. It's the first step of the online branch's updater: a release is the
 installer and a package, and neither holds any of Microsoft's code or any of Halo's art.
 
 - **The package** (`opence.oxpk`, made by `port/oxbox/tools/mkpackage.py`) says how to make a build of OpenCE from
-  a clean retail Halo XBE: which runs of the retail XBE's bytes go where, OpenCE's own bytes (its code), and where
-  the pictures go. It covers each retail XBE it knows (NTSC versions 8 and 9) and is about 1.4 MB.
+  a retail Halo XBE: which runs of the retail XBE's bytes go where, OpenCE's own bytes (its code), and where the
+  pictures go. It covers each of the NTSC discs' XBEs (versions 1, 8 and 9, the same code with different
+  signatures), and a copy of one patched to run from the hard disk or in any region. It's about 1.6 MB.
 - **The pictures** (the main menu's OPTIONS and PROFILES, the postgame's gametype pictures, ONLINE PLAY's header)
   are made on the Xbox from the letters and pictures in the game's own `maps\ui.map` (`pictures.c`).
 
@@ -14,23 +15,26 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
 
 1. Copy the installer's folder (`default.xbe`, `opence.oxpk`) anywhere on the Xbox's hard disk, for example
    `E:\Apps\Halo 1 Unlimited installer`, and start it from your dashboard.
-2. It lists each Halo it finds in E:, F: and G: and in their `Games` folders (and the folder it's in, if that's
-   inside Halo's), with what's there:
-   - *clean retail Halo (NTSC, version 8)*: ready to install.
-   - *OpenCE (retail kept: ...)*: installed; A updates it to this package's.
-   - *another XBE (retail kept: ...)*: a different XBE (a modified Halo, say) with the clean retail one beside it.
-   - *not a clean retail Halo XBE this package knows*: nothing to install from. Put the retail `default.xbe` from
-     your own disc in the folder, either as `default.xbe` or, to keep the XBE that's there, as
-     `default_retail.xbe`.
+2. It lists every Halo it finds on E:, F: and G: (in their folders, their `Games` folders, and one folder further
+   in, such as `E:\Games\Halo mods\...`). The ones it can install to come first, in green:
+   - *retail Halo: ready to install*: the `default.xbe` from a disc (or a copy patched for region or media).
+   - *OpenCE (this package's)* or *OpenCE (another build)*: installed, the retail XBE kept beside it; A installs
+     this package's.
+   - *another XBE (retail kept)*: a different XBE (a modified Halo, say) with the retail one beside it.
+
+   The others are grey, and can't be started from here:
+   - *modified or unknown XBE*: nothing to install from. To install there, copy the `default.xbe` from your disc
+     into the folder as `default_retail.xbe` (the XBE that's there is kept, as `default_old.xbe`).
+   - *default_retail.xbe in the way*: that file isn't a retail Halo XBE; move it out first.
 3. **A** installs (or updates), **X** puts the retail Halo back, **START** plays what's in the folder, **B** goes
-   back to the dashboard.
+   back to the dashboard. The d-pad or the left stick moves; the triggers move a page.
 
 What it changes in the Halo folder:
 
 | File | |
 |---|---|
 | `default.xbe` | OpenCE, made from the retail XBE |
-| `default_retail.xbe` | the clean retail XBE, kept (made from `default.xbe` on the first install) |
+| `default_retail.xbe` | the retail XBE, kept as it was (from `default.xbe` on the first install) |
 | `default_old.xbe` | an XBE that was there and that the installer didn't make (a modified Halo), kept |
 
 It checks the retail XBE's SHA-256 before it starts, writes OpenCE beside the old XBE (`default.xbe.new`), reads it
@@ -46,13 +50,15 @@ Building the installer needs nxdk (with its submodules) and its tools on the `PA
 make -C port/oxbox/installer -f nxdk.mk NXDK_DIR=/path/to/nxdk     # bin/default.xbe
 ```
 
-A package is made from builds of the same commit, one from each retail XBE:
+A package is made from builds of the same commit, one from each disc's XBE (NTSC versions 1, 8 and 9: the
+README in `port/oxbox` has their SHA-256s):
 
 ```sh
-sh port/oxbox/build.sh retail_v8.xbe && cp build-xbox/halo1unlimited.xbe build_v8.xbe
-sh port/oxbox/build.sh retail_v9.xbe && cp build-xbox/halo1unlimited.xbe build_v9.xbe
+for v in 1 8 9; do
+  sh port/oxbox/build.sh halo_v$v.xbe && cp build-xbox/halo1unlimited.xbe build_v$v.xbe
+done
 python3 port/oxbox/tools/mkpackage.py opence.oxpk "crossplay experiment 6" \
-    retail_v8.xbe build_v8.xbe retail_v9.xbe build_v9.xbe
+    halo_v1.xbe build_v1.xbe halo_v8.xbe build_v8.xbe halo_v9.xbe build_v9.xbe
 ```
 
 mkpackage checks that the package makes each build back, and before any of the build's bytes go into the package it
@@ -64,10 +70,12 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | File | |
 |---|---|
 | `nxdk.mk` | the installer's build (nxdk's makefile) |
-| `main.c` | the installer: the menu, finding Halo, installing, putting the retail Halo back |
+| `main.c` | the installer: the list, finding Halo, installing, putting the retail Halo back |
+| `screen.c`, `screen.h` | the text screen, in colour, and the black picture kept while the next XBE starts |
 | `package.c`, `package.h` | reading a package and making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
 | `sha256.c`, `sha256.h` | SHA-256 |
+| `text.h` | snprintf that always ends its text (nxdk's PDCLib doesn't when it cuts it short) |
 | `mkpictures.c`, `oxpatch.c` | the PC tools |
 
 ### Coming next

@@ -1,14 +1,15 @@
 """mkpackage.py: an OpenCE package for the installer (port/oxbox/installer): how to make a build of OpenCE from the
-player's own clean Halo XBE, with none of Microsoft's code or Halo's art in it.
+player's own retail Halo XBE, with none of Microsoft's code or Halo's art in it.
 
 Usage: python3 port/oxbox/tools/mkpackage.py out.oxpk "name" RETAIL.xbe BUILD.xbe [RETAIL2.xbe BUILD2.xbe ...]
 
-Each BUILD is port/oxbox/build.sh's halo1unlimited.xbe made from the RETAIL XBE beside it (a clean retail Halo:
-NTSC version 8 or 9). The package says, for each, how to make the build from the retail XBE: runs of its bytes taken
-from the retail XBE (wherever they are in it), bytes of OpenCE's own (its code, in a pool the builds share), runs of
-zeros, and the pictures (pictures.h), made on the Xbox from the player's ui.map. Before any of OpenCE's own bytes go
-into the pool, any 16 bytes or more found in the retail XBE are taken from it instead, so the pool holds only what
-the build added.
+Each BUILD is port/oxbox/build.sh's halo1unlimited.xbe made from the RETAIL XBE beside it (a retail Halo, the
+disc's: NTSC version 1, 8 or 9). The package says, for each, how to make the build from the retail XBE: runs of its
+bytes taken from the retail XBE (wherever they are in it), bytes of OpenCE's own (its code, in a pool the builds
+share), runs of zeros, and the pictures (pictures.h), made on the Xbox from the player's ui.map. Before any of
+OpenCE's own bytes go into the pool, any 16 bytes or more found in the retail XBE are taken from it instead, so the
+pool holds only what the build added. (A copy of a disc's XBE patched for media or regions is matched by the
+installer as the disc's: package.c, package_match.)
 
 The format (little-endian), read by port/oxbox/installer/package.c:
     header, 128 bytes:

@@ -20,7 +20,8 @@ int main(int argc, char **argv)
 {
 	struct package package;
 	struct package_xbe const *xbe;
-	unsigned char digest[32], *retail;
+	struct package_patch patch;
+	unsigned char *retail;
 	char error[256];
 	long size;
 	FILE *file;
@@ -48,8 +49,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	fclose(file);
-	sha256(retail, size, digest);
-	xbe = package_find(&package, digest);
+	xbe = package_match(&package, retail, size, &patch);
 	if (!xbe)
 	{
 		fprintf(stderr, "oxpatch: %s isn't a retail XBE this package knows\n", argv[2]);
@@ -71,6 +71,6 @@ int main(int argc, char **argv)
 		fprintf(stderr, "oxpatch: %s\n", error);
 		return 1;
 	}
-	printf("%s: from %s\n", argv[4], xbe->name);
+	printf("%s: from %s%s\n", argv[4], xbe->name, patch.patched ? " (a copy patched for media or regions)" : "");
 	return 0;
 }

@@ -202,6 +202,53 @@ struct package_xbe const *package_find(struct package const *package, unsigned c
 	return NULL;
 }
 
+static void put32(unsigned char *p, unsigned long v)
+{
+	p[0] = (unsigned char)v, p[1] = (unsigned char)(v >> 8), p[2] = (unsigned char)(v >> 16);
+	p[3] = (unsigned char)(v >> 24);
+}
+
+void package_unpatch(unsigned char *data, struct package_patch const *patch)
+{
+	if (patch->patched)
+		put32(data + patch->cert + 0x9c, patch->media), put32(data + patch->cert + 0xa0, patch->regions);
+}
+
+void package_repatch(unsigned char *data, struct package_patch const *patch)
+{
+	if (patch->patched)
+		put32(data + patch->cert + 0x9c, PACKAGE_DISC_MEDIA), put32(data + patch->cert + 0xa0, PACKAGE_DISC_REGIONS);
+}
+
+struct package_xbe const *package_match(struct package const *package, unsigned char *data, unsigned long size,
+	struct package_patch *patch)
+{
+	struct package_xbe const *xbe;
+	unsigned char digest[32];
+	memset(patch, 0, sizeof(*patch));
+	sha256(data, size, digest);
+	xbe = package_find(package, digest);
+	if (xbe || size < 0x200)
+		return xbe;
+	patch->cert = u32(data + 0x118) - u32(data + 0x104);
+	if (patch->cert > size - 0xa4)
+		return NULL;
+	patch->media = u32(data + patch->cert + 0x9c);
+	patch->regions = u32(data + patch->cert + 0xa0);
+	if (patch->media == PACKAGE_DISC_MEDIA && patch->regions == PACKAGE_DISC_REGIONS)
+		return NULL;
+	patch->patched = 1;
+	package_repatch(data, patch);
+	sha256(data, size, digest);
+	xbe = package_find(package, digest);
+	if (!xbe)
+	{
+		package_unpatch(data, patch);
+		patch->patched = 0;
+	}
+	return xbe;
+}
+
 /* (the build goes out in parts this big) */
 #define CHUNK 65536
 

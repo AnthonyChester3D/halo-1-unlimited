@@ -100,10 +100,12 @@ as upstream OpenCE, which asks for your own disc image. Other files are also lef
 You need Linux (or WSL), plus clang, ld.lld, llvm-objcopy, ninja, python3 and a 32-bit libgcc (on Debian or
 Ubuntu, the `gcc-multilib` package provides it).
 
-The input is your own clean retail Halo XBE, the `default.xbe` from the disc: NTSC version 8 (SHA-256
-`8d19f6fa407c86978f93cc28aeeb44447e7449f49c0f7c079286a2c163b865c3`) or version 9 (SHA-256
-`d183cc8f9a27604df78ce0f898278d648682d0bae00fdd768856f25d59c79d4f`). (The early builds started from a Halo XBE with
-a 16-console system link patch, `default_16Xbox.xbe`, SHA-256
+The input is your own retail Halo XBE, the `default.xbe` from the disc. The NTSC discs have three, with the same
+code and different signatures: version 1 (SHA-256 `ed3a8e962351ad6c4b3b620768fb6a0bda658963390252439ea036d5ede3a3ac`),
+version 8 (`e0eca392e4aa0c174e60329a7a6799de6c1b18292cddb1905e46c20ca2fbfdde`) and version 9
+(`4094e994243ddeae3f1b478bde6a7ee81498218ccd7c9d7bc2327db547d95aae`). A copy patched to run from the hard disk or in any
+region (its certificate's media and regions changed) builds the same game. (The early builds started from a Halo XBE
+with a 16-console system link patch, `default_16Xbox.xbe`, SHA-256
 `473b2c3ae3d503edd27f48e5844fe32209904cd0f505a76845860f08f4e13d89`, which still works.) The build keeps that XBE's
 sections where they are. It uses the XBE's own libraries (Direct3D, DirectSound, XNet), links the game code against
 them, adds that code after its last section, and points the startup at it.

@@ -66,7 +66,7 @@ def section_name(d, i):
     nm = struct.unpack_from('<I', d, sh + i * 0x38 + 0x14)[0] - base
     return bytes(d[nm:d.index(b'\0', nm)]).decode('latin-1')
 
-# a clean retail XBE (NTSC, version 8 or 9), or one without the 16-player XBE's .cap16 (16 KB at 0x3B5000, the section
+# a retail XBE (NTSC, version 1, 8 or 9), or one without the 16-player XBE's .cap16 (16 KB at 0x3B5000, the section
 # this port first went into): an empty .cap16 added, as that XBE has it, so the image goes at 0x3B9000 either way.
 # Every retail section stays where it was; the retail certificate (title, keys, media, region) is kept
 if section_name(d, struct.unpack_from('<I', d, 0x11c)[0] - 1) != '.cap16':
@@ -74,7 +74,7 @@ if section_name(d, struct.unpack_from('<I', d, 0x11c)[0] - 1) != '.cap16':
     last = struct.unpack_from('<I', d, 0x120)[0] - base + (nsec0 - 1) * 0x38
     assert section_name(d, nsec0 - 1) == '$$XSIMAGE' and \
         struct.unpack_from('<IIII', d, last + 4) == (0x3b37a0, 0x1000, 0x269000, 0x1000), \
-        'not a retail Halo XBE (NTSC, version 8 or 9) nor the 16-player one'
+        'not a retail Halo XBE (NTSC, version 1, 8 or 9) nor the 16-player one'
     assert len(d) == 0x26b000 and not any(d[0x26a000:]), 'not a retail Halo XBE: its end'
     d = d[:0x26a000] + bytearray(0x4000 + 0x1000)   # .cap16's raw data, then the empty page the 16-player XBE has
     add_section(d, '.cap16', 7, 0x3b5000, 0x4000, 0x26a000, 0x4000)   # writable (1), preload (2), executable (4)
