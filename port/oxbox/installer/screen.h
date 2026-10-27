@@ -23,8 +23,8 @@ int screen_text(int row, int column, unsigned long colour, char const *format, .
 void screen_row(int row, unsigned long background);
 /* draws what changed */
 void screen_show(void);
-/* a black picture that stays up while the console starts the next XBE, instead of the next XBE's bytes showing
-through the old one */
+/* the screen blanked (the video encoder's output, not a picture in memory) while the console starts the next XBE,
+whose Direct3D shows the screen again at its first frame */
 void screen_hand_over(void);
 
 #endif

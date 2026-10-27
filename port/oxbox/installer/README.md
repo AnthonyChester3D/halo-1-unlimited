@@ -75,7 +75,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 |---|---|
 | `nxdk.mk` | the installer's build (nxdk's makefile) |
 | `main.c` | the installer: the list, finding Halo, installing, putting the retail Halo back |
-| `screen.c`, `screen.h` | the text screen, in colour, and the black picture kept while the next XBE starts |
+| `screen.c`, `screen.h` | the text screen, in colour, and the screen blanked while the next XBE starts |
 | `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
 | `sha256.c`, `sha256.h` | SHA-256 |
@@ -102,6 +102,14 @@ public keys in `keys.txt`. `port/oxbox/tools/oxsign.py` does it all, with plain 
    Installers built from then on trust those keys.
 3. Each release: `python3 oxsign.py sign path/to/main.oxkey opence.oxpk`, then
    `python3 oxsign.py verify opence.oxpk --keys port/oxbox/installer/keys.txt` to check it.
+
+Or in one go, on Windows. Once: `py port\oxbox\tools\oxsign.py setup path\to\main.oxkey`. From then on,
+double-clicking a `.oxpk` opens a window that shows the package (name, release, notes) and its signatures, checked
+against `keys.txt`, and asks "Sign it with main? [y/N]": Y signs it and checks it again. Dropping packages on
+`tools\sign.cmd` does the same. It asks main's passphrase the first time, and offers to remember it on this PC:
+Windows keeps it encrypted so only your Windows login can read it back (`oxsign.py forget` forgets it;
+`oxsign.py unsetup` undoes all of it). It always asks before signing, so opening a package someone sent you
+can't sign it by accident.
 
 `.oxkey` files are in `.gitignore`, so one can't be committed by mistake. A signature covers the package's header
 (which holds its contents' SHA-256) and its manifest (`oxsign.py show` prints it: name, release, network version,

@@ -26,7 +26,7 @@ The hook sites, each inside #if defined(OXBOX_SHOWCASE):
 struct observer_result;
 
 /* the main menu's attract time is up: TRUE when the showcase starts (or is already running), FALSE for the movie
-(it's off, no folder map has a showcase.txt, or hosting failed a moment ago) */
+(it's off, the network cable is unplugged, no folder map has a showcase.txt, or hosting failed a moment ago) */
 boolean showcase_start(void);
 /* how long the main menu waits for a press before the attract time is up (opence.ini's showcase_seconds; Halo's
 own 75 seconds) */

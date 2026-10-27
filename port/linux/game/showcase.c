@@ -32,8 +32,9 @@ then the next map loads; with one map, its list just plays on. The game is Slaye
 bots: the map's suggested players (info.txt, else 8), 4 to 10, less the watching player, at Normal.
 
 The hook sites are oxbox_showcase.h's list. Hosting is network_test.c's (the PC's automated system link tests): the
-lobby's fast setup, the map and the variant a second on, the player a moment later, then the start. If hosting
-fails (no network: system link needs the cable), the attract movies play for the next ten minutes.
+lobby's fast setup, the map and the variant a second on, the player a moment later, then the start. With the
+network cable unplugged it doesn't start (Halo's system link needs it): the attract movies, as before. If hosting
+fails twice in a row anyway, the movies play for the next ten minutes.
 
 The log (oxbox_log.txt): a line when it starts, each map, and when it ends, and any showcase.txt it couldn't read
 (with the line and why). It reads only the maps' showcase.txt files and writes nothing.
@@ -70,6 +71,7 @@ The log (oxbox_log.txt): a line when it starts, each map, and when it ends, and 
 
 void platform_log(char const *format, ...);
 short hmp_browse_suggested_players(char const *level_name);
+boolean transport_network_available(void); /* (the network cable: transport_endpoint_set_winsock.c) */
 long halo_screen_width(void);
 
 /* opence.ini (oxbox_entry.c): showcase = 0 turns it off (the movies, as Halo has them); showcase_seconds = N: the
@@ -147,6 +149,7 @@ static struct
 	real alpha;                     /* the fade to black over everything: 1 is black */
 	unsigned long retry_after;      /* hosting failed: the movies until then */
 	short failures;                 /* games in a row that didn't start */
+	boolean told_cable;             /* the log said the cable is unplugged */
 	/* the lobby */
 	boolean map_set;
 	boolean player_added;
@@ -703,7 +706,7 @@ static void showcase_host(
 	player_ui_fast_setup_network_server();
 	if (!global_network_game_server_get() || !global_network_game_client_get())
 	{
-		platform_log("showcase: couldn't host a game (system link needs the network cable): the movies for now");
+		platform_log("showcase: couldn't host a game: the movies for now");
 		showcase.failures = 1;
 		showcase_failed();
 		showcase_set_state(_showcase_returning);
@@ -750,7 +753,7 @@ static void showcase_back_at_menu(
 	void)
 {
 	showcase.camera_valid = FALSE;
-	if (showcase.chain && !showcase.user_ended && showcase_next_map())
+	if (showcase.chain && !showcase.user_ended && transport_network_available() && showcase_next_map())
 	{
 		showcase.alpha = 1.0f;
 		showcase_host();
@@ -789,6 +792,15 @@ boolean showcase_start(
 	if (showcase.retry_after && (long)(system_milliseconds() - showcase.retry_after) < 0)
 		return FALSE;
 	showcase.retry_after = 0;
+	/* (a system link game needs the network cable: without it, Halo's networking gives up with an error box) */
+	if (!transport_network_available())
+	{
+		if (!showcase.told_cable)
+			platform_log("showcase: the network cable is unplugged: the movies instead (system link needs it)");
+		showcase.told_cable = TRUE;
+		return FALSE;
+	}
+	showcase.told_cable = FALSE;
 	if (!showcase_next_map())
 		return FALSE;
 	showcase.user_ended = FALSE;
@@ -961,12 +973,21 @@ void showcase_update(
 		showcase.alpha = 1.0f;
 		if (main_menu_loaded)
 			showcase.camera_valid = FALSE;
-		/* (the main menu settling first, as network_test.c waits) */
-		if (main_menu_loaded && !network_game_is_active() && main_menu_screen_is_active())
+		/* (the main menu settling first, as network_test.c waits; with something over it, such as an error box,
+		the main menu back after 3 seconds, to show it) */
+		if (main_menu_loaded && !network_game_is_active())
 		{
 			showcase.menu_seconds += seconds;
-			if (showcase.menu_seconds >= (showcase.chain && !showcase.user_ended ? 1.0f : 0.2f))
+			if (!main_menu_screen_is_active() && showcase.menu_seconds >= 3.0f)
+			{
+				showcase.chain = FALSE;
 				showcase_back_at_menu();
+			}
+			else if (main_menu_screen_is_active() &&
+				showcase.menu_seconds >= (showcase.chain && !showcase.user_ended ? 1.0f : 0.2f))
+			{
+				showcase_back_at_menu();
+			}
 		}
 		else
 		{

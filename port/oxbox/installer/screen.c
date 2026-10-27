@@ -116,16 +116,17 @@ void screen_show(void)
 
 void screen_hand_over(void)
 {
+	/* the screen blanked (the encoder's output), as a retail title's Direct3D does when it shuts down without
+	keeping a picture: AvSendTVEncoderOption(AV_OPTION_BLANK_SCREEN, TRUE). The next title's Direct3D blanks it too
+	while it starts, and turns it back on at its first frame. Nothing in memory shows meanwhile (this picture's
+	memory is the next XBE's to load into).
+	(Installer tests 2 and 3 kept a black picture instead, as Direct3D's D3DDevice_PersistDisplay keeps one for the
+	next title: MmPersistContiguousMemory and AvSetSavedDataAddress. But Direct3D's kept picture is one of its own
+	surfaces, a description and then the pixels: given just the pixels, Halo's Direct3D pointed the screen at the
+	wrong memory for a fifth of a second as it started, the scrambled frames the user saw) */
 	unsigned char *fb = XVideoGetFB();
 	ULONG size = MmQueryAllocationSize(fb);
 	memset(fb, 0, size ? size : 640 * 480 * 4);
 	XVideoFlushFB();
-	/* the black picture kept through the reboot, as the retail D3DDevice_PersistDisplay keeps one: its memory isn't
-	reused for the next XBE, and the next XBE's video set-up frees it (Halo's does: it starts with the same free
-	memory as when it's started from a dashboard). Without this, the next XBE's bytes showed in the old picture */
-	if (size)
-	{
-		MmPersistContiguousMemory(fb, size, TRUE);
-		AvSetSavedDataAddress(fb);
-	}
+	AvSendTVEncoderOption((PVOID)VIDEO_BASE, VIDEO_ENC_VIDEOENABLE, TRUE, NULL);
 }

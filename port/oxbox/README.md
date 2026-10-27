@@ -97,6 +97,7 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
   with Catmull-Rom tangents). Shots fade out over their last `fade` seconds and in over the next one's first.
 - Maps: favourites first, each group shuffled, hidden maps skipped. A map's list plays through (for at least a
   minute), then the next map loads. Slayer to 999, bots at Normal (the map's suggested players, 4 to 10).
+- It needs the network cable plugged in (Halo's system link does); without it, the attract movies play.
 - Settings in `opence.ini`: `showcase = 0` plays the attract movies instead; `showcase_seconds = N` (5 and up)
   changes the 75-second wait.
 - Without the switch, the build is byte for byte what it was.
