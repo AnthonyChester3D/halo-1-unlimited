@@ -1,0 +1,6 @@
+# The public keys the installer trusts: a package signed by one of them is a release (port/oxbox/tools/oxsign.py).
+# One "name id public" line each, as oxsign.py keygen prints it (in NAME.pub). Public keys aren't secret; the secret
+# keys (.oxkey) never go in the repository.
+
+main 0061941d58350118 68fc66b120e51deec45ee542f54fd84021f5108cf13ed7a75353afb36c0e78e2
+backup 604f81eb9ad3143f 9d932c4e0db185a5c64660a1b14520223dca13c50ae90dfe22e43b4364c09607

@@ -2,6 +2,11 @@
 player's own retail Halo XBE, with none of Microsoft's code or Halo's art in it.
 
 Usage: python3 port/oxbox/tools/mkpackage.py out.oxpk "name" RETAIL.xbe BUILD.xbe [RETAIL2.xbe BUILD2.xbe ...]
+           [--release N] [--network N] [--notes "text"]
+
+(--release: the release's number, which goes up by one each release (0, the default: a test); --network: the
+network version its online play speaks; --notes: a line about it.) The package isn't signed: the project's owner signs
+it on their PC with port/oxbox/tools/oxsign.py, which appends the signature.
 
 Each BUILD is port/oxbox/build.sh's halo1unlimited.xbe made from the RETAIL XBE beside it (a retail Halo, the
 disc's: NTSC version 1, 8 or 9). The package says, for each, how to make the build from the retail XBE: runs of its
@@ -14,11 +19,16 @@ installer as the disc's: package.c, package_match.)
 The format (little-endian), read by port/oxbox/installer/package.c:
     header, 128 bytes:
         0   "OXPK"
-        4   u32 format (1)
+        4   u32 format (2; 1 had no manifest and no signatures, and zeros at 112)
         8   u32 body's size (zlib), 12 u32 its size unpacked
         16  SHA-256 of the body (as stored)
         48  the package's name (64 bytes, ASCII, NUL-padded)
-        112 (16 bytes, zero)
+        112 u32 the manifest's size, u32 release, u32 network version, u32 (zero)
+    the manifest: "key: value" lines (ASCII): name, release, network, date, notes, makes (the retail XBEs)
+    the body (zlib)
+    then, if it's signed: "OXSG", u32 count, and for each signature: the key's id (the first 8 bytes of the SHA-256 of
+        its public key), and an Ed25519 signature of "Halo 1 Unlimited package, signed\n" + the header + the manifest
+        (the header holds the body's SHA-256, so the signature covers it all). oxsign.py appends them.
     body (zlib), unpacked:
         u32 number of XBEs it makes
         for each, 112 bytes:
@@ -35,9 +45,9 @@ The format (little-endian), read by port/oxbox/installer/package.c:
         5 HEADER: size (pictures.h's ONLINE GAMES header: 32768)
         0 the end
 """
-import bisect, hashlib, re, struct, sys, zlib
+import argparse, bisect, datetime, hashlib, re, struct, sys, zlib
 
-FORMAT = 1
+FORMAT = 2
 MIN_MATCH = 16
 MIN_ZEROS = 64
 PICTURES_SIZE = 9 * 16384
@@ -243,10 +253,22 @@ def retail_name(retail):
 
 
 def main():
-    if len(sys.argv) < 5 or len(sys.argv) % 2 != 1:
+    parser = argparse.ArgumentParser(usage=__doc__)
+    parser.add_argument('out')
+    parser.add_argument('name')
+    parser.add_argument('xbes', nargs='+')
+    parser.add_argument('--release', type=int, default=0)
+    parser.add_argument('--network', type=int, default=0)
+    parser.add_argument('--notes', default='')
+    args = parser.parse_args()
+    if len(args.xbes) % 2:
         sys.exit(__doc__)
-    out_path, name = sys.argv[1], sys.argv[2]
-    pairs = [(open(sys.argv[k], 'rb').read(), open(sys.argv[k + 1], 'rb').read()) for k in range(3, len(sys.argv), 2)]
+    out_path, name = args.out, args.name
+    for text in (name, args.notes):
+        if not all(32 <= ord(c) < 127 for c in text):
+            sys.exit('mkpackage: the name and notes are plain ASCII')
+    pairs = [(open(args.xbes[k], 'rb').read(), open(args.xbes[k + 1], 'rb').read())
+             for k in range(0, len(args.xbes), 2)]
     pool = bytearray()
     pool_index = Index(pool)
     made = []
@@ -275,10 +297,15 @@ def main():
         assert apply(body, (at, len(e)), retail) == blank(build), 'a build not made back'
         at += len(e)
     packed = zlib.compress(body, 9)
+    manifest = 'name: %s\nrelease: %d\nnetwork: %d\ndate: %s\nnotes: %s\nmakes: %s\n' % (
+        name, args.release, args.network, datetime.date.today().isoformat(), args.notes,
+        ', '.join(retail_name(r) for r, _, _ in made))
+    manifest = manifest.encode('ascii')
     header = b'OXPK' + struct.pack('<III', FORMAT, len(packed), len(body)) + hashlib.sha256(packed).digest()
-    header += name.encode('ascii').ljust(64, b'\0')[:64] + bytes(16)
+    header += name.encode('ascii').ljust(64, b'\0')[:64]
+    header += struct.pack('<IIII', len(manifest), args.release, args.network, 0)
     assert len(header) == 128
-    open(out_path, 'wb').write(header + packed)
+    open(out_path, 'wb').write(header + manifest + packed)
     for (retail, build, steps), e in zip(made, encoded):
         counts = {}
         for s in steps:
@@ -290,7 +317,8 @@ def main():
                  HEADER: 'header'}
         print('%s -> %d bytes: %s' % (retail_name(retail), len(build), ', '.join(
             '%s %d bytes (%d runs)' % (names[k], v[1], v[0]) for k, v in sorted(counts.items()))))
-    print('%s: %d bytes (body %d, its pool %d)' % (out_path, 128 + len(packed), len(body), len(pool)))
+    print('%s: %d bytes (body %d, its pool %d), release %d, not signed' % (
+        out_path, 128 + len(manifest) + len(packed), len(body), len(pool), args.release))
 
 
 if __name__ == '__main__':

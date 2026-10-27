@@ -27,13 +27,16 @@ The list shows every Halo it finds: the ones it can install to first, in green; 
 #include "sha256.h"
 #include "text.h"
 
+#include "keys.h"
+
 #define TITLE "Halo 1 Unlimited installer"
 #define PACKAGE_PATH "D:\\opence.oxpk"
 #define LOG_PATH "D:\\installer_log.txt"
 #define HALO_TITLE_ID 0x4D530004ul
 #define MAX_XBE (16 * 1024 * 1024)
 static struct package package;
-static int package_ok;
+static int package_ok, package_missing, signature;
+static char const *signer;
 static char package_error[256];
 
 static unsigned long u32(unsigned char const *p)
@@ -97,12 +100,34 @@ static void pictures_step(char const *step)
 	say("  %s", step);
 }
 
+/* the package's signature, as the heading says it */
+static char const *signature_text(unsigned long *colour)
+{
+	static char text[48];
+	*colour = signature == PACKAGE_SIGNED ? COLOUR_GREEN : COLOUR_YELLOW;
+	if (signature == PACKAGE_SIGNED)
+		text_print(text, sizeof(text), "signed (%s)", signer);
+	else
+		text_print(text, sizeof(text), "%s", signature == PACKAGE_UNKNOWN_KEY ? "signed by a key it doesn't know" :
+			"not signed");
+	return text;
+}
+
 static void heading(char const *what)
 {
 	screen_clear();
 	screen_text(0, 0, COLOUR_YELLOW, TITLE);
+	if (package_ok)
+	{
+		unsigned long colour;
+		char const *said = signature_text(&colour);
+		screen_text(0, SCREEN_COLUMNS - (int)strlen(said), colour, "%s", said);
+	}
 	screen_text(1, 0, COLOUR_GREY, "Package: ");
-	screen_text(1, 9, COLOUR_WHITE, "%s", package_ok ? package.name : "none");
+	if (package_ok && package.release)
+		screen_text(1, 9, COLOUR_WHITE, "%s (release %lu)", package.name, package.release);
+	else
+		screen_text(1, 9, COLOUR_WHITE, "%s", package_ok ? package.name : "none");
 	screen_text(2, 0, COLOUR_DIM, "------------------------------------------------------------------------");
 	if (what)
 		screen_text(3, 0, COLOUR_WHITE, "%s", what);
@@ -750,8 +775,13 @@ static int install(struct halo *h)
 	text_print(line, sizeof(line), "Installing OpenCE in %s", h->path);
 	heading(line);
 	log_clear();
-	say("Installing %s", package.name);
-	say("in %s", h->path);
+	{
+		unsigned long colour;
+		char const *said = signature_text(&colour);
+		say("Installing %s", package.name);
+		say_in(colour, "  (release %lu, %s)", package.release, said);
+		say("in %s", h->path);
+	}
 	/* the retail XBE, checked again */
 	if (retail_read(h->state == RETAIL ? main : backup, &r) || r.xbe != h->retail)
 	{
@@ -895,15 +925,11 @@ static void show_list(void)
 	heading(NULL);
 	for (i = 0; i < halo_count; i++)
 		ready_count += ready(&halos[i]);
-	{
-		char counts[40];
-		text_print(counts, sizeof(counts), "%d Halo found, %d ready", halo_count, ready_count);
-		screen_text(0, SCREEN_COLUMNS - (int)strlen(counts), COLOUR_GREY, "%s", counts);
-	}
 	if (!package_ok)
 	{
 		screen_text(LIST_TOP, 0, COLOUR_RED, "%s", package_error);
-		screen_text(LIST_TOP + 1, 0, COLOUR_WHITE, "Put opence.oxpk beside this installer.");
+		if (package_missing)
+			screen_text(LIST_TOP + 1, 0, COLOUR_WHITE, "Put opence.oxpk beside this installer.");
 	}
 	else if (!halo_count)
 	{
@@ -927,8 +953,10 @@ static void show_list(void)
 		screen_text(r, 42, colour, "%.30s", h->note);
 	}
 	if (halo_count > LIST_ROWS)
-		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d-%d of %d   (LT/RT: a page)", first_shown + 1,
-			first_shown + row, halo_count);
+		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d Halo found, %d ready: %d-%d shown (LT/RT: a page)",
+			halo_count, ready_count, first_shown + 1, first_shown + row);
+	else if (halo_count)
+		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d Halo found, %d ready", halo_count, ready_count);
 	if (halo_count && package_ok)
 	{
 		struct halo *h = &halos[selected];
@@ -978,7 +1006,20 @@ int main(void)
 	heading("Reading the package...");
 	log_file("---- " TITLE);
 	package_ok = !package_load(PACKAGE_PATH, &package, package_error);
+	package_missing = !package_ok && GetFileAttributesA(PACKAGE_PATH) == INVALID_FILE_ATTRIBUTES;
 	log_file(package_ok ? package.name : package_error);
+	if (package_ok)
+	{
+		unsigned long colour;
+		signature = package_verify(&package, trusted_keys, trusted_key_count, &signer);
+		if (signature == PACKAGE_BAD)
+		{
+			package_ok = 0;
+			text_print(package_error, sizeof(package_error),
+				"opence.oxpk was changed after it was signed: it can't be installed.");
+		}
+		log_file(package_ok ? signature_text(&colour) : package_error);
+	}
 	find_halos();
 	for (;;)
 	{

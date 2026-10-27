@@ -12,6 +12,8 @@ built with nxdk (https://github.com/XboxDev/nxdk), and its XBE also contains:
 - SDL 2.0.9, nxdk's port (for the controllers): zlib License. Copyright (C) 1997-2019 Sam Lantinga.
 - zlib 1.3.1: zlib License. Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler.
 - The unscii-16 font (the installer's lettering), nxdk's copy: public domain (http://pelulamu.net/unscii/).
+- Monocypher 4.0.3 (checking signatures): CC0 1.0 (public domain), or the BSD 2-clause licence. By Loup Vaillant,
+  Michael Savage and Fabio Scotoni (https://monocypher.org).
 
 The package beside it (opence.oxpk) holds OpenCE's own code (AGPL-3.0-or-later; its source is the repository's
 commit it was built from) and none of Microsoft's: the installer makes the XBE from your own retail Halo.

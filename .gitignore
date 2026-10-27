@@ -42,4 +42,9 @@ dist/
 /port/oxbox/installer/main.exe
 /port/oxbox/installer/*.obj
 /port/oxbox/installer/*.c.d
+/port/oxbox/installer/keys.h
+/port/third_party/monocypher/*.obj
+/port/third_party/monocypher/*.c.d
 *.oxpk
+# signing keys' secret halves (port/oxbox/tools/oxsign.py): never in the repository
+*.oxkey

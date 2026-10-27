@@ -34,7 +34,7 @@ The rest (miniupnpc, mbedtls, opus, zlib, expat and others) belong to OpenCE's P
 The installer (`port/oxbox/installer`) is built with [nxdk](https://github.com/XboxDev/nxdk), which isn't in this
 repository; its XBE contains nxdk's libraries (MIT; the kernel imports CC0 1.0), nxdk's USB stack libusbohci
 (Apache 2.0), PDCLib (CC0 1.0), nxdk's SDL 2.0.9 (zlib licence), zlib 1.3.1 (zlib licence) and the unscii font
-(public domain). Their notices are in
+(public domain), and Monocypher from `port/third_party` (above). Their notices are in
 `port/oxbox/installer/THIRD_PARTY.txt`, which goes beside the installer in a release.
 
 ## Not covered

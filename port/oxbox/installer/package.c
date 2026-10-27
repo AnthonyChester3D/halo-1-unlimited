@@ -6,12 +6,15 @@
 #include <string.h>
 #include <zlib.h>
 
+#include "monocypher-ed25519.h"
 #include "pictures.h"
 #include "sha256.h"
 #include "text.h"
 
-#define FORMAT 1
+#define FORMAT 2
 #define HEADER_BYTES 128
+/* (what a signature covers: this, then the header and the manifest; tools/oxsign.py) */
+#define SIGNED_PREFIX "Halo 1 Unlimited package, signed\n"
 enum { END, COPY, POOL, ZERO, PICTURES, HEADER };
 
 static unsigned long u32(unsigned char const *p)
@@ -84,8 +87,8 @@ static unsigned long steps_check(struct package const *package, struct package_x
 int package_load(char const *path, struct package *package, char *error)
 {
 	FILE *file = fopen(path, "rb");
-	unsigned char header[HEADER_BYTES], digest[32], *packed = NULL;
-	unsigned long packed_size;
+	unsigned char header[HEADER_BYTES], digest[32], *packed = NULL, tail[8];
+	unsigned long packed_size, manifest_size = 0, prefix = sizeof(SIGNED_PREFIX) - 1;
 	z_stream z;
 	int i, result = 1;
 
@@ -100,20 +103,44 @@ int package_load(char const *path, struct package *package, char *error)
 		text_print(error, 256, "%s isn't an OpenCE package", path);
 		goto done;
 	}
-	if (u32(header + 4) != FORMAT)
+	package->format = (int)u32(header + 4);
+	if (package->format < 1 || package->format > FORMAT)
 	{
-		text_print(error, 256, "%s is a newer package (format %lu): this installer reads format %d", path,
+		text_print(error, 256, "%s is a newer package (format %lu): this installer reads formats 1 to %d", path,
 			u32(header + 4), FORMAT);
 		goto done;
 	}
 	packed_size = u32(header + 8);
 	package->body_size = u32(header + 12);
 	text(package->name, header + 48, 64);
-	if (packed_size > 64 * 1024 * 1024 || package->body_size > 64 * 1024 * 1024 || package->body_size < 4)
+	if (package->format >= 2)
+	{
+		manifest_size = u32(header + 112);
+		package->release = u32(header + 116);
+		package->network = u32(header + 120);
+	}
+	if (packed_size > 64 * 1024 * 1024 || package->body_size > 64 * 1024 * 1024 || package->body_size < 4 ||
+		manifest_size > PACKAGE_MAX_MANIFEST)
 	{
 		text_print(error, 256, "%s's sizes don't read", path);
 		goto done;
 	}
+	/* what a signature covers, the manifest among it */
+	package->signed_size = prefix + HEADER_BYTES + manifest_size;
+	package->signed_part = malloc(package->signed_size);
+	if (!package->signed_part)
+	{
+		text_print(error, 256, "out of memory");
+		goto done;
+	}
+	memcpy(package->signed_part, SIGNED_PREFIX, prefix);
+	memcpy(package->signed_part + prefix, header, HEADER_BYTES);
+	if (fread(package->signed_part + prefix + HEADER_BYTES, 1, manifest_size, file) != manifest_size)
+	{
+		text_print(error, 256, "%s is cut short", path);
+		goto done;
+	}
+	text(package->manifest, package->signed_part + prefix + HEADER_BYTES, (int)manifest_size);
 	packed = malloc(packed_size);
 	package->body = malloc(package->body_size);
 	if (!packed || !package->body)
@@ -131,6 +158,25 @@ int package_load(char const *path, struct package *package, char *error)
 	{
 		text_print(error, 256, "%s is damaged (its contents don't match its SHA-256)", path);
 		goto done;
+	}
+	/* the signatures, after the body ("OXSG", a count, then each key's id and signature) */
+	if (package->format >= 2 && fread(tail, 1, 8, file) == 8)
+	{
+		unsigned long count = u32(tail + 4);
+		if (memcmp(tail, "OXSG", 4) || count > PACKAGE_MAX_SIGNATURES)
+		{
+			text_print(error, 256, "%s's signatures don't read", path);
+			goto done;
+		}
+		for (package->signatures = 0; package->signatures < (int)count; package->signatures++)
+		{
+			if (fread(package->signature_ids[package->signatures], 1, 8, file) != 8 ||
+				fread(package->signature[package->signatures], 1, 64, file) != 64)
+			{
+				text_print(error, 256, "%s's signatures are cut short", path);
+				goto done;
+			}
+		}
 	}
 	memset(&z, 0, sizeof(z));
 	z.zalloc = z_alloc;
@@ -187,8 +233,32 @@ done:
 void package_free(struct package *package)
 {
 	free(package->body);
+	free(package->signed_part);
 	package->body = NULL;
+	package->signed_part = NULL;
 	package->count = 0;
+}
+
+int package_verify(struct package const *package, struct package_key const *keys, int count, char const **signer)
+{
+	int s, k, known = 0;
+	*signer = NULL;
+	if (!package->signatures)
+		return PACKAGE_UNSIGNED;
+	for (s = 0; s < package->signatures; s++)
+	{
+		for (k = 0; k < count; k++)
+		{
+			if (memcmp(package->signature_ids[s], keys[k].id, 8))
+				continue;
+			known = 1;
+			if (crypto_ed25519_check(package->signature[s], keys[k].key, package->signed_part, package->signed_size))
+				return PACKAGE_BAD;
+			if (!*signer)
+				*signer = keys[k].name;
+		}
+	}
+	return *signer ? PACKAGE_SIGNED : known ? PACKAGE_BAD : PACKAGE_UNKNOWN_KEY;
 }
 
 struct package_xbe const *package_find(struct package const *package, unsigned char const *retail_sha256)

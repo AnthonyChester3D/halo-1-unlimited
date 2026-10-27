@@ -1,9 +1,11 @@
 /* package.h: an OpenCE package (port/oxbox/tools/mkpackage.py has its format): how to make a build of OpenCE from
-the player's own clean Halo XBE */
+the player's own retail Halo XBE, and who signed it (port/oxbox/tools/oxsign.py) */
 #ifndef OXBOX_PACKAGE_H
 #define OXBOX_PACKAGE_H
 
 #define PACKAGE_MAX_XBES 8
+#define PACKAGE_MAX_SIGNATURES 4
+#define PACKAGE_MAX_MANIFEST 1024
 
 /* one build it makes, from one retail XBE */
 struct package_xbe
@@ -19,15 +21,41 @@ struct package_xbe
 struct package
 {
 	char name[65];
+	int format;
+	unsigned long release, network; /* (format 2) */
+	char manifest[PACKAGE_MAX_MANIFEST + 1];
 	unsigned char *body;
 	unsigned long body_size;
 	int count;
 	struct package_xbe xbes[PACKAGE_MAX_XBES];
+	/* what's signed (the header and the manifest), and the signatures: each a key's id and an Ed25519 signature */
+	unsigned char *signed_part;
+	unsigned long signed_size;
+	int signatures;
+	unsigned char signature_ids[PACKAGE_MAX_SIGNATURES][8], signature[PACKAGE_MAX_SIGNATURES][64];
+};
+
+/* a public key the installer trusts (keys.txt, made into keys.h by tools/mkkeys.py) */
+struct package_key
+{
+	char const *name;
+	unsigned char id[8], key[32];
+};
+
+enum
+{
+	PACKAGE_UNSIGNED,    /* no signatures (or format 1) */
+	PACKAGE_SIGNED,      /* signed by a key it trusts */
+	PACKAGE_UNKNOWN_KEY, /* signed, but by no key it trusts */
+	PACKAGE_BAD          /* a signature by a key it trusts doesn't match: changed after it was signed */
 };
 
 /* reads a package and checks it whole (its hash, and every step's sizes); 0 when it's good, else an error's text */
 int package_load(char const *path, struct package *package, char *error);
 void package_free(struct package *package);
+
+/* who signed it: PACKAGE_SIGNED (and *signer, the key's name), or why not */
+int package_verify(struct package const *package, struct package_key const *keys, int count, char const **signer);
 
 /* the build made from the retail XBE with this SHA-256, or NULL */
 struct package_xbe const *package_find(struct package const *package, unsigned char const *retail_sha256);

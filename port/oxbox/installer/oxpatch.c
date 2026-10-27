@@ -1,6 +1,9 @@
 /* oxpatch package.oxpk RETAIL.xbe ui.map OUT.xbe: what the installer does, on a PC: makes the package's build of
-OpenCE from a clean retail Halo XBE, its pictures from the ui.map given. (For testing packages; built with
-	cc -O2 -ffp-contract=off -o oxpatch oxpatch.c package.c pictures.c sha256.c -lz -lm) */
+OpenCE from a retail Halo XBE, its pictures from the ui.map given, and says who signed it (the keys in keys.txt). For
+testing packages; built (in this folder) with
+	python3 ../tools/mkkeys.py keys.txt keys.h
+	cc -O2 -ffp-contract=off -I../../third_party/monocypher -o oxpatch oxpatch.c package.c pictures.c sha256.c \
+		../../third_party/monocypher/monocypher.c ../../third_party/monocypher/monocypher-ed25519.c -lz -lm */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -8,6 +11,8 @@ OpenCE from a clean retail Halo XBE, its pictures from the ui.map given. (For te
 #include "pictures.h"
 #include "sha256.h"
 #include "text.h"
+
+#include "keys.h"
 
 static int write_file(void *context, unsigned char const *data, unsigned long size)
 {
@@ -37,7 +42,16 @@ int main(int argc, char **argv)
 		fprintf(stderr, "oxpatch: %s\n", error);
 		return 1;
 	}
-	printf("package: %s\n", package.name);
+	{
+		char const *signer;
+		int signature = package_verify(&package, trusted_keys, trusted_key_count, &signer);
+		printf("package: %s (format %d, release %lu)\n", package.name, package.format, package.release);
+		printf("  %s%s\n", signature == PACKAGE_SIGNED ? "signed by " : signature == PACKAGE_UNSIGNED ? "not signed" :
+			signature == PACKAGE_UNKNOWN_KEY ? "signed, but not by a key in keys.txt" :
+			"SIGNATURE DOESN'T MATCH (changed after it was signed)", signature == PACKAGE_SIGNED ? signer : "");
+		if (signature == PACKAGE_BAD)
+			return 1;
+	}
 	for (i = 0; i < package.count; i++)
 		printf("  makes a build from %s (%lu bytes -> %lu)\n", package.xbes[i].name, package.xbes[i].retail_size,
 			package.xbes[i].build_size);

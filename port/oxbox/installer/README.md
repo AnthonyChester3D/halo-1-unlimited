@@ -29,6 +29,10 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
 3. **A** installs (or updates), **X** puts the retail Halo back, **START** plays what's in the folder, **B** goes
    back to the dashboard. The d-pad or the left stick moves; the triggers move a page.
 
+The top line says whether the package is signed: *signed (main)* in green is a release from the project; *not
+signed* (a test package) or *signed by a key it doesn't know* in yellow can still be installed from a copy you put
+there yourself. A package changed after it was signed isn't installed at all.
+
 What it changes in the Halo folder:
 
 | File | |
@@ -72,19 +76,44 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `nxdk.mk` | the installer's build (nxdk's makefile) |
 | `main.c` | the installer: the list, finding Halo, installing, putting the retail Halo back |
 | `screen.c`, `screen.h` | the text screen, in colour, and the black picture kept while the next XBE starts |
-| `package.c`, `package.h` | reading a package and making a build from it |
+| `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
 | `sha256.c`, `sha256.h` | SHA-256 |
+| `keys.txt` | the public keys it trusts (`keys.h` is made from it when it's built) |
 | `text.h` | snprintf that always ends its text (nxdk's PDCLib doesn't when it cuts it short) |
 | `mkpictures.c`, `oxpatch.c` | the PC tools |
 
+### Signing releases (the project's owner)
+
+A release is a package signed with the owner's key; the installer (and, later, the game's update check) trusts the
+public keys in `keys.txt`. `port/oxbox/tools/oxsign.py` does it all, with plain Python 3 (nothing to install).
+
+1. Once: make two keys, in a folder outside the repository:
+
+   ```sh
+   python3 oxsign.py keygen main      # main.oxkey (secret) and main.pub
+   python3 oxsign.py keygen backup    # backup.oxkey and backup.pub
+   ```
+
+   Each asks for a passphrase, which locks its secret file: a copied `.oxkey` file is no use without it. Keep
+   `main.oxkey` on your PC, put `backup.oxkey` somewhere offline (a USB stick in a drawer), and keep the passphrases
+   in a password manager. If main is ever lost or leaked, a release signed with backup can trust a new main.
+2. Once: put the two lines from `main.pub` and `backup.pub` in `keys.txt` (they're public) and commit it.
+   Installers built from then on trust those keys.
+3. Each release: `python3 oxsign.py sign path/to/main.oxkey opence.oxpk`, then
+   `python3 oxsign.py verify opence.oxpk --keys port/oxbox/installer/keys.txt` to check it.
+
+`.oxkey` files are in `.gitignore`, so one can't be committed by mistake. A signature covers the package's header
+(which holds its contents' SHA-256) and its manifest (`oxsign.py show` prints it: name, release, network version,
+notes); `mkpackage.py --release N --network N --notes "..."` writes it.
+
 ### Coming next
 
-Signed packages (the signing key held by the project's owner alone), downloads from GitHub Releases, and the game
-saying when an update is out and starting the installer to get it.
+Downloads from GitHub Releases (signed releases only), and the game saying when an update is out and starting the
+installer to get it.
 
 ### Licences
 
 This folder is part of the online branch (AGPL-3.0-or-later). The installer XBE also contains nxdk's libraries (MIT;
-its USB stack, Apache-2.0; PDCLib, CC0), SDL2 (zlib licence) and zlib (zlib licence): a release carries their
-notices beside it (`THIRD_PARTY.txt`).
+its USB stack, Apache-2.0; PDCLib, CC0), SDL2 (zlib licence), zlib (zlib licence), the unscii font (public domain)
+and Monocypher (CC0): a release carries their notices beside it (`THIRD_PARTY.txt`).
