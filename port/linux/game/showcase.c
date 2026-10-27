@@ -32,9 +32,10 @@ then the next map loads; with one map, its list just plays on. The game is Slaye
 bots: the map's suggested players (info.txt, else 8), 4 to 10, less the watching player, at Normal.
 
 The hook sites are oxbox_showcase.h's list. Hosting is network_test.c's (the PC's automated system link tests): the
-lobby's fast setup, the map and the variant a second on, the player a moment later, then the start. With the
-network cable unplugged it doesn't start (Halo's system link needs it): the attract movies, as before. If hosting
-fails twice in a row anyway, the movies play for the next ten minutes.
+lobby's fast setup, the map and the variant a second on, the player a moment later, then the start. It plays
+without the network cable too: while it runs, the host's network checks treat its game as a split screen game,
+which needs none (network_client_manager.c, network_server_manager.c). If hosting fails twice in a row, the movies
+play for the next ten minutes.
 
 The log (oxbox_log.txt): a line when it starts, each map, and when it ends, and any showcase.txt it couldn't read
 (with the line and why). It reads only the maps' showcase.txt files and writes nothing.
@@ -149,7 +150,6 @@ static struct
 	real alpha;                     /* the fade to black over everything: 1 is black */
 	unsigned long retry_after;      /* hosting failed: the movies until then */
 	short failures;                 /* games in a row that didn't start */
-	boolean told_cable;             /* the log said the cable is unplugged */
 	/* the lobby */
 	boolean map_set;
 	boolean player_added;
@@ -753,7 +753,7 @@ static void showcase_back_at_menu(
 	void)
 {
 	showcase.camera_valid = FALSE;
-	if (showcase.chain && !showcase.user_ended && transport_network_available() && showcase_next_map())
+	if (showcase.chain && !showcase.user_ended && showcase_next_map())
 	{
 		showcase.alpha = 1.0f;
 		showcase_host();
@@ -792,15 +792,6 @@ boolean showcase_start(
 	if (showcase.retry_after && (long)(system_milliseconds() - showcase.retry_after) < 0)
 		return FALSE;
 	showcase.retry_after = 0;
-	/* (a system link game needs the network cable: without it, Halo's networking gives up with an error box) */
-	if (!transport_network_available())
-	{
-		if (!showcase.told_cable)
-			platform_log("showcase: the network cable is unplugged: the movies instead (system link needs it)");
-		showcase.told_cable = TRUE;
-		return FALSE;
-	}
-	showcase.told_cable = FALSE;
 	if (!showcase_next_map())
 		return FALSE;
 	showcase.user_ended = FALSE;
@@ -809,7 +800,8 @@ boolean showcase_start(
 	showcase.last_time = system_milliseconds();
 	showcase.alpha = 0.0f;
 	ui_stop_main_menu_music();
-	platform_log("showcase: the main menu has waited %lu seconds: the showcase", showcase_idle_milliseconds() / 1000);
+	platform_log("showcase: the main menu has waited %lu seconds: the showcase%s", showcase_idle_milliseconds() / 1000,
+		transport_network_available() ? "" : " (no network cable: the game is this console's alone anyway)");
 	showcase_set_state(_showcase_menu_fade);
 	return TRUE;
 }

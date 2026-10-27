@@ -825,6 +825,24 @@ boolean network_game_client_dont_use_directly_in_use = FALSE;
 
 /* ---------- public code */
 
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+/* oxbox (offline system link): whether this console's network game goes on without the network cable. A console
+hosting a system link game plays it through its own address (its player joins its game at 127.0.0.1, and bots
+need no network), and one looking for games simply finds none: so an Xbox with no cable can host a game alone,
+with bots, as it plays split screen. A console that joined another's game still leaves it when its network
+goes. (With the cable, nothing changes; a host whose cable comes out mid-game plays on, and the other consoles
+drop out on their own time-outs.) */
+boolean network_game_offline_allowed(
+	void)
+{
+	struct network_game_client *client = global_network_game_client_get();
+
+	/* (only a console in another's game, joining it or in its lobby or game, needs the network) */
+	return global_network_game_server_get() != NULL || !client ||
+		client->state == _network_game_client_state_searching;
+}
+#endif
+
 /* transport_network_available asks the system for its interfaces
 (getifaddrs): asked at most once a second, not every frame */
 static boolean network_game_client_network_available(
@@ -835,6 +853,21 @@ static boolean network_game_client_network_available(
 	static unsigned long ask_time;
 	unsigned long now = system_milliseconds();
 
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: the showcase screensaver's game is this console's alone, as a split screen game is: it plays without
+	the network cable (port/linux/game/showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active())
+			return TRUE;
+	}
+#endif
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+	/* oxbox (offline system link): no network cable needed to host, or to look for games */
+	if (network_game_offline_allowed())
+		return TRUE;
+#endif
 	if (!asked || now - ask_time >= 1000)
 	{
 		available = transport_network_available();

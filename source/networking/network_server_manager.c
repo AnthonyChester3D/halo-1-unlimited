@@ -1518,6 +1518,24 @@ static boolean network_game_server_network_lost(
 	boolean recent = checked_time && now - checked_time <= 2000;
 	boolean available;
 
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: the showcase screensaver's game is this console's alone, as a split screen game is: it plays without
+	the network cable (port/linux/game/showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active())
+			return FALSE;
+	}
+#endif
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+	/* oxbox (offline system link, network_client_manager.c network_game_offline_allowed): a host plays on without
+	the network cable */
+	(void)down_time;
+	(void)recent;
+	(void)in_game;
+	return FALSE;
+#endif
 	/* (asked once a second: each asking lists the machine's interfaces) */
 	if (!asked || now - asked_time >= 1000)
 	{

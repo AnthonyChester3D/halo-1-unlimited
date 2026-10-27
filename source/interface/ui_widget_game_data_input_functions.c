@@ -3007,7 +3007,12 @@ static void system_link_status_check(
 {
 	(void)widget;
 
-	if (!transport_network_available() && !network_game_is_splitscreen_local())
+	if (!transport_network_available() && !network_game_is_splitscreen_local()
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+		/* oxbox (offline system link): hosting, or looking for games, needs no cable */
+		&& !network_game_offline_allowed()
+#endif
+		)
 	{
 		display_error_when_main_menu_loaded(_error_network_connection_lost);
 		main_goto_main_menu();
@@ -3156,7 +3161,12 @@ static void dim_if_no_system_link_cable(
 		widget->type == _ui_widget_type_text_box,
 		"expected a text box widget for system link menu text item");
 
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+	/* oxbox (offline system link): SYSTEM LINK isn't dimmed without the network cable (it hosts a game alone) */
+	widget->alpha_modifier = 1.0f;
+#else
 	widget->alpha_modifier = transport_network_available() ? 1.0f : 0.333f;
+#endif
 	return;
 }
 

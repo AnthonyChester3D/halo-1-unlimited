@@ -32,6 +32,10 @@ void network_game_client_dispose(
 	struct network_game_client *client);
 void network_game_client_keep_alive(
 	struct network_game_client *client);
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+/* oxbox: whether this console's network game goes on without the network cable (it hosts, or it's looking) */
+boolean network_game_offline_allowed(void);
+#endif
 short network_game_client_get_state(
 	struct network_game_client *client,
 	short *state_data);

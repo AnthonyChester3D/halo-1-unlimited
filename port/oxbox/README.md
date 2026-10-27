@@ -97,10 +97,20 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
   with Catmull-Rom tangents). Shots fade out over their last `fade` seconds and in over the next one's first.
 - Maps: favourites first, each group shuffled, hidden maps skipped. A map's list plays through (for at least a
   minute), then the next map loads. Slayer to 999, bots at Normal (the map's suggested players, 4 to 10).
-- It needs the network cable plugged in (Halo's system link does); without it, the attract movies play.
+- It plays without the network cable too (the game is the console's alone, as a split screen game is).
 - Settings in `opence.ini`: `showcase = 0` plays the attract movies instead; `showcase_seconds = N` (5 and up)
   changes the 75-second wait.
 - Without the switch, the build is byte for byte what it was.
+
+## System link without a network cable (a test build switch)
+
+Built with `-DOXBOX_OFFLINE_SYSTEM_LINK` added to `OXBOX_EXTRA`: SYSTEM LINK PLAY opens without the cable (it isn't
+dimmed, and no "network connection lost" box), so an Xbox that isn't on a network can host a game alone, with bots,
+as it plays split screen. A host plays its own game through its own address (127.0.0.1), and bots need no network.
+The network checks that end a game when the cable is out (`network_client_manager.c`, `network_server_manager.c`)
+pass for a console that hosts or is looking for games (`network_game_offline_allowed`); a console in another's game
+still leaves it when its network goes. With the cable in, nothing changes, except that a host whose cable comes out
+in a game plays on (the other consoles drop out on their own time-outs).
 
 ## What isn't here
 

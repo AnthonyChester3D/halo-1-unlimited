@@ -16,6 +16,8 @@ The hook sites, each inside #if defined(OXBOX_SHOWCASE):
 - players.c: the local player isn't spawned (it only watches).
 - ui_widget.c: no pause menu (a press ends the showcase instead).
 - network_server_message_handler.c and network_server_manager.c: the game isn't advertised, listed or joinable.
+- network_client_manager.c and network_server_manager.c: no network cable needed (the network checks pass, as a
+  split screen game's do).
 - hmp_stats.c: its games aren't counted as plays.
 - bots.c: bots_showcase, the bots it asks for, and the host's own bot setting back afterwards; and no lobby bots
   line over its black. */
@@ -26,7 +28,7 @@ The hook sites, each inside #if defined(OXBOX_SHOWCASE):
 struct observer_result;
 
 /* the main menu's attract time is up: TRUE when the showcase starts (or is already running), FALSE for the movie
-(it's off, the network cable is unplugged, no folder map has a showcase.txt, or hosting failed a moment ago) */
+(it's off, no folder map has a showcase.txt, or hosting failed a moment ago) */
 boolean showcase_start(void);
 /* how long the main menu waits for a press before the attract time is up (opence.ini's showcase_seconds; Halo's
 own 75 seconds) */

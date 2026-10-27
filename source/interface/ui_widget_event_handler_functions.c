@@ -2644,6 +2644,10 @@ static boolean display_error_if_no_network_connection(
 {
 	boolean result = transport_network_available();
 
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+	/* oxbox (offline system link): SYSTEM LINK opens without the network cable, to host a game alone (with bots) */
+	result = TRUE;
+#endif
 	match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 4575,
 		event != NULL, "event");
 	if (!result)
