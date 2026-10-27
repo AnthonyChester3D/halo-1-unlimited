@@ -535,6 +535,9 @@ long hmp_options_dispatch(struct widget_instance *root, struct event_record *eve
 {
 	short local;
 	boolean press;
+#if defined(OXBOX_NET_P2P)
+	hmp_online_event(root, event);   /* (the A that joins a game listed online once its host is reached) */
+#endif
 	if (!root || event->type != 3) return 0;
 	for (local = 0; local < 4 && ui_widget_get_active_widget(local) != root; local++) ;   /* (the main menu is anyone's: its slot) */
 	if (local > 3) return 0;

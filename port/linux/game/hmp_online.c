@@ -66,6 +66,8 @@ enum
 	XBOX_ICON_HEIGHT = 20,
 	/* milliseconds: rows scrolled while up or down is held, one each */
 	SCROLL_REPEAT = 180,
+	/* (milliseconds) a reached host's row shown before it is joined (oxbox_online_join_reached) */
+	JOIN_SETTLE = 600,
 	/* the menus' button events (input.h's d-pad, then the left stick's directions) */
 	BUTTON_DPAD_UP = 8,
 	BUTTON_DPAD_DOWN = 9,
@@ -249,6 +251,15 @@ static struct
 	/* the Xbox's picture: its tag, as found for the list made then */
 	long picture_tag;
 	unsigned long picture_time;
+	/* the controller whose A started the reaching (the games list's last A), and whether its host's own row, once
+	reached, is joined at once (oxbox_online_join_reached): one A joins */
+	short join_controller;
+	boolean join_reached;
+	/* ... its row (as shown) and when it was reached */
+	short join_row;
+	unsigned long join_time;
+	/* the A is due: the games list's next empty event is made it (hmp_online_event) */
+	boolean join_due;
 } online;
 
 /* ---------- private code */
@@ -419,7 +430,13 @@ boolean hmp_online_dispatch(struct widget_instance *root, struct event_record *e
 	if (!root || event->type != 3)
 		return FALSE;
 	if (name_is(root, SERVER_LIST_SCREEN))
+	{
+		/* (the controller of an A on a row: the one that joins once its host is reached) */
+		if (event->data.button.index == 0 && event->data.button.value == 1)
+			online.join_controller = event->controller_index >= 0 && event->controller_index < 4 ?
+				event->controller_index : 0;
 		return games_list_scroll(root, event);
+	}
 	if (event->data.button.value != 1 || (event->data.button.index != 0 && event->data.button.index != 12) ||
 		!name_is(root, MULTIPLAYER_SCREEN))
 	{
@@ -691,6 +708,8 @@ int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *
 				{
 					reached = index;
 					online.joining = FALSE;
+					/* (an open game: joined at once, as if A were pressed on it) */
+					online.join_reached = row->open ? TRUE : FALSE;
 					break;
 				}
 			}
@@ -737,6 +756,8 @@ int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *
 			online.top = reached - maximum + 1;
 		if (select)
 			*select = (short)(reached - online.top);
+		online.join_row = (short)(reached - online.top);
+		online.join_time = system_milliseconds();
 	}
 	if (online.top > online.row_count - maximum)
 		online.top = online.row_count - maximum;
@@ -747,6 +768,38 @@ int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *
 	for (index = 0; index < online.shown_count; index++)
 		displayed[index] = online.rows[online.top + index];
 	return online.shown_count;
+}
+
+/* the games list's data input, each update (after oxbox_online_add_rows selected a reached host's row): once the
+list has had JOIN_SETTLE to show that row, highlighted, and the player hasn't moved off it, an A is posted for the
+controller that pressed A on its listing, which joins the game as a press on the row would (an open game). One A
+joins a game listed online: it took two, one to reach the host, one on its own row once reached */
+void oxbox_online_join_reached(struct widget_instance *list)
+{
+	if (!online.join_reached || system_milliseconds() - online.join_time < JOIN_SETTLE)
+		return;
+	online.join_reached = FALSE;
+	if (!list || !list->focused_child || list->parameters.list.selected_index != online.join_row)
+	{
+		platform_log("online: the host is reached (its row not selected: not joined at once)");
+		return;
+	}
+	platform_log("online: the host is reached: joining its game");
+	online.join_due = TRUE;
+}
+
+/* a local player's top menu is about to get an event (hmp_options_dispatch, first): the games list's empty event
+(each update's, for its animations) is made the A that joins a reached host's game (oxbox_online_join_reached). An
+event posted from the list's data input would be lost: the menus flush the events once they have taken theirs */
+void hmp_online_event(struct widget_instance *root, struct event_record *event)
+{
+	if (!online.join_due || !root || event->type != 0 || !name_is(root, SERVER_LIST_SCREEN))
+		return;
+	online.join_due = FALSE;
+	event->type = 3;
+	event->controller_index = online.join_controller;
+	event->data.button.index = 0;
+	event->data.button.value = 1;
 }
 
 /* a row's text as the list writes it (text: up to length characters): its name ROW_INDENT spaces in, where an Xbox
@@ -823,7 +876,10 @@ boolean oxbox_online_row_join(void const *server)
 	struct p2p_listing const *game;
 
 	if (!online_listed || row < online_listed->rows || row >= online_listed->rows + MAXIMUM_LISTED)
+	{
+		platform_log("online: A on a reached host's row (%s)", row && row->valid ? "valid" : "not valid");
 		return FALSE;
+	}
 	game = &online_listed->games[row - online_listed->rows];
 	if (!memcmp(game->identifier, row->identifier, sizeof(row->identifier)) && game->invite[0] &&
 		p2p_join_invite(game->invite))

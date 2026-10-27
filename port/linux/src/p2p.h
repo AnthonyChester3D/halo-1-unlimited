@@ -180,6 +180,9 @@ enum
 };
 void p2p_hardware_id(char *hex, int size);
 void p2p_hardware_id_sanitize(char *destination, int size, const char *source);
+/* oxbox: an Xbox's hardware id begins with this (p2p.c), which a host of ours tells its Xbox players by; a PC
+build's, a hash, begins with it once in four billion */
+#define P2P_XBOX_HARDWARE_ID_MARK "0b0c0b0c"
 
 /* the real address (network byte order) of the internet play peer of this
 virtual address (network byte order): where its packets come from; 0 if

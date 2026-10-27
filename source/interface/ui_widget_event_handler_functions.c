@@ -5704,6 +5704,36 @@ static boolean playlist_profile_change_player_options(
 	return result;
 }
 
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox, lobby kinds: whether the map chosen is played: a folder map (or any but the Xbox's 13) in a crossplay lobby
+with a PC in it makes it the Xboxes' alone, which drops the PC (network_server_manager.c), so it is said first, and
+the same map chosen again within 20 seconds is played */
+static boolean oxbox_lobby_map_confirmed(
+	char const *map_name,
+	short local_player_index)
+{
+	extern boolean oxbox_crossplay_lobby_has_pc(void);
+	extern int oxbox_online_stock_map(char const *map);
+	static char asked_map[64];
+	static unsigned long asked_time;
+	unsigned long now = system_milliseconds();
+
+	if (!global_network_game_server_get() || oxbox_online_stock_map(map_name) || !oxbox_crossplay_lobby_has_pc())
+		return TRUE;
+	if (asked_time && now - asked_time <= 20000 && !_stricmp(asked_map, map_name))
+	{
+		asked_time = 0;
+		return TRUE;
+	}
+	strncpy(asked_map, map_name, sizeof(asked_map) - 1);
+	asked_map[sizeof(asked_map) - 1] = 0;
+	asked_time = now;
+	display_error_text_deferred(L"PC players can't play\r\nthis map: choosing it\r\ndrops them from the\r\nlobby. Choose it again\r\nto play it.",
+		local_player_index);
+	return FALSE;
+}
+#endif
+
 static boolean multiplayer_level_select(
 	struct widget_instance *widget,
 	struct event_record *event,
@@ -5767,6 +5797,10 @@ static boolean multiplayer_level_select(
 			return FALSE;
 		}
 	}
+#if defined(OXBOX_CROSSPLAY)
+	if (!oxbox_lobby_map_confirmed(map_name, widget->local_player_index))
+		return FALSE;
+#endif
 	main_set_multiplayer_map_name(map_name);
 	game_engine_override_map_name(map_name);
 	{
@@ -6032,6 +6066,10 @@ boolean ui_widget_port_multiplayer_map_choose(
 			return FALSE;
 		}
 	}
+#if defined(OXBOX_CROSSPLAY)
+	if (!oxbox_lobby_map_confirmed(map_name, NONE))
+		return FALSE;
+#endif
 	main_set_multiplayer_map_name(map_name);
 	game_engine_override_map_name(map_name);
 	if (server)

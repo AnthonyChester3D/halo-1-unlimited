@@ -145,6 +145,10 @@ static struct
 
 /* the lobby's setting (NETWORK_GAME_BOT_MODE): the mode + 1, and the difficulty in the high byte */
 #define BOTS_SETTING(mode, difficulty) ((short)((mode) + 1 + ((difficulty) << 8)))
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox: how long the host has to press Y again, once told that bots drop the lobby's PC players */
+#define BOTS_CONFIRM_MILLISECONDS 20000
+#endif
 
 static struct bots_skill const *bots_skill(
 	void)
@@ -5276,6 +5280,26 @@ boolean bots_lobby_button(
 		return FALSE;
 	if (button == _gamepad_analog_button_y)
 	{
+#if defined(OXBOX_CROSSPLAY)
+		/* oxbox, lobby kinds: bots turned on in a crossplay lobby with a PC in it make it the Xboxes' alone, which
+		drops the PC (network_server_manager.c): said first, and Y again within BOTS_CONFIRM_MILLISECONDS turns them
+		on */
+		{
+			extern boolean oxbox_crossplay_lobby_has_pc(void);
+			static unsigned long asked_time;
+			unsigned long now = system_milliseconds();
+
+			if (bots_globals.mode == _bots_mode_off && oxbox_crossplay_lobby_has_pc() &&
+				(!asked_time || now - asked_time > BOTS_CONFIRM_MILLISECONDS))
+			{
+				asked_time = now;
+				display_error_text_deferred(L"PC players can't play\r\nwith bots: turning them\r\non drops them from the\r\nlobby. Press Y again\r\nto add bots.",
+					NONE);
+				return TRUE;
+			}
+			asked_time = 0;
+		}
+#endif
 		bots_globals.mode = (short)((bots_globals.mode + 1) % NUMBER_OF_BOTS_MODES);
 		network_game_server_set_bot_mode(BOTS_SETTING(bots_globals.mode, bots_globals.difficulty));
 		ui_play_audio_feedback_sound(1);

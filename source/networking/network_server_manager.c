@@ -1568,6 +1568,36 @@ boolean oxbox_crossplay_hosting(
 	oxbox_crossplay_hosted = crossplay;
 	return crossplay;
 }
+
+/* oxbox, lobby kinds: whether the crossplay game this Xbox hosts has a PC in it: a machine whose hardware id isn't an
+Xbox's (p2p.h's P2P_XBOX_HARDWARE_ID_MARK; none told, as an Xbox build before experiment 5 tells, is an Xbox's). The
+host is asked before a folder map or bots drop it (ui_widget_event_handler_functions.c, bots.c) */
+#define P2P_XBOX_HARDWARE_ID_MARK "0b0c0b0c"   /* (port/linux/src/p2p.h's) */
+
+boolean oxbox_crossplay_lobby_has_pc(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	long index;
+
+	if (!server || !oxbox_crossplay_hosting())
+		return FALSE;
+	for (index = 0; index < MAXIMUM_NETWORK_MACHINE_COUNT; index++)
+	{
+		struct network_game_server_client_machine *machine = &server->client_machines[index];
+		char const *id;
+
+		if (!network_game_server_client_machine_is_joined_to_game(server, machine) ||
+			!VALID_INDEX(machine->machine_index, MAXIMUM_NETWORK_MACHINE_COUNT))
+		{
+			continue;
+		}
+		id = network_game_server_hardware_ids[machine->machine_index];
+		if (id[0] && strncmp(id, P2P_XBOX_HARDWARE_ID_MARK, sizeof(P2P_XBOX_HARDWARE_ID_MARK) - 1))
+			return TRUE;
+	}
+	return FALSE;
+}
 #endif
 
 /* port: wide text as the listing has it: ASCII, a Latin letter with a mark

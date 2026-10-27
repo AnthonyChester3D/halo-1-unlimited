@@ -218,12 +218,29 @@ static size_t descriptors_needed (struct pbuf *p)
 
 static err_t low_level_output_one (struct netif *netif, struct pbuf *p);
 
+/* oxbox: whether a frame has a piece in memory the sender may change once this returns (PBUF_REF, PBUF_ROM: lwIP's
+   sockets send a datagram straight from the caller's buffer) */
+static int volatile_data (struct pbuf *p)
+{
+    for (struct pbuf *q = p; q != NULL; q = q->next) {
+        if (PBUF_NEEDS_COPY(q)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* oxbox: a frame in more pieces than the card takes at once (4 descriptors: a TCP segment built from several
    buffers, some across pages) is sent from a copy in one buffer; it used to be dropped (ERR_MEM), and a TCP
-   connection whose segment was dropped after a retransmission stopped for good */
+   connection whose segment was dropped after a retransmission stopped for good. So is a frame with a piece of the
+   sender's own memory: the card reads a frame some time after this returns (after the frames queued before it), and
+   by then the sender may have built its next datagram in the same buffer (internet play's tunnel builds every packet
+   in one), so the card sent the newer bytes under the older length, which the other end threw away. On a console a
+   burst of datagrams was mostly lost that way, and a game connection over the tunnel could stall for good (xemu's
+   card copies a frame as it is queued, so it never showed there) */
 static err_t low_level_output (struct netif *netif, struct pbuf *p)
 {
-    if (descriptors_needed(p) > 4) {
+    if (descriptors_needed(p) > 4 || volatile_data(p)) {
         struct pbuf *copy = pbuf_clone(PBUF_RAW, PBUF_RAM, p);
         err_t err;
 

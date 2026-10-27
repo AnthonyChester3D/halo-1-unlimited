@@ -950,6 +950,7 @@ static void difficulty_select_menu_update_extended_description(
 #if defined(OXBOX_NET_P2P)
 int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *available, int available_count,
 	short *select);
+void oxbox_online_join_reached(struct widget_instance *list);
 void oxbox_online_row_text(wchar_t *text, int length);
 #endif
 
@@ -1021,7 +1022,20 @@ static void server_list_menu_update(
 			displayed_server_count = oxbox_online_add_rows((void **)displayed_servers, (int)displayed_server_count,
 				MAXIMUM_NETWORK_ADVERTISED_GAMES, available_games, MAXIMUM_NETWORK_ADVERTISED_GAMES, &reached_row);
 			if (reached_row != NONE)
+			{
+				struct widget_instance *row_item;
+				short row_index;
+
 				widget->parameters.list.selected_list_item_index = reached_row;
+				/* (and the highlight on it: the host's own row, which took the listing's place, at the top) */
+				for (row_item = widget->child, row_index = 0; row_item && row_index < reached_row;
+					row_item = row_item->next, row_index++)
+				{
+				}
+				if (row_item)
+					widget->focused_child = row_item;
+			}
+			oxbox_online_join_reached(widget);
 		}
 #endif
 		widget->parameters.list.list_items = displayed_servers;

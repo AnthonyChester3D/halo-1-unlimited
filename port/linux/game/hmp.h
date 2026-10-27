@@ -181,6 +181,7 @@ void hmp_game_tick(void);
 
 void hmp_online_tick(short local_player_index);
 boolean hmp_online_dispatch(struct widget_instance *root, struct event_record *event);
+void hmp_online_event(struct widget_instance *root, struct event_record *event);
 void hmp_online_release(void);
 void hmp_online_multiplayer_description(struct widget_instance *list, short index, short *picture, short *text);
 wchar_t *hmp_online_string(short string_index);

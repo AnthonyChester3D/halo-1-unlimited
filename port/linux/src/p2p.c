@@ -745,6 +745,20 @@ static int hardware_id_source(char *text, int size)
 {
 #ifdef _WIN32
 	return posix_hardware_id_source(text, size);
+#elif defined(HALO_XBOX_TARGET)
+	/* (oxbox: the console's network card's address, the factory's; before the network is up, this run's key) */
+	extern const unsigned char *oxbox_lwip_mac(void);
+	const unsigned char *mac = oxbox_lwip_mac();
+	char key[2 * P2P_KEY_SIZE + 1];
+
+	if (mac)
+	{
+		snprintf(text, (size_t)size, "xbox:%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+		return 1;
+	}
+	p2p_hex(p2p_public_key(), P2P_KEY_SIZE, key);
+	snprintf(text, (size_t)size, "xbox:%s", key);
+	return 1;
 #else
 	static const char *const linux_paths[] = { "/etc/machine-id", "/var/lib/dbus/machine-id" };
 	char android_path[1024];
@@ -801,6 +815,10 @@ void p2p_hardware_id(char *hex, int size)
 		{
 			p2p_hmac_sha256((const unsigned char *)key, (int)sizeof(key) - 1, source, (int)strlen(source), digest);
 			p2p_hex(digest, P2P_HARDWARE_ID_BYTES, cached);
+#if defined(HALO_XBOX_TARGET)
+			/* (oxbox: marked as an Xbox's, for a host of ours: network_server_manager.c) */
+			memcpy(cached, P2P_XBOX_HARDWARE_ID_MARK, sizeof(P2P_XBOX_HARDWARE_ID_MARK) - 1);
+#endif
 		}
 	}
 	snprintf(hex, (size_t)size, "%s", cached);
@@ -2219,7 +2237,7 @@ static const char *stream_end_cause(char cause)
 	{
 	case 'r': return "the other machine's game closed it";
 	case 'l': return "this machine's game closed it";
-	case 'e': return "this machine's game's socket failed";
+	case 'e': return "this machine's game closed it (at once, as a game leaving does)";
 	case 'w': return "this machine's game stopped taking its data";
 	case 't': return "the tunnel gave up on it (a message sent again and again, never acknowledged)";
 	case 'o': return "a message too large for it came";
