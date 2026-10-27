@@ -351,6 +351,14 @@ static void multiplayer_patch(short local, struct widget_instance *root)
 	}
 }
 
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+/* ONLINE PLAY chosen: the games list is the internet's (net_status.c says why none show up) */
+boolean hmp_online_chosen(void)
+{
+	return online.mode;
+}
+#endif
+
 /* ---------- public code: the Multiplayer screen */
 
 /* each tick, each local player's (hmp_game_tick) */

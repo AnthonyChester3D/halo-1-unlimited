@@ -3074,6 +3074,16 @@ int p2p_peer_reached(const unsigned char *peer_identifier, unsigned long *addres
 	return result;
 }
 
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+/* (the p2p thread takes it on its next pass) */
+static volatile int network_changed;
+
+void p2p_network_changed(void)
+{
+	network_changed = 1;
+}
+#endif
+
 void p2p_set_hosting_allowed(int allowed)
 {
 	pthread_mutex_lock(&p2p_lock);
@@ -3530,6 +3540,24 @@ static void *p2p_thread(void *unused)
 			network_resumed(p2p_now() - waited);
 			read_count = write_count = 0;
 		}
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+		/* oxbox: the network is back (p2p_network_changed): with no broker connected, as after a pause */
+		if (network_changed)
+		{
+			network_changed = 0;
+			if (!p2p_signal_connected())
+			{
+				for (index = 0; index < p2p.stun_count; index++)
+				{
+					p2p.stun[index].has_mapped = 0;
+					p2p.stun[index].attempts = 0;
+				}
+				p2p_signal_reconnect();
+				platform_log("Internet play: the network is back; its public address is asked again and the "
+					"brokers reconnected");
+			}
+		}
+#endif
 
 		/* what is ready (the lists now hold only ready sockets, in the order
 		asked, so each one's owner is found going along both); a socket

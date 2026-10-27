@@ -356,6 +356,9 @@ symbols in this file:
 #include "text/unicode.h"
 #include "custom_edition_maps.h" /* port: port/linux/game/custom_edition_maps.c */
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+#include "oxbox_net_status.h" /* oxbox: port/linux/game/net_status.c */
+#endif
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: the lobby's machine names (port/linux/game/hmp_browse.c) */
 wchar_t const *hmp_lobby_machine_name(wchar_t const *name, struct network_machine const *machine, boolean local,
@@ -1359,6 +1362,12 @@ static void server_list_menu_update(
 				score_limit_type_text->parameters.text_box.string_list_index = 1;
 				message_text->parameters.text_box.string_list_index =
 					(milliseconds_since_creation >= 1000) ? 1 : 0;
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+				/* oxbox (offline system link): and why no game shows up, the network gone or not there yet
+				(port/linux/game/net_status.c) */
+				if (milliseconds_since_creation >= 1000 && net_status_server_list(milliseconds_since_creation))
+					message_text->parameters.text_box.string_list_index = NET_STATUS_STRING_INDEX;
+#endif
 				message_text->visible = TRUE;
 			}
 		}

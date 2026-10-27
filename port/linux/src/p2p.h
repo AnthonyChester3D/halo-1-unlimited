@@ -17,6 +17,13 @@ its networking; local_address is the address the game's sockets are
 reached at (network.address, else 127.0.0.1) */
 void p2p_initialize(unsigned long local_address);
 
+/* oxbox (the builds with OXBOX_OFFLINE_SYSTEM_LINK): the network is back (the
+cable in again, or an address after none: port/linux/game/net_status.c, from
+the game's thread). If no broker is connected, the p2p thread asks its public
+address again and reconnects to them on its next pass, rather than when their
+retry time comes round */
+void p2p_network_changed(void);
+
 /* on the desktop, before anything else: if this process was started with
 an invite link (halo://join/...) and another copy of the game is running,
 passes the link to it and returns nonzero (this one should quit) */

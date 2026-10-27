@@ -43,6 +43,9 @@ the list's table and the text caches are the menus' and are freed when a game ma
 #include "cache/texture_cache.h"
 #include "text/text_group.h"
 #include "hmp.h"
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+#include "oxbox_net_status.h"
+#endif
 
 #include <string.h>
 #include <xtl.h>
@@ -1467,6 +1470,10 @@ wchar_t *hmp_string(long tag_index, short index)
 		return compose(index - HMP_STOCK_DESCRIPTION_BASE, tag_index != NONE ?
 			unicode_string_list_get_string(tag_index, index - HMP_STOCK_DESCRIPTION_BASE) : L"");
 	}
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+	/* (the games list's "Looking for games..." with why none show up: net_status.c) */
+	if (index == HMP_NET_STATUS_STRING) return net_status_server_list_message(tag_index);
+#endif
 	if (index >= HMP_STRING_BASE && index < HMP_STOCK_DESCRIPTION_BASE) return hmp_game_string(index);
 	if (index >= HMP_MISSING_NAME_BASE && index < HMP_MISSING_NAME_BASE + HMP_MISSING_NAMES)
 		return missing_names[index - HMP_MISSING_NAME_BASE].name;

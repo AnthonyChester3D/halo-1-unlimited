@@ -47,6 +47,7 @@ enum
 	HMP_LIVE_NAME = 0x7008,         /* (past ui_widget.c's kills-to-win descriptions, 0x7000-0x7005) the lobby's map name: map sharing's status while it runs, else the map's name */
 	HMP_STRING_BASE = 0x7010,       /* hmp_game.c's and hmp_browse.c's own texts (0x7010-0x70ff) */
 	HMP_ONLINE_STRING_BASE = 0x7090, /* hmp_online.c's (the online test builds: 0x7090-0x709f) */
+	HMP_NET_STATUS_STRING = 0x70A0, /* the games list's message with why no game shows up (net_status.c: OXBOX_OFFLINE_SYSTEM_LINK) */
 	HMP_STOCK_DESCRIPTION_BASE = 0x7100, /* a stock map's description with the browser's lines on top */
 	HMP_MISSING_NAME_BASE = 0x7200, /* a map this console hasn't (a game in the browser): its folder's name */
 	HMP_MISSING_NAMES = 8,

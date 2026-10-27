@@ -114,6 +114,12 @@ pass for a console that hosts or is looking for games (`network_game_offline_all
 still leaves it when its network goes. With the cable in, nothing changes, except that a host whose cable comes out
 in a game plays on (the other consoles drop out on their own time-outs).
 
+Since Halo's box no longer says it, the player is told when the network isn't there (`port/linux/game/net_status.c`):
+the games list, while it lists no game, adds why under "Looking for games..." (no network connection; connecting to
+the network; in ONLINE PLAY no router, connecting to the online servers, or can't reach them); a host's lobby says "No
+network connection" in its countdown bar; and in a game it hosts, the network going or coming back is a HUD message.
+When the network is back, internet play reconnects to its brokers at once instead of at their next retry.
+
 ## What isn't here
 
 The game data isn't in this repository, and the Halo XBE the build starts from isn't either. That's the same

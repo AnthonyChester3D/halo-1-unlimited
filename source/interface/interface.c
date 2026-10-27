@@ -406,6 +406,14 @@ void interface_draw_fullscreen_overlays(
 
 		bots_render();
 	}
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+	/* oxbox: the lobby's "No network connection", hosting without one (port/linux/game/net_status.c) */
+	{
+		void net_status_render(void);
+
+		net_status_render();
+	}
+#endif
 	terminal_draw();
 	main_framerate_render();
 	render_debug_profile();
