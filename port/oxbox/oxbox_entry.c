@@ -306,7 +306,10 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	                     opence_bot_log.txt beside it, the spots where bots gave up on where they were going
 	perf_log = 1         the developers' performance and memory log (test build 31, oxbox_perf.c): a CSV file a map
 	                     in perf\ beside the XBE; its own settings (perf_slow_frame_ms, perf_gpu_sample_ms) are
-	                     read by it */
+	                     read by it
+	showcase = 0         (the builds with the showcase screensaver, port/linux/game/showcase.c) the attract movies
+	                     instead
+	showcase_seconds = N (the same) how long the main menu waits for a press before it starts (5 and up; 75) */
 int oxbox_setting_audio_effects = 1;
 int oxbox_setting_bot_log = 0;
 static int oxbox_setting_perf_log = 0;
@@ -464,6 +467,19 @@ static void read_settings(const char *path)
 			oxbox_setting_bot_log = value != 0;
 		else if (same_text(name, "perf_log"))
 			oxbox_setting_perf_log = value != 0;
+#if defined(OXBOX_SHOWCASE)
+		/* (the showcase screensaver: port/linux/game/showcase.c) */
+		else if (same_text(name, "showcase"))
+		{
+			extern int oxbox_setting_showcase;
+			oxbox_setting_showcase = value != 0;
+		}
+		else if (same_text(name, "showcase_seconds"))
+		{
+			extern int oxbox_setting_showcase_seconds;
+			oxbox_setting_showcase_seconds = value;
+		}
+#endif
 #if defined(OXBOX_NET_TEST)
 		else if (same_text(name, "net_test"))
 		{

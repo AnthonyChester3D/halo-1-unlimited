@@ -26,6 +26,15 @@ enum
 	MUSIC_FADE_TIME = 1500
 };
 
+#if defined(OXBOX_SHOWCASE)
+/* oxbox: the showcase screensaver (port/linux/game/showcase.c) in place of the movies, and how long the main menu
+waits for it (opence.ini's showcase_seconds) */
+#include "oxbox_showcase.h"
+#define ATTRACT_MODE_WAIT showcase_idle_milliseconds()
+#else
+#define ATTRACT_MODE_WAIT ATTRACT_MODE_COUNTDOWN
+#endif
+
 /* ---------- prototypes */
 
 /* ---------- globals */
@@ -61,7 +70,7 @@ boolean attract_mode_should_start(
 		time_since_last_event = MAX(attract_mode_countdown_timer, time_since_last_event);
 		time_elapsed = current_time-time_since_last_event;
 	
-		if (time_elapsed>=ATTRACT_MODE_COUNTDOWN-MUSIC_FADE_TIME)
+		if (time_elapsed>=ATTRACT_MODE_WAIT-MUSIC_FADE_TIME)
 		{
 			if (ui_main_menu_music_active())
 			{
@@ -76,7 +85,7 @@ boolean attract_mode_should_start(
 			}
 		}
 
-		if (time_elapsed>=ATTRACT_MODE_COUNTDOWN)
+		if (time_elapsed>=ATTRACT_MODE_WAIT)
 		{
 			should_start = TRUE;
 		}
@@ -195,6 +204,10 @@ void attract_mode_start(
 {
 	short video_index;
 
+#if defined(OXBOX_SHOWCASE)
+	if (showcase_start())
+		return;
+#endif
 	while (TRUE)
 	{
 		video_index = seed_random_range(get_global_local_random_seed_address(), 0, NUMBER_OF_ATTRACT_MODE_MOVIES);

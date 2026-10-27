@@ -1770,6 +1770,15 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 		/* (the time taken only by a search answered) */
 		if (game && last_advertised_time && now - last_advertised_time < GAME_ADVERTISEMENT_INTERVAL)
 			return TRUE;
+#if defined(OXBOX_SHOWCASE)
+		/* oxbox: the showcase screensaver's game isn't advertised (port/linux/game/showcase.c) */
+		{
+			extern boolean showcase_active(void);
+
+			if (showcase_active())
+				return TRUE;
+		}
+#endif
 		if (game)
 		{
 			struct message_server_game_advertise advertisement = {0};

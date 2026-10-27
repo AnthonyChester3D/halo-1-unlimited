@@ -1626,6 +1626,15 @@ static void network_game_server_list(
 	boolean open = state == _network_game_server_state_ingame ? network_game_server_accepts_late_joins(server) :
 		network_game_server_game_is_open(server) && network_game_has_free_player_slot(game);
 
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: nor is it listed in internet play's server browser (port/linux/game/showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active())
+			return;
+	}
+#endif
 	listing_text(name, sizeof(name), game->name, NUMBEROF(game->name));
 	listing_text(gametype, sizeof(gametype), game->variant.human_readable_game_description,
 		NUMBEROF(game->variant.human_readable_game_description));
@@ -2175,6 +2184,16 @@ boolean network_game_server_game_is_open(
 	{
 		game_is_open = FALSE;
 	}
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: the showcase screensaver's game is no one else's, once the host's own machine is in it
+	(port/linux/game/showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active() && server->game.machine_count > 0)
+			game_is_open = FALSE;
+	}
+#endif
 
 	match_assert(NETWORK_SERVER_MANAGER_FILE, 0x217,
 		(TRUE == game_is_open) || (FALSE == game_is_open));

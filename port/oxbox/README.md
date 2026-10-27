@@ -83,6 +83,24 @@ Built with `OXBOX_EXTRA="-DOXBOX_NET_TEST -DOXBOX_NET_LWIP -DOXBOX_NET_P2P"`:
 - Third-party licences: lwIP (BSD-3-Clause), nxdk's driver and port (MIT, BSD-3-Clause) and KCP (MIT), each beside
   its code and in the test builds' `OpenCE_online_licenses.txt`; Monocypher under its CC0 option.
 
+## The showcase screensaver (a test build switch)
+
+Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.c`):
+
+- When the main menu has gone 75 seconds without a press, instead of an attract movie the Xbox hosts a closed
+  system link game on a folder map that has a `showcase.txt` (Halo Map Porter writes one beside the map's
+  `info.txt` and `preview.bin`), with bots, and flies the file's camera shots over the map while they play. There's
+  no HUD, the watching player never spawns, and the game isn't advertised, listed or joinable, nor counted in the
+  play stats. Any button fades it out and brings the main menu back.
+- The file: `fade S`, then shots (`shot SECONDS label`, an optional `look X Y Z`, and keys
+  `key T X Y Z YAW PITCH [FOV]`). Between keys the camera follows the same curves as the porter's preview (Hermite
+  with Catmull-Rom tangents). Shots fade out over their last `fade` seconds and in over the next one's first.
+- Maps: favourites first, each group shuffled, hidden maps skipped. A map's list plays through (for at least a
+  minute), then the next map loads. Slayer to 999, bots at Normal (the map's suggested players, 4 to 10).
+- Settings in `opence.ini`: `showcase = 0` plays the attract movies instead; `showcase_seconds = N` (5 and up)
+  changes the 75-second wait.
+- Without the switch, the build is byte for byte what it was.
+
 ## What isn't here
 
 The game data isn't in this repository, and the Halo XBE the build starts from isn't either. That's the same

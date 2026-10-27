@@ -89,6 +89,9 @@ symbols in this file:
 /* oxbox: the window's steps timed for the developers' perf log (test build 32), when opence.ini loads it: each step's
 end a mark, timed from the mark before it */
 #include "oxbox_perf.h"
+#if defined(OXBOX_SHOWCASE)
+#include "oxbox_showcase.h"
+#endif
 #else
 #define OXBOX_PERF_MARK(step)
 #endif
@@ -457,11 +460,25 @@ static void render_window(
 				rasterizer_camera->viewport_bounds.y1);
 		}
 		OXBOX_PERF_MARK(_oxbox_perf_draw_other)
+#if defined(OXBOX_SHOWCASE)
+		/* oxbox: no HUD in the showcase screensaver (port/linux/game/showcase.c); its watching player has no unit,
+		so no weapon's screen effect either (as interface_draw_screen has it) */
+		if (showcase_active())
+		{
+			if (render.local_player_index != NONE)
+				rasterizer_screen_effect(NULL);
+		}
+		else
+#endif
 		interface_draw_screen();
 		rasterizer_screen_flash();
 		OXBOX_PERF_MARK(_oxbox_perf_draw_screen_flash)
 		halo_screen_ui_offset(TRUE);
 		render_ui_widgets(local_player_index, &rasterizer_camera->viewport_bounds);
+#if defined(OXBOX_SHOWCASE)
+		/* (and its fade to black, over everything) */
+		showcase_render();
+#endif
 		halo_screen_ui_offset(FALSE);
 		OXBOX_PERF_MARK(_oxbox_perf_draw_ui_widgets)
 	}

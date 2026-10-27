@@ -3416,6 +3416,9 @@ enum
 };
 static LARGE_INTEGER frame_probe_marks[NUMBER_OF_FRAME_PROBE_MARKS];
 #include "oxbox_perf.h"
+#if defined(OXBOX_SHOWCASE)
+#include "oxbox_showcase.h"
+#endif
 static long frame_probe_ticks_before;
 static unsigned long frame_probe_reads_before[5], frame_probe_net_before[2];
 extern unsigned long oxbox_texture_reads, oxbox_texture_read_bytes, oxbox_texture_blocking_reads;
@@ -3659,6 +3662,10 @@ static boolean main_loop_iteration(
 #else
 			/* oxbox: Halo Universal's map sharing, play stats and END GAME (port/linux/game/hmp_share.c) */
 			map_share_update();
+#if defined(OXBOX_SHOWCASE)
+			/* oxbox: the showcase screensaver, before the menus see this frame's presses (port/linux/game/showcase.c) */
+			showcase_update(main_globals.main_menu_scenario_loaded);
+#endif
 #endif
 			/* oxbox: the host's bots (port/linux/game/bots.c) */
 			{

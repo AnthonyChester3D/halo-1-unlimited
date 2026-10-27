@@ -280,6 +280,9 @@ symbols in this file:
 #include "units/units.h"
 #include "units/vehicle_definitions.h"
 #include "units/vehicles.h"
+#if defined(OXBOX_SHOWCASE)
+#include "oxbox_showcase.h"
+#endif
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -4823,6 +4826,10 @@ void players_update_before_game(
 					the host spawns them with, network_player_attach_unit) */
 					if (
 						!network_game_distributed_client() &&
+#if defined(OXBOX_SHOWCASE)
+						/* oxbox: the showcase screensaver's own player only watches (showcase.c) */
+						!(showcase_active() && player->local_player_index != NONE) &&
+#endif
 						game_engine_should_spawn_player(iterator.datum_index))
 					{
 						game_engine_prespawn_player_update(iterator.datum_index);

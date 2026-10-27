@@ -356,6 +356,14 @@ static void played(void)
 	char const *map = cache_files_loaded_map_name();
 	struct stat_line *line;
 	unsigned long today = hmp_today();
+#if defined(OXBOX_SHOWCASE)
+	/* (the showcase screensaver's games aren't plays: showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active()) return;
+	}
+#endif
 	if (!hmp_stats_globals.loaded) load();
 	normalize(key, map ? map : "");
 	if (!key[0] || !ieq(key, "ui")) return;

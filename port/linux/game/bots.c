@@ -5141,6 +5141,38 @@ void bots_update(
 	}
 }
 
+#if defined(OXBOX_SHOWCASE)
+/* the showcase screensaver's bots (showcase.c): that many, at Normal, while it
+runs; 0: the host's own setting back */
+void bots_showcase(
+	short count)
+{
+	static boolean saved = FALSE;
+	static short saved_mode, saved_count, saved_difficulty;
+
+	if (count > 0)
+	{
+		if (!saved)
+		{
+			saved = TRUE;
+			saved_mode = bots_globals.mode;
+			saved_count = bots_globals.custom_count;
+			saved_difficulty = bots_globals.difficulty;
+		}
+		bots_globals.mode = _bots_mode_custom;
+		bots_globals.custom_count = count > NETWORK_BOT_MAXIMUM_COUNT ? NETWORK_BOT_MAXIMUM_COUNT : count;
+		bots_globals.difficulty = _bots_difficulty_normal;
+	}
+	else if (saved)
+	{
+		saved = FALSE;
+		bots_globals.mode = saved_mode;
+		bots_globals.custom_count = saved_count;
+		bots_globals.difficulty = saved_difficulty;
+	}
+}
+#endif
+
 /* the bot to leave: one dead (waiting to respawn, so nobody sees a player
 vanish), else the lowest score, else the last; NONE when there is none */
 long bots_pick_leaver(
@@ -5356,6 +5388,15 @@ void bots_render(
 #if defined(HALO_XBOX_TARGET)
 	if (map_share_status_showing())
 		return;
+#endif
+#if defined(OXBOX_SHOWCASE)
+	/* (not over the showcase screensaver's black: showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active())
+			return;
+	}
 #endif
 	game = network_game_client_get_game(client);
 	mode = host ? bots_globals.mode : (short)((NETWORK_GAME_BOT_MODE(game) & 0xFF) - 1);

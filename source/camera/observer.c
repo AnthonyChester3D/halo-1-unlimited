@@ -110,6 +110,9 @@ symbols in this file:
 #include "physics/collision_usage.h"
 #include "scenario/scenario.h"
 #include "structures/structure_bsp_definitions.h"
+#if defined(OXBOX_SHOWCASE)
+#include "oxbox_showcase.h"
+#endif
 
 /* ---------- constants */
 
@@ -408,6 +411,11 @@ struct observer_result const *observer_get_camera(
 			0x12D,
 			observer->result.location.cluster_index>=NONE && observer->result.location.cluster_index<global_structure_bsp_get()->clusters.count);
 	}
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: the showcase screensaver's camera while it flies: the view drawn, and the sound, follow it
+	(port/linux/game/showcase.c) */
+	result = showcase_camera(local_player_index, result);
+#endif
 
 	return result;
 }

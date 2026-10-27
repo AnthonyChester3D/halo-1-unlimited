@@ -8410,6 +8410,15 @@ static boolean ui_check_for_pause_game(
 	boolean network_game = network_game_is_active();
 	short controller_index = NONE;
 
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: no pause menu in the showcase screensaver's game: a press ends it (port/linux/game/showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active())
+			return FALSE;
+	}
+#endif
 	if (game_in_progress() &&
 		!cinematic_in_progress() &&
 		game_connection() != _game_connection_film_playback &&
