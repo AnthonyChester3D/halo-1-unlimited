@@ -79,7 +79,8 @@ Built with `OXBOX_EXTRA="-DOXBOX_NET_TEST -DOXBOX_NET_LWIP -DOXBOX_NET_P2P"`:
   tunnel's port, so consoles behind strict NATs can still reach it.
 - **Settings** in `opence.ini`: `online = 0` turns internet play off (no ONLINE PLAY item); `online_upnp = 0` doesn't
   ask the router; `online_brokers`, `online_stun` (host:port lists) and `online_tunnel_port` change where it goes.
-- The network test's lines (address, DNS, STUN, MQTT, ONLINE) show on the main menu in these test builds.
+- The network test's lines (address, DNS, STUN, MQTT, ONLINE) are in `oxbox_log.txt`; `net_test_screen = 1` in
+  `opence.ini` shows them on the main menu too.
 - Third-party licences: lwIP (BSD-3-Clause), nxdk's driver and port (MIT, BSD-3-Clause) and KCP (MIT), each beside
   its code and in the test builds' `OpenCE_online_licenses.txt`; Monocypher under its CC0 option.
 
@@ -96,10 +97,11 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
   `key T X Y Z YAW PITCH [FOV]`). Between keys the camera follows the same curves as the porter's preview (Hermite
   with Catmull-Rom tangents). Shots fade out over their last `fade` seconds and in over the next one's first.
 - Maps: favourites first, each group shuffled, hidden maps skipped. A map's list plays through (for at least a
-  minute), then the next map loads. Slayer to 999, bots at Normal (the map's suggested players, 4 to 10).
+  minute), then the next map loads (through the main menu, as every system link game does, with no title music).
+  Team Slayer to 999, bots at Normal (the map's suggested players, 4 to 10, an even number of bots).
 - It plays without the network cable too (the game is the console's alone, as a split screen game is).
 - Settings in `opence.ini`: `showcase = 0` plays the attract movies instead; `showcase_seconds = N` (5 and up)
-  changes the 75-second wait.
+  changes the 75-second wait; `showcase_bots = N` (0 to 15) sets its bots.
 - Without the switch, the build is byte for byte what it was.
 
 ## System link without a network cable (a test build switch)

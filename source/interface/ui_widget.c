@@ -4262,6 +4262,16 @@ void draw_string_and_hack_in_icons(
 void ui_start_main_menu_music(
 	void)
 {
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: no title music while the showcase screensaver goes from one map to the next through the main menu
+	(port/linux/game/showcase.c) */
+	{
+		extern boolean showcase_quiet(void);
+
+		if (showcase_quiet())
+			return;
+	}
+#endif
 	if (!widget_globals.main_menu_music_active && !main_menu_fade_active())
 	{
 		long sound_definition_index = tag_loaded(LOOPING_SOUND_DEFINITION_TAG, "sound\\music\\title1\\title1");

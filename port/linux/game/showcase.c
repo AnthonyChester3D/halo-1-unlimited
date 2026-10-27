@@ -28,8 +28,11 @@ cuts): out over a shot's last `fade` seconds, in over the next one's first.
 
 Which map: the folder maps with a showcase.txt (not ones hidden in the map browser), favorites first, each group in
 a shuffled order, a map at a time. A map plays its shot list through (and again, until it has played a minute),
-then the next map loads; with one map, its list just plays on. The game is Slayer to 999 with no time limit, and
-bots: the map's suggested players (info.txt, else 8), 4 to 10, less the watching player, at Normal.
+then the next map loads (through the main menu, as every system link game does, with the title music kept off);
+with one map, its list just plays on. The game is Team Slayer to 999 with no time limit (the bots travel to find
+the other team, which plays better than Slayer's fights where they spawn), and bots: the map's suggested players
+(info.txt, else 8), 4 to 10, less the watching player, made even for the two teams, at Normal (opence.ini
+showcase_bots = N: N bots).
 
 The hook sites are oxbox_showcase.h's list. Hosting is network_test.c's (the PC's automated system link tests): the
 lobby's fast setup, the map and the variant a second on, the player a moment later, then the start. It plays
@@ -79,6 +82,7 @@ long halo_screen_width(void);
 main menu waits N seconds (5 and up) instead of 75 */
 int oxbox_setting_showcase = 1;
 int oxbox_setting_showcase_seconds = 0;
+int oxbox_setting_showcase_bots = -1;   /* showcase_bots = N: that many bots (0 to 15), else the map's suggestion */
 
 /* ---------- constants */
 
@@ -715,6 +719,12 @@ static void showcase_host(
 	if (players <= 0)
 		players = 8;
 	players = players < 4 ? 4 : players > 10 ? 10 : players;
+	/* (Team Slayer: an even number of bots, so the two teams' bots are as many, with the watching player, who never
+	spawns, on one of them) */
+	if ((players - 1) % 2)
+		players++;
+	if (oxbox_setting_showcase_bots >= 0)
+		players = (short)((oxbox_setting_showcase_bots > 15 ? 15 : oxbox_setting_showcase_bots) + 1);
 	bots_showcase((short)(players - 1));
 #if defined(OXBOX_NET_P2P)
 	/* (not in internet play's server browser) */
@@ -759,7 +769,7 @@ static void showcase_back_at_menu(
 		showcase_host();
 		return;
 	}
-	bots_showcase(0);
+	bots_showcase(-1);
 	attract_mode_reset_timer();
 	if (showcase.user_ended)
 		platform_log("showcase: ended by a press");
@@ -780,6 +790,12 @@ boolean showcase_active(
 	void)
 {
 	return showcase.state != _showcase_off;
+}
+
+boolean showcase_quiet(
+	void)
+{
+	return showcase.state != _showcase_off && showcase.state != _showcase_menu_return && !showcase.user_ended;
 }
 
 boolean showcase_start(
@@ -867,7 +883,8 @@ void showcase_update(
 			struct game_variant variant;
 
 			network_game_server_change_map_name(server, showcase.key);
-			variant = *game_engine_get_variant_by_name(&variant, "slayer");
+			/* (Team Slayer: the bots go looking for the other team, rather than fighting where they spawn) */
+			variant = *game_engine_get_variant_by_name(&variant, "team_slayer");
 			variant.universal_variant.score_to_win = SHOWCASE_SCORE_TO_WIN;
 			player_ui_set_game_variant(&variant);
 			network_game_server_change_game_variant(server, &variant);
@@ -998,7 +1015,7 @@ void showcase_update(
 		if (showcase.alpha <= 0.0f)
 		{
 			showcase.alpha = 0.0f;
-			bots_showcase(0);
+			bots_showcase(-1);
 			showcase_set_state(_showcase_off);
 		}
 		break;

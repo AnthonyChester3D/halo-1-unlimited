@@ -309,7 +309,9 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	                     read by it
 	showcase = 0         (the builds with the showcase screensaver, port/linux/game/showcase.c) the attract movies
 	                     instead
-	showcase_seconds = N (the same) how long the main menu waits for a press before it starts (5 and up; 75) */
+	showcase_seconds = N (the same) how long the main menu waits for a press before it starts (5 and up; 75)
+	showcase_bots = N    (the same) its matches' bots, 0 to 15 (else the map's suggested players, 4 to 10, less 1)
+	net_test_screen = 1  (the online test builds) the network test's lines on the main menu too, not only in this log */
 int oxbox_setting_audio_effects = 1;
 int oxbox_setting_bot_log = 0;
 static int oxbox_setting_perf_log = 0;
@@ -479,6 +481,11 @@ static void read_settings(const char *path)
 			extern int oxbox_setting_showcase_seconds;
 			oxbox_setting_showcase_seconds = value;
 		}
+		else if (same_text(name, "showcase_bots"))
+		{
+			extern int oxbox_setting_showcase_bots;
+			oxbox_setting_showcase_bots = value;
+		}
 #endif
 #if defined(OXBOX_NET_TEST)
 		else if (same_text(name, "net_test"))
@@ -495,6 +502,11 @@ static void read_settings(const char *path)
 		{
 			extern int oxbox_net_test_port;
 			oxbox_net_test_port = value;
+		}
+		else if (same_text(name, "net_test_screen"))
+		{
+			extern int oxbox_net_test_screen;
+			oxbox_net_test_screen = value != 0;
 		}
 #endif
 #if defined(OXBOX_NET_P2P)

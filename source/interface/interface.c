@@ -414,11 +414,12 @@ void interface_draw_fullscreen_overlays(
 	{
 		extern char oxbox_net_test_lines[8][64];
 		extern volatile int oxbox_net_test_line_count;
+		extern int oxbox_net_test_screen;   /* (opence.ini net_test_screen = 1) */
 		real_argb_color color = { 1.0f, 1.0f, 0.9f, 0.3f };
 		long font = tag_loaded('font', "ui\\large_ui");
 		int count = oxbox_net_test_line_count, line;
 
-		if (font != NONE && !game_engine && count > 0)
+		if (oxbox_net_test_screen && font != NONE && !game_engine && count > 0)
 		{
 			draw_string_set_draw_mode(font, NONE, 0, 0, &color);   /* (left-justified) */
 			draw_string_set_tab_stops(NULL, 0);

@@ -57,9 +57,11 @@ unsigned long oxbox_net_test_dns;
 unsigned long oxbox_net_test_static;   /* (test 2: a fixed address, net/oxbox_lwip.c) */
 int oxbox_net_test_port = 5555;
 
-/* what the main menu shows (interface.c) */
+/* what the main menu shows (interface.c), with opence.ini's net_test_screen = 1 (installer test 6: off by default;
+the log always has them) */
 char oxbox_net_test_lines[8][64];
 volatile int oxbox_net_test_line_count;
+int oxbox_net_test_screen = 0;
 
 static unsigned long ip(unsigned a, unsigned b, unsigned c, unsigned d)
 {

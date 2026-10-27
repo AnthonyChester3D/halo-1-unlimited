@@ -5142,15 +5142,15 @@ void bots_update(
 }
 
 #if defined(OXBOX_SHOWCASE)
-/* the showcase screensaver's bots (showcase.c): that many, at Normal, while it
-runs; 0: the host's own setting back */
+/* the showcase screensaver's bots (showcase.c): that many (0 to 15), at Normal,
+while it runs; -1: the host's own setting back */
 void bots_showcase(
 	short count)
 {
 	static boolean saved = FALSE;
 	static short saved_mode, saved_count, saved_difficulty;
 
-	if (count > 0)
+	if (count >= 0)
 	{
 		if (!saved)
 		{

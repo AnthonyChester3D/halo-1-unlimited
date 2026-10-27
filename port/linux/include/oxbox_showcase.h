@@ -14,7 +14,7 @@ The hook sites, each inside #if defined(OXBOX_SHOWCASE):
   showcase.c puts the watching player, who has no unit, in the camera's cluster.)
 - render.c render_window: no HUD (showcase_active), and its fade to black over everything (showcase_render).
 - players.c: the local player isn't spawned (it only watches).
-- ui_widget.c: no pause menu (a press ends the showcase instead).
+- ui_widget.c: no pause menu (a press ends the showcase instead), and no title music between its maps.
 - network_server_message_handler.c and network_server_manager.c: the game isn't advertised, listed or joinable.
 - network_client_manager.c and network_server_manager.c: no network cable needed (the network checks pass, as a
   split screen game's do).
@@ -42,7 +42,10 @@ struct observer_result const *showcase_camera(short local_player_index, struct o
 /* its fade to black, after the HUD and the menus are drawn */
 void showcase_render(void);
 
-/* bots.c: the showcase's bots (a count: custom, at normal), or 0: the host's own setting back */
+/* no title music now: it's between its maps (ui_widget.c ui_start_main_menu_music) */
+boolean showcase_quiet(void);
+
+/* bots.c: the showcase's bots (a count, 0 to 15: custom, at normal), or -1: the host's own setting back */
 void bots_showcase(short count);
 
 #endif
