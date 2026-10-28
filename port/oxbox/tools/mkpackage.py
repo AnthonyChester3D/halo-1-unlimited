@@ -2,11 +2,13 @@
 player's own retail Halo XBE, with none of Microsoft's code or Halo's art in it.
 
 Usage: python3 port/oxbox/tools/mkpackage.py out.oxpk "name" RETAIL.xbe BUILD.xbe [RETAIL2.xbe BUILD2.xbe ...]
-           [--release N] [--network N] [--notes "text"]
+           [--release N] [--network N] [--notes "text"] [--installer INSTALLER.xbe]
 
 (--release: the release's number, which goes up by one each release (0, the default: a test); --network: the
-network version its online play speaks; --notes: a line about it.) The package isn't signed: the project's owner signs
-it on their PC with port/oxbox/tools/oxsign.py, which appends the signature.
+network version its online play speaks; --notes: a line about it; --installer: the installer's XBE
+(port/oxbox/installer's bin/default.xbe), carried so an older installer can update itself from the package: its
+version is read from the XBE.) The package isn't signed: the project's owner signs it on their PC with
+port/oxbox/tools/oxsign.py, which appends the signature. Only a signed package's installer is ever used.
 
 Each BUILD is port/oxbox/build.sh's halo1unlimited.xbe made from the RETAIL XBE beside it (a retail Halo, the
 disc's: NTSC version 1, 8 or 9). The package says, for each, how to make the build from the retail XBE: runs of its
@@ -24,7 +26,8 @@ The format (little-endian), read by port/oxbox/installer/package.c:
         16  SHA-256 of the body (as stored)
         48  the package's name (64 bytes, ASCII, NUL-padded)
         112 u32 the manifest's size, u32 release, u32 network version, u32 (zero)
-    the manifest: "key: value" lines (ASCII): name, release, network, date, notes, makes (the retail XBEs)
+    the manifest: "key: value" lines (ASCII): name, release, network, date, notes, makes (the retail XBEs), and with
+        an installer: "installer" (its version), "installer size", "installer sha256" (hex)
     the body (zlib)
     then, if it's signed: "OXSG", u32 count, and for each signature: the key's id (the first 8 bytes of the SHA-256 of
         its public key), and an Ed25519 signature of "Halo 1 Unlimited package, signed\n" + the header + the manifest
@@ -37,6 +40,8 @@ The format (little-endian), read by port/oxbox/installer/package.c:
             u32 offset of its steps in the body, u32 their size
             its name (32 bytes, ASCII, NUL-padded)
         the steps, then the pool
+        then the installer's XBE, if it carries one: the body's last "installer size" bytes. (Installers before
+        version 1 read none of this, and the format is still 2: they ignore it)
     steps: a byte, then u32s:
         1 COPY from the retail XBE: offset, size
         2 POOL: offset in the body, size
@@ -48,6 +53,7 @@ The format (little-endian), read by port/oxbox/installer/package.c:
 import argparse, bisect, datetime, hashlib, re, struct, sys, zlib
 
 FORMAT = 2
+INSTALLER_MARK = b'OXINSTV1'  # (port/oxbox/installer/main.c: then the version, a u32)
 MIN_MATCH = 16
 MIN_ZEROS = 64
 PICTURES_SIZE = 9 * 16384
@@ -252,6 +258,16 @@ def retail_name(retail):
     return 'Halo (%s, version %d)' % (region, version)
 
 
+def installer_version(xbe):
+    """the installer's version, from its mark (main.c's installer_mark)"""
+    assert xbe[:4] == b'XBEH', 'the installer isn\'t an XBE'
+    mark = xbe.find(INSTALLER_MARK)
+    assert mark >= 0 and xbe.find(INSTALLER_MARK, mark + 1) < 0, 'no installer version mark in the XBE (or two)'
+    version, = struct.unpack_from('<I', xbe, mark + len(INSTALLER_MARK))
+    assert version > 0, 'the installer\'s version is 0'
+    return version
+
+
 def main():
     parser = argparse.ArgumentParser(usage=__doc__)
     parser.add_argument('out')
@@ -260,6 +276,7 @@ def main():
     parser.add_argument('--release', type=int, default=0)
     parser.add_argument('--network', type=int, default=0)
     parser.add_argument('--notes', default='')
+    parser.add_argument('--installer')
     args = parser.parse_args()
     if len(args.xbes) % 2:
         sys.exit(__doc__)
@@ -290,6 +307,9 @@ def main():
         body += e
     assert len(body) == pool_at
     body += pool
+    installer = open(args.installer, 'rb').read() if args.installer else None
+    if installer:
+        body += installer
     body = bytes(body)
     # (checked: each build made from its retail XBE, as the installer will)
     at = table_size
@@ -300,6 +320,9 @@ def main():
     manifest = 'name: %s\nrelease: %d\nnetwork: %d\ndate: %s\nnotes: %s\nmakes: %s\n' % (
         name, args.release, args.network, datetime.date.today().isoformat(), args.notes,
         ', '.join(retail_name(r) for r, _, _ in made))
+    if installer:
+        manifest += 'installer: %d\ninstaller size: %d\ninstaller sha256: %s\n' % (
+            installer_version(installer), len(installer), hashlib.sha256(installer).hexdigest())
     manifest = manifest.encode('ascii')
     header = b'OXPK' + struct.pack('<III', FORMAT, len(packed), len(body)) + hashlib.sha256(packed).digest()
     header += name.encode('ascii').ljust(64, b'\0')[:64]
@@ -317,6 +340,8 @@ def main():
                  HEADER: 'header'}
         print('%s -> %d bytes: %s' % (retail_name(retail), len(build), ', '.join(
             '%s %d bytes (%d runs)' % (names[k], v[1], v[0]) for k, v in sorted(counts.items()))))
+    if installer:
+        print('the installer, version %d: %d bytes' % (installer_version(installer), len(installer)))
     print('%s: %d bytes (body %d, its pool %d), release %d, not signed' % (
         out_path, 128 + len(manifest) + len(packed), len(body), len(pool), args.release))
 

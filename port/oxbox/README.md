@@ -98,10 +98,34 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
   with Catmull-Rom tangents). Shots fade out over their last `fade` seconds and in over the next one's first.
 - Maps: favourites first, each group shuffled, hidden maps skipped. A map's list plays through (for at least a
   minute), then the next map loads (through the main menu, as every system link game does, with no title music).
-  Team Slayer to 999, bots at Normal (the map's suggested players, 4 to 10, an even number of bots).
+  Team Slayer to 999, bots at Normal (the map's suggested players, 4 to 10, an even number of bots), no announcer.
+  While the game runs under 15 frames a second, bots drop out one at a time (while dead, so none vanishes on screen),
+  down to two; each map starts with the full count again.
+- A map's first ten seconds have a title card, as the campaign's chapter titles do: black bars top and bottom and the
+  map's name (its `info.txt` name) bottom right, in the chapter titles' font and place.
+- Between maps, the lobby starts on the next map rather than the default (Carousel), and starts as soon as the bots
+  are in (they join faster than in a person's lobby).
 - It plays without the network cable too (the game is the console's alone, as a split screen game is).
 - Settings in `opence.ini`: `showcase = 0` plays the attract movies instead; `showcase_seconds = N` (5 and up)
-  changes the 75-second wait; `showcase_bots = N` (0 to 15) sets its bots.
+  changes the 75-second wait; `showcase_bots = N` (0 to 15) sets its bots; `showcase_min_fps = N` the frame rate
+  under which bots drop out (15; 0: never).
+- Without the switch, the build is byte for byte what it was.
+
+## Bot tuning (a test build switch)
+
+Built with `-DOXBOX_BOT_TUNING` added to `OXBOX_EXTRA` (`port/linux/game/bots.c`):
+
+- A bot's periodic looks (its goal, a better weapon, an item, a vehicle, the look ahead, a look round) start at its
+  own point in their intervals when it spawns. Bots that spawned together, as all of them do when a game starts,
+  did each of these on the same tick for the rest of their lives.
+- A bot standing on the power weapon it walked to holds the action button to take it (with two weapons already,
+  walking over it takes only its ammunition).
+- A bot carrying a flag or a ball forgets the weapon, item or vehicle it was going for, and doesn't look for others.
+- A bot driving a vehicle plans no route through a teleporter, nor onto one's way in.
+- A hop to a waypoint well above or below searches the whole 60 world units for the way (a ramp or a walkway round
+  to a raised flag stand), not twice the straight distance.
+- A team game's bots keep the teams even in the lobby: while the teams differ by more than a player (a person
+  changing team, or leaving), a bot moves from the bigger team to the smaller (`network_server_manager.c`).
 - Without the switch, the build is byte for byte what it was.
 
 ## System link without a network cable (a test build switch)
@@ -170,7 +194,9 @@ How the pieces fit:
 - `tools/gen_overlay.py` places OpenCE's larger globals over retail game code that nothing runs.
 - `tools/mkxbe.py` writes the XBE: it adds the image (and the empty `.cap16` section, on a retail XBE), redirects
   `main`, appends the effects program and the pictures, and fixes up the section digests.
-- `installer/` is the installer XBE, and `tools/mkpackage.py` makes its packages.
+- `installer/` is the installer XBE, and `tools/mkpackage.py` makes its packages. The installer downloads the
+  latest signed release's package from GitHub (Y) and updates itself from a signed package that carries a newer
+  installer (`installer/README.md`).
 
 ## Credits
 

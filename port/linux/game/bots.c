@@ -77,6 +77,8 @@ enum
 	/* between two changes to the bots (milliseconds): one at a time, and
 	the settings each sends out first */
 	BOTS_CHANGE_INTERVAL = 250,
+	/* ... in the showcase screensaver's game (showcase.c), which has no other console */
+	BOTS_SHOWCASE_CHANGE_INTERVAL = 40,
 	/* Suggested on a map that says no player count */
 	BOTS_SUGGESTED_DEFAULT = 8,
 	/* a network game client's lobby (network_game_globals.c's
@@ -141,6 +143,11 @@ static struct
 	{ 0, _bots_mode_custom, OXBOX_TEST_BOTS, "", 0, _bots_difficulty_normal };
 #else
 	{ 0, _bots_mode_off, 4, "", 0, _bots_difficulty_normal };
+#endif
+
+#if defined(OXBOX_SHOWCASE)
+/* the showcase screensaver's bots are the ones in play (bots_showcase) */
+static boolean bots_showcase_on = FALSE;
 #endif
 
 /* the lobby's setting (NETWORK_GAME_BOT_MODE): the mode + 1, and the difficulty in the high byte */
@@ -622,6 +629,9 @@ static long bots_unit_team(long unit_index);
 short vehicle_bot_type(long vehicle_index);  /* vehicles.c's (port: the bots') */
 static boolean bots_goal_walk(struct bots_brain *brain, real_point3d const *position, long now);
 static boolean bots_route_to(struct bots_brain *brain, real_point3d const *position, short waypoint, long now);
+#if defined(OXBOX_BOT_TUNING)
+static void bots_brain_stagger(struct bots_brain *brain, long now);
+#endif
 
 #if defined(HALO_XBOX_TARGET)
 extern int oxbox_setting_bot_log;
@@ -1328,6 +1338,12 @@ static short bots_explore(
 
 			if (waypoint->link_failures[link] >= BOTS_LINK_FAILURES_UNUSABLE || done[to])
 				continue;
+#if defined(OXBOX_BOT_TUNING)
+			/* (OXBOX_BOT_TUNING) a vehicle doesn't go through a teleporter (the game sends only players): its
+			driver's routes leave out the teleporters' links, and onto any way in, where it only hits the pad */
+			if (brain->driving && (TEST_FLAG(waypoint->teleport_links, link) || bots_route.waypoints[to].teleport_source))
+				continue;
+#endif
 			link_cost = TEST_FLAG(waypoint->teleport_links, link) ? 1.f :
 				bots_distance3d(&waypoint->point, &bots_route.waypoints[to].point);
 			if (!waypoint->link_good[link])
@@ -1596,6 +1612,13 @@ static void bots_search(
 	{
 		real bound = 2.f * bots_distance3d(&start, &waypoint->point) + 10.f;
 
+#if defined(OXBOX_BOT_TUNING)
+		/* (OXBOX_BOT_TUNING) a waypoint well above or below: the way up or down is often round the long way (a ramp,
+		a walkway to a raised flag stand), past twice the straight distance, and the search ended under the waypoint:
+		the whole 60 */
+		if ((real)fabs(waypoint->point.z - start.z) > 1.5f)
+			bound = 60.f;
+#endif
 		path_input_set_search_bounds(&input, bound < 60.f ? bound : 60.f);
 	}
 	{
@@ -1725,9 +1748,10 @@ not_straight:
 					(real)fabs(result.endpoint.point.z - waypoint->point.z) > 1.5f)) && logged++ < 60)
 		{
 			bots_log("bots: short search: from (%.2f %.2f %.2f) for (%.2f %.2f %.2f), ends at (%.2f %.2f %.2f): %.2f away, "
-				"%.2f across, %.2f up", start.x, start.y, start.z, waypoint->point.x, waypoint->point.y, waypoint->point.z,
-				result.endpoint.point.x, result.endpoint.point.y, result.endpoint.point.z, closest,
-				bots_distance2d(&result.endpoint.point, &waypoint->point), waypoint->point.z - result.endpoint.point.z);
+				"%.2f across, %.2f up; %d of %d nodes", start.x, start.y, start.z, waypoint->point.x, waypoint->point.y,
+				waypoint->point.z, result.endpoint.point.x, result.endpoint.point.y, result.endpoint.point.z, closest,
+				bots_distance2d(&result.endpoint.point, &waypoint->point), waypoint->point.z - result.endpoint.point.z,
+				(int)state.node_count, (int)PATH_NODE_LIST_SIZE);
 		}
 	}
 #endif
@@ -2156,6 +2180,9 @@ static void bots_walk(
 	if (brain->unit_index != unit_index)
 	{
 		bots_brain_reset(brain, unit_index);
+#if defined(OXBOX_BOT_TUNING)
+		bots_brain_stagger(brain, now);
+#endif
 		brain->last_position = position;
 		brain->progress_point = position;
 		brain->progress_time = now;
@@ -3421,6 +3448,9 @@ static void bots_fight(
 		}
 		/* a better weapon nearby, out of a fight (and not on the way to an objective) */
 		if (brain->target == NONE && now >= brain->pickup_time && !brain->goal_urgent && brain->seat_kind == _bots_seat_none &&
+#if defined(OXBOX_BOT_TUNING)
+			!bots_carries_objective(unit) &&
+#endif
 			(!brain->goal_kind || brain->goal_reason == _bots_reason_defend || brain->goal_reason == _bots_reason_item))
 		{
 			brain->pickup_time = now + BOTS_PICKUP_LOOK_TICKS;
@@ -4007,6 +4037,31 @@ short vehicle_bot_type(long vehicle_index);
 #define BOTS_VEHICLE_TYPE_ALIEN_FIGHTER 5
 #define BOTS_VEHICLE_TYPE_TURRET 6
 
+#if defined(OXBOX_BOT_TUNING)
+/* (test build switch OXBOX_BOT_TUNING) a bot just spawned: its periodic looks (its goal, a better weapon, an item, a
+vehicle, the look ahead, a look round) start at its own point in their intervals. Bots that spawn together, as all
+of them do when a game starts, otherwise did each of these on the same tick as each other, for the rest of their
+lives: a slow tick every second or so, with fast ones between. (Looking for enemies was staggered already: a fifth
+of them a tick, bots_fight; Halo's own path searches are one a tick, bots_search_turn.) */
+static void bots_brain_stagger(
+	struct bots_brain *brain,
+	long now)
+{
+	long index = (long)(brain - bots_brains);
+
+	if (index < 0)
+		index = 0;
+	brain->goal_update_time = now + 1 + index % BOTS_GOAL_TICKS;
+	brain->goal_look_time = now + 1 + (index * 3 + 5) % BOTS_GOAL_TICKS;
+	brain->weapon_time = now + (index * 7) % BOTS_WEAPON_TICKS;
+	brain->pickup_time = now + (index * 11 + 3) % BOTS_PICKUP_LOOK_TICKS;
+	brain->item_time = now + (index * 13 + 7) % BOTS_ITEM_LOOK_TICKS;
+	brain->vehicle_time = now + (index * 17 + 11) % BOTS_VEHICLE_LOOK_TICKS;
+	brain->probe_time = now + index % 3;
+	brain->scout_next = now + (index * 23) % (3 * BOTS_TICKS_PER_SECOND);
+}
+#endif
+
 static short bots_seat_kind(
 	long vehicle_index,
 	short seat_index)
@@ -4535,6 +4590,17 @@ static void bots_objective(
 	real_point3d position;
 	short engine = game_engine_get_variant() ? game_engine_get_variant()->game_engine_index : 0;
 
+#if defined(OXBOX_BOT_TUNING)
+	/* (OXBOX_BOT_TUNING) carrying a flag or a ball: home with it and nothing else. A weapon it was walking to before
+	it picked the flag up, an item, a vehicle: forgotten (the pickup's switch to its worse weapon would even have
+	dropped the flag) */
+	if (bots_carries_objective(unit))
+	{
+		brain->pickup_object = NONE;
+		brain->item_object = NONE;
+		brain->vehicle_object = NONE;
+	}
+#endif
 	if (now < brain->goal_update_time)
 	{
 		if (brain->goal_kind && brain->goal_object != NONE)
@@ -4789,9 +4855,23 @@ static boolean bots_goal_walk(
 		}
 		toward = &brain->goal_point;
 	}
+#if defined(OXBOX_BOT_TUNING)
+	/* (standing on a ball that isn't picked up on its own: the action button, after a third of a second. And
+	(OXBOX_BOT_TUNING) on the power weapon it walked to: with two weapons already, walking over one doesn't take it,
+	the button held does, in place of the weapon in hand; the item's worth is twice what it carries or more, so
+	either may go) */
+	if (brain->goal_kind == _bots_goal_touch && distance < 0.6f && rise < 1.f &&
+		(brain->goal_reason == _bots_reason_take ||
+			(brain->goal_reason == _bots_reason_item && brain->goal_object != NONE && object_try_and_get(brain->goal_object) &&
+				TEST_FLAG(_object_mask_weapon, object_get(brain->goal_object)->object.type))))
+	{
+		brain->touch_ticks++;
+	}
+#else
 	/* (standing on a ball that isn't picked up on its own: the action button, after a third of a second) */
 	if (brain->goal_kind == _bots_goal_touch && brain->goal_reason == _bots_reason_take && distance < 0.6f && rise < 1.f)
 		brain->touch_ticks++;
+#endif
 	else
 		brain->touch_ticks = 0;
 	/* (not trapped while it goes for its goal) */
@@ -5066,8 +5146,14 @@ static void bots_act(
 	}
 	if (brain->crouch_ticks > 0)
 		action->control_flags |= FLAG(_unit_control_crouch_modifier_bit);
+#if defined(OXBOX_BOT_TUNING)
+	/* (held for half a second, and again each second it's still there) */
+	if (brain->touch_ticks > 10 && (brain->touch_ticks - 11) % BOTS_TICKS_PER_SECOND < 15)
+		action->control_flags |= FLAG(_unit_control_swap_weapons_bit);
+#else
 	if (brain->touch_ticks > 10 && brain->touch_ticks <= 25)
 		action->control_flags |= FLAG(_unit_control_swap_weapons_bit);
+#endif
 	if (brain->driving)
 	{
 		/* (a vehicle steers toward where the camera faces: the route's way, unless its driver aims its guns; the
@@ -5122,6 +5208,12 @@ void bots_update(
 	if (network_game_server_bots_held())
 		return;
 	now = system_milliseconds();
+#if defined(OXBOX_SHOWCASE)
+	/* (the showcase screensaver's lobby has no other console to tell each change: its bots join quicker) */
+	if (bots_showcase_on && bots_globals.last_change && now - bots_globals.last_change < BOTS_SHOWCASE_CHANGE_INTERVAL)
+		return;
+	if (!bots_showcase_on)
+#endif
 	if (bots_globals.last_change && now - bots_globals.last_change < BOTS_CHANGE_INTERVAL)
 		return;
 	bots = network_game_server_bot_count(&people);
@@ -5136,6 +5228,26 @@ void bots_update(
 	}
 	else if (bots > wanted)
 	{
+#if defined(OXBOX_SHOWCASE)
+		/* (the showcase's game: a bot drops out while it's dead, waiting to respawn, so none vanishes on screen) */
+		if (bots_showcase_on && game_in_progress())
+		{
+			long index;
+
+			for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+			{
+				struct player_datum *player = bots_player_at(index);
+
+				if (player && player->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST &&
+					player->unit_index == NONE)
+				{
+					break;
+				}
+			}
+			if (index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+				return;
+		}
+#endif
 		if (network_game_server_remove_bot(NONE))
 			bots_globals.last_change = now;
 	}
@@ -5143,13 +5255,15 @@ void bots_update(
 
 #if defined(OXBOX_SHOWCASE)
 /* the showcase screensaver's bots (showcase.c): that many (0 to 15), at Normal,
-while it runs; -1: the host's own setting back */
+while it runs (fewer later: those over the count drop out, one at a time);
+-1: the host's own setting back */
 void bots_showcase(
 	short count)
 {
 	static boolean saved = FALSE;
 	static short saved_mode, saved_count, saved_difficulty;
 
+	bots_showcase_on = count >= 0;
 	if (count >= 0)
 	{
 		if (!saved)

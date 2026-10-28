@@ -6,9 +6,12 @@ of Halo's art is in the installer or the package.
 The list shows every Halo it finds: the ones it can install to first, in green; the others in grey.
 	A      install (or update) OpenCE in the folder chosen
 	X      put the retail Halo back (from default_retail.xbe)
+	Y      look online for a newer package (download.c: the project's latest release)
 	START  play what's in the folder (green ones only)
 	B      back to the dashboard
-	LT/RT  a page up or down */
+	LT/RT  a page up or down
+A package signed by a key it trusts that carries a newer installer (tools/mkpackage.py --installer) offers to update
+the installer itself. */
 #include <hal/video.h>
 #include <hal/xbox.h>
 #include <nxdk/mount.h>
@@ -21,6 +24,7 @@ The list shows every Halo it finds: the ones it can install to first, in green; 
 #include <stdlib.h>
 #include <string.h>
 
+#include "download.h"
 #include "package.h"
 #include "pictures.h"
 #include "screen.h"
@@ -28,10 +32,26 @@ The list shows every Halo it finds: the ones it can install to first, in green; 
 #include "text.h"
 
 #include "keys.h"
+#include "notices.h"
 
 #define TITLE "Halo 1 Unlimited installer"
+/* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
+#ifndef INSTALLER_VERSION
+#define INSTALLER_VERSION 2
+#endif
+__attribute__((used)) static struct
+{
+	char mark[8];
+	unsigned long version;
+} const installer_mark = {{'O', 'X', 'I', 'N', 'S', 'T', 'V', '1'}, INSTALLER_VERSION};
 #define PACKAGE_PATH "D:\\opence.oxpk"
+#define OLD_PACKAGE_PATH "D:\\opence_old.oxpk" /* (the package a download replaced) */
+#define DOWNLOAD_PATH "D:\\opence_download.oxpk"
+#define URL_PATH "D:\\installer_url.txt" /* (another address for updates, its first line: download.h) */
+#define OLD_INSTALLER_PATH "D:\\installer_old.xbe" /* (the installer an update replaced) */
+#define NOTICES_PATH "D:\\THIRD_PARTY.txt"
 #define LOG_PATH "D:\\installer_log.txt"
+#define LAST_PATH "D:\\installer_last.txt" /* the folder of the last install that worked, first in the list next time */
 #define HALO_TITLE_ID 0x4D530004ul
 #define MAX_XBE (16 * 1024 * 1024)
 static struct package package;
@@ -68,23 +88,48 @@ static void log_clear(void)
 	log_count = 0;
 }
 
-static void say_in(unsigned long colour, char const *format, ...)
+static void say_line(unsigned long colour, char const *text, int length)
 {
-	char text[256];
-	va_list list;
-	int r;
-	va_start(list, format);
-	text_vprint(text, sizeof(text), format, list);
-	va_end(list);
-	log_file(text);
 	if (log_count == LOG_ROWS)
 	{
 		memmove(log_lines[0], log_lines[1], sizeof(log_lines[0]) * (LOG_ROWS - 1));
 		memmove(&log_colours[0], &log_colours[1], sizeof(log_colours[0]) * (LOG_ROWS - 1));
 		log_count--;
 	}
-	text_print(log_lines[log_count], sizeof(log_lines[0]), "%s", text);
+	text_print(log_lines[log_count], sizeof(log_lines[0]), "%.*s", length, text);
 	log_colours[log_count++] = colour;
+}
+
+static void say_in(unsigned long colour, char const *format, ...)
+{
+	char text[256], *at;
+	va_list list;
+	int r, indent = 0;
+	va_start(list, format);
+	text_vprint(text, sizeof(text), format, list);
+	va_end(list);
+	log_file(text);
+	/* (a long line wrapped at a space, the rest indented as it was) */
+	while (text[indent] == ' ')
+		indent++;
+	for (at = text; (int)strlen(at) > SCREEN_COLUMNS;)
+	{
+		int cut = SCREEN_COLUMNS;
+		while (cut > SCREEN_COLUMNS / 2 && at[cut] != ' ')
+			cut--;
+		if (at[cut] != ' ')
+			cut = SCREEN_COLUMNS;
+		say_line(colour, at, cut);
+		at += cut;
+		while (*at == ' ')
+			at++;
+		if (indent + 2 < SCREEN_COLUMNS / 2)
+		{
+			at -= indent + 2;
+			memset(at, ' ', (size_t)(indent + 2));
+		}
+	}
+	say_line(colour, at, (int)strlen(at));
 	for (r = 0; r < LOG_ROWS; r++)
 	{
 		screen_row(LOG_TOP + r, COLOUR_BLACK);
@@ -116,7 +161,7 @@ static char const *signature_text(unsigned long *colour)
 static void heading(char const *what)
 {
 	screen_clear();
-	screen_text(0, 0, COLOUR_YELLOW, TITLE);
+	screen_text(0, 0, COLOUR_YELLOW, "%s, version %d", TITLE, INSTALLER_VERSION);
 	if (package_ok)
 	{
 		unsigned long colour;
@@ -136,7 +181,7 @@ static void heading(char const *what)
 
 /* ---- the controllers: every pad, d-pad or left stick (held: repeats), triggers a page ---- */
 
-enum { NONE, UP, DOWN, PAGE_UP, PAGE_DOWN, A, B, X, START };
+enum { NONE, UP, DOWN, PAGE_UP, PAGE_DOWN, A, B, X, Y, START };
 
 static SDL_GameController *pads[4];
 static unsigned held_buttons = ~0u; /* (none counts as pressed until it's been seen up) */
@@ -180,6 +225,7 @@ static int poll_input(void)
 		buttons |= (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_B) |
 			SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_BACK)) << B;
 		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_X) << X;
+		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_Y) << Y;
 		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_START) << START;
 		y = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_LEFTY);
 		if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_UP) || y < -16000)
@@ -416,6 +462,7 @@ struct halo
 #define MAX_HALOS 128
 static struct halo halos[MAX_HALOS];
 static int halo_count;
+static char last_install[160]; /* (LAST_PATH's folder: "E:\Games\Halo"; empty when none) */
 
 static int ready(struct halo const *h)
 {
@@ -626,19 +673,73 @@ static void scan(char const *folder, int depth)
 	FindClose(find);
 }
 
-/* the ones it can install to first (each group as found) */
+static void flush_drive(char const *path);
+
+static int is_last_install(struct halo const *h)
+{
+	return last_install[0] && !_stricmp(h->path, last_install);
+}
+
+/* the folder of the last install that worked, from LAST_PATH (none: empty) */
+static void last_install_read(void)
+{
+	FILE *file = fopen(LAST_PATH, "r");
+	size_t n;
+	last_install[0] = 0;
+	if (!file)
+		return;
+	if (!fgets(last_install, sizeof(last_install), file))
+		last_install[0] = 0;
+	fclose(file);
+	n = strlen(last_install);
+	while (n && (last_install[n - 1] == '\n' || last_install[n - 1] == '\r' || last_install[n - 1] == ' '))
+		last_install[--n] = 0;
+	/* (only a folder on a drive it looks on) */
+	if (n < 3 || last_install[1] != ':' || last_install[2] != '\\')
+		last_install[0] = 0;
+}
+
+/* the drive the installer is on, written out as an install's is */
+static void flush_own_drive(void)
+{
+	char own[260], *slash, drive[260];
+	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	if ((slash = strrchr(own, '\\')) != NULL)
+		*slash = 0;
+	if (from_device(own, drive, sizeof(drive)))
+		flush_drive(drive);
+}
+
+/* an install worked: its folder goes first in the list from now on (LAST_PATH, beside the installer, written out) */
+static void last_install_write(char const *path)
+{
+	FILE *file = fopen(LAST_PATH, "w");
+	text_print(last_install, sizeof(last_install), "%s", path);
+	if (!file)
+		return;
+	fprintf(file, "%s\n", path);
+	fclose(file);
+	flush_own_drive();
+}
+
+/* the last install's folder at the very top, then the ones it can install to, then the rest (each group as found) */
 static void sort_halos(void)
 {
 	static struct halo sorted[MAX_HALOS];
 	int i, n = 0;
 	for (i = 0; i < halo_count; i++)
 	{
-		if (ready(&halos[i]))
+		if (is_last_install(&halos[i]))
 			sorted[n++] = halos[i];
 	}
 	for (i = 0; i < halo_count; i++)
 	{
-		if (!ready(&halos[i]))
+		if (ready(&halos[i]) && !is_last_install(&halos[i]))
+			sorted[n++] = halos[i];
+	}
+	for (i = 0; i < halo_count; i++)
+	{
+		if (!ready(&halos[i]) && !is_last_install(&halos[i]))
 			sorted[n++] = halos[i];
 	}
 	memcpy(halos, sorted, sizeof(halos[0]) * halo_count);
@@ -656,6 +757,9 @@ static void find_halos(void)
 		*slash = 0;
 	if (from_device(own, path, sizeof(path)))
 		add_halo(path);
+	/* (the last install's folder, even one deeper than the look round goes) */
+	if (last_install[0])
+		add_halo(last_install);
 	for (i = 0; i < 3; i++)
 	{
 		char root[4] = {partitions[i][0], ':', 0};
@@ -913,6 +1017,297 @@ static void launch_halo(struct halo *h)
 	launch(device);
 }
 
+/* ---- the package, read (at the start, and after a download) ---- */
+
+static void package_read(void)
+{
+	unsigned long colour;
+	package_free(&package);
+	package_ok = !package_load(PACKAGE_PATH, &package, package_error);
+	package_missing = !package_ok && GetFileAttributesA(PACKAGE_PATH) == INVALID_FILE_ATTRIBUTES;
+	signature = PACKAGE_UNSIGNED;
+	signer = NULL;
+	log_file(package_ok ? package.name : package_error);
+	if (!package_ok)
+		return;
+	signature = package_verify(&package, trusted_keys, trusted_key_count, &signer);
+	if (signature == PACKAGE_BAD)
+	{
+		package_ok = 0;
+		text_print(package_error, sizeof(package_error),
+			"opence.oxpk was changed after it was signed: it can't be installed.");
+	}
+	log_file(package_ok ? signature_text(&colour) : package_error);
+	if (package_ok && package.installer_version)
+	{
+		char line[96];
+		text_print(line, sizeof(line), "(it carries installer version %lu)", package.installer_version);
+		log_file(line);
+	}
+}
+
+/* THIRD_PARTY.txt beside the installer: the notices of the code in it (notices.h, from the THIRD_PARTY.txt it was
+built with), written when what's there differs, as after the installer updated itself */
+static void notices_write(void)
+{
+	unsigned long size;
+	unsigned char *there = read_whole(NOTICES_PATH, &size);
+	int same = there && size == sizeof(notices) && !memcmp(there, notices, size);
+	free(there);
+	if (!same)
+	{
+		HANDLE file = create(NOTICES_PATH);
+		DWORD put;
+		if (file != INVALID_HANDLE_VALUE)
+		{
+			int ok = WriteFile(file, notices, sizeof(notices), &put, NULL) && put == sizeof(notices);
+			log_file(finish(file) && ok ? "wrote THIRD_PARTY.txt" : "(couldn't write THIRD_PARTY.txt)");
+		}
+	}
+}
+
+/* ---- updates: the installer itself, from a package that carries a newer one ---- */
+
+static void update_installer(void)
+{
+	char own[260], name[64], path[80], temp[96], *slash;
+	unsigned char want[32], got[32];
+	unsigned long got_size;
+	struct writer w;
+
+	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	slash = strrchr(own, '\\');
+	text_print(name, sizeof(name), "%s", slash ? slash + 1 : own);
+	text_print(path, sizeof(path), "D:\\%s", name);
+	text_print(temp, sizeof(temp), "D:\\%s.new", name);
+	heading("Updating the installer");
+	log_clear();
+	say("Writing installer version %lu beside this one (%s)...", package.installer_version, name);
+	w.file = create(temp);
+	if (w.file == INVALID_HANDLE_VALUE)
+	{
+		say_in(COLOUR_RED, "Couldn't write beside the installer: nothing changed.");
+		return;
+	}
+	if (write_part(&w, package.body + package.installer_offset, package.installer_size))
+	{
+		CloseHandle(w.file);
+		DeleteFileA(temp);
+		say_in(COLOUR_RED, "Couldn't write the new installer (is the drive full?): nothing changed.");
+		return;
+	}
+	sha256(package.body + package.installer_offset, package.installer_size, want);
+	if (!finish(w.file) || file_sha256(temp, NULL, NULL, 0, got, &got_size) || got_size != package.installer_size ||
+		memcmp(want, got, 32))
+	{
+		DeleteFileA(temp);
+		say_in(COLOUR_RED, "The new installer didn't read back right: nothing changed.");
+		return;
+	}
+	say("  written and checked (%lu KB)", got_size / 1024);
+	/* this one kept as installer_old.xbe, the new one in its place */
+	DeleteFileA(OLD_INSTALLER_PATH);
+	if (!MoveFileA(path, OLD_INSTALLER_PATH))
+	{
+		DeleteFileA(temp);
+		say_in(COLOUR_RED, "Couldn't move this installer aside: nothing changed.");
+		return;
+	}
+	if (!MoveFileA(temp, path))
+	{
+		MoveFileA(OLD_INSTALLER_PATH, path);
+		DeleteFileA(temp);
+		say_in(COLOUR_RED, "Couldn't put the new installer in place: this one is kept.");
+		return;
+	}
+	flush_own_drive();
+	say_in(COLOUR_GREEN, "Done: the installer is version %lu (this one is kept as installer_old.xbe).",
+		package.installer_version);
+	say("Starting it...");
+	Sleep(1500);
+	log_file("starting the new installer");
+	launch(own);
+}
+
+/* when the package (signed by a key it trusts) carries a newer installer: asks, then updates */
+static void offer_installer_update(void)
+{
+	int b;
+	if (!package_ok || package.installer_version <= INSTALLER_VERSION)
+		return;
+	if (signature != PACKAGE_SIGNED)
+	{
+		log_file("(the package's installer isn't used: the package isn't signed by a key this installer trusts)");
+		return;
+	}
+	heading("A newer installer");
+	log_clear();
+	say("opence.oxpk carries installer version %lu. This installer is version %d.", package.installer_version,
+		INSTALLER_VERSION);
+	say("Updating puts it in place of this one (kept as installer_old.xbe), then starts it.");
+	say_in(COLOUR_YELLOW, "A: update the installer now   B: not now");
+	while ((b = wait_input()) != A && b != B)
+		;
+	if (b == A)
+		update_installer();
+	else
+		log_file("installer update: not now");
+}
+
+/* ---- updates: a newer package, downloaded (download.c) ---- */
+
+static void update_step(void *context, char const *text)
+{
+	(void)context;
+	say("%s", text);
+}
+
+static void update_progress(void *context, unsigned long done, unsigned long total)
+{
+	(void)context;
+	screen_row(4, COLOUR_BLACK);
+	if (total)
+	{
+		int bar = (int)((unsigned long long)done * 40 / total), i;
+		char line[41];
+		for (i = 0; i < 40; i++)
+			line[i] = i < bar ? '#' : '.';
+		line[40] = 0;
+		screen_text(4, 0, COLOUR_WHITE, "[%s] %lu of %lu KB", line, done / 1024, total / 1024);
+	}
+	else
+		screen_text(4, 0, COLOUR_WHITE, "%lu KB", done / 1024);
+	screen_show();
+}
+
+/* where updates come from: installer_url.txt's first line, if there's one, else the project's latest release */
+static void update_url(char *url, int size)
+{
+	FILE *file = fopen(URL_PATH, "r");
+	size_t n;
+	url[0] = 0;
+	if (file)
+	{
+		if (!fgets(url, size, file))
+			url[0] = 0;
+		fclose(file);
+	}
+	n = strlen(url);
+	while (n && (url[n - 1] == '\n' || url[n - 1] == '\r' || url[n - 1] == ' '))
+		url[--n] = 0;
+	if (_strnicmp(url, "https://", 8) && _strnicmp(url, "http://", 7))
+		text_print(url, size, "%s", DOWNLOAD_DEFAULT_URL);
+}
+
+/* looks for a newer package online; 1 when opence.oxpk was replaced */
+static int check_updates(void)
+{
+	static struct package fresh;
+	char url[512], address[32], error[256], value[200];
+	struct download_report report = {update_step, update_progress, NULL};
+	struct writer w;
+	unsigned long size;
+	char const *fresh_signer;
+	int b, changed = 0;
+
+	heading("Looking online for a newer package");
+	log_clear();
+	update_url(url, sizeof(url));
+	say("From %s", url);
+	if (download_network(&report, address, error))
+	{
+		say_in(COLOUR_RED, "No network: %s.", error);
+		goto back;
+	}
+	say("The Xbox's address: %s", address);
+	w.file = create(DOWNLOAD_PATH);
+	if (w.file == INVALID_HANDLE_VALUE)
+	{
+		say_in(COLOUR_RED, "Couldn't write beside the installer.");
+		goto back;
+	}
+	if (download(url, 64ul * 1024 * 1024, write_part, &w, &report, &size, error))
+	{
+		CloseHandle(w.file);
+		DeleteFileA(DOWNLOAD_PATH);
+		say_in(COLOUR_RED, "Couldn't download it: %s.", error);
+		goto back;
+	}
+	if (!finish(w.file))
+	{
+		DeleteFileA(DOWNLOAD_PATH);
+		say_in(COLOUR_RED, "Couldn't finish writing what was downloaded.");
+		goto back;
+	}
+	say("  %lu KB downloaded", size / 1024);
+	if (package_load(DOWNLOAD_PATH, &fresh, error))
+	{
+		DeleteFileA(DOWNLOAD_PATH);
+		say_in(COLOUR_RED, "What came isn't a package that reads: %s", error);
+		goto back;
+	}
+	say("Found: %s (release %lu)", fresh.name, fresh.release);
+	package_manifest_value(&fresh, "date", value, sizeof(value));
+	if (value[0])
+		say("  made %s", value);
+	package_manifest_value(&fresh, "notes", value, sizeof(value));
+	if (value[0])
+		say("  %s", value);
+	/* only a package signed by a key it trusts, and not older than the one it has */
+	if (package_verify(&fresh, trusted_keys, trusted_key_count, &fresh_signer) != PACKAGE_SIGNED)
+	{
+		say_in(COLOUR_RED, "It isn't signed by a key this installer trusts, so it isn't used.");
+		goto discard;
+	}
+	say_in(COLOUR_GREEN, "  signed (%s)", fresh_signer);
+	if (package_ok && package_same(&fresh, &package))
+	{
+		say_in(COLOUR_GREEN, "That's the package you have: it's up to date.");
+		goto discard;
+	}
+	if (package_ok && signature == PACKAGE_SIGNED && fresh.release < package.release)
+	{
+		say_in(COLOUR_YELLOW, "That's older than yours (release %lu), so yours is kept.", package.release);
+		goto discard;
+	}
+	if (fresh.installer_version > INSTALLER_VERSION)
+		say("  It carries installer version %lu (this one is %d).", fresh.installer_version, INSTALLER_VERSION);
+	say_in(COLOUR_YELLOW, package_ok ? "A: use it in place of yours   B: keep yours" : "A: use it   B: back");
+	while ((b = wait_input()) != A && b != B)
+		;
+	if (b == B)
+		goto discard;
+	package_free(&fresh);
+	/* the old package kept as opence_old.oxpk, the new one in its place */
+	DeleteFileA(OLD_PACKAGE_PATH);
+	if (exists(PACKAGE_PATH) && !MoveFileA(PACKAGE_PATH, OLD_PACKAGE_PATH))
+	{
+		DeleteFileA(DOWNLOAD_PATH);
+		say_in(COLOUR_RED, "Couldn't move the old package aside: nothing changed.");
+		goto back;
+	}
+	if (!MoveFileA(DOWNLOAD_PATH, PACKAGE_PATH))
+	{
+		MoveFileA(OLD_PACKAGE_PATH, PACKAGE_PATH);
+		DeleteFileA(DOWNLOAD_PATH);
+		say_in(COLOUR_RED, "Couldn't put the new package in place: yours is kept.");
+		goto back;
+	}
+	flush_own_drive();
+	package_read();
+	say_in(COLOUR_GREEN, "Done: it's opence.oxpk now (the old one is kept as opence_old.oxpk).");
+	changed = 1;
+	goto back;
+discard:
+	package_free(&fresh);
+	DeleteFileA(DOWNLOAD_PATH);
+back:
+	say_in(COLOUR_YELLOW, "B: back");
+	while (wait_input() != B)
+		;
+	return changed;
+}
+
 /* ---- the list ---- */
 
 #define LIST_TOP 3
@@ -929,7 +1324,7 @@ static void show_list(void)
 	{
 		screen_text(LIST_TOP, 0, COLOUR_RED, "%s", package_error);
 		if (package_missing)
-			screen_text(LIST_TOP + 1, 0, COLOUR_WHITE, "Put opence.oxpk beside this installer.");
+			screen_text(LIST_TOP + 1, 0, COLOUR_WHITE, "Put opence.oxpk beside this installer, or press Y to download it.");
 	}
 	else if (!halo_count)
 	{
@@ -946,6 +1341,8 @@ static void show_list(void)
 		unsigned long colour = ready(h) ? COLOUR_GREEN : COLOUR_GREY;
 		size_t n = strlen(h->path);
 		screen_row(r, is_selected ? COLOUR_BAR : COLOUR_BLACK);
+		if (is_last_install(h))
+			screen_text(r, 0, COLOUR_YELLOW, "*");
 		if (n > 40)
 			screen_text(r, 1, colour, "...%s", h->path + n - 37);
 		else
@@ -953,10 +1350,11 @@ static void show_list(void)
 		screen_text(r, 42, colour, "%.30s", h->note);
 	}
 	if (halo_count > LIST_ROWS)
-		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d Halo found, %d ready: %d-%d shown (LT/RT: a page)",
-			halo_count, ready_count, first_shown + 1, first_shown + row);
+		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d Halo found, %d ready: %d-%d shown (LT/RT: a page)%s",
+			halo_count, ready_count, first_shown + 1, first_shown + row, is_last_install(&halos[0]) ? "  * last" : "");
 	else if (halo_count)
-		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d Halo found, %d ready", halo_count, ready_count);
+		screen_text(LIST_TOP + LIST_ROWS, 1, COLOUR_DIM, "%d Halo found, %d ready%s", halo_count, ready_count,
+			is_last_install(&halos[0]) ? "   * your last install" : "");
 	if (halo_count && package_ok)
 	{
 		struct halo *h = &halos[selected];
@@ -977,6 +1375,7 @@ static void show_list(void)
 	}
 	else
 		screen_text(24, 0, COLOUR_YELLOW, "B: dashboard");
+	screen_text(23, 0, COLOUR_DIM, "Y: look online for a newer package");
 	screen_show();
 }
 
@@ -1004,21 +1403,20 @@ int main(void)
 	screen_init();
 	SDL_Init(SDL_INIT_GAMECONTROLLER);
 	heading("Reading the package...");
-	log_file("---- " TITLE);
-	package_ok = !package_load(PACKAGE_PATH, &package, package_error);
-	package_missing = !package_ok && GetFileAttributesA(PACKAGE_PATH) == INVALID_FILE_ATTRIBUTES;
-	log_file(package_ok ? package.name : package_error);
-	if (package_ok)
 	{
-		unsigned long colour;
-		signature = package_verify(&package, trusted_keys, trusted_key_count, &signer);
-		if (signature == PACKAGE_BAD)
-		{
-			package_ok = 0;
-			text_print(package_error, sizeof(package_error),
-				"opence.oxpk was changed after it was signed: it can't be installed.");
-		}
-		log_file(package_ok ? signature_text(&colour) : package_error);
+		char line[96];
+		text_print(line, sizeof(line), "---- %s, version %d", TITLE, INSTALLER_VERSION);
+		log_file(line);
+	}
+	notices_write();
+	package_read();
+	offer_installer_update();
+	last_install_read();
+	if (last_install[0])
+	{
+		char line[200];
+		text_print(line, sizeof(line), "last install: %s", last_install);
+		log_file(line);
 	}
 	find_halos();
 	for (;;)
@@ -1043,6 +1441,8 @@ int main(void)
 		else if (h && package_ok && b == A && ready(h))
 		{
 			int failed = install(h);
+			if (!failed)
+				last_install_write(h->path);
 			look_again(h);
 			say_in(COLOUR_YELLOW, failed ? "B: back" : "START: play it   B: back");
 			while ((b = wait_input()) != B && !(b == START && !failed))
@@ -1060,6 +1460,12 @@ int main(void)
 		}
 		else if (h && b == START && ready(h) && h->state != MISSING)
 			launch_halo(h);
+		else if (b == Y && check_updates())
+		{
+			offer_installer_update();
+			find_halos();
+			selected = first_shown = 0;
+		}
 	}
 	return 0;
 }

@@ -33,6 +33,9 @@ struct package
 	unsigned long signed_size;
 	int signatures;
 	unsigned char signature_ids[PACKAGE_MAX_SIGNATURES][8], signature[PACKAGE_MAX_SIGNATURES][64];
+	/* the installer it carries (tools/mkpackage.py --installer): its version (0: none), and where it is in the body
+	(checked against the manifest's SHA-256 by package_load) */
+	unsigned long installer_version, installer_offset, installer_size;
 };
 
 /* a public key the installer trusts (keys.txt, made into keys.h by tools/mkkeys.py) */
@@ -53,6 +56,12 @@ enum
 /* reads a package and checks it whole (its hash, and every step's sizes); 0 when it's good, else an error's text */
 int package_load(char const *path, struct package *package, char *error);
 void package_free(struct package *package);
+
+/* the same package (its header and manifest: the body's SHA-256 among them) */
+int package_same(struct package const *a, struct package const *b);
+
+/* a manifest line's value ("date", "notes"...), up to size bytes; empty when it has none */
+void package_manifest_value(struct package const *package, char const *key, char *value, int size);
 
 /* who signed it: PACKAGE_SIGNED (and *signer, the key's name), or why not */
 int package_verify(struct package const *package, struct package_key const *keys, int count, char const **signer);

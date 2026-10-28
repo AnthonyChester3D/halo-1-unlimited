@@ -19,8 +19,11 @@ The hook sites, each inside #if defined(OXBOX_SHOWCASE):
 - network_client_manager.c and network_server_manager.c: no network cable needed (the network checks pass, as a
   split screen game's do).
 - hmp_stats.c: its games aren't counted as plays.
-- bots.c: bots_showcase, the bots it asks for, and the host's own bot setting back afterwards; and no lobby bots
-  line over its black. */
+- bots.c: bots_showcase, the bots it asks for (fewer when the frame rate is low: they drop out while dead), and the
+  host's own bot setting back afterwards; its bots join its lobby quicker; and no lobby bots line over its black.
+- game_engine_multiplayer_sounds.c: no announcer while it runs ("Team Slayer" at each map's start).
+- player_ui.c player_ui_fast_setup_network_server: its lobby starts on its map, not the default (Carousel), whose
+  copy into the cache partition held up the map's own. */
 
 #ifndef OXBOX_SHOWCASE_H
 #define OXBOX_SHOWCASE_H
@@ -45,7 +48,8 @@ void showcase_render(void);
 /* no title music now: it's between its maps (ui_widget.c ui_start_main_menu_music) */
 boolean showcase_quiet(void);
 
-/* bots.c: the showcase's bots (a count, 0 to 15: custom, at normal), or -1: the host's own setting back */
+/* bots.c: the showcase's bots (a count, 0 to 15: custom, at normal; a lower count later drops bots out, one at a time,
+while they're dead), or -1: the host's own setting back */
 void bots_showcase(short count);
 
 #endif

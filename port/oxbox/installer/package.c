@@ -43,6 +43,15 @@ static void text(char *to, unsigned char const *from, int size)
 	to[i] = 0;
 }
 
+/* (the manifest: its lines kept) */
+static void text_lines(char *to, unsigned char const *from, int size)
+{
+	int i;
+	for (i = 0; i < size && from[i]; i++)
+		to[i] = (from[i] >= 32 && from[i] < 127) || from[i] == '\n' ? (char)from[i] : '?';
+	to[i] = 0;
+}
+
 /* walks an XBE's steps, checking each; its size made, or 0 if they're bad */
 static unsigned long steps_check(struct package const *package, struct package_xbe const *xbe)
 {
@@ -140,7 +149,7 @@ int package_load(char const *path, struct package *package, char *error)
 		text_print(error, 256, "%s is cut short", path);
 		goto done;
 	}
-	text(package->manifest, package->signed_part + prefix + HEADER_BYTES, (int)manifest_size);
+	text_lines(package->manifest, package->signed_part + prefix + HEADER_BYTES, (int)manifest_size);
 	packed = malloc(packed_size);
 	package->body = malloc(package->body_size);
 	if (!packed || !package->body)
@@ -221,6 +230,38 @@ int package_load(char const *path, struct package *package, char *error)
 			goto done;
 		}
 	}
+	/* the installer it carries: the body's last bytes, as the manifest says */
+	{
+		char value[80];
+		package_manifest_value(package, "installer", value, sizeof(value));
+		if (value[0])
+		{
+			unsigned char want[32];
+			int k;
+			package->installer_version = strtoul(value, NULL, 10);
+			package_manifest_value(package, "installer size", value, sizeof(value));
+			package->installer_size = strtoul(value, NULL, 10);
+			package_manifest_value(package, "installer sha256", value, sizeof(value));
+			for (k = 0; k < 32 && value[2 * k] && value[2 * k + 1]; k++)
+			{
+				char hex[3] = {value[2 * k], value[2 * k + 1], 0};
+				want[k] = (unsigned char)strtoul(hex, NULL, 16);
+			}
+			if (!package->installer_version || package->installer_size < 4096 ||
+				package->installer_size > package->body_size - (4 + 112ul * package->count) || k != 32)
+			{
+				text_print(error, 256, "%s's installer doesn't read", path);
+				goto done;
+			}
+			package->installer_offset = package->body_size - package->installer_size;
+			sha256(package->body + package->installer_offset, package->installer_size, digest);
+			if (memcmp(digest, want, 32) || memcmp(package->body + package->installer_offset, "XBEH", 4))
+			{
+				text_print(error, 256, "%s's installer is damaged (its SHA-256 differs)", path);
+				goto done;
+			}
+		}
+	}
 	result = 0;
 done:
 	free(packed);
@@ -237,6 +278,34 @@ void package_free(struct package *package)
 	package->body = NULL;
 	package->signed_part = NULL;
 	package->count = 0;
+}
+
+int package_same(struct package const *a, struct package const *b)
+{
+	return a->signed_size == b->signed_size && !memcmp(a->signed_part, b->signed_part, a->signed_size);
+}
+
+void package_manifest_value(struct package const *package, char const *key, char *value, int size)
+{
+	char const *line = package->manifest;
+	size_t n = strlen(key);
+	value[0] = 0;
+	while (*line)
+	{
+		char const *end = strchr(line, '\n');
+		if (!end)
+			end = line + strlen(line);
+		if (!strncmp(line, key, n) && line[n] == ':' && line[n + 1] == ' ')
+		{
+			int length = (int)(end - (line + n + 2));
+			if (length > size - 1)
+				length = size - 1;
+			memcpy(value, line + n + 2, (size_t)length);
+			value[length] = 0;
+			return;
+		}
+		line = *end ? end + 1 : end;
+	}
 }
 
 int package_verify(struct package const *package, struct package_key const *keys, int count, char const **signer)

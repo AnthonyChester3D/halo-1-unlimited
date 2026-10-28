@@ -5366,6 +5366,41 @@ static boolean network_game_server_idle_pregame_tasks(
 	{
 		long itr;
 
+#if defined(OXBOX_BOT_TUNING)
+		/* oxbox (OXBOX_BOT_TUNING, port/linux/game/bots.c): a team game's bots keep the teams even, whatever the
+		gametype's auto team balance: while the teams differ by more than a player, a bot of the bigger team moves to
+		the smaller. Bots join on the smaller team, but kept their team after: a person changing team (or leaving)
+		left them uneven, 3 against 1 */
+		if (server->game.variant.universal_variant.teams)
+		{
+			for (;;)
+			{
+				short count[2] = { 0, 0 };
+				long last_bot[2] = { NONE, NONE };
+				short bigger;
+
+				for (itr = 0; itr < MAXIMUM_NETWORK_PLAYER_COUNT; itr++)
+				{
+					struct network_player *player = &server->game.players[itr];
+
+					if (network_player_is_present(player) && VALID_INDEX(player->team_index, 2))
+					{
+						count[player->team_index]++;
+						if (network_player_is_bot(player))
+							last_bot[player->team_index] = itr;
+					}
+				}
+				if (ABS(count[0] - count[1]) <= 1)
+					break;
+				bigger = count[0] > count[1] ? 0 : 1;
+				if (last_bot[bigger] == NONE)
+					break;
+				server->game.players[last_bot[bigger]].team_index = (char)(1 - bigger);
+				network_event("bot at slot %ld to team %d (the teams even)", last_bot[bigger], (int)(1 - bigger));
+				network_game_server_send_game_data_pregame(server);
+			}
+		}
+#endif
 		/* port: the gametype's auto team balance (game_variant_options):
 		the lobby's teams kept within a player of each other, the bigger
 		team's last player moved */

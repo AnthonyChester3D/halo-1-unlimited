@@ -32,10 +32,19 @@ then the next map loads (through the main menu, as every system link game does, 
 with one map, its list just plays on. The game is Team Slayer to 999 with no time limit (the bots travel to find
 the other team, which plays better than Slayer's fights where they spawn), and bots: the map's suggested players
 (info.txt, else 8), 4 to 10, less the watching player, made even for the two teams, at Normal (opence.ini
-showcase_bots = N: N bots).
+showcase_bots = N: N bots). The bots drop out one at a time while the game runs under 15 frames a second
+(opence.ini showcase_min_fps = N: under N; 0: never), down to two; each map starts with the full count again. No
+announcer ("Team Slayer") at a map's start: game_engine_multiplayer_sounds.c is quiet while it runs.
+
+A map's first ten seconds have a title card, as the campaign's chapter titles have: black bars top and bottom (an
+eighth of the screen each, sliding in and out over a second) and the map's name (its info.txt's first line, as the
+map browser shows it) bottom right in the chapter titles' font and place (the HUD's single player font and default
+title bounds), fading in and out.
 
 The hook sites are oxbox_showcase.h's list. Hosting is network_test.c's (the PC's automated system link tests): the
-lobby's fast setup, the map and the variant a second on, the player a moment later, then the start. It plays
+lobby's fast setup (on the showcase's map from the start: player_ui.c leaves it, so the lobby doesn't ask for the
+default map, Carousel, whose copy into the cache partition held up the map's own), the map and the variant, the
+player, then the start once the bots are in (they join faster than in a person's lobby: bots.c). It plays
 without the network cable too: while it runs, the host's network checks treat its game as a split screen game,
 which needs none (network_client_manager.c, network_server_manager.c). If hosting fails twice in a row, the movies
 play for the next ten minutes.
@@ -56,12 +65,19 @@ The log (oxbox_log.txt): a line when it starts, each map, and when it ends, and 
 #include "networking/network_game_globals.h"
 #include "networking/network_client_manager.h"
 #include "networking/network_server_manager.h"
+#if defined(OXBOX_TEST_SHOWCASE_SWITCH_TEAM)
+#include "networking/network_game_manager.h"
+#endif
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
 #include "scenario/scenario.h"
 #include "camera/observer.h"
 #include "cutscene/cinematics.h"
+#include "interface/hud.h"
+#include "interface/hud_definitions.h"
+#include "rasterizer/rasterizer.h"
+#include "text/draw_string.h"
 #include "hmp.h"
 #include "oxbox_showcase.h"
 #if defined(OXBOX_NET_P2P)
@@ -77,12 +93,14 @@ void platform_log(char const *format, ...);
 short hmp_browse_suggested_players(char const *level_name);
 boolean transport_network_available(void); /* (the network cable: transport_endpoint_set_winsock.c) */
 long halo_screen_width(void);
+short network_game_server_bot_count(short *people);   /* (network_server_manager.c) */
 
 /* opence.ini (oxbox_entry.c): showcase = 0 turns it off (the movies, as Halo has them); showcase_seconds = N: the
 main menu waits N seconds (5 and up) instead of 75 */
 int oxbox_setting_showcase = 1;
 int oxbox_setting_showcase_seconds = 0;
 int oxbox_setting_showcase_bots = -1;   /* showcase_bots = N: that many bots (0 to 15), else the map's suggestion */
+int oxbox_setting_showcase_min_fps = 15;   /* showcase_min_fps = N: bots drop out under N frames a second (0: never) */
 
 /* ---------- constants */
 
@@ -99,6 +117,19 @@ int oxbox_setting_showcase_bots = -1;   /* showcase_bots = N: that many bots (0 
 #define SHOWCASE_MAP_MINIMUM_SECONDS 60.0f    /* a map's list plays again until it has played this long */
 #define SHOWCASE_RETRY_MILLISECONDS (10 * 60 * 1000)
 #define SHOWCASE_SCORE_TO_WIN 999
+#define SHOWCASE_MENU_SETTLE_SECONDS 0.5f      /* the main menu back between maps, before the next lobby */
+#define SHOWCASE_LOBBY_MAP_SECONDS 0.3f        /* the lobby's map and variant set this long after the fast setup */
+#define SHOWCASE_LOBBY_PLAYER_SECONDS 0.5f     /* ... and the watching player added */
+#define SHOWCASE_LOBBY_START_SECONDS 1.0f      /* the start: once the bots are in, and no sooner than this */
+#define SHOWCASE_LOBBY_LONGEST_SECONDS 5.0f    /* ... or this, bots or not */
+#define SHOWCASE_TITLE_SECONDS 10.0f           /* the title card: the bars and the map's name, from the first shot */
+#define SHOWCASE_TITLE_SLIDE_SECONDS 1.0f      /* the bars sliding in and out (the campaign's letterbox: a second) */
+#define SHOWCASE_TITLE_FADE_SECONDS 1.0f       /* the name fading in and out */
+#define SHOWCASE_TITLE_BAR 0.125f              /* each bar's height, of the screen's (the campaign's) */
+#define SHOWCASE_FPS_WINDOW_MILLISECONDS 3000  /* the frame rate, over this long */
+#define SHOWCASE_FPS_SETTLE_SECONDS 5.0f       /* none measured this long into a map (its textures loading) */
+#define SHOWCASE_FPS_DROP_SECONDS 6.0f         /* after a bot drops out, this long before the next */
+#define SHOWCASE_FEWEST_BOTS 2                 /* a bot a team */
 
 enum
 {
@@ -170,6 +201,14 @@ static struct
 	short map_next;
 	char maps[SHOWCASE_MAXIMUM_MAPS][SHOWCASE_KEY_LENGTH];
 	unsigned long random;
+	/* the map's name for its title card (read in the menus: the map browser's names are let go in a game) */
+	wchar_t title[64];
+	/* the bots: how many now (fewer when the frame rate is low), the frames counted since window_start, and when
+	one last dropped out (map_seconds) */
+	short bots;
+	unsigned long fps_window_start;
+	long fps_frames;
+	real drop_seconds;
 } showcase;
 
 /* ---------- private code: the file */
@@ -700,6 +739,68 @@ static void showcase_failed(
 	}
 }
 
+/* the map's name for its title card: its menu name (info.txt's first line), else its folder's */
+static void showcase_title_read(
+	void)
+{
+	wchar_t const *name = hmp_maps_title(showcase.key);
+	long length = 0;
+
+	if (name)
+	{
+		while (name[length] && length < (long)NUMBEROF(showcase.title) - 1)
+		{
+			showcase.title[length] = name[length];
+			length++;
+		}
+	}
+	else
+	{
+		char const *folder = strrchr(showcase.key, '/');
+
+		folder = folder ? folder + 1 : showcase.key[0] == '+' ? showcase.key + 1 : showcase.key;
+		while (folder[length] && length < (long)NUMBEROF(showcase.title) - 1)
+		{
+			showcase.title[length] = (wchar_t)(unsigned char)folder[length];
+			length++;
+		}
+	}
+	showcase.title[length] = 0;
+}
+
+/* the frame rate while the map plays: under the lowest wanted (opence.ini showcase_min_fps), a bot drops out, then
+another after a while if it's still low, down to a bot a team (each map starts with the full count again) */
+static void showcase_frame_rate(
+	unsigned long now)
+{
+	unsigned long elapsed;
+	long fps10;
+
+	if (oxbox_setting_showcase_min_fps <= 0 || showcase.map_seconds < SHOWCASE_SETTLE_SECONDS + SHOWCASE_FPS_SETTLE_SECONDS)
+	{
+		showcase.fps_window_start = now;
+		showcase.fps_frames = 0;
+		return;
+	}
+	showcase.fps_frames++;
+	elapsed = now - showcase.fps_window_start;
+	if (elapsed < SHOWCASE_FPS_WINDOW_MILLISECONDS)
+		return;
+	fps10 = (long)((unsigned long)showcase.fps_frames * 10000ul / elapsed);
+	showcase.fps_window_start = now;
+	showcase.fps_frames = 0;
+	if (fps10 >= oxbox_setting_showcase_min_fps * 10 || showcase.bots <= SHOWCASE_FEWEST_BOTS ||
+		showcase.map_seconds - showcase.drop_seconds < SHOWCASE_FPS_DROP_SECONDS)
+	{
+		return;
+	}
+	showcase.bots--;
+	showcase.drop_seconds = showcase.map_seconds;
+	bots_showcase(showcase.bots);
+	platform_log("showcase: %ld.%ld frames a second over %lu seconds (under %d): a bot drops out, %d left", fps10 / 10,
+		fps10 % 10, elapsed / 1000, oxbox_setting_showcase_min_fps, (int)showcase.bots);
+}
+
 /* the lobby, as the menus' fast setup makes it (network_test.c's host) */
 static void showcase_host(
 	void)
@@ -725,7 +826,9 @@ static void showcase_host(
 		players++;
 	if (oxbox_setting_showcase_bots >= 0)
 		players = (short)((oxbox_setting_showcase_bots > 15 ? 15 : oxbox_setting_showcase_bots) + 1);
-	bots_showcase((short)(players - 1));
+	showcase.bots = (short)(players - 1);
+	bots_showcase(showcase.bots);
+	showcase_title_read();
 #if defined(OXBOX_NET_P2P)
 	/* (not in internet play's server browser) */
 	p2p_set_hosting_public(FALSE);
@@ -878,22 +981,71 @@ void showcase_update(
 			break;
 		}
 		/* the map and the variant (the fast setup clears them) */
-		if (!showcase.map_set && showcase.state_seconds >= 1.0f)
+		if (!showcase.map_set && showcase.state_seconds >= SHOWCASE_LOBBY_MAP_SECONDS)
 		{
 			struct game_variant variant;
 
 			network_game_server_change_map_name(server, showcase.key);
 			/* (Team Slayer: the bots go looking for the other team, rather than fighting where they spawn) */
+#if defined(OXBOX_TEST_SHOWCASE_VARIANT)
+			/* (test builds: another game type, for watching the bots play it: OXBOX_TEST_SHOWCASE_VARIANT="ctf") */
+			variant = *game_engine_get_variant_by_name(&variant, OXBOX_TEST_SHOWCASE_VARIANT);
+#else
 			variant = *game_engine_get_variant_by_name(&variant, "team_slayer");
+#endif
 			variant.universal_variant.score_to_win = SHOWCASE_SCORE_TO_WIN;
 			player_ui_set_game_variant(&variant);
 			network_game_server_change_game_variant(server, &variant);
 			showcase.map_set = TRUE;
 		}
 		/* the watching player, as pressing A in the lobby adds one (the bots come once there's a person) */
-		if (showcase.map_set && !showcase.player_added && showcase.state_seconds >= 1.5f)
+		if (showcase.map_set && !showcase.player_added && showcase.state_seconds >= SHOWCASE_LOBBY_PLAYER_SECONDS)
 			showcase.player_added = network_game_client_add_player(client, 0);
-		if (showcase.player_added && showcase.state_seconds >= 4.0f)
+#if defined(OXBOX_TEST_SHOWCASE_SWITCH_TEAM)
+		/* (test builds: once the bots are in, the teams logged, then the watching player changes team, as a person might
+		in the lobby, and two seconds later the teams logged again: the bots should have evened them out,
+		network_server_manager.c. The start waits for it) */
+		{
+			static short step;
+			static unsigned long since;
+
+			if (showcase.player_added && step < 2 && network_game_server_bot_count(NULL) >= showcase.bots)
+			{
+				if (!since)
+					since = system_milliseconds();
+				if (system_milliseconds() - since >= 2000)
+				{
+					struct network_game *test_game = network_game_client_get_game(client);
+					short count[2] = { 0, 0 }, index;
+
+					for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+					{
+						struct network_player test_player = test_game->players[index];
+
+						if (!network_player_is_present(&test_player) || test_player.team_index < 0 || test_player.team_index > 1)
+							continue;
+						count[test_player.team_index]++;
+						/* (the watching player alone, as its team spinner does: the bots are on the host's machine too) */
+						if (!step && !network_player_is_bot(&test_player))
+						{
+							test_player.team_index = (char)(test_player.team_index == 1 ? 0 : 1);
+							network_game_client_update_local_player_data(client, &test_player);
+						}
+					}
+					platform_log("showcase test: teams %d red, %d blue%s", (int)count[0], (int)count[1],
+						step ? " (two seconds after the switch)" : "; the watching player switches team");
+					step++;
+					since = system_milliseconds();
+				}
+				showcase.state_seconds = 0.5f;
+				break;
+			}
+		}
+#endif
+		/* the start, once the bots are in (or at the latest, bots or not) */
+		if (showcase.player_added && showcase.state_seconds >= SHOWCASE_LOBBY_START_SECONDS &&
+			(network_game_server_bot_count(NULL) >= showcase.bots ||
+				showcase.state_seconds >= SHOWCASE_LOBBY_LONGEST_SECONDS))
 		{
 			network_game_client_request_immediate_start();
 			showcase_set_state(_showcase_loading);
@@ -908,6 +1060,9 @@ void showcase_update(
 			showcase.shot_index = 0;
 			showcase.shot_time = -SHOWCASE_SETTLE_SECONDS;
 			showcase.map_seconds = 0.0f;
+			showcase.drop_seconds = -SHOWCASE_FPS_DROP_SECONDS;
+			showcase.fps_window_start = now;
+			showcase.fps_frames = 0;
 			showcase.failures = 0;
 			showcase_camera_update(TRUE);
 			showcase_set_state(_showcase_playing);
@@ -937,6 +1092,7 @@ void showcase_update(
 		}
 		showcase.shot_time += seconds;
 		showcase.map_seconds += seconds;
+		showcase_frame_rate(now);
 		while (showcase.shot_time >= showcase_file.shots[showcase.shot_index].seconds)
 		{
 			showcase.shot_time -= showcase_file.shots[showcase.shot_index].seconds;
@@ -993,7 +1149,7 @@ void showcase_update(
 				showcase_back_at_menu();
 			}
 			else if (main_menu_screen_is_active() &&
-				showcase.menu_seconds >= (showcase.chain && !showcase.user_ended ? 1.0f : 0.2f))
+				showcase.menu_seconds >= (showcase.chain && !showcase.user_ended ? SHOWCASE_MENU_SETTLE_SECONDS : 0.2f))
 			{
 				showcase_back_at_menu();
 			}
@@ -1034,13 +1190,87 @@ struct observer_result const *showcase_camera(
 	return &showcase.camera;
 }
 
+/* the title card over the map's first seconds: the bars, and the name bottom right (cinematics.c's chapter titles:
+the HUD's single player font in its default title bounds) */
+static void showcase_title_render(
+	void)
+{
+	real t, bars, fade;
+	short width = (short)halo_screen_width();
+	short left = (short)(-(width - 640) / 2), right = (short)(640 + (width - 640) / 2);
+	rectangle2d bar;
+	long font;
+
+	if (showcase.state != _showcase_playing && showcase.state != _showcase_leaving)
+		return;
+	t = showcase.map_seconds - SHOWCASE_SETTLE_SECONDS;
+	if (t <= 0.0f || t >= SHOWCASE_TITLE_SECONDS + SHOWCASE_TITLE_SLIDE_SECONDS)
+		return;
+	bars = t < SHOWCASE_TITLE_SLIDE_SECONDS ? t / SHOWCASE_TITLE_SLIDE_SECONDS :
+		t > SHOWCASE_TITLE_SECONDS ? 1.0f - (t - SHOWCASE_TITLE_SECONDS) / SHOWCASE_TITLE_SLIDE_SECONDS : 1.0f;
+	bars = bars < 0.0f ? 0.0f : bars > 1.0f ? 1.0f : bars;
+	if (bars > 0.0f)
+	{
+		short height = (short)(bars * SHOWCASE_TITLE_BAR * 480.0f + 0.5f);
+
+		bar.x0 = left;
+		bar.x1 = right;
+		bar.y0 = 0;
+		bar.y1 = height;
+		draw_quad(&bar, 0xFF000000);
+		bar.y0 = (short)(480 - height);
+		bar.y1 = 480;
+		draw_quad(&bar, 0xFF000000);
+	}
+	fade = t < SHOWCASE_TITLE_SLIDE_SECONDS * 0.5f ? 0.0f :
+		t < SHOWCASE_TITLE_SLIDE_SECONDS * 0.5f + SHOWCASE_TITLE_FADE_SECONDS ?
+			(t - SHOWCASE_TITLE_SLIDE_SECONDS * 0.5f) / SHOWCASE_TITLE_FADE_SECONDS :
+		t > SHOWCASE_TITLE_SECONDS - SHOWCASE_TITLE_FADE_SECONDS ?
+			(SHOWCASE_TITLE_SECONDS - t) / SHOWCASE_TITLE_FADE_SECONDS : 1.0f;
+	fade = fade < 0.0f ? 0.0f : fade > 1.0f ? 1.0f : fade;
+	if (fade <= 0.0f || !showcase.title[0] || !hud_globals)
+		return;
+	font = hud_globals->messaging.single_player_font.index;
+	if (font == NONE)
+		font = hud_globals->messaging.multi_player_font.index;
+	if (font == NONE)
+		return;
+	{
+		/* (the campaign's light grey, a little shadow) */
+		real_argb_color color = { 1.0f, 0.8f, 0.8f, 0.8f };
+		rectangle2d bounds = hud_globals->defaults.default_title_bounds;
+		short shift;
+
+		if (bounds.x1 <= bounds.x0 || bounds.y1 <= bounds.y0 || bounds.y0 < 240)
+		{
+			bounds.y0 = 425;
+			bounds.x0 = 0;
+			bounds.y1 = 444;
+			bounds.x1 = 597;
+		}
+		/* (kept in its place relative to the screen's sides on a wider screen, as cinematics.c does) */
+		shift = (short)(((bounds.x0 + bounds.x1) / 2) * (width - 640) / 640);
+		bounds.x0 += shift;
+		bounds.x1 += shift;
+		color.alpha = fade;
+		draw_string_set_draw_mode(font, NONE, 1, 0, &color);
+		draw_string_set_tab_stops(NULL, 0);
+		rasterizer_text_set_shadow_color(((pixel32)(long)(fade * 255.0f) << 24));
+		rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, showcase.title);
+		rasterizer_text_set_shadow_color(0);
+	}
+}
+
 void showcase_render(
 	void)
 {
 	rectangle2d bounds;
 	long alpha;
 
-	if (showcase.state == _showcase_off || showcase.alpha <= 0.0f)
+	if (showcase.state == _showcase_off)
+		return;
+	showcase_title_render();
+	if (showcase.alpha <= 0.0f)
 		return;
 	alpha = (long)(showcase.alpha * 255.0f + 0.5f);
 	if (alpha > 255)

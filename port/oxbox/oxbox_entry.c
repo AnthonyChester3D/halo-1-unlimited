@@ -311,6 +311,7 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	                     instead
 	showcase_seconds = N (the same) how long the main menu waits for a press before it starts (5 and up; 75)
 	showcase_bots = N    (the same) its matches' bots, 0 to 15 (else the map's suggested players, 4 to 10, less 1)
+	showcase_min_fps = N (the same) its bots drop out one at a time while it runs under N frames a second (15; 0: never)
 	net_test_screen = 1  (the online test builds) the network test's lines on the main menu too, not only in this log */
 int oxbox_setting_audio_effects = 1;
 int oxbox_setting_bot_log = 0;
@@ -485,6 +486,11 @@ static void read_settings(const char *path)
 		{
 			extern int oxbox_setting_showcase_bots;
 			oxbox_setting_showcase_bots = value;
+		}
+		else if (same_text(name, "showcase_min_fps"))
+		{
+			extern int oxbox_setting_showcase_min_fps;
+			oxbox_setting_showcase_min_fps = value;
 		}
 #endif
 #if defined(OXBOX_NET_TEST)

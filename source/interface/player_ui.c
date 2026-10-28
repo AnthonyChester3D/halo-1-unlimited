@@ -655,7 +655,18 @@ void player_ui_fast_setup_network_server(
 	dispose_global_network_game_server();
 	dispose_global_network_game_client();
 	game_connection_set(_game_connection_local);
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: the showcase screensaver's lobby starts on its map (showcase.c set it), not on the default (Carousel),
+	whose copy into the cache partition would come first */
+	{
+		extern boolean showcase_active(void);
+
+		if (!showcase_active())
+			main_set_multiplayer_map_name("");
+	}
+#else
 	main_set_multiplayer_map_name("");
+#endif
 	player_ui_globals.multiplayer_variant_specified = FALSE;
 	/* port: the pregame screen the menus open (the port's lobby with its
 	menus loaded, as ui_widget.c opens it), not ui.map's by name */

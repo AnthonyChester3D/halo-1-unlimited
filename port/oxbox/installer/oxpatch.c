@@ -55,6 +55,8 @@ int main(int argc, char **argv)
 	for (i = 0; i < package.count; i++)
 		printf("  makes a build from %s (%lu bytes -> %lu)\n", package.xbes[i].name, package.xbes[i].retail_size,
 			package.xbes[i].build_size);
+	if (package.installer_version)
+		printf("  carries installer version %lu (%lu bytes)\n", package.installer_version, package.installer_size);
 	file = fopen(argv[2], "rb");
 	if (!file || fseek(file, 0, SEEK_END) || (size = ftell(file)) <= 0 || fseek(file, 0, SEEK_SET) ||
 		!(retail = malloc(size)) || fread(retail, 1, size, file) != (size_t)size)

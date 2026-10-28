@@ -235,6 +235,15 @@ static long get_sound_length_in_ticks(
 void game_engine_play_multiplayer_sound(
 	long sound_index)
 {
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: no announcer in the showcase screensaver's games ("Team Slayer" at each map's start: showcase.c) */
+	{
+		extern boolean showcase_active(void);
+
+		if (showcase_active())
+			return;
+	}
+#endif
 	if (sound_is_queueable[sound_index])
 	{
 		push_queued_sound(

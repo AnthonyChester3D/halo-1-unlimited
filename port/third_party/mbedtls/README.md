@@ -21,3 +21,8 @@ its own WebRTC).
 The Linux build's self-updater (`port/linux/src/posix_update.c`) uses it to
 download new builds over HTTPS, with the system's certificate authorities.
 The Windows build uses WinHTTP instead, and the Android app Java's HTTPS.
+
+The Xbox installer (`port/oxbox/installer`) builds it with its own
+configuration (`port/oxbox/installer/tls_config.h`: a TLS 1.2 and 1.3 client
+only) to download packages over HTTPS. It checks no certificate: what it
+downloads is trusted for its Ed25519 signature instead (its README has why).
