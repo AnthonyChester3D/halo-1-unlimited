@@ -994,6 +994,10 @@ void showcase_update(
 			variant = *game_engine_get_variant_by_name(&variant, "team_slayer");
 #endif
 			variant.universal_variant.score_to_win = SHOWCASE_SCORE_TO_WIN;
+#if defined(OXBOX_TEST_SHOWCASE_VEHICLES)
+			/* (test builds: every vehicle the map places, for watching the bots drive and fly) */
+			variant.universal_variant.vehicle_set = VARIANT_VEHICLE_SET_PC;
+#endif
 			player_ui_set_game_variant(&variant);
 			network_game_server_change_game_variant(server, &variant);
 			showcase.map_set = TRUE;

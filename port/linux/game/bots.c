@@ -3245,6 +3245,22 @@ static void bots_fight(
 		action->desired_weapon_index = brain->wanted_weapon;
 	weapon_index = unit->unit.current_weapon_index >= 0 && unit->unit.current_weapon_index < MAXIMUM_WEAPONS_PER_UNIT ?
 		unit->unit.weapon_object_indices[unit->unit.current_weapon_index] : NONE;
+	/* in a seat, the gun is the vehicle's: a Ghost's, a Banshee's or a Scorpion's for its driver, a Warthog's for
+	its gunner. (The biped's own weapon is put away in a seat, so this was NONE there: nobody ever fired from a
+	vehicle, though the drivers and gunners aimed) */
+	if (brain->seat_kind == _bots_seat_driver || brain->seat_kind == _bots_seat_gunner)
+	{
+		struct unit_datum *vehicle = unit->object.parent_object_index != NONE &&
+			object_try_and_get(unit->object.parent_object_index) ?
+			(struct unit_datum *)object_get(unit->object.parent_object_index) : NULL;
+
+		weapon_index = NONE;
+		if (vehicle && TEST_FLAG(_object_mask_vehicle, vehicle->object.type) && vehicle->unit.current_weapon_index >= 0 &&
+			vehicle->unit.current_weapon_index < MAXIMUM_WEAPONS_PER_UNIT)
+		{
+			weapon_index = vehicle->unit.weapon_object_indices[vehicle->unit.current_weapon_index];
+		}
+	}
 	{
 		/* (out of a fight with a magazine under half: a reload, as a player would) */
 		long loaded, total, maximum;
@@ -3312,14 +3328,15 @@ static void bots_fight(
 		brain->aimed = (real)fabs(bots_angle_difference(aim_yaw, brain->yaw)) < tolerance &&
 			(real)fabs(aim_pitch - brain->pitch) < tolerance;
 
-		if (distance < BOTS_MELEE_RANGE + 0.6f && now >= brain->melee_time)
+		/* (no melee or grenades from a seat: the vehicle's gun alone) */
+		if (brain->seat_kind == _bots_seat_none && distance < BOTS_MELEE_RANGE + 0.6f && now >= brain->melee_time)
 		{
 			/* (within arm's reach) */
 			action->control_flags |= FLAG(_unit_control_use_equipment_bit);
 			brain->melee_time = now + BOTS_MELEE_TICKS;
 			bots_route.melees++;
 		}
-		else if (now >= brain->target_sighted_time && brain->aimed && weapon_index != NONE &&
+		else if (brain->seat_kind == _bots_seat_none && now >= brain->target_sighted_time && brain->aimed && weapon_index != NONE &&
 			distance > BOTS_GRENADE_RANGE_MINIMUM && distance < BOTS_GRENADE_RANGE_MAXIMUM && now >= brain->grenade_time &&
 			!brain->goal_urgent &&
 			(unit->unit.grenade_counts[0] > 0 || unit->unit.grenade_counts[1] > 0))
@@ -3358,7 +3375,14 @@ static void bots_fight(
 				real rate_of_fire = definition->weapon.triggers.count ?
 					TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, 0, struct weapon_trigger_definition)->final_rate_of_fire : 1.f;
 
-				if (rate_of_fire >= 5.f)
+				if (brain->seat_kind != _bots_seat_none && rate_of_fire >= 5.f)
+				{
+					/* (a vehicle's gun: shorter bursts and longer pauses, as a person fires one. Each shot is an object
+					with its own light and collision, and every vehicle in a game holding its trigger is a lot of them) */
+					brain->burst_ticks = (short)(6 + bots_random() % 7);
+					brain->pause_ticks = (short)(20 + bots_random() % 21);
+				}
+				else if (rate_of_fire >= 5.f)
 				{
 					brain->burst_ticks = (short)(12 + bots_random() % 13);
 					brain->pause_ticks = (short)(6 + bots_random() % 9);
@@ -4350,6 +4374,7 @@ static void bots_vehicle_update(
 	real_point3d position;
 
 	brain->driving = FALSE;
+	brain->flying = FALSE;
 	brain->drive_hold = FALSE;
 	brain->press_action = FALSE;
 	brain->seat_kind = _bots_seat_none;

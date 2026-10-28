@@ -21,8 +21,9 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
   ledges, fight (spotting, aiming, bursts, weapon choice and pickups, grenades, melee; only the other team in team
   games), switch to their other weapon and reload, scan with a sniper's scope, dodge vehicles coming at them, go
   for power weapons and powerups, back off when hurt, play the objective (CTF, Oddball, King of the Hill, Race),
-  drive vehicles (a Warthog's driver waits for a gunner), man guns and turrets, ride along in teammates' vehicles,
-  and leave to make room when a person joins.
+  drive vehicles (a Warthog's driver waits for a gunner) and fire their guns (a Ghost's, a Banshee's or a
+  Scorpion's as its driver, a Warthog's as its gunner), man turrets, ride along in teammates' vehicles, and leave
+  to make room when a person joins.
 - **END GAME.** The host has an END GAME item in the pause menu.
 - **Memory.** The texture cache borrows whatever part of Halo's 22 MB of tag memory the map leaves unused, from
   map load until the map closes. That's 12 to 14 MB on stock-sized maps. On a 128 MB console the texture cache
@@ -30,8 +31,11 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
 - **Detail levels.** A model's level of detail comes from its straight-line distance to the camera, not its depth
   in the view, so models don't change detail, or vanish at their lowest one, as the camera turns.
 - **Logs.** It writes `debug.txt` and `oxbox_log.txt` beside the XBE, or in `T:` when the XBE runs from a
-  disc or ISO. They record the kernel version, memory, map sharing, and any frame of 100 ms or more.
-- **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, holds one `name = number` per line:
+  disc or ISO. They record the kernel version, memory, map sharing, and any frame of 100 ms or more. A thread of
+  its own writes `oxbox_log.txt` out (every 100 ms, to the disk every 2 s): the game thread only appends to a ring
+  in memory, so a log line never waits on the hard drive.
+- **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, holds one `name = number` per line
+  (`opence.ini.example` has every setting, commented, at its default):
   - `audio_effects = 0` skips DirectSound's effects program.
   - `fps_counter = 1` shows the frame rate in the bottom right corner (off by default).
   - `bot_log = 1` turns on the bots' developer log (off by default): a line every 10 seconds in

@@ -19,12 +19,29 @@ int main(void);
 int halo_linux_vsnprintf(char *buffer, size_t count, const char *format, va_list arguments);
 BOOL WINAPI FlushFileBuffers(HANDLE file);
 
-/* ---------- the log: oxbox_log.txt beside the XBE, and a ring in memory (readable with a debugger) */
+/* ---------- the log: oxbox_log.txt beside the XBE, and a ring in memory (readable with a debugger)
+
+The game thread (and the network's threads) only append to the ring: a writer thread of its own copies what's new
+to the file every 100 ms and has the drive write it out every 2 seconds. (It used to write and flush from the
+game thread, and a flush took the hard drive 20 to 50 ms on a real Xbox: a dropped frame or two every few seconds
+of play, the perf log's "input" and "network" steps.) A crash loses at most the last 2 seconds, as before. */
 
 char oxbox_log_ring[0x4000];   /* (a power of two) */
-unsigned long oxbox_log_ring_position;
+unsigned long oxbox_log_ring_position;   /* (the head: all that was ever logged; the ring keeps the last 16 KB) */
+char oxbox_debug_ring[0x1000];           /* (debug.txt's last lines, for a debugger: they have their own file) */
+unsigned long oxbox_debug_ring_position;
+static unsigned long log_ring_tail;      /* (what the writer has written out) */
+static unsigned long log_lost;           /* (bytes the ring dropped before the writer got to them) */
+/* (the kernel's critical section: the retail XBE's import table hasn't it, so from the kernel's exports: 291, 277
+and 294 are RtlInitializeCriticalSection, RtlEnterCriticalSection and RtlLeaveCriticalSection) */
+typedef void (__stdcall *log_lock_proc)(RTL_CRITICAL_SECTION *section);
+static RTL_CRITICAL_SECTION log_lock;
+static log_lock_proc log_lock_enter, log_lock_leave;
+static int log_lock_ready;
+void *oxbox_kernel_export(unsigned long ordinal);
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static int log_opened;
+static HANDLE log_writer;
 unsigned long oxbox_stage;   /* how far start-up got (a debugger reads it) */
 
 /* a byte to the debug serial port (COM1, 0x3F8: xemu's isa-serial when started with one). A real Xbox has no
@@ -49,63 +66,140 @@ static void serial_put(char c)
 	__asm__ volatile ("outb %0, %w1" : : "a"(c), "Nd"(0x3F8));
 }
 
+static void log_open(void)
+{
+	if (log_opened)
+		return;
+	log_opened = 1;
+	log_file = CreateFileA("d:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+		FILE_ATTRIBUTE_NORMAL, NULL);
+	/* (D: can't be written, as a disc or an ISO: T:, Halo's title data on the hard drive, E:\TDATA\4d530004) */
+	if (log_file == INVALID_HANDLE_VALUE)
+	{
+		log_file = CreateFileA("T:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+			FILE_ATTRIBUTE_NORMAL, NULL);
+		if (log_file != INVALID_HANDLE_VALUE)
+		{
+			static const char note[] = "oxbox: D: can't be written (a disc or an ISO?): this log is T:\\oxbox_log.txt "
+				"(E:\\TDATA\\4d530004), debug.txt beside it\r\n";
+			unsigned long done;
+
+			WriteFile(log_file, note, sizeof(note) - 1, &done, NULL);
+		}
+	}
+	if (log_file == INVALID_HANDLE_VALUE)
+	{
+		char note[64];
+		unsigned long error = GetLastError(), i, n = 0;
+		const char *prefix = "oxbox: d:\\oxbox_log.txt: error ";
+
+		for (i = 0; prefix[i]; i++) note[n++] = prefix[i];
+		for (i = 1000000000; i; i /= 10) if (error >= i || i == 1) note[n++] = (char)('0' + error / i % 10);
+		note[n++] = '\r'; note[n++] = '\n';
+		for (i = 0; i < n; i++) serial_put(note[i]);
+	}
+}
+
+/* what the ring has past the tail, to the file (from the writer thread, or the crashing one); flush: and to the
+disk */
+static void log_write_out(int flush)
+{
+	static char batch[2048];
+	unsigned long written;
+
+	for (;;)
+	{
+		unsigned long head, tail, count, index;
+
+		if (log_lock_ready)
+			log_lock_enter(&log_lock);
+		head = oxbox_log_ring_position;
+		tail = log_ring_tail;
+		if (head - tail > sizeof(oxbox_log_ring))
+		{
+			/* (the writer fell behind: the oldest of what's not written is gone) */
+			log_lost += head - tail - sizeof(oxbox_log_ring);
+			tail = head - sizeof(oxbox_log_ring);
+		}
+		count = head - tail;
+		if (count > sizeof(batch))
+			count = sizeof(batch);
+		for (index = 0; index < count; index++)
+			batch[index] = oxbox_log_ring[(tail + index) & (sizeof(oxbox_log_ring) - 1)];
+		log_ring_tail = tail + count;
+		if (log_lock_ready)
+			log_lock_leave(&log_lock);
+		if (!count)
+			break;
+		log_open();
+		if (log_file == INVALID_HANDLE_VALUE)
+			return;
+		WriteFile(log_file, batch, count, &written, NULL);
+	}
+	if (flush && log_file != INVALID_HANDLE_VALUE)
+		FlushFileBuffers(log_file);
+}
+
+static unsigned long __stdcall log_writer_thread(void *unused)
+{
+	unsigned long last_flush = GetTickCount();
+
+	(void)unused;
+	for (;;)
+	{
+		unsigned long now;
+
+		Sleep(100);
+		now = GetTickCount();
+		log_write_out(now - last_flush >= 2000);
+		if (now - last_flush >= 2000)
+			last_flush = now;
+	}
+	return 0;
+}
+
 static void log_write(const char *text, unsigned long length)
 {
-	unsigned long index, written;
+	unsigned long index;
 
 	for (index = 0; index < length; index++)
 		serial_put(text[index]);
 
+	if (!log_lock_ready)
+	{
+		log_lock_proc initialize = (log_lock_proc)oxbox_kernel_export(291);
+
+		log_lock_enter = (log_lock_proc)oxbox_kernel_export(277);
+		log_lock_leave = (log_lock_proc)oxbox_kernel_export(294);
+		if (initialize && log_lock_enter && log_lock_leave)
+		{
+			initialize(&log_lock);
+			log_lock_ready = 1;
+		}
+	}
+	if (log_lock_ready)
+		log_lock_enter(&log_lock);
 	for (index = 0; index < length; index++)
 		oxbox_log_ring[(oxbox_log_ring_position++) & (sizeof(oxbox_log_ring) - 1)] = text[index];
-	if (!log_opened)
-	{
-		log_opened = 1;
-		log_file = CreateFileA("d:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-			FILE_ATTRIBUTE_NORMAL, NULL);
-		/* (D: can't be written, as a disc or an ISO: T:, Halo's title data on the hard drive, E:\TDATA\4d530004) */
-		if (log_file == INVALID_HANDLE_VALUE)
-		{
-			log_file = CreateFileA("T:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-				FILE_ATTRIBUTE_NORMAL, NULL);
-			if (log_file != INVALID_HANDLE_VALUE)
-			{
-				static const char note[] = "oxbox: D: can't be written (a disc or an ISO?): this log is T:\\oxbox_log.txt "
-					"(E:\\TDATA\\4d530004), debug.txt beside it\r\n";
-				unsigned long done;
-
-				WriteFile(log_file, note, sizeof(note) - 1, &done, NULL);
-			}
-		}
-		if (log_file == INVALID_HANDLE_VALUE)
-		{
-			char note[64];
-			unsigned long error = GetLastError(), i, n = 0;
-			const char *prefix = "oxbox: d:\\oxbox_log.txt: error ";
-
-			for (i = 0; prefix[i]; i++) note[n++] = prefix[i];
-			for (i = 1000000000; i; i /= 10) if (error >= i || i == 1) note[n++] = (char)('0' + error / i % 10);
-			note[n++] = '\r'; note[n++] = '\n';
-			for (i = 0; i < n; i++) serial_put(note[i]);
-		}
-	}
-	if (log_file != INVALID_HANDLE_VALUE)
-	{
-		/* flushed every 2 seconds at most (a flush per line could stall the game on the hard drive): a crash
-		loses at most the last 2 seconds */
-		static unsigned long last_flush;
-		unsigned long now = GetTickCount();
-
-		WriteFile(log_file, text, length, &written, NULL);
-		if (now - last_flush >= 2000)
-		{
-			FlushFileBuffers(log_file);
-			last_flush = now;
-		}
-	}
+	if (log_lock_ready)
+		log_lock_leave(&log_lock);
+	/* (until the writer thread runs, from start-up: written straight out, as before) */
+	if (!log_writer)
+		log_write_out(0);
 }
 
-/* the ring alone (debug.txt's lines, which have their own file) */
+/* the writer thread, once the kernel's services are up (oxbox_entry) */
+static void log_start_writer(void)
+{
+	log_write_out(0);
+	log_writer = CreateThread(NULL, 0x4000, log_writer_thread, NULL, 0, NULL);
+	/* (at the game's own priority: below it, the thread starved while the game had the processor to itself, and
+	the log stopped) */
+	if (!log_writer)
+		platform_log("the log has no writer thread: written from the game thread instead");
+}
+
+/* debug.txt's lines: the serial port and their own ring (their file is Halo's) */
 void oxbox_log_text(const char *text, unsigned long length)
 {
 	unsigned long index;
@@ -114,7 +208,7 @@ void oxbox_log_text(const char *text, unsigned long length)
 		serial_put(text[index]);
 
 	for (index = 0; index < length; index++)
-		oxbox_log_ring[(oxbox_log_ring_position++) & (sizeof(oxbox_log_ring) - 1)] = text[index];
+		oxbox_debug_ring[(oxbox_debug_ring_position++) & (sizeof(oxbox_debug_ring) - 1)] = text[index];
 }
 
 void platform_log(const char *format, ...)
@@ -603,6 +697,7 @@ int oxbox_entry(int argc, char **argv, char **envp)
 		if (oxbox_overlay_zero[i][1] > oxbox_overlay_zero[i][0])
 			memset(oxbox_overlay_zero[i][0], 0, oxbox_overlay_zero[i][1] - oxbox_overlay_zero[i][0]);
 	oxbox_stage = 1;
+	log_start_writer();
 #if defined(OXBOX_MEMPROF)
 	{
 		void oxbox_memprof_initialize(void);
