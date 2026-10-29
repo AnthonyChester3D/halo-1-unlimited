@@ -445,3 +445,78 @@ void oxbox_perf_load(void)
 	}
 	platform_log("perf: this XBE has no OXPERF section");
 }
+
+/* ---------- the developers' FTP server (port/oxbox/net/oxbox_ftp.c), in the menus only
+
+opence.ini ftp = 1 (ftp_password = text, xbox if it isn't there; ftp_port = N, 21): its section, OXFTP, is loaded the first time
+the menus are up, and the server runs while they are; it stops (its memory freed) while a map is loaded. Without
+ftp = 1 nothing of it is loaded. */
+
+int oxbox_setting_ftp = 0;
+char oxbox_setting_ftp_password[33] = "xbox";   /* (opence.ini ftp_password = text; the dashboards' FTP's own) */
+int oxbox_setting_ftp_port = 21;
+volatile long oxbox_ftp_maps_changed;   /* (the server: a file under maps\ written, deleted or renamed) */
+char oxbox_ftp_status[64];              /* (the server: "FTP: 192.168.1.20 port 21" while it runs, the menus' line) */
+long oxbox_ftp_writes;                  /* (changes seen: cache_files.c copies folder maps afresh after one) */
+
+void oxbox_ftp_frame(int menus)
+{
+	int oxbox_ftp_start(unsigned short port, char const *password);
+	void oxbox_ftp_stop(void);
+	void hmp_maps_scan(void);
+	int hmp_browse_list_showing(void);
+	static int loaded, failed, on;
+	static long seen_changes;
+	static unsigned long next_try;
+	unsigned long now = GetTickCount();
+
+	if (!oxbox_setting_ftp || failed)
+		return;
+	if (!loaded)
+	{
+		oxbox_section_proc load_section = (oxbox_section_proc)oxbox_kernel_export(327);
+		const unsigned char *header = (const unsigned char *)0x10000;
+		unsigned long count = *(const unsigned long *)(header + 0x11C);
+		unsigned char *sections = *(unsigned char *const *)(header + 0x120);
+		unsigned long index;
+
+		if (!oxbox_setting_ftp_password[0])
+		{
+			platform_log("ftp: ftp_password is empty in opence.ini: no FTP");
+			failed = 1;
+			return;
+		}
+		for (index = 0; index < count; index++)
+		{
+			unsigned char *section = sections + index * 0x38;
+			if (!strcmp(*(const char *const *)(section + 0x14), "OXFTP"))
+				break;
+		}
+		if (index == count || !load_section || load_section(sections + index * 0x38) < 0)
+		{
+			platform_log("ftp: the OXFTP section couldn't be loaded: no FTP");
+			failed = 1;
+			return;
+		}
+		loaded = 1;
+	}
+	if (menus && !on && (long)(now - next_try) >= 0)
+	{
+		if (oxbox_ftp_start((unsigned short)oxbox_setting_ftp_port, oxbox_setting_ftp_password))
+			on = 1;
+		else
+			next_try = now + 5000;          /* (the network isn't up yet) */
+	}
+	else if (!menus && on)
+	{
+		oxbox_ftp_stop();
+		on = 0;
+	}
+	/* (a change in the maps folder: the map list scanned again, on Halo's thread; folder maps copied afresh) */
+	if (menus && oxbox_ftp_maps_changed != seen_changes && !hmp_browse_list_showing())   /* (not under an open map list) */
+	{
+		seen_changes = oxbox_ftp_maps_changed;
+		oxbox_ftp_writes++;
+		hmp_maps_scan();
+	}
+}

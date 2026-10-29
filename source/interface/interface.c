@@ -417,6 +417,53 @@ void interface_draw_fullscreen_overlays(
 	terminal_draw();
 	main_framerate_render();
 	render_debug_profile();
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the map checks' progress (opence.ini map_check = 1: port/linux/game/hmp_maps.c), at the bottom left of
+	the menus' screen */
+	{
+		extern wchar_t const *hmp_maps_check_status(void);
+		wchar_t const *status = game_engine ? NULL : hmp_maps_check_status();
+		long font = status ? tag_loaded('font', "ui\\small_ui") : NONE;
+
+		/* (and the developers' FTP server's address while it runs, opence.ini ftp = 1: oxbox_sdk.c) */
+		{
+			extern char oxbox_ftp_status[64];
+			long small = oxbox_ftp_status[0] && !game_engine ? tag_loaded('font', "ui\\small_ui") : NONE;
+
+			if (small != NONE)
+			{
+				real_argb_color color = { 1.0f, 0.6f, 1.0f, 0.6f };
+				rectangle2d bounds;
+				wchar_t wide[64];
+				int index;
+
+				for (index = 0; oxbox_ftp_status[index] && index < 63; index++)
+					wide[index] = (wchar_t)(unsigned char)oxbox_ftp_status[index];
+				wide[index] = 0;
+				draw_string_set_draw_mode(small, NONE, 1, 0, &color);   /* (right-justified) */
+				draw_string_set_tab_stops(NULL, 0);
+				bounds.x0 = 320;
+				bounds.x1 = 616;
+				bounds.y0 = 448;
+				bounds.y1 = 468;
+				rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, wide);
+			}
+		}
+		if (status && font != NONE)
+		{
+			real_argb_color color = { 1.0f, 1.0f, 0.85f, 0.3f };
+			rectangle2d bounds;
+
+			draw_string_set_draw_mode(font, NONE, 0, 0, &color);
+			draw_string_set_tab_stops(NULL, 0);
+			bounds.x0 = 24;
+			bounds.x1 = 616;
+			bounds.y0 = 448;
+			bounds.y1 = 468;
+			rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, status);
+		}
+	}
+#endif
 #if defined(OXBOX_NET_TEST)
 	/* oxbox: the online test's result (port/oxbox/oxbox_nettest.c), in the menus */
 	{

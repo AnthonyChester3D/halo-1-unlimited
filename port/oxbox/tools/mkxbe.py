@@ -132,6 +132,21 @@ if perf_end > perf_start:
     add_section(d, 'OXPERF', 5, perf_start, perf_end - perf_start, perf_raw, len(perf))
     struct.pack_into('<I', d, 0x10c, perf_start + perf_size - base)   # size of image
     nsec += 1
+# the developers' FTP server (port/oxbox/net/oxbox_ftp.c: link.ld's .oxftp and .oxftp.bss), likewise its own section,
+# OXFTP, right after OXPERF, loaded only when opence.ini says ftp = 1 (oxbox_sdk.c oxbox_ftp_frame)
+ftp_start, ftp_load_end, ftp_end = sym['__oxftp_start'], sym['__oxftp_load_end'], sym['__oxftp_end']
+ftp_size = 0
+if ftp_end > ftp_start:
+    subprocess.run(['llvm-objcopy', '-O', 'binary', '--only-section=.oxftp', elf, os.path.join(os.path.dirname(elf), 'oxbox_ftp.bin')], check=True)
+    ftpb = open(os.path.join(os.path.dirname(elf), 'oxbox_ftp.bin'), 'rb').read()
+    assert len(ftpb) == ftp_load_end - ftp_start, (hex(len(ftpb)), hex(ftp_load_end - ftp_start))
+    assert perf_size and ftp_start == perf_start + perf_size and not ftp_start & 0xFFF, (hex(ftp_start), hex(perf_start + perf_size))
+    ftp_raw = len(d)
+    d += ftpb + bytes((-len(ftpb)) % 0x1000)
+    ftp_size = ((ftp_end + 0xFFF) & ~0xFFF) - ftp_start
+    add_section(d, 'OXFTP', 5, ftp_start, ftp_end - ftp_start, ftp_raw, len(ftpb))
+    struct.pack_into('<I', d, 0x10c, ftp_start + ftp_size - base)   # size of image
+    nsec += 1
 
 # mainXapiStartup: call main(0, 0, 0) -> call oxbox_entry(0, 0, 0)
 site = 0x15cb1

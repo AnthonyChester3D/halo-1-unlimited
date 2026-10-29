@@ -1205,9 +1205,12 @@ static void cache_files_map_failed(
 	boolean client = global_network_game_client_get() && !global_network_game_server_get();
 
 	extern void hmp_maps_forget_good(char const *key);
+	extern void hmp_maps_mark_failed(char const *key);
 
-	cache_files_precache_map_end();
+	if (cache_files_precache_in_progress())
+		cache_files_precache_map_end();
 	hmp_maps_forget_good(map_name);
+	hmp_maps_mark_failed(map_name);
 	strncpy(cache_files_failed_map, map_name, sizeof(cache_files_failed_map) - 1);
 	cache_files_failed_map[sizeof(cache_files_failed_map) - 1] = 0;
 	if ((slash = strrchr(name, '/')) != NULL)
@@ -1248,6 +1251,31 @@ boolean cache_files_give_time_to_precache(
 	if (map_share_downloading(map_name))
 		return FALSE;
 #ifdef HALO_XBOX_TARGET
+	/* oxbox: with the developers' FTP server on (opence.ini ftp = 1), a folder map is copied into the map cache
+	afresh the first time it's asked for after it's chosen, and after any change through the server: a new version
+	put there is what's played, never the cache's older copy */
+	{
+		extern int oxbox_setting_ftp;
+		extern long oxbox_ftp_writes;
+		extern boolean cache_files_forget_cached_map(char const *map_name);
+		static char fresh_map[64];
+		static long fresh_writes = -1;
+
+		if (oxbox_setting_ftp && map_name[0] == '+' &&
+			(strncmp(fresh_map, map_name, sizeof(fresh_map) - 1) || fresh_writes != oxbox_ftp_writes))
+		{
+			boolean loaded = cache_files_precache_map_loaded(map_name);
+
+			if (!loaded || !cache_files_precache_in_progress())
+			{
+				if (loaded && cache_files_forget_cached_map(map_name))
+					error(_error_silent, "ftp on: map '%s' copied into the map cache afresh", map_name);
+				strncpy(fresh_map, map_name, sizeof(fresh_map) - 1);
+				fresh_map[sizeof(fresh_map) - 1] = 0;
+				fresh_writes = oxbox_ftp_writes;
+			}
+		}
+	}
 	/* oxbox: a folder map that failed to load here (cache_files_map_failed): not tried again while it's the map
 	asked for; another map asked for clears it */
 	if (cache_files_failed_map[0])
@@ -1321,7 +1349,19 @@ boolean cache_files_give_time_to_precache(
 		{
 			cache_files_precache_set_priority(0);
 			if (!cache_files_precache_map_begin(map_name, FALSE))
+			{
+#ifdef HALO_XBOX_TARGET
+				/* oxbox: a folder map that couldn't be started (deleted, renamed, not a map, too big for a cache
+				file): the dialog, not the damaged disc error (v1.44: a lobby still on a map deleted from the map
+				list ended the game) */
+				if (map_name[0] == '+')
+				{
+					cache_files_map_failed(map_name);
+					return FALSE;
+				}
+#endif
 				display_error_damaged_media();
+			}
 		}
 	}
 

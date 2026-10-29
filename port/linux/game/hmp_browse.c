@@ -1225,6 +1225,13 @@ boolean hmp_browse_prompt_event(struct event_record const *event)
 	return TRUE;
 }
 
+/* whether the map list is on the screen (drawn in the last half second): the maps aren't scanned again under it
+(oxbox_sdk.c's FTP changes wait for it to close) */
+int hmp_browse_list_showing(void)
+{
+	return g.prompt_seen && now_milliseconds() - g.prompt_seen < 500;
+}
+
 /* the prompt on entry's card (compose, hmp_maps.c), NULL when it isn't up for it */
 wchar_t const *hmp_browse_prompt_text(char const *entry)
 {

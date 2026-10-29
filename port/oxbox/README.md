@@ -115,6 +115,16 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
   changes the 75-second wait; `showcase_bots = N` (0 to 15) sets its bots; `showcase_min_fps = N` the frame rate
   under which bots drop out (15; 0: never); `showcase_map_seconds = N` how long each map plays at most (90; 0: no
   limit). A map with more shots than fit plays its first, a random pick of the others, and its last.
+
+Developers' tools (opence.ini, off by default):
+- `map_check = 1`: every folder map is checked once the menus are up (its header, then unpacked whole on a thread of
+  its own), its progress at the bottom left of the menus; `map_check.txt` in the game's folder lists every map, the
+  failures first. Maps that fail to load or the check are remembered (`T:\hmp_bad_maps.txt`), and the ones that load
+  (`T:\hmp_good_maps.txt`: map sharing sends only those).
+- `ftp = 1` (`ftp_password = text`, `xbox` by default; `ftp_port = N`, 21): an FTP server on the game's folder while the menus
+  are up, stopped (its memory freed) while a map is loaded; its address at the bottom right of the menus. Its code is
+  an XBE section of its own, OXFTP, loaded only with `ftp = 1`. A change in the maps folder rescans the map list, and
+  folder maps are copied into the map cache afresh, so a new version of a map is what's played.
 - Without the switch, the build is byte for byte what it was.
 
 ## Bot tuning (a test build switch)

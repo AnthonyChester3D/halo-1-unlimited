@@ -407,6 +407,9 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	showcase_bots = N    (the same) its matches' bots, 0 to 15 (else the map's suggested players, 4 to 10, less 1)
 	showcase_min_fps = N (the same) its bots drop out one at a time while it runs under N frames a second (15; 0: never)
 	showcase_map_seconds = N (the same) each map plays at most N seconds (90; 0: no limit, a minute and its shots)
+	ftp = 1              a small FTP server on the game's folder while the menus are up (stopped while a map is
+	                     loaded); ftp_password = text (xbox, as the dashboards' FTP); ftp_port = N (21). Folder maps are copied into
+	                     the map cache afresh after a change through it (developers' map work)
 	map_check = 1        every folder map not yet known to load is read and unpacked whole once the menus are up, on a
 	                     thread of its own, and oxbox_log.txt lists each result and the maps that failed (testing)
 	net_test_screen = 1  (the online test builds) the network test's lines on the main menu too, not only in this log */
@@ -486,6 +489,21 @@ static void read_settings(const char *path)
 			continue;
 		while (*p == ' ' || *p == '\t')
 			p++;
+		/* (the FTP server's password: text, as typed, up to 32 characters; oxbox_sdk.c) */
+		if (same_text(name, "ftp_password"))
+		{
+			extern char oxbox_setting_ftp_password[33];
+			int length = 0;
+
+			while (p[length] && p[length] != '\r' && length < 32)
+				length++;
+			while (length && (p[length - 1] == ' ' || p[length - 1] == '\t'))
+				length--;
+			memcpy(oxbox_setting_ftp_password, p, (size_t)length);
+			oxbox_setting_ftp_password[length] = 0;
+			platform_log("settings: ftp_password from %s", path);
+			continue;
+		}
 #if defined(OXBOX_NET_TEST)
 		/* (the online test's addresses: a.b.c.d, oxbox_nettest.c) */
 		if (same_text(name, "net_test_host") || same_text(name, "net_test_dns") || same_text(name, "net_test_static"))
@@ -571,6 +589,16 @@ static void read_settings(const char *path)
 		{
 			extern int oxbox_setting_map_check;
 			oxbox_setting_map_check = value != 0;
+		}
+		else if (same_text(name, "ftp"))
+		{
+			extern int oxbox_setting_ftp;
+			oxbox_setting_ftp = value != 0;
+		}
+		else if (same_text(name, "ftp_port"))
+		{
+			extern int oxbox_setting_ftp_port;
+			oxbox_setting_ftp_port = value > 0 && value < 65536 ? value : 21;
 		}
 #if defined(OXBOX_SHOWCASE)
 		/* (the showcase screensaver: port/linux/game/showcase.c) */

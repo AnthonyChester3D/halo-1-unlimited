@@ -2060,6 +2060,10 @@ void map_share_update(void) {
     }
     session_tick(server || client);
     hmp_maps_check_tick();
+    {
+        void oxbox_ftp_frame(int menus);   /* (oxbox_sdk.c: the developers' FTP server, in the menus only) */
+        oxbox_ftp_frame(loaded && ieq(loaded, "ui") == 0);
+    }
     if (!server && !g_cl.state) g_status_on = 0;
     if (server && !host_sending()) g_status_on = 0;
     hmp_stats_tick();

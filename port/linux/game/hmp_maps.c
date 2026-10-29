@@ -1780,7 +1780,8 @@ int oxbox_setting_map_check = 0;   /* opence.ini map_check = 1: the full check (
 #define CHECK_REASONS 16
 #define CHECK_FAILED_MAXIMUM 64
 #define GOOD_MAXIMUM 512
-#define QUICK_PER_FRAME 4
+#define BAD_MAXIMUM 128
+#define QUICK_PER_FRAME 1                     /* (4 a frame dropped the menus' frame rate: each is a file opened and read) */
 #define CHECK_WORK_SIZE (112 * 1024)          /* the full check's memory, while it runs: 64 KB of buffers, zlib's 48 KB */
 
 static struct
@@ -1789,14 +1790,17 @@ static struct
 	long reason_count;
 	struct { char key[48]; char const *why; } failed[CHECK_FAILED_MAXIMUM];   /* the full check's failures */
 	long failed_count;
-	/* the maps known to load */
-	struct { unsigned long key_hash, identity; } good[GOOD_MAXIMUM];
-	long good_count;
-	boolean good_loaded;
+	/* the maps known to load, and the ones known not to (failed to load, or the full check): by key and file */
+	struct { unsigned long key_hash, identity; } good[GOOD_MAXIMUM], bad[BAD_MAXIMUM];
+	long good_count, bad_count;
+	boolean good_loaded, bad_loaded;
 	/* the checks' progress: 0 not started, 1 quick, 2 full, 3 done */
 	short stage;
 	long next, problems, passed, skipped;
 	unsigned long started;
+	/* the full check's result for each map (the report): 0 not yet, else a STATUS_ */
+	unsigned char *status;
+	long status_count;
 	/* the full check's thread and its one job */
 	HANDLE thread;
 	void *work;
@@ -1804,10 +1808,15 @@ static struct
 	char job_key[48], job_path[260];
 	char const *volatile job_why;
 	unsigned long job_started;
+	unsigned long done_time;                 /* when the full check ended (its status line stays a while) */
+	wchar_t status_text[96];
 } check;
 
 static char const good_path[] = "T:\\hmp_good_maps.txt";
+static char const bad_path[] = "T:\\hmp_bad_maps.txt";
+static char const bad_reason[] = "it failed to load on this Xbox (or the full check)";
 static char good_text[GOOD_MAXIMUM * 18 + 1];   /* (the file's text, read or written) */
+static boolean is_bad(char const *key);
 
 static unsigned long key_hash(char const *key)
 {
@@ -1837,52 +1846,99 @@ char const *hmp_maps_problem(long i)
 	{
 		char const *why = NULL;
 		for (k = 0; k < check.failed_count; k++) if (!ieq(check.failed[k].key, MAP_KEY(i))) { why = check.failed[k].why; break; }
+		if (!why && is_bad(MAP_KEY(i))) why = bad_reason;
 		if (!why) why = cache_files_map_problem(MAP_KEY(i));
 		map->problem = (char)reason_code(why);
 	}
 	return map->problem >= 2 ? check.reasons[map->problem - 2] : NULL;
 }
 
-static void good_load(void)
+struct map_record { unsigned long key_hash, identity; };
+
+static void records_load(char const *path, struct map_record *list, long *count, long maximum)
 {
 	char line[64];
 	HANDLE file;
 	unsigned long got = 0, k, start = 0;
 	char *text = good_text;
-	if (check.good_loaded) return;
-	check.good_loaded = TRUE;
-	file = open_read(good_path);
+	file = open_read(path);
 	if (file == INVALID_FILE) return;
 	if (!ReadFile(file, text, sizeof(good_text) - 1, &got, NULL)) got = 0;
 	CloseHandle(file);
 	text[got] = 0;
-	for (k = 0; k <= got && check.good_count < GOOD_MAXIMUM; k++)
+	for (k = 0; k <= got && *count < maximum; k++)
 	{
 		if (k < got && text[k] != '\n') continue;
 		if (k - start >= 17 && k - start < sizeof(line))
 		{
 			memcpy(line, text + start, k - start);
 			line[k - start] = 0;
-			check.good[check.good_count].key_hash = strtoul(line, NULL, 16);
-			check.good[check.good_count].identity = strtoul(line + 9, NULL, 16);
-			check.good_count++;
+			list[*count].key_hash = strtoul(line, NULL, 16);
+			list[*count].identity = strtoul(line + 9, NULL, 16);
+			(*count)++;
 		}
 		start = k + 1;
 	}
 }
 
-static void good_write_all(void)
+static void records_write(char const *path, struct map_record const *list, long count)
 {
 	char *text = good_text;
 	long k, n = 0;
 	unsigned long put;
 	HANDLE file;
-	for (k = 0; k < check.good_count; k++)
-		n += snprintf(text + n, sizeof(good_text) - n, "%08lx %08lx\n", check.good[k].key_hash, check.good[k].identity);
-	file = CreateFileA(good_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	for (k = 0; k < count; k++)
+		n += snprintf(text + n, sizeof(good_text) - n, "%08lx %08lx\n", list[k].key_hash, list[k].identity);
+	file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_FILE) return;
 	WriteFile(file, text, (unsigned long)n, &put, NULL);
 	CloseHandle(file);
+}
+
+static void good_load(void)
+{
+	if (check.good_loaded) return;
+	check.good_loaded = TRUE;
+	records_load(good_path, (struct map_record *)check.good, &check.good_count, GOOD_MAXIMUM);
+}
+static void good_write_all(void) { records_write(good_path, (struct map_record const *)check.good, check.good_count); }
+static void bad_load(void)
+{
+	if (check.bad_loaded) return;
+	check.bad_loaded = TRUE;
+	records_load(bad_path, (struct map_record *)check.bad, &check.bad_count, BAD_MAXIMUM);
+}
+
+/* whether this file of a folder map failed to load, or the full check, on this Xbox */
+static boolean is_bad(char const *key)
+{
+	unsigned long h, id;
+	long k;
+	bad_load();
+	if (!check.bad_count || !(id = hmp_share_map_version(key))) return FALSE;
+	h = key_hash(key);
+	for (k = 0; k < check.bad_count; k++) if (check.bad[k].key_hash == h && check.bad[k].identity == id) return TRUE;
+	return FALSE;
+}
+
+/* a folder map failed to load (cache_files.c) or the full check: remembered as bad (its card says so, after a
+restart too, until its file changes) */
+void hmp_maps_mark_failed(char const *key)
+{
+	unsigned long id;
+	long i = key ? hmp_maps_find(key) : NONE, k;
+	if (!key || key[0] != '+') return;
+	if (i != NONE) hmp_maps_globals.maps[i].problem = (char)reason_code(bad_reason);
+	if (is_bad(key) || !(id = hmp_share_map_version(key))) return;
+	if (check.bad_count >= BAD_MAXIMUM)
+	{
+		memmove(&check.bad[0], &check.bad[1], (BAD_MAXIMUM - 1) * sizeof(check.bad[0]));
+		check.bad_count--;
+	}
+	k = check.bad_count++;
+	check.bad[k].key_hash = key_hash(key);
+	check.bad[k].identity = id;
+	records_write(bad_path, (struct map_record const *)check.bad, check.bad_count);
 }
 
 /* whether a folder map is known to load on this Xbox, as its file is now */
@@ -1946,6 +2002,63 @@ static DWORD WINAPI full_check_thread(void *parameter)
 	return 0;
 }
 
+enum { STATUS_NONE, STATUS_CHECKED, STATUS_KNOWN, STATUS_FAILED, STATUS_BUSY };
+
+/* the full check's report: every map, the failures first, then the ones that passed, in d:\map_check.txt (beside
+the XBE; T:\map_check.txt when the game's folder can't be written) */
+static void check_report(void)
+{
+	static char const *const paths[2] = { "d:\\map_check.txt", "T:\\map_check.txt" };
+	char buffer[2048];
+	long n = 0, pass, k, failed = 0, passed = 0, busy = 0, path;
+	unsigned long put;
+	HANDLE file = INVALID_FILE;
+	SYSTEMTIME now;
+	for (path = 0; path < 2 && file == INVALID_FILE; path++)
+		file = CreateFileA(paths[path], GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_FILE) { hmp_log("map check (full): couldn't write map_check.txt"); return; }
+	for (k = 0; k < check.status_count && k < hmp_maps_globals.map_count; k++)
+	{
+		if (check.status[k] == STATUS_FAILED) failed++;
+		else if (check.status[k] == STATUS_CHECKED || check.status[k] == STATUS_KNOWN) passed++;
+		else busy++;
+	}
+	GetSystemTime(&now);
+#define REPORT_FLUSH() do { WriteFile(file, buffer, (unsigned long)n, &put, NULL); n = 0; } while (0)
+	n += snprintf(buffer + n, sizeof(buffer) - n, "Halo 1 Unlimited map check (opence.ini map_check = 1), %04d-%02d-%02d %02d:%02d UTC\r\n"
+		"%ld folder maps: %ld failed, %ld passed, %ld not checked (busy, being loaded)\r\n",
+		now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, check.status_count, failed, passed, busy);
+	for (pass = 0; pass < 3; pass++)
+	{
+		long total = pass == 0 ? failed : pass == 1 ? busy : passed;
+		if (!total) continue;
+		n += snprintf(buffer + n, sizeof(buffer) - n, "\r\n%s (%ld)\r\n", pass == 0 ? "FAILED" : pass == 1 ?
+			"NOT CHECKED (busy: try again)" : "PASSED", total);
+		for (k = 0; k < check.status_count && k < hmp_maps_globals.map_count; k++)
+		{
+			unsigned char st = check.status[k];
+			if (pass == 0 ? st != STATUS_FAILED : pass == 1 ? (st != STATUS_BUSY && st != STATUS_NONE) :
+				(st != STATUS_CHECKED && st != STATUS_KNOWN))
+			{
+				continue;
+			}
+			if (n > (long)sizeof(buffer) - 400) REPORT_FLUSH();
+			if (pass == 0)
+			{
+				char const *why = hmp_maps_globals.maps[k].problem >= 2 ? check.reasons[hmp_maps_globals.maps[k].problem - 2] : "?";
+				n += snprintf(buffer + n, sizeof(buffer) - n, "  %s: %s\r\n", MAP_KEY(k) + 1, why);
+			}
+			else
+				n += snprintf(buffer + n, sizeof(buffer) - n, "  %s%s\r\n", MAP_KEY(k) + 1,
+					st == STATUS_KNOWN ? " (loaded on this Xbox before)" : "");
+		}
+	}
+	REPORT_FLUSH();
+#undef REPORT_FLUSH
+	CloseHandle(file);
+	hmp_log("map check (full): every map's result is in %s", paths[path - 1]);
+}
+
 static void check_summary(char const *what)
 {
 	long k;
@@ -1959,11 +2072,38 @@ static void check_summary(char const *what)
 	}
 }
 
+/* the map checks' line on the menus' screen (interface.c), while opence.ini map_check = 1 has them running and for 20
+seconds after: how far along, how many failed, the map being unpacked now; NULL when there's nothing to say */
+wchar_t const *hmp_maps_check_status(void)
+{
+	char text[96];
+	long k, done = check.passed + check.problems + check.skipped, total = hmp_maps_globals.map_count;
+	if (!oxbox_setting_map_check) return NULL;
+	if (check.stage == 1)
+		snprintf(text, sizeof(text), "Map check: reading headers, %ld / %ld", check.next, total);
+	else if (check.stage == 2)
+		snprintf(text, sizeof(text), "Map check: %ld / %ld, %ld failed%s%.40s", done, total, check.problems,
+			check.job == 1 ? ", now: " : "", check.job == 1 ? check.job_key + 1 : "");
+	else if (check.stage == 3 && check.done_time && GetTickCount() - check.done_time < 20000)
+		snprintf(text, sizeof(text), "Map check done: %ld failed, %ld passed: see map_check.txt", check.problems,
+			check.passed);
+	else
+		return NULL;
+	for (k = 0; text[k] && k < (long)NUMBEROF(check.status_text) - 1; k++) check.status_text[k] = (unsigned char)text[k];
+	check.status_text[k] = 0;
+	return check.status_text;
+}
+
 /* every frame (hmp_share.c's map_share_update): the checks, a little at a time, in the menus */
 void hmp_maps_check_tick(void)
 {
 	long k;
 	if (check.stage == 3 || !hmp_menus_running() || !hmp_maps_globals.map_count) return;
+	if (check.stage == 0 && !oxbox_setting_map_check)
+	{
+		check.stage = 3;                              /* (without map_check: each card is checked when it's shown) */
+		return;
+	}
 	if (check.stage == 0)
 	{
 		check.stage = 1;
@@ -1984,6 +2124,8 @@ void hmp_maps_check_tick(void)
 		check.next = check.problems = check.passed = check.skipped = 0;
 		check.started = GetTickCount();
 		check.work = LocalAlloc(0, CHECK_WORK_SIZE);
+		check.status_count = hmp_maps_globals.map_count;
+		check.status = (unsigned char *)LocalAlloc(LMEM_ZEROINIT, (unsigned int)check.status_count + 1);
 		check.job = 0;
 		check.thread = check.work ? CreateThread(NULL, 16 * 1024, full_check_thread, NULL, 0, NULL) : NULL;
 		if (!check.thread)
@@ -1994,7 +2136,8 @@ void hmp_maps_check_tick(void)
 			check.stage = 3;
 			return;
 		}
-		SetThreadPriority(check.thread, -2);   /* (THREAD_PRIORITY_LOWEST) */
+		/* (at the game's priority, giving way after every piece it unpacks: at the lowest it got only what the
+		menus left, a minute or more a map, v1.44) */
 		hmp_log("map check (full): checking every map not yet known to load, one at a time (opence.ini map_check = 1)");
 	}
 	/* the full check: a result in, then the next map out */
@@ -2003,6 +2146,8 @@ void hmp_maps_check_tick(void)
 		char const *why = check.job_why;
 		unsigned long seconds10 = (GetTickCount() - check.job_started) / 100;
 		long i = hmp_maps_find(check.job_key);
+		if (check.status && i != NONE && i < check.status_count)
+			check.status[i] = !why ? STATUS_CHECKED : !strncmp(why, "busy", 4) ? STATUS_BUSY : STATUS_FAILED;
 		if (why && !strncmp(why, "busy", 4))
 		{
 			check.skipped++;
@@ -2017,8 +2162,9 @@ void hmp_maps_check_tick(void)
 				strcpy(check.failed[check.failed_count].key, check.job_key);
 				check.failed[check.failed_count++].why = why;
 			}
-			if (i != NONE) hmp_maps_globals.maps[i].problem = (char)reason_code(why);
 			hmp_maps_forget_good(check.job_key);
+			hmp_maps_mark_failed(check.job_key);
+			if (i != NONE) hmp_maps_globals.maps[i].problem = (char)reason_code(why);
 		}
 		else
 		{
@@ -2029,19 +2175,30 @@ void hmp_maps_check_tick(void)
 		check.job = 0;
 	}
 	if (check.job != 0) return;
-	while (check.next < hmp_maps_globals.map_count)
+	for (k = 0; k < 2 && check.next < hmp_maps_globals.map_count; k++)   /* (2 a frame: each is a header or two read) */
 	{
 		long i = check.next++;
 		char const *key = MAP_KEY(i);
 		if (strlen(key) >= sizeof(check.job_key)) continue;
-		if (hmp_maps_problem(i)) { check.problems++; continue; }   /* (the quick check said already) */
-		if (hmp_maps_is_good(key)) { check.passed++; continue; }
+		if (hmp_maps_problem(i))                      /* (the quick check said already) */
+		{
+			check.problems++;
+			if (check.status && i < check.status_count) check.status[i] = STATUS_FAILED;
+			continue;
+		}
+		if (hmp_maps_is_good(key))
+		{
+			check.passed++;
+			if (check.status && i < check.status_count) check.status[i] = STATUS_KNOWN;
+			continue;
+		}
 		strcpy(check.job_key, key);
 		cache_files_map_file_path(key, check.job_path);
 		check.job_started = GetTickCount();
 		check.job = 1;
 		return;
 	}
+	if (check.next < hmp_maps_globals.map_count) return;   /* (more next frame) */
 	check.job = -1;                                   /* (the thread ends) */
 	WaitForSingleObject(check.thread, 1000);
 	CloseHandle(check.thread);
@@ -2050,6 +2207,13 @@ void hmp_maps_check_tick(void)
 	check.work = NULL;
 	if (check.skipped) hmp_log("map check (full): %ld maps were busy (being loaded) and weren't checked", check.skipped);
 	check_summary("full");
+	check.done_time = GetTickCount() | 1;
+	if (check.status)
+	{
+		check_report();
+		LocalFree(check.status);
+		check.status = NULL;
+	}
 	check.stage = 3;
 }
 #endif

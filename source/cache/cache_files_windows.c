@@ -1940,6 +1940,7 @@ char const *cache_files_map_full_check(
 		stream.next_out = out;
 		stream.avail_out = OUT_SIZE;
 		result = inflate(&stream, Z_NO_FLUSH);
+		Sleep(1);   /* (gives way to the game after each 32 KB it unpacks: the thread runs at the game's priority) */
 		if (result != Z_OK && result != Z_STREAM_END && result != Z_BUF_ERROR)
 			why = "its packed map data is damaged (it doesn't unpack)";
 		else if (stream.total_out > expected)
