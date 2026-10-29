@@ -97,6 +97,10 @@ python3 port/oxbox/tools/mkpackage.py opence.oxpk "crossplay experiment 6" \
     --release 1 --installer port/oxbox/installer/bin/default.xbe
 ```
 
+`--showcase DIR` carries the stock maps' showcase files (`DIR/bloodgulch.txt`...). Installer version 3 and later
+writes them as `maps\showcase\<name>.txt` only when it first makes OpenCE in a Halo folder (one that wasn't OpenCE
+already), and never over a file that's there: updates leave the folder alone, so a player can change or delete them.
+
 `--installer` carries the installer in the package (about 600 KB more), so older installers can update themselves
 from it. Its version comes from the XBE (`INSTALLER_VERSION` in `main.c`, raised with each installer that should
 replace the last; `make ... INSTALLER_VERSION=N` builds another for testing). Installers before version 1 (installer

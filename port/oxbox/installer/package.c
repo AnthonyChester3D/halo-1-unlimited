@@ -262,6 +262,52 @@ int package_load(char const *path, struct package *package, char *error)
 			}
 		}
 	}
+	/* the showcase files: just before the installer (or the body's last bytes), each named safely */
+	{
+		char value[80];
+		package_manifest_value(package, "showcase size", value, sizeof(value));
+		if (value[0])
+		{
+			unsigned long size = strtoul(value, NULL, 10), at, n, k, end, room;
+			room = package->body_size - (4 + 112ul * package->count) - package->installer_size;
+			package_manifest_value(package, "showcase files", value, sizeof(value));
+			n = strtoul(value, NULL, 10);
+			if (size < 4 || size > room || n < 1 || n > 64 || u32(package->body + package->body_size -
+				package->installer_size - size) != n)
+			{
+				text_print(error, 256, "%s's showcase files don't read", path);
+				goto done;
+			}
+			package->showcase_offset = at = package->body_size - package->installer_size - size;
+			end = at + size;
+			for (at += 4, k = 0; k < n; k++)
+			{
+				char const *name = (char const *)package->body + at;
+				int c, length = 0, ok = 1;
+				if (end - at < 36 || u32(package->body + at + 32) > 64 * 1024 || u32(package->body + at + 32) >
+					end - at - 36)
+					ok = 0;
+				while (ok && length < 32 && name[length])
+				{
+					c = name[length++];
+					ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+				}
+				if (!ok || length < 5 || length > 31 || strcmp(name + length - 4, ".txt") || strchr(name, '.') != name + length - 4)
+				{
+					text_print(error, 256, "%s's showcase files don't read", path);
+					goto done;
+				}
+				at += 36 + u32(package->body + at + 32);
+			}
+			if (at != end)
+			{
+				text_print(error, 256, "%s's showcase files don't read", path);
+				goto done;
+			}
+			package->showcase_count = n;
+			package->showcase_size = size;
+		}
+	}
 	result = 0;
 done:
 	free(packed);
@@ -283,6 +329,18 @@ void package_free(struct package *package)
 int package_same(struct package const *a, struct package const *b)
 {
 	return a->signed_size == b->signed_size && !memcmp(a->signed_part, b->signed_part, a->signed_size);
+}
+
+void package_showcase_file(struct package const *package, unsigned long n, char *name, unsigned char const **data,
+	unsigned long *size)
+{
+	unsigned long at = package->showcase_offset + 4;
+	while (n--)
+		at += 36 + u32(package->body + at + 32);
+	memcpy(name, package->body + at, 32);
+	name[31] = 0;
+	*size = u32(package->body + at + 32);
+	*data = package->body + at + 36;
 }
 
 void package_manifest_value(struct package const *package, char const *key, char *value, int size)

@@ -114,6 +114,8 @@ short hmp_maps_root(long map_index);
 boolean hmp_maps_both(long map_index);
 boolean hmp_maps_map_path(long map_index, short root, char *path, long size);
 boolean hmp_maps_use_root(long map_index, short root);
+unsigned long hmp_maps_version(long map_index);
+long hmp_maps_unpin_all(void (*each)(char const *key));
 /* the map list's table (the browser sorts it in place) and its length */
 char **hmp_maps_table(void);
 long hmp_maps_table_count(void);
@@ -145,6 +147,8 @@ boolean hmp_browse_same(long position0, long position1);
 wchar_t const *hmp_browse_label(long position);
 wchar_t const *hmp_browse_mark(char const *entry);
 short hmp_browse_black(char const *entry);
+boolean hmp_browse_has_ctf(char const *level_name);
+char const *hmp_browse_stock_title(char const *level_name);
 /* a button on the map list (its selection and arrow flash): TRUE when it was ours */
 boolean hmp_browse_event(struct widget_instance *list, struct event_record const *event);
 void hmp_browse_visible(char const *selected);

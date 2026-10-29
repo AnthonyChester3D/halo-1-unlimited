@@ -1059,32 +1059,68 @@ void hmp_browse_tick(void)
 	}
 }
 
-/* oxbox: a level's suggested most players, for the bots' Suggested (bots.c): the stock table's, or the folder
-   map's card's ("Players: 4-16", or "4-16 players" in its description); 0 when it says none */
-short hmp_browse_suggested_players(char const *level_name)
+/* a level's card read into t (a folder map's info.txt); FALSE when it has none */
+static boolean level_tags(char const *level_name, struct map_tags *t)
 {
-	struct map_tags t, *saved_parsing = g.parsing;
+	struct map_tags *saved_parsing = g.parsing;
 	long saved_line = g.parse_line;
 	boolean saved_players = g.parse_players;
 	unsigned char text[1024];
-	long k, m, got;
-	if (!level_name || !level_name[0]) return 0;
-	for (k = 0; k < HMP_STOCK_LEVELS; k++)
-	{
-		char const *stock = hmp_maps_stock_level(k);
-		if (stock && !ieq(stock, level_name)) return stock_players[k][1];
-	}
+	long m, got;
+	csmemset(t, 0, sizeof(*t));
 	m = hmp_maps_find(level_name);
-	if (m == NONE || (got = hmp_maps_read_info(m, text, sizeof(text))) <= 0) return 0;
-	csmemset(&t, 0, sizeof(t));
-	g.parsing = &t;
+	if (m == NONE || (got = hmp_maps_read_info(m, text, sizeof(text))) <= 0) return FALSE;
+	g.parsing = t;
 	g.parse_line = 0;
 	g.parse_players = FALSE;
 	tag_lines(text, got);
 	g.parsing = saved_parsing;
 	g.parse_line = saved_line;
 	g.parse_players = saved_players;
-	return t.players_maximum;
+	return TRUE;
+}
+
+/* oxbox: a level's suggested most players, for the bots' Suggested (bots.c): the stock table's, or the folder
+   map's card's ("Players: 4-16", or "4-16 players" in its description); 0 when it says none */
+short hmp_browse_suggested_players(char const *level_name)
+{
+	struct map_tags t;
+	long k;
+	if (!level_name || !level_name[0]) return 0;
+	for (k = 0; k < HMP_STOCK_LEVELS; k++)
+	{
+		char const *stock = hmp_maps_stock_level(k);
+		if (stock && !ieq(stock, level_name)) return stock_players[k][1];
+	}
+	return level_tags(level_name, &t) ? t.players_maximum : 0;
+}
+
+/* oxbox: a stock level's name as the menus have it ("Blood Gulch"), NULL for a folder map */
+char const *hmp_browse_stock_title(char const *level_name)
+{
+	long k;
+	if (!level_name || !level_name[0]) return NULL;
+	for (k = 0; k < HMP_STOCK_LEVELS; k++)
+	{
+		char const *stock = hmp_maps_stock_level(k);
+		if (stock && !ieq(stock, level_name)) return stock_titles[k];
+	}
+	return NULL;
+}
+
+/* oxbox: whether a level has CTF, for the showcase (showcase.c): every stock map does; a folder map when its card's
+   "Gametypes:" line names it (Halo Map Porter writes it from the map's own flags). No line: not known, so no */
+boolean hmp_browse_has_ctf(char const *level_name)
+{
+	struct map_tags t;
+	long k;
+	if (!level_name || !level_name[0]) return FALSE;
+	for (k = 0; k < HMP_STOCK_LEVELS; k++)
+	{
+		char const *stock = hmp_maps_stock_level(k);
+		if (stock && !ieq(stock, level_name)) return TRUE;
+	}
+	return level_tags(level_name, &t) && (t.gametypes & _gametype_known) && (t.gametypes & _gametype_ctf);
 }
 
 #endif /* HALO_XBOX_TARGET */

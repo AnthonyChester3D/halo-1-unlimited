@@ -34,8 +34,7 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
   disc or ISO. They record the kernel version, memory, map sharing, and any frame of 100 ms or more. A thread of
   its own writes `oxbox_log.txt` out (every 100 ms, to the disk every 2 s): the game thread only appends to a ring
   in memory, so a log line never waits on the hard drive.
-- **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, holds one `name = number` per line
-  (`opence.ini.example` has every setting, commented, at its default):
+- **Settings file.** An `opence.ini` next to the XBE, or `T:\opence.ini`, holds one `name = number` per line:
   - `audio_effects = 0` skips DirectSound's effects program.
   - `fps_counter = 1` shows the frame rate in the bottom right corner (off by default).
   - `bot_log = 1` turns on the bots' developer log (off by default): a line every 10 seconds in
@@ -94,7 +93,8 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
 
 - When the main menu has gone 75 seconds without a press, instead of an attract movie the Xbox hosts a closed
   system link game on a folder map that has a `showcase.txt` (Halo Map Porter writes one beside the map's
-  `info.txt` and `preview.bin`), with bots, and flies the file's camera shots over the map while they play. There's
+  `info.txt` and `preview.bin`), or a stock map that has a `maps\showcase\<its name>.txt` (`bloodgulch.txt`,
+  `beavercreek.txt`: the same format), with bots, and flies the file's camera shots over the map while they play. There's
   no HUD, the watching player never spawns, and the game isn't advertised, listed or joinable, nor counted in the
   play stats. Any button fades it out and brings the main menu back.
 - The file: `fade S`, then shots (`shot SECONDS label`, an optional `look X Y Z`, and keys
@@ -102,7 +102,8 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
   with Catmull-Rom tangents). Shots fade out over their last `fade` seconds and in over the next one's first.
 - Maps: favourites first, each group shuffled, hidden maps skipped. A map's list plays through (for at least a
   minute), then the next map loads (through the main menu, as every system link game does, with no title music).
-  Team Slayer to 999, bots at Normal (the map's suggested players, 4 to 10, an even number of bots), no announcer.
+  CTF where the map has CTF (its card's "Gametypes:" line, as Halo Map Porter writes it; every stock map), else Team
+  Slayer, to 999, with every vehicle the map places, bots at Normal (the map's suggested players, 4 to 10, an even number of bots), no announcer.
   While the game runs under 15 frames a second, bots drop out one at a time (while dead, so none vanishes on screen),
   down to two; each map starts with the full count again.
 - A map's first ten seconds have a title card, as the campaign's chapter titles do: black bars top and bottom and the

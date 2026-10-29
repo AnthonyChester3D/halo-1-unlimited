@@ -120,14 +120,16 @@ static u32 host_rtt(void) { return 0; }   /* (the client's own measure: its conn
 #define REP_MAGIC 0x72504d48                /* "HMPr" */
 #define RES_MAGIC 0x73504d48                /* "HMPs": a partial download's resume.hmp */
 #define JOIN_MAGIC 0x6a504d48               /* "HMPj": another connection for a download already under way */
-#define VERSION 5                           /* 3: pack maps ("+pack/folder") and their series.bin; 4: several connections;
-                                               5 (OpenCE): the request carries the machine, the reply whether the game is under way */
+#define VERSION 6                           /* 3: pack maps ("+pack/folder") and their series.bin; 4: several connections;
+                                               5 (OpenCE): the request carries the machine, the reply whether the game is under way;
+                                               6: a fifth file, the folder's showcase.txt (the showcase screensaver's shots),
+                                               and the reply carries the host's copy's "Version:" (its info .txt) */
 #define REP_SAME 0
 #define REP_SENDING 1
 #define REP_UNAVAILABLE 2
 #define WHY_NOT_HOSTED 1                    /* REP_UNAVAILABLE's reason (in .streams, build 20): not the map the host has up now */
 #define NAME_LEN 44
-#define MAX_FILES 4
+#define MAX_FILES 5                         /* the .map, info .txt, preview.bin, series.bin, showcase.txt */
 #define MAX_MAP_SIZE (96u << 20)
 #define MAX_TXT_SIZE (64u << 10)
 #define PREVIEW_SIZE 16384
@@ -171,7 +173,7 @@ static u32 host_rtt(void) { return 0; }   /* (the client's own measure: its conn
    connections the client will open; rtt: its ping to the host (ms), in case the host has none yet */
 struct req { u32 magic, version; char key[32]; u32 have_size, have_chk, resume_size, resume_chk, resume_offset, flags, rtt, token, stream, machine; };
 struct rfile { char name[NAME_LEN]; u32 size; };
-struct rep { u32 magic, version, status, nfiles, map_chk, start, streams, token, in_game; struct rfile f[MAX_FILES]; };
+struct rep { u32 magic, version, status, nfiles, map_chk, start, streams, token, in_game, map_version; struct rfile f[MAX_FILES]; };
 struct resume { u32 magic, size, chk; char name[NAME_LEN]; u32 good; };   /* good: bytes of the .part flushed to disk */
 struct sin { short family; u16 port; u32 addr; char zero[8]; };
 struct fds { u32 count; int fd[1]; };
@@ -731,6 +733,7 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
     else if (i < 0 || !hmp_map_path_c(i, -1, g_p1) || !map_identity(g_p1, &size, &chk)) why = "can't read its own copy";
     else {
         g_hrep.map_chk = chk;
+        g_hrep.map_version = hmp_maps_version(i);
         if (q->have_size == size && q->have_chk == chk) {
             g_hrep.status = REP_SAME;
         } else {
@@ -1034,6 +1037,9 @@ static struct {
     int loading;                  /* logged that Halo went ahead with the map */
     int mismatch;                 /* the host shares maps differently (another test build) */
     int notyet;                   /* times the host said it isn't hosting this map (yet): it was changing maps */
+    int visiting;                 /* the host's copy is an older version than this console's: it goes in the other maps
+                                     folder, for games with this host, and this console's own stays as it is */
+    u32 mine;                     /* this console's copy's version ("Version:"; 0 none) */
     u32 rate, rate_t, rate_done;  /* recent download speed (bytes/s), for the time left */
     u32 need_mb, free_mb;         /* CL_NOROOM: what the download needs and what's free (MB) */
 } g_cl = { .s = NO_SOCK, .xs = { NO_SOCK, NO_SOCK, NO_SOCK } };
@@ -1237,7 +1243,17 @@ static void cl_finish(u32 now) {
     rm_folder(old);
     had = MoveFileA(fin, old);                   /* an older copy (or a folder without a map) steps aside */
     if (!MoveFileA(tmp, fin)) { if (had) MoveFileA(old, fin); cl_give_up(now, 1, "couldn't move the map into place", 0); return; }
-    if (had) { keep_genres(old, fin); rm_folder(old); }
+    if (had) {
+        keep_genres(old, fin);
+        if (!g_cl.visiting && g_cl.r.map_version <= g_cl.mine) {
+            /* the versions don't say the host's is newer (none, or the same): the replaced copy is kept as
+               <folder>.hmp_prev (one per map; the map list skips it), in case it was the newer one */
+            char *prev = mpath(g_p2, g_dl_root, g_cl.key + 1, ".hmp_prev", 0);
+            rm_folder(prev);
+            if (MoveFileA(old, prev)) lg("client: kept the replaced copy as %s.hmp_prev", g_cl.key + 1);
+            else rm_folder(old);
+        } else rm_folder(old);
+    }
     if (cache_files_forget_cached_map(g_cl.key)) lg("client: dropped the old build from Halo's map cache");
     hmp_maps_scan();
     if (!hmp_use_root_c(hmp_find_key(g_cl.key), g_dl_root)) lg("client: the new copy isn't in the map list!");   /* (this one, whatever the clock says) */
@@ -1485,6 +1501,26 @@ static void cl_reply(u32 now) {
             hmp_use_root_c(k, r2)) {
             lg("client: the copy in %s is the host's build; using that one", k_root_name[r2]);
             cl_close(); g_cl.state = CL_OK; g_status_on = 0; return;
+        }
+    }
+    /* the host's copy is an older version than this console's: never in place of it. It goes in the other maps folder
+       (where an older one for another host may be), chosen for this game only; the newer copy is used again once
+       the game is left (map_share_update). Asked again from there, so a partial download there resumes */
+    if (k >= 0 && !g_cl.visiting) {
+        int other = !hmp_root_c(k);
+        g_cl.mine = hmp_maps_version(k);
+        if (g_cl.r.map_version < g_cl.mine) {
+            if (other == 1 || g_writable) {
+                g_cl.visiting = 1;
+                lg("client: the host's %s is version %u, older than this console's %u: getting it for this game only, in %s",
+                   g_cl.key, g_cl.r.map_version, g_cl.mine, k_root_name[other]);
+                if (g_dl_root != other) {
+                    g_dl_root = other;
+                    cl_close(); g_cl.state = CL_START; return;
+                }
+            } else
+                lg("client: the host's %s is version %u, older than this console's %u, and there's no other maps folder to "
+                   "keep it in: it replaces this console's", g_cl.key, g_cl.r.map_version, g_cl.mine);
         }
     }
     {                                                 /* room for it? Nothing old is deleted to make room. */
@@ -1928,6 +1964,7 @@ boolean map_share_download_begin(char const *level_name, unsigned long version, 
     scpy(g_cl.key, level_name);
     g_cl.state = CL_START;
     maps_writable();
+    g_dl_root = g_writable ? 0 : 1;               /* (an older version's download went to the other folder) */
     lg("client: the host's map %s (version %x) isn't here; asking the host for it", level_name, (u32)version);
     status("Map: asking the host", -1, 0);
     L_start("Asking the host for its map");
@@ -1967,6 +2004,21 @@ unsigned long hmp_share_map_version(char const *level_name) {
     return (size * 2654435761u ^ chk) | 1;
 }
 
+/* a game left: the copies map sharing chose for it (an older version from a host, say) give way to the newer ones
+   again, out of Halo's map cache too, so the menus and this console's own games use the newer */
+static int g_in_session;
+static void unpinned(char const *key) { cache_files_forget_cached_map(key); }
+static void session_tick(int on) {
+    long n;
+    if (on) { g_in_session = 1; return; }
+    if (!g_in_session) return;
+    g_in_session = 0;
+    if ((n = hmp_maps_unpin_all(unpinned)) != 0) {
+        hmp_maps_scan();
+        lg("game left: %d map%s back to this console's newest copy", (int)n, n == 1 ? "" : "s");
+    }
+}
+
 /* every frame, menus and matches (main.c) */
 static char g_loaded_map[32];
 void map_share_update(void) {
@@ -1995,6 +2047,7 @@ void map_share_update(void) {
         if (!client || server || !map || ieq(map, g_cl.key)) client_reset();
         else client_tick(now);
     }
+    session_tick(server || client);
     if (!server && !g_cl.state) g_status_on = 0;
     if (server && !host_sending()) g_status_on = 0;
     hmp_stats_tick();

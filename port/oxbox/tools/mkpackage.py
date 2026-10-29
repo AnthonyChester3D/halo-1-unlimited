@@ -2,12 +2,14 @@
 player's own retail Halo XBE, with none of Microsoft's code or Halo's art in it.
 
 Usage: python3 port/oxbox/tools/mkpackage.py out.oxpk "name" RETAIL.xbe BUILD.xbe [RETAIL2.xbe BUILD2.xbe ...]
-           [--release N] [--network N] [--notes "text"] [--installer INSTALLER.xbe]
+           [--release N] [--network N] [--notes "text"] [--installer INSTALLER.xbe] [--showcase DIR]
 
 (--release: the release's number, which goes up by one each release (0, the default: a test); --network: the
 network version its online play speaks; --notes: a line about it; --installer: the installer's XBE
 (port/oxbox/installer's bin/default.xbe), carried so an older installer can update itself from the package: its
-version is read from the XBE.) The package isn't signed: the project's owner signs it on their PC with
+version is read from the XBE; --showcase: a folder of the stock maps' showcase files (bloodgulch.txt...), which
+the installer writes as maps\\showcase\\<name>.txt only when it first makes OpenCE in a Halo folder, never over a
+file that's there, and never on an update.) The package isn't signed: the project's owner signs it on their PC with
 port/oxbox/tools/oxsign.py, which appends the signature. Only a signed package's installer is ever used.
 
 Each BUILD is port/oxbox/build.sh's halo1unlimited.xbe made from the RETAIL XBE beside it (a retail Halo, the
@@ -27,7 +29,8 @@ The format (little-endian), read by port/oxbox/installer/package.c:
         48  the package's name (64 bytes, ASCII, NUL-padded)
         112 u32 the manifest's size, u32 release, u32 network version, u32 (zero)
     the manifest: "key: value" lines (ASCII): name, release, network, date, notes, makes (the retail XBEs), and with
-        an installer: "installer" (its version), "installer size", "installer sha256" (hex)
+        an installer: "installer" (its version), "installer size", "installer sha256" (hex); with showcase files:
+        "showcase files" (how many), "showcase size" (their section's bytes)
     the body (zlib)
     then, if it's signed: "OXSG", u32 count, and for each signature: the key's id (the first 8 bytes of the SHA-256 of
         its public key), and an Ed25519 signature of "Halo 1 Unlimited package, signed\n" + the header + the manifest
@@ -40,8 +43,12 @@ The format (little-endian), read by port/oxbox/installer/package.c:
             u32 offset of its steps in the body, u32 their size
             its name (32 bytes, ASCII, NUL-padded)
         the steps, then the pool
+        then the showcase files, if it carries them ("showcase size" bytes, just before the installer, or the body's
+        last): u32 how many, and for each: its name (32 bytes, ASCII, NUL-padded: letters, digits, _ - and one .txt),
+        u32 its size, its bytes
         then the installer's XBE, if it carries one: the body's last "installer size" bytes. (Installers before
-        version 1 read none of this, and the format is still 2: they ignore it)
+        version 1 read none of this, installers before version 3 not the showcase files, and the format is still 2:
+        they ignore it)
     steps: a byte, then u32s:
         1 COPY from the retail XBE: offset, size
         2 POOL: offset in the body, size
@@ -58,6 +65,8 @@ MIN_MATCH = 16
 MIN_ZEROS = 64
 PICTURES_SIZE = 9 * 16384
 HEADER_SIZE = 32768
+SHOWCASE_MAX = 64 * 1024     # (a showcase.txt's most: hmp_share.c's MAX_TXT_SIZE)
+SHOWCASE_NAME = re.compile(r'^[a-z0-9_-]{1,27}\.txt$')
 COPY, POOL, ZERO, PICTURES, HEADER, END = 1, 2, 3, 4, 5, 0
 
 def match_length(a, i, b, j, limit):
@@ -258,6 +267,21 @@ def retail_name(retail):
     return 'Halo (%s, version %d)' % (region, version)
 
 
+def showcase_section(folder):
+    """the stock maps' showcase files (folder/*.txt): the body's section for them, and how many"""
+    import os
+    names = sorted(n for n in os.listdir(folder) if n.lower().endswith('.txt'))
+    section = bytearray(struct.pack('<I', len(names)))
+    for n in names:
+        assert SHOWCASE_NAME.match(n.lower()), '%s: a showcase file is named like bloodgulch.txt' % n
+        data = open(os.path.join(folder, n), 'rb').read()
+        assert 0 < len(data) <= SHOWCASE_MAX, '%s: empty or over 64 KB' % n
+        assert all(b in (9, 10, 13) or 32 <= b < 127 for b in data), '%s: not plain ASCII text' % n
+        section += n.lower().encode('ascii').ljust(32, b'\0') + struct.pack('<I', len(data)) + data
+    assert names, 'no .txt files in ' + folder
+    return len(names), bytes(section)
+
+
 def installer_version(xbe):
     """the installer's version, from its mark (main.c's installer_mark)"""
     assert xbe[:4] == b'XBEH', 'the installer isn\'t an XBE'
@@ -277,6 +301,7 @@ def main():
     parser.add_argument('--network', type=int, default=0)
     parser.add_argument('--notes', default='')
     parser.add_argument('--installer')
+    parser.add_argument('--showcase')
     args = parser.parse_args()
     if len(args.xbes) % 2:
         sys.exit(__doc__)
@@ -307,6 +332,9 @@ def main():
         body += e
     assert len(body) == pool_at
     body += pool
+    showcase = showcase_section(args.showcase) if args.showcase else None
+    if showcase:
+        body += showcase[1]
     installer = open(args.installer, 'rb').read() if args.installer else None
     if installer:
         body += installer
@@ -320,6 +348,8 @@ def main():
     manifest = 'name: %s\nrelease: %d\nnetwork: %d\ndate: %s\nnotes: %s\nmakes: %s\n' % (
         name, args.release, args.network, datetime.date.today().isoformat(), args.notes,
         ', '.join(retail_name(r) for r, _, _ in made))
+    if showcase:
+        manifest += 'showcase files: %d\nshowcase size: %d\n' % (showcase[0], len(showcase[1]))
     if installer:
         manifest += 'installer: %d\ninstaller size: %d\ninstaller sha256: %s\n' % (
             installer_version(installer), len(installer), hashlib.sha256(installer).hexdigest())
@@ -340,6 +370,8 @@ def main():
                  HEADER: 'header'}
         print('%s -> %d bytes: %s' % (retail_name(retail), len(build), ', '.join(
             '%s %d bytes (%d runs)' % (names[k], v[1], v[0]) for k, v in sorted(counts.items()))))
+    if showcase:
+        print('showcase files: %d, %d bytes' % (showcase[0], len(showcase[1])))
     if installer:
         print('the installer, version %d: %d bytes' % (installer_version(installer), len(installer)))
     print('%s: %d bytes (body %d, its pool %d), release %d, not signed' % (

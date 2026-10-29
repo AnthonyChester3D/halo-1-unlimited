@@ -9,7 +9,8 @@ joinable, and not counted in the play stats. Any button fades it out and brings 
 sees that press.
 
 Halo Map Porter writes showcase.txt in a ported map's folder, beside info.txt and preview.bin (a map maker can
-ship their own). The file, as the porter's showcase.hpp has it:
+ship their own). Map sharing (hmp_share.c, version 6) sends it with the map. The file, as the porter's showcase.hpp
+has it:
 
 	# a comment (anything after # on a line)
 	fade 0.5                  seconds of the fade to black between shots (0 to 5; 0.5 when left out)
@@ -26,11 +27,14 @@ after the last it holds. With look, it turns to keep the point in the middle. Th
 window's preview plays the same), so a shot looks here as it looked there. The fade is ours (the porter's preview
 cuts): out over a shot's last `fade` seconds, in over the next one's first.
 
-Which map: the folder maps with a showcase.txt (not ones hidden in the map browser), favorites first, each group in
-a shuffled order, a map at a time. A map plays its shot list through (and again, until it has played a minute),
+Which map: the folder maps with a showcase.txt, and the stock maps with a maps\showcase\<name>.txt (bloodgulch.txt,
+the level's own name: the same format; the installer adds the package's on a first install), not ones hidden in the map browser, favorites first, each group in a
+shuffled order, a map at a time. A map plays its shot list through (and again, until it has played a minute),
 then the next map loads (through the main menu, as every system link game does, with the title music kept off);
-with one map, its list just plays on. The game is Team Slayer to 999 with no time limit (the bots travel to find
-the other team, which plays better than Slayer's fights where they spawn), and bots: the map's suggested players
+with one map, its list just plays on. The game is CTF where the map has it (its info.txt's "Gametypes:" line
+names CTF; every stock map), else Team Slayer, to 999 with no time limit and every vehicle the map places (the bots
+travel to the other team's flag or find the other team, which plays better than Slayer's fights where they spawn,
+and drive and fly what's there), and bots: the map's suggested players
 (info.txt, else 8), 4 to 10, less the watching player, made even for the two teams, at Normal (opence.ini
 showcase_bots = N: N bots). The bots drop out one at a time while the game runs under 15 frames a second
 (opence.ini showcase_min_fps = N: under N; 0: never), down to two; each map starts with the full count again. No
@@ -381,7 +385,8 @@ static boolean showcase_line(
 	return TRUE;
 }
 
-/* the showcase.txt beside a folder map's .map: its path, FALSE for none */
+/* a map's shots: the showcase.txt beside a folder map's .map, or a stock map's maps\showcase\<its name>.txt
+(maps\showcase\bloodgulch.txt); FALSE for none */
 static boolean showcase_path(
 	char const *key,
 	char *path,
@@ -389,6 +394,18 @@ static boolean showcase_path(
 {
 	char *slash;
 
+	if (key && key[0] != '+' && hmp_browse_stock_title(key))
+	{
+		char const *name = strrchr(key, '\\');
+
+		name = name ? name + 1 : key;
+		if ((long)strlen(name) + 24 > size)
+			return FALSE;
+		strcpy(path, "d:\\maps\\showcase\\");
+		strcat(path, name);
+		strcat(path, ".txt");
+		return TRUE;
+	}
 	if (size < 16 || !hmp_map_file_path(key, path, size - 16))
 		return FALSE;
 	slash = strrchr(path, '\\');
@@ -643,7 +660,29 @@ static void showcase_swap_maps(
 	strcpy(showcase.maps[b], swap);
 }
 
-/* the folder maps with a showcase.txt, in the order to show them: favorites first, each group shuffled */
+/* whether the map goes in the showcase's list: not hidden in the map browser, in this pass (favorites, then the
+rest), and its shots there */
+static boolean showcase_listed(
+	char const *key,
+	long pass)
+{
+	struct hmp_rating rating;
+	HANDLE file;
+
+	if (!key || strlen(key) >= SHOWCASE_KEY_LENGTH)
+		return FALSE;
+	hmp_stats_get(key, &rating);
+	if (rating.hidden || (rating.favorite != 0) != (pass == 0))
+		return FALSE;
+	file = showcase_open(key);
+	if (file == INVALID_HANDLE_VALUE)
+		return FALSE;
+	CloseHandle(file);
+	return TRUE;
+}
+
+/* the maps with shots (folder maps with a showcase.txt, stock maps with a maps\showcase\<name>.txt), in the order
+to show them: favorites first, each group shuffled */
 static void showcase_find_maps(
 	void)
 {
@@ -665,19 +704,16 @@ static void showcase_find_maps(
 		for (index = 0; index < count && showcase.map_count < SHOWCASE_MAXIMUM_MAPS; index++)
 		{
 			char const *key = hmp_maps_key(index);
-			struct hmp_rating rating;
-			HANDLE file;
 
-			if (!key || strlen(key) >= SHOWCASE_KEY_LENGTH)
-				continue;
-			hmp_stats_get(key, &rating);
-			if (rating.hidden || (rating.favorite != 0) != (pass == 0))
-				continue;
-			file = showcase_open(key);
-			if (file == INVALID_HANDLE_VALUE)
-				continue;
-			CloseHandle(file);
-			strcpy(showcase.maps[showcase.map_count++], key);
+			if (showcase_listed(key, pass))
+				strcpy(showcase.maps[showcase.map_count++], key);
+		}
+		for (index = 0; index < HMP_STOCK_LEVELS && showcase.map_count < SHOWCASE_MAXIMUM_MAPS; index++)
+		{
+			char const *key = hmp_maps_stock_level(index);
+
+			if (showcase_listed(key, pass))
+				strcpy(showcase.maps[showcase.map_count++], key);
 		}
 		/* (Fisher-Yates) */
 		for (index = showcase.map_count - 1; index > first; index--)
@@ -739,14 +775,23 @@ static void showcase_failed(
 	}
 }
 
-/* the map's name for its title card: its menu name (info.txt's first line), else its folder's */
+/* the map's name for its title card: its menu name (info.txt's first line, or a stock map's), else its folder's */
 static void showcase_title_read(
 	void)
 {
 	wchar_t const *name = hmp_maps_title(showcase.key);
+	char const *stock = hmp_browse_stock_title(showcase.key);
 	long length = 0;
 
-	if (name)
+	if (stock)
+	{
+		while (stock[length] && length < (long)NUMBEROF(showcase.title) - 1)
+		{
+			showcase.title[length] = (wchar_t)(unsigned char)stock[length];
+			length++;
+		}
+	}
+	else if (name)
 	{
 		while (name[length] && length < (long)NUMBEROF(showcase.title) - 1)
 		{
@@ -986,19 +1031,26 @@ void showcase_update(
 			struct game_variant variant;
 
 			network_game_server_change_map_name(server, showcase.key);
-			/* (Team Slayer: the bots go looking for the other team, rather than fighting where they spawn) */
+			/* (CTF where the map has it, else Team Slayer: the bots go after the other team, or its flag, rather than
+			fighting where they spawn; every vehicle the map places, for them to drive and fly) */
 #if defined(OXBOX_TEST_SHOWCASE_VARIANT)
-			/* (test builds: another game type, for watching the bots play it: OXBOX_TEST_SHOWCASE_VARIANT="ctf") */
+			/* (test builds: another game type, for watching the bots play it: OXBOX_TEST_SHOWCASE_VARIANT="oddball") */
 			variant = *game_engine_get_variant_by_name(&variant, OXBOX_TEST_SHOWCASE_VARIANT);
 #else
-			variant = *game_engine_get_variant_by_name(&variant, "team_slayer");
+			variant = *game_engine_get_variant_by_name(&variant, hmp_browse_has_ctf(showcase.key) ? "ctf" : "team_slayer");
 #endif
+			platform_log("showcase: %s, %s, every vehicle the map places", showcase.key,
+				hmp_browse_has_ctf(showcase.key) ? "CTF" : "Team Slayer (no CTF on its card)");
 			variant.universal_variant.score_to_win = SHOWCASE_SCORE_TO_WIN;
-#if defined(OXBOX_TEST_SHOWCASE_VEHICLES)
-			/* (test builds: every vehicle the map places, for watching the bots drive and fly) */
-			variant.universal_variant.vehicle_set = VARIANT_VEHICLE_SET_PC;
-#endif
 			player_ui_set_game_variant(&variant);
+			{
+				/* (the vehicles: the gametype's PC options, each team's set, game_engine.h; the server takes the
+				menus' options with their gametype) */
+				struct game_variant_options options = *player_ui_get_game_variant_options();
+
+				options.vehicle_set[0] = options.vehicle_set[1] = VARIANT_VEHICLE_SET_PC;
+				player_ui_set_game_variant_options(&options);
+			}
 			network_game_server_change_game_variant(server, &variant);
 			showcase.map_set = TRUE;
 		}

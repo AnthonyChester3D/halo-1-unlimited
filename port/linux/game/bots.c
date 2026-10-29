@@ -324,7 +324,7 @@ arrivals, give-ups, waypoints visited, the bots' time). */
 
 enum
 {
-	BOTS_WAYPOINT_MAXIMUM = 192,
+	BOTS_WAYPOINT_MAXIMUM = 512,     /* (192 up to release 2; the searches' arrays are static, and the search keeps a heap) */
 	BOTS_LINK_MAXIMUM = 8,
 	BOTS_LINK_MINIMUM = 2,           /* links a waypoint gets however far its neighbours are */
 	BOTS_ROUTE_MAXIMUM = 40,
@@ -1247,6 +1247,47 @@ static void bots_link_result(
 	}
 }
 
+/* the search's queue: a binary heap of (cost, waypoint), smallest first; a waypoint may be in it more than once (an
+older, higher cost is skipped when it comes out). At most the 3 starts and one per link looked at */
+static struct bots_queued { real cost; short node; } bots_queue[3 + BOTS_WAYPOINT_MAXIMUM * BOTS_LINK_MAXIMUM];
+static long bots_queue_count;
+
+static void bots_queue_push(real cost, short node)
+{
+	long at = bots_queue_count++;
+
+	while (at > 0 && bots_queue[(at - 1) / 2].cost > cost)
+	{
+		bots_queue[at] = bots_queue[(at - 1) / 2];
+		at = (at - 1) / 2;
+	}
+	bots_queue[at].cost = cost;
+	bots_queue[at].node = node;
+}
+
+static struct bots_queued bots_queue_pop(void)
+{
+	struct bots_queued top = bots_queue[0], last = bots_queue[--bots_queue_count];
+	long at = 0;
+
+	for (;;)
+	{
+		long child = 2 * at + 1;
+
+		if (child >= bots_queue_count)
+			break;
+		if (child + 1 < bots_queue_count && bots_queue[child + 1].cost < bots_queue[child].cost)
+			child++;
+		if (bots_queue[child].cost >= last.cost)
+			break;
+		bots_queue[at] = bots_queue[child];
+		at = child;
+	}
+	if (bots_queue_count)
+		bots_queue[at] = last;
+	return top;
+}
+
 /* how far every waypoint is from where the bot is, over the usable links (Dijkstra, from its 3 nearest
 waypoints): cost REAL_MAX for one it can't reach, and each one's previous on the way */
 static short bots_explore(
@@ -1257,7 +1298,7 @@ static short bots_explore(
 	short *previous)
 {
 	short at = NONE;
-	byte done[BOTS_WAYPOINT_MAXIMUM];
+	static byte done[BOTS_WAYPOINT_MAXIMUM];
 	short starts[3] = { NONE, NONE, NONE };
 	real start_costs[3] = { REAL_MAX, REAL_MAX, REAL_MAX };
 	short count = bots_route.waypoint_count;
@@ -1299,36 +1340,34 @@ static short bots_explore(
 			}
 		}
 	}
+	bots_queue_count = 0;
 	if (at != NONE)
 	{
 		/* (on a waypoint: from it alone, so its links count what happens on the way) */
 		cost[at] = 0.f;
+		bots_queue_push(0.f, at);
 	}
 	else
 	{
 		for (index = 0; index < 3; index++)
 		{
-			if (starts[index] != NONE)
-				cost[starts[index]] = start_costs[index];
-		}
-	}
-	while (TRUE)
-	{
-		real best_cost = REAL_MAX;
-		struct bots_waypoint const *waypoint;
-		short node = NONE;
-		short link;
-
-		for (index = 0; index < count; index++)
-		{
-			if (!done[index] && cost[index] < best_cost)
+			if (starts[index] != NONE && start_costs[index] < cost[starts[index]])
 			{
-				best_cost = cost[index];
-				node = index;
+				cost[starts[index]] = start_costs[index];
+				bots_queue_push(start_costs[index], starts[index]);
 			}
 		}
-		if (node == NONE)
-			break;
+	}
+	while (bots_queue_count)
+	{
+		struct bots_queued next = bots_queue_pop();
+		real best_cost = next.cost;
+		struct bots_waypoint const *waypoint;
+		short node = next.node;
+		short link;
+
+		if (done[node] || best_cost > cost[node])
+			continue;
 		done[node] = TRUE;
 		waypoint = &bots_route.waypoints[node];
 		for (link = 0; link < waypoint->link_count; link++)
@@ -1354,6 +1393,7 @@ static short bots_explore(
 			{
 				cost[to] = best_cost + link_cost;
 				previous[to] = node;
+				bots_queue_push(cost[to], to);
 			}
 		}
 	}
@@ -1367,9 +1407,9 @@ static boolean bots_pick_destination(
 	real_point3d const *position,
 	long now)
 {
-	real cost[BOTS_WAYPOINT_MAXIMUM];
-	short previous[BOTS_WAYPOINT_MAXIMUM];
-	short route[BOTS_WAYPOINT_MAXIMUM];
+	static real cost[BOTS_WAYPOINT_MAXIMUM];
+	static short previous[BOTS_WAYPOINT_MAXIMUM];
+	static short route[BOTS_WAYPOINT_MAXIMUM];
 	short best = NONE;
 	long best_score = 0;
 	short length = 0;
@@ -2746,9 +2786,9 @@ static boolean bots_head_for(
 	real_point3d const *point,
 	long now)
 {
-	real cost[BOTS_WAYPOINT_MAXIMUM];
-	short previous[BOTS_WAYPOINT_MAXIMUM];
-	short route[BOTS_WAYPOINT_MAXIMUM];
+	static real cost[BOTS_WAYPOINT_MAXIMUM];
+	static short previous[BOTS_WAYPOINT_MAXIMUM];
+	static short route[BOTS_WAYPOINT_MAXIMUM];
 	short best = NONE;
 	real best_distance = 8.f;
 	short length = 0;
@@ -4693,9 +4733,9 @@ static boolean bots_route_to(
 	short waypoint,
 	long now)
 {
-	real cost[BOTS_WAYPOINT_MAXIMUM];
-	short previous[BOTS_WAYPOINT_MAXIMUM];
-	short route[BOTS_WAYPOINT_MAXIMUM];
+	static real cost[BOTS_WAYPOINT_MAXIMUM];
+	static short previous[BOTS_WAYPOINT_MAXIMUM];
+	static short route[BOTS_WAYPOINT_MAXIMUM];
 	short length = 0;
 	short index;
 	short node;
@@ -4799,8 +4839,8 @@ static boolean bots_goal_walk(
 			if (now >= brain->goal_plan_time)
 			{
 				/* (the waypoint nearest the goal of those the bot can reach; a little for the way there too) */
-				real cost[BOTS_WAYPOINT_MAXIMUM];
-				short previous[BOTS_WAYPOINT_MAXIMUM];
+				static real cost[BOTS_WAYPOINT_MAXIMUM];
+				static short previous[BOTS_WAYPOINT_MAXIMUM];
 				short best = NONE;
 				real best_distance = REAL_MAX;
 				short index;

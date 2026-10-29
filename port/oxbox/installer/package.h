@@ -36,6 +36,9 @@ struct package
 	/* the installer it carries (tools/mkpackage.py --installer): its version (0: none), and where it is in the body
 	(checked against the manifest's SHA-256 by package_load) */
 	unsigned long installer_version, installer_offset, installer_size;
+	/* the stock maps' showcase files it carries (mkpackage.py --showcase): how many, and their section in the body
+	(checked by package_load; read with package_showcase_file) */
+	unsigned long showcase_count, showcase_offset, showcase_size;
 };
 
 /* a public key the installer trusts (keys.txt, made into keys.h by tools/mkkeys.py) */
@@ -59,6 +62,10 @@ void package_free(struct package *package);
 
 /* the same package (its header and manifest: the body's SHA-256 among them) */
 int package_same(struct package const *a, struct package const *b);
+
+/* the n-th showcase file (n < showcase_count): its name ("bloodgulch.txt": checked safe), its bytes and size */
+void package_showcase_file(struct package const *package, unsigned long n, char *name, unsigned char const **data,
+	unsigned long *size);
 
 /* a manifest line's value ("date", "notes"...), up to size bytes; empty when it has none */
 void package_manifest_value(struct package const *package, char const *key, char *value, int size);

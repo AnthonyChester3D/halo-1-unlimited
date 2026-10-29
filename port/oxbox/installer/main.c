@@ -37,7 +37,7 @@ the installer itself. */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 2
+#define INSTALLER_VERSION 3
 #endif
 __attribute__((used)) static struct
 {
@@ -863,6 +863,33 @@ static int set_aside(struct halo *h, char const *main)
 	return 1;
 }
 
+/* the stock maps' showcase files the package carries, as maps\showcase\<name>.txt: only when OpenCE is first made in
+this folder (not an update), and never over a file that's there (the player may have changed or deleted them: an
+update leaves them be). Not being able to write one doesn't stop anything */
+static void install_showcase(struct halo *h)
+{
+	char path[220], name[32];
+	unsigned char const *data;
+	unsigned long n, size, wrote = 0;
+	if (!package.showcase_count)
+		return;
+	text_print(path, sizeof(path), "%s\\maps\\showcase", h->path);
+	CreateDirectoryA(path, NULL);
+	for (n = 0; n < package.showcase_count; n++)
+	{
+		package_showcase_file(&package, n, name, &data, &size);
+		text_print(path, sizeof(path), "%s\\maps\\showcase\\%s", h->path, name);
+		if (exists(path))
+			continue;
+		if (write_checked(path, data, size))
+			say_in(COLOUR_YELLOW, "  couldn't write maps\\showcase\\%s", name);
+		else
+			wrote++;
+	}
+	if (wrote)
+		say("Added %lu stock maps' showcase files (maps\\showcase)", wrote);
+}
+
 static int install(struct halo *h)
 {
 	char main[200], backup[200], temp[220], ui_map[200], error[256], line[SCREEN_COLUMNS + 8];
@@ -961,6 +988,8 @@ static int install(struct halo *h)
 		say("(The retail XBE is safe in default_retail.xbe.)");
 		return 1;
 	}
+	if (h->state != INSTALLED)
+		install_showcase(h);
 	say_in(COLOUR_GREEN, "Done: OpenCE is this folder's default.xbe.");
 	return 0;
 }

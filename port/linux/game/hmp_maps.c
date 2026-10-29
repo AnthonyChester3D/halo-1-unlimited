@@ -14,10 +14,12 @@ the retail XBE's addresses).
 			Abyss\ ...
 
 T:\maps (E:\TDATA\4d530004\maps: Halo's own storage on the hard drive) is read the same way after d:\maps; a map in
-both is listed once (the newer .map; map sharing can switch to the copy that matches the host).
+both is listed once (the higher "Version:" in its info .txt, else the newer .map; map sharing can switch to the copy
+that matches the host for a game, and switches back when the game is left: hmp_maps_unpin_all).
 
 info.txt: line 1 the name, the rest the description (UTF-8, UTF-16 with a BOM, or ANSI; "|n" breaks a line).
-"Genres:", "Gametypes:" and "Players:" lines are the browser's (hmp_browse.c) and aren't shown. Halo's text boxes
+"Version: N" (Halo Map Porter raises it each time a map is re-released; none: 0) says which copy of a map is newer:
+map sharing never puts an older one in place of a newer one. "Genres:", "Gametypes:" and "Players:" lines are the browser's (hmp_browse.c) and aren't shown. Halo's text boxes
 never wrap, so names and descriptions are broken into lines here, with the menu fonts' letter widths.
 
 preview.bin: 256x128 DXT1 (16,384 bytes, no header), the layout of Halo's own map pictures (the top-left 140x114
@@ -582,9 +584,34 @@ static boolean pack_has_series(short root, char const *key)
 	return series;
 }
 
-/* the copy to use when a map is in both maps folders: the newer .map (the same age: the game's folder) */
+/* a copy's "Version:" line (its info .txt): 0 when it has none */
+static unsigned long version_found;
+static void version_line(char *line)
+{
+	static char const name[] = "version:";
+	long n;
+	while (*line == ' ' || *line == '\t') line++;
+	for (n = 0; name[n] && lower((unsigned char)line[n]) == name[n]; n++) ;
+	if (name[n]) return;
+	for (line += n; *line == ' ' || *line == '\t'; line++) ;
+	for (n = 0; *line >= '0' && *line <= '9' && n < 9; line++, n++)
+		version_found = (n ? version_found * 10 : 0) + (unsigned long)(*line - '0');
+}
+static unsigned long copy_version(struct hmp_map const *map)
+{
+	char buffer[300];
+	if (map->info_file == NONE) return 0;
+	version_found = 0;
+	key_path(buffer, map->root, map_string(map->key), map_string(map->info_file));
+	return read_lines(buffer, version_line) ? version_found : 0;
+}
+
+/* the copy to use when a map is in both maps folders: the higher version, else the newer .map (the same age: the
+   game's folder) */
 static boolean newer(struct hmp_map const *a, struct hmp_map const *b)
 {
+	unsigned long va = copy_version(a), vb = copy_version(b);
+	if (va != vb) return va > vb;
 	return a->map_time_high != b->map_time_high ? a->map_time_high > b->map_time_high :
 		a->map_time_low != b->map_time_low ? a->map_time_low > b->map_time_low : a->root < b->root;
 }
@@ -643,13 +670,13 @@ static boolean valid_utf8(unsigned char const *b, long n)
 	}
 	return TRUE;
 }
-/* a line that's the browser's ("Genres:", "Gametypes:", "Players:") */
+/* a line that's the browser's ("Genres:", "Gametypes:", "Players:") or map sharing's ("Version:") */
 static boolean browser_line(wchar_t const *s)
 {
-	static char const *const names[3] = { "genres:", "gametypes:", "players:" };
+	static char const *const names[4] = { "genres:", "gametypes:", "players:", "version:" };
 	long j, n;
 	while (*s == ' ') s++;
-	for (j = 0; j < 3; j++)
+	for (j = 0; j < 4; j++)
 	{
 		for (n = 0; names[j][n] && s[n] < 128 && lower(s[n]) == names[j][n]; n++) ;
 		if (!names[j][n]) return TRUE;
@@ -1250,7 +1277,8 @@ char const *hmp_maps_file(long i, short which)
 	case 0: return map_string(map->map_file);
 	case 1: return map->info_file != NONE ? map_string(map->info_file) : NULL;
 	case 2: return map->picture ? "preview.bin" : NULL;
-	default: return map->series ? "series.bin" : NULL;
+	case 3: return map->series ? "series.bin" : NULL;
+	default: return "showcase.txt";        /* (map sharing sends it when the folder has one) */
 	}
 }
 short hmp_maps_root(long i) { return i >= 0 && i < hmp_maps_globals.map_count ? hmp_maps_globals.maps[i].root : 0; }
@@ -1284,6 +1312,27 @@ boolean hmp_maps_use_root(long i, short root)
 	if (i < 0 || i >= hmp_maps_globals.map_count || !set_root(i, root)) return FALSE;
 	hmp_maps_globals.maps[i].pinned = 1;
 	return TRUE;
+}
+
+/* the version of the copy in use ("Version:" in its info .txt; 0: none) */
+unsigned long hmp_maps_version(long i)
+{
+	return i >= 0 && i < hmp_maps_globals.map_count ? copy_version(&hmp_maps_globals.maps[i]) : 0;
+}
+
+/* the game left: no copy stays chosen by map sharing (the next hmp_maps_scan picks the newer again). each(key) for each
+   that was; how many */
+long hmp_maps_unpin_all(void (*each)(char const *key))
+{
+	long i, n = 0;
+	for (i = 0; i < hmp_maps_globals.map_count; i++)
+	{
+		if (!hmp_maps_globals.maps[i].pinned) continue;
+		hmp_maps_globals.maps[i].pinned = 0;
+		if (each) each(MAP_KEY(i));
+		n++;
+	}
+	return n;
 }
 
 void hmp_menu_memory_release(void)
