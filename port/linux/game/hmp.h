@@ -95,6 +95,16 @@ char const *hmp_maps_key(long map_index);
 long hmp_maps_find(char const *level_name);
 /* a list entry (a stock level's name or a key) -> 0-12 for a stock level, HMP_STOCK_LEVELS + folder map, NONE */
 long hmp_maps_entry(char const *entry);
+char const *hmp_browse_unsupported(char const *entry);
+boolean hmp_maps_note_gametypes(char const *level_name, char const *text);
+boolean hmp_maps_delete(char const *key);
+char const *hmp_maps_problem(long map_index);
+boolean hmp_maps_is_good(char const *key);
+void hmp_maps_mark_good(char const *key);
+void hmp_maps_forget_good(char const *key);
+void hmp_maps_check_tick(void);
+char const *hmp_browse_problem(char const *entry);
+wchar_t const *hmp_browse_prompt_text(char const *entry);
 /* the stock levels' names (levels\test\bloodgulch\bloodgulch ...), the list's first 13 */
 char const *hmp_maps_stock_level(long stock_index);
 char const *hmp_maps_stock_name(long stock_index);    /* "bloodgulch" */
@@ -148,6 +158,7 @@ wchar_t const *hmp_browse_label(long position);
 wchar_t const *hmp_browse_mark(char const *entry);
 short hmp_browse_black(char const *entry);
 boolean hmp_browse_has_ctf(char const *level_name);
+boolean hmp_browse_in_genre(char const *level_name, char const *word);
 char const *hmp_browse_stock_title(char const *level_name);
 /* a button on the map list (its selection and arrow flash): TRUE when it was ours */
 boolean hmp_browse_event(struct widget_instance *list, struct event_record const *event);

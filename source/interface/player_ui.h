@@ -57,6 +57,8 @@ void player_ui_set_game_variant_options(
 	struct game_variant_options const *options);
 struct game_variant_options const *player_ui_get_game_variant_options(
 	void);
+long player_ui_get_game_variant_engine(
+	void);
 boolean player_ui_edit_profile_is_dirty(
 	void);
 boolean player_ui_save_profile(

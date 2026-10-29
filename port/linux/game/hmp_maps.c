@@ -49,6 +49,7 @@ the list's table and the text caches are the menus' and are freed when a game ma
 #include "oxbox_net_status.h"
 #endif
 
+#include <stdlib.h>
 #include <string.h>
 #include <xtl.h>
 
@@ -85,7 +86,7 @@ struct hmp_map
 	char hidden;                                 /* "-name" in its pack's order.txt */
 	char mark;
 	char pinned;                                 /* map sharing chose this copy for the session */
-	char pad;
+	char problem;                                /* the map checks': 0 not checked, 1 fine, else a reason's + 2 */
 };
 
 struct hmp_info
@@ -860,20 +861,49 @@ static wchar_t *compose(long entry, wchar_t const *description)
 	char const *entry_name = entry < HMP_STOCK_LEVELS ? hmp_maps_globals.stock_levels[entry] : MAP_KEY(entry - HMP_STOCK_LEVELS);
 	wchar_t *o, *start, *end, line[48];
 	wchar_t const *t;
+	char const *unsupported;
 	long k, position = NONE, n;
 	short black;
 	if (!menu) return (wchar_t *)description;
 	start = o = menu->composed[menu->composed_next = (menu->composed_next + 1) % 3];
 	end = o + NUMBEROF(menu->composed[0]) - 1;
+	if ((t = hmp_browse_prompt_text(entry_name)) != NULL)   /* Black held: the map's options */
+	{
+		while (*t && o < end) *o++ = *t++;
+		*o = 0;
+		return start;
+	}
 	if ((black = hmp_browse_black(entry_name)) != 0)
 	{
 		wchar_t const *mark = hmp_browse_mark(entry_name);
 		boolean hidden = FALSE;
 		char const *q;
 		for (k = 0; mark[k]; k++) if (mark[k] == 'H') hidden = TRUE;
-		if (black == 1) q = hidden ? "Keep holding Black\rto show this map\ragain" : "Keep holding Black\rto hide this map";
-		else q = hidden ? "Hold Black to show\rthis map again" : "Hold Black to hide\rthis map";
+		(void)hidden;
+		if (black == 1) q = "Keep holding Black\rfor this map's\roptions";
+		else q = "Hold Black for\rthis map's options\r(delete, hide)";
 		while (*q) *o++ = (unsigned char)*q++;
+		*o = 0;
+		return start;
+	}
+	/* a map that can't load (the map checks): the card says why (in yellow), and A won't choose it */
+	if (entry >= HMP_STOCK_LEVELS && (unsupported = hmp_maps_problem(entry - HMP_STOCK_LEVELS)) != NULL)
+	{
+		wchar_t text[128];
+		char const *q = "Problem: ", *g = unsupported;
+		n = 0;
+		while (*q && n < 127) text[n++] = (unsigned char)*q++;
+		while (*g && n < 127) text[n++] = (unsigned char)*g++;
+		text[n] = 0;
+		hmp_wrap_text(text, o, (long)(end - o), FALSE, DESCRIPTION_TEXT_WIDTH);
+		return start;
+	}
+	/* the chosen gametype isn't on this map: the card says only that (in yellow: ui_widget.c), and A won't start it */
+	if ((unsupported = hmp_browse_unsupported(entry_name)) != NULL)
+	{
+		char const *q = "Does not support ", *g = unsupported;
+		while (*q && o < end) *o++ = (unsigned char)*q++;
+		while (*g && o < end) *o++ = (unsigned char)*g++;
 		*o = 0;
 		return start;
 	}
@@ -1235,6 +1265,167 @@ long hmp_maps_read_info(long i, unsigned char *buffer, long size)
 	return (long)got;
 }
 
+/* oxbox: a folder map's info .txt says "Gametypes: <text>" in place of any line it had (game_engine.c: the map
+turned out not to have what the chosen gametype needs, so the map browser stops it next time: hmp_browse.c). Written
+beside as .new, checked, swapped in; UTF-16 stays UTF-16. Nothing when the map has no info .txt (its first line is
+the map's name) or it's over 8 KB. FALSE when it wasn't written */
+boolean hmp_maps_note_gametypes(char const *level_name, char const *text)
+{
+	enum { IN_SIZE = 8192, OUT_SIZE = 8192 + 512 };
+	static char const name[] = "gametypes:";
+	unsigned char *in, *out;
+	boolean result = FALSE;
+	char path[310];
+	long i = hmp_maps_find(level_name), got, n = 0, at, unit, k;
+	unsigned long put = 0;
+	HANDLE file;
+	if (i == NONE || !(in = (unsigned char *)LocalAlloc(0, IN_SIZE + OUT_SIZE))) return FALSE;   /* (only for this) */
+	out = in + IN_SIZE;
+	if ((got = hmp_maps_read_info(i, in, IN_SIZE)) <= 0 || got >= IN_SIZE) { LocalFree(in); return FALSE; }
+	unit = got >= 2 && in[0] == 0xff && in[1] == 0xfe ? 2 : 1;
+	at = unit == 2 ? 2 : got >= 3 && in[0] == 0xef && in[1] == 0xbb && in[2] == 0xbf ? 3 : 0;
+	memcpy(out, in, at);
+	n = at;
+	while (at < got)
+	{
+		long end = at, s = at;
+		while (end < got && in[end] != '\n') end += unit;
+		end = end < got ? end + unit : got;            /* (the line with its newline) */
+		while (s < end && (in[s] == ' ' || in[s] == '\t') && (unit == 1 || !in[s + 1])) s += unit;
+		for (k = 0; name[k] && s + k * unit < end && lower(in[s + k * unit]) == name[k] && (unit == 1 || !in[s + k * unit + 1]); k++) ;
+		if (name[k])
+		{
+			memcpy(out + n, in + at, end - at);
+			n += end - at;
+		}
+		at = end;
+	}
+	if (n > (unit == 2 ? 2 : 0) && out[n - unit] != '\n')
+	{
+		out[n] = '\r'; if (unit == 2) out[n + 1] = 0; n += unit;
+		out[n] = '\n'; if (unit == 2) out[n + 1] = 0; n += unit;
+	}
+	{
+		char line[128], *p = line;
+		char const *q = "Gametypes: ";
+		while (*q) *p++ = *q++;
+		for (q = text; *q && p < line + sizeof(line) - 3; ) *p++ = *q++;
+		*p++ = '\r'; *p++ = '\n'; *p = 0;
+		for (p = line; *p; p++) { out[n++] = (unsigned char)*p; if (unit == 2) out[n++] = 0; }
+	}
+	strcpy(path, hmp_maps_globals.info_path);       /* (hmp_maps_read_info's) */
+	strcat(path, ".new");
+	file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file != INVALID_FILE)
+	{
+		boolean written = WriteFile(file, out, (unsigned long)n, &put, NULL) && put == (unsigned long)n;
+		FlushFileBuffers(file);
+		CloseHandle(file);
+		if (!written) DeleteFileA(path);
+		else
+		{
+			DeleteFileA(hmp_maps_globals.info_path);
+			result = MoveFileA(path, hmp_maps_globals.info_path) != 0;
+		}
+	}
+	LocalFree(in);
+	return result;
+}
+
+/* a folder and what's in it (depth: how many levels of folders in it go too); TRUE when it's gone */
+#define NO_FILE_ATTRIBUTES ((DWORD)0xFFFFFFFF)
+static boolean delete_tree(char const *path, long depth)
+{
+	char pattern[320], item[320];
+	WIN32_FIND_DATAA find;
+	HANDLE handle;
+	if (strlen(path) > 250) return FALSE;
+	strcpy(pattern, path);
+	strcat(pattern, "\\*");
+	handle = FindFirstFileA(pattern, &find);
+	if (handle != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			if (find.cFileName[0] == '.' && (!find.cFileName[1] || (find.cFileName[1] == '.' && !find.cFileName[2]))) continue;
+			if (strlen(find.cFileName) > 60) continue;
+			strcpy(item, path);
+			strcat(item, "\\");
+			strcat(item, find.cFileName);
+			if (find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { if (depth > 0) delete_tree(item, depth - 1); }
+			else
+			{
+				SetFileAttributesA(item, FILE_ATTRIBUTE_NORMAL);
+				if (!DeleteFileA(item)) hmp_log("maps: couldn't delete %s (error %d)", item, (int)GetLastError());
+			}
+		} while (FindNextFileA(handle, &find));
+		CloseHandle(handle);
+	}
+	if (RemoveDirectoryA(path) || GetFileAttributesA(path) == NO_FILE_ATTRIBUTES) return TRUE;
+	hmp_log("maps: couldn't remove the folder %s (error %d)", path, (int)GetLastError());
+	return FALSE;
+}
+
+/* whether a folder has a folder in it (a pack: a map still in it) */
+static boolean has_folder(char const *path)
+{
+	char pattern[320];
+	WIN32_FIND_DATAA find;
+	HANDLE handle;
+	boolean found = FALSE;
+	strcpy(pattern, path);
+	strcat(pattern, "\\*");
+	handle = FindFirstFileA(pattern, &find);
+	if (handle == INVALID_HANDLE_VALUE) return FALSE;
+	do if ((find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && find.cFileName[0] != '.') found = TRUE;
+	while (!found && FindNextFileA(handle, &find));
+	CloseHandle(handle);
+	return found;
+}
+
+/* oxbox: the map browser's Delete (hmp_browse.c): folder map key ("+folder", "+pack/folder") gone from both maps
+folders, with its .hmp_prev copy (map sharing's), out of Halo's map cache; a pack with no map left goes too.
+hmp_maps_scan after. TRUE when no copy is left */
+boolean hmp_maps_delete(char const *key)
+{
+	extern boolean cache_files_forget_cached_map(char const *map_name);
+	char folder[310];
+	char const *k;
+	short root;
+	boolean gone = TRUE;
+	size_t length = key ? strlen(key) : 0;
+	/* (a map's own folder, never a maps folder itself or a pack: "+x" at least, no empty part, no "..") */
+	if (length < 2 || length > 200 || key[0] != '+' || key[1] == '/' || key[length - 1] == '/' || strstr(key, "//") ||
+		strstr(key, "..") || strchr(key, '\\') || hmp_maps_find(key) == NONE)
+	{
+		hmp_log("maps: %s isn't a folder map this console has: not deleted", key ? key : "(none)");
+		return FALSE;
+	}
+	cache_files_forget_cached_map(key);              /* (first: a precache may hold the map open) */
+	for (root = 0; root < 2; root++)
+	{
+		char *p = key_path(folder, root, key, "");
+		p[-1] = 0;                                   /* (without the last backslash) */
+		if (GetFileAttributesA(folder) != NO_FILE_ATTRIBUTES)
+		{
+			if (delete_tree(folder, 2)) hmp_log("maps: deleted %s", folder);
+			else { gone = FALSE; hmp_log("maps: couldn't delete all of %s", folder); }
+		}
+		strcpy(p - 1, ".hmp_prev");
+		if (GetFileAttributesA(folder) != NO_FILE_ATTRIBUTES) delete_tree(folder, 2);
+		if ((k = strchr(key, '/')) != NULL)          /* a pack's map: the pack too, when no map is left in it */
+		{
+			char *q = scpy(folder, maps_roots[root]);
+			memcpy(q, key + 1, k - key - 1);
+			q[k - key - 1] = 0;
+			if (GetFileAttributesA(folder) != NO_FILE_ATTRIBUTES && !has_folder(folder) && delete_tree(folder, 0))
+				hmp_log("maps: deleted the pack %s (no maps left in it)", folder);
+		}
+	}
+	cache_files_forget_cached_map(key);
+	return gone;
+}
+
 boolean hmp_maps_same_pack(char const *a, char const *b)
 {
 	long x = hmp_maps_entry(a), y = hmp_maps_entry(b);
@@ -1563,3 +1754,302 @@ struct bitmap_data *custom_edition_maps_picture(long bitmap_tag_index, short *fr
 }
 
 #endif /* HALO_XBOX_TARGET */
+
+
+#ifdef HALO_XBOX_TARGET
+/* ---------- oxbox: map checks
+
+A folder map that can't be loaded ended the game for everyone (the damaged disc error, at the end of the lobby's
+countdown), and map sharing could already have sent it to the others. Three things:
+- the quick check (every map, from its header: cut short, not a map, another version's, not multiplayer, too big for
+  the Xbox's map cache): the map browser's card says "Problem: ..." in yellow and A won't choose it. Once a boot,
+  every map is checked a few a frame, and oxbox_log.txt lists the ones with a problem.
+- maps known to load: one that loaded once on this Xbox (or passed the full check) is remembered, by its size and
+  header checksum, in T:\hmp_good_maps.txt. Map sharing sends only those (hmp_share.c): a joining console waits
+  ("the host is checking the map") until the host's own copy has loaded.
+- the full check (opence.ini map_check = 1, for testing): after the quick check, every map not yet known to load is
+  read and unpacked whole on a thread of its own, as loading it does, one by one; each result, and at the end the
+  list of the ones that failed, goes in oxbox_log.txt ("map check: ..."). */
+
+char const *cache_files_map_problem(char const *map_name);
+char const *cache_files_map_full_check(char const *path, void *work, unsigned long work_size, volatile long const *stop);
+void cache_files_map_file_path(char const *map_name, char *path);
+unsigned long hmp_share_map_version(char const *level_name);
+int oxbox_setting_map_check = 0;   /* opence.ini map_check = 1: the full check (oxbox_entry.c) */
+
+#define CHECK_REASONS 16
+#define CHECK_FAILED_MAXIMUM 64
+#define GOOD_MAXIMUM 512
+#define QUICK_PER_FRAME 4
+#define CHECK_WORK_SIZE (112 * 1024)          /* the full check's memory, while it runs: 64 KB of buffers, zlib's 48 KB */
+
+static struct
+{
+	char const *reasons[CHECK_REASONS];      /* the reasons the maps' problem codes stand for */
+	long reason_count;
+	struct { char key[48]; char const *why; } failed[CHECK_FAILED_MAXIMUM];   /* the full check's failures */
+	long failed_count;
+	/* the maps known to load */
+	struct { unsigned long key_hash, identity; } good[GOOD_MAXIMUM];
+	long good_count;
+	boolean good_loaded;
+	/* the checks' progress: 0 not started, 1 quick, 2 full, 3 done */
+	short stage;
+	long next, problems, passed, skipped;
+	unsigned long started;
+	/* the full check's thread and its one job */
+	HANDLE thread;
+	void *work;
+	volatile long job;                       /* 0 idle, 1 asked, 2 done, -1 quit */
+	char job_key[48], job_path[260];
+	char const *volatile job_why;
+	unsigned long job_started;
+} check;
+
+static char const good_path[] = "T:\\hmp_good_maps.txt";
+static char good_text[GOOD_MAXIMUM * 18 + 1];   /* (the file's text, read or written) */
+
+static unsigned long key_hash(char const *key)
+{
+	unsigned long h = 2166136261ul;
+	for (; *key; key++) h = (h ^ (unsigned long)lower((unsigned char)*key)) * 16777619ul;
+	return h;
+}
+
+static long reason_code(char const *why)
+{
+	long k;
+	if (!why) return 1;
+	for (k = 0; k < check.reason_count; k++) if (check.reasons[k] == why) return k + 2;
+	if (check.reason_count >= CHECK_REASONS) return 2;
+	check.reasons[check.reason_count++] = why;
+	return check.reason_count + 1;
+}
+
+/* the quick check's (or the full check's) reason folder map i can't be loaded, NULL when it can (as far as is known) */
+char const *hmp_maps_problem(long i)
+{
+	struct hmp_map *map;
+	long k;
+	if (i < 0 || i >= hmp_maps_globals.map_count) return NULL;
+	map = &hmp_maps_globals.maps[i];
+	if (!map->problem)
+	{
+		char const *why = NULL;
+		for (k = 0; k < check.failed_count; k++) if (!ieq(check.failed[k].key, MAP_KEY(i))) { why = check.failed[k].why; break; }
+		if (!why) why = cache_files_map_problem(MAP_KEY(i));
+		map->problem = (char)reason_code(why);
+	}
+	return map->problem >= 2 ? check.reasons[map->problem - 2] : NULL;
+}
+
+static void good_load(void)
+{
+	char line[64];
+	HANDLE file;
+	unsigned long got = 0, k, start = 0;
+	char *text = good_text;
+	if (check.good_loaded) return;
+	check.good_loaded = TRUE;
+	file = open_read(good_path);
+	if (file == INVALID_FILE) return;
+	if (!ReadFile(file, text, sizeof(good_text) - 1, &got, NULL)) got = 0;
+	CloseHandle(file);
+	text[got] = 0;
+	for (k = 0; k <= got && check.good_count < GOOD_MAXIMUM; k++)
+	{
+		if (k < got && text[k] != '\n') continue;
+		if (k - start >= 17 && k - start < sizeof(line))
+		{
+			memcpy(line, text + start, k - start);
+			line[k - start] = 0;
+			check.good[check.good_count].key_hash = strtoul(line, NULL, 16);
+			check.good[check.good_count].identity = strtoul(line + 9, NULL, 16);
+			check.good_count++;
+		}
+		start = k + 1;
+	}
+}
+
+static void good_write_all(void)
+{
+	char *text = good_text;
+	long k, n = 0;
+	unsigned long put;
+	HANDLE file;
+	for (k = 0; k < check.good_count; k++)
+		n += snprintf(text + n, sizeof(good_text) - n, "%08lx %08lx\n", check.good[k].key_hash, check.good[k].identity);
+	file = CreateFileA(good_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_FILE) return;
+	WriteFile(file, text, (unsigned long)n, &put, NULL);
+	CloseHandle(file);
+}
+
+/* whether a folder map is known to load on this Xbox, as its file is now */
+boolean hmp_maps_is_good(char const *key)
+{
+	unsigned long h, id;
+	long k;
+	if (!key || key[0] != '+') return TRUE;          /* (Halo's own maps) */
+	good_load();
+	if (!(id = hmp_share_map_version(key))) return FALSE;
+	h = key_hash(key);
+	for (k = 0; k < check.good_count; k++) if (check.good[k].key_hash == h && check.good[k].identity == id) return TRUE;
+	return FALSE;
+}
+
+/* a folder map loaded (cache_files.c), or passed the full check: known to load, as its file is now */
+void hmp_maps_mark_good(char const *key)
+{
+	unsigned long h, id;
+	long k;
+	if (!key || key[0] != '+' || hmp_maps_is_good(key) || !(id = hmp_share_map_version(key))) return;
+	h = key_hash(key);
+	for (k = 0; k < check.good_count && check.good[k].key_hash != h; k++) ;
+	if (k == check.good_count)
+	{
+		if (check.good_count >= GOOD_MAXIMUM)
+		{
+			memmove(&check.good[0], &check.good[1], (GOOD_MAXIMUM - 1) * sizeof(check.good[0]));   /* (the oldest goes) */
+			k = GOOD_MAXIMUM - 1;
+		}
+		else check.good_count++;
+	}
+	check.good[k].key_hash = h;
+	check.good[k].identity = id;
+	good_write_all();
+	hmp_log("map check: %s loads: map sharing may send it", key);
+}
+
+/* a folder map failed to load (cache_files.c): not known to load any more */
+void hmp_maps_forget_good(char const *key)
+{
+	unsigned long h;
+	long k, n = 0;
+	if (!key) return;
+	good_load();
+	h = key_hash(key);
+	for (k = 0; k < check.good_count; k++) if (check.good[k].key_hash != h) check.good[n++] = check.good[k];
+	if (n != check.good_count) { check.good_count = n; good_write_all(); }
+}
+
+static DWORD WINAPI full_check_thread(void *parameter)
+{
+	(void)parameter;
+	for (;;)
+	{
+		if (check.job == -1) break;
+		if (check.job != 1) { Sleep(50); continue; }
+		check.job_why = cache_files_map_full_check(check.job_path, check.work, CHECK_WORK_SIZE, NULL);
+		check.job = 2;
+	}
+	return 0;
+}
+
+static void check_summary(char const *what)
+{
+	long k;
+	hmp_log("map check (%s): done in %lu s: %ld maps, %ld fine, %ld with a problem%s", what,
+		(GetTickCount() - check.started) / 1000, hmp_maps_globals.map_count, check.passed, check.problems,
+		check.problems ? ":" : "");
+	for (k = 0; k < hmp_maps_globals.map_count; k++)
+	{
+		char const *why = hmp_maps_globals.maps[k].problem >= 2 ? check.reasons[hmp_maps_globals.maps[k].problem - 2] : NULL;
+		if (why) hmp_log("map check:   %s: %s", MAP_KEY(k), why);
+	}
+}
+
+/* every frame (hmp_share.c's map_share_update): the checks, a little at a time, in the menus */
+void hmp_maps_check_tick(void)
+{
+	long k;
+	if (check.stage == 3 || !hmp_menus_running() || !hmp_maps_globals.map_count) return;
+	if (check.stage == 0)
+	{
+		check.stage = 1;
+		check.next = check.problems = check.passed = check.skipped = 0;
+		check.started = GetTickCount();
+	}
+	if (check.stage == 1)
+	{
+		for (k = 0; k < QUICK_PER_FRAME && check.next < hmp_maps_globals.map_count; k++, check.next++)
+		{
+			if (hmp_maps_problem(check.next)) check.problems++;
+			else check.passed++;
+		}
+		if (check.next < hmp_maps_globals.map_count) return;
+		check_summary("quick");
+		if (!oxbox_setting_map_check) { check.stage = 3; return; }
+		check.stage = 2;
+		check.next = check.problems = check.passed = check.skipped = 0;
+		check.started = GetTickCount();
+		check.work = LocalAlloc(0, CHECK_WORK_SIZE);
+		check.job = 0;
+		check.thread = check.work ? CreateThread(NULL, 16 * 1024, full_check_thread, NULL, 0, NULL) : NULL;
+		if (!check.thread)
+		{
+			hmp_log("map check (full): couldn't start (no memory)");
+			if (check.work) LocalFree(check.work);
+			check.work = NULL;
+			check.stage = 3;
+			return;
+		}
+		SetThreadPriority(check.thread, -2);   /* (THREAD_PRIORITY_LOWEST) */
+		hmp_log("map check (full): checking every map not yet known to load, one at a time (opence.ini map_check = 1)");
+	}
+	/* the full check: a result in, then the next map out */
+	if (check.job == 2)
+	{
+		char const *why = check.job_why;
+		unsigned long seconds10 = (GetTickCount() - check.job_started) / 100;
+		long i = hmp_maps_find(check.job_key);
+		if (why && !strncmp(why, "busy", 4))
+		{
+			check.skipped++;
+			hmp_log("map check: %s: %s", check.job_key, why);
+		}
+		else if (why)
+		{
+			check.problems++;
+			hmp_log("map check: %s: FAILED (%lu.%lu s): %s", check.job_key, seconds10 / 10, seconds10 % 10, why);
+			if (check.failed_count < CHECK_FAILED_MAXIMUM)
+			{
+				strcpy(check.failed[check.failed_count].key, check.job_key);
+				check.failed[check.failed_count++].why = why;
+			}
+			if (i != NONE) hmp_maps_globals.maps[i].problem = (char)reason_code(why);
+			hmp_maps_forget_good(check.job_key);
+		}
+		else
+		{
+			check.passed++;
+			hmp_log("map check: %s: fine (%lu.%lu s)", check.job_key, seconds10 / 10, seconds10 % 10);
+			hmp_maps_mark_good(check.job_key);
+		}
+		check.job = 0;
+	}
+	if (check.job != 0) return;
+	while (check.next < hmp_maps_globals.map_count)
+	{
+		long i = check.next++;
+		char const *key = MAP_KEY(i);
+		if (strlen(key) >= sizeof(check.job_key)) continue;
+		if (hmp_maps_problem(i)) { check.problems++; continue; }   /* (the quick check said already) */
+		if (hmp_maps_is_good(key)) { check.passed++; continue; }
+		strcpy(check.job_key, key);
+		cache_files_map_file_path(key, check.job_path);
+		check.job_started = GetTickCount();
+		check.job = 1;
+		return;
+	}
+	check.job = -1;                                   /* (the thread ends) */
+	WaitForSingleObject(check.thread, 1000);
+	CloseHandle(check.thread);
+	check.thread = NULL;
+	LocalFree(check.work);
+	check.work = NULL;
+	if (check.skipped) hmp_log("map check (full): %ld maps were busy (being loaded) and weren't checked", check.skipped);
+	check_summary("full");
+	check.stage = 3;
+}
+#endif

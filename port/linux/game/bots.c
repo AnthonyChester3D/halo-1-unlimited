@@ -3368,7 +3368,8 @@ static void bots_fight(
 		brain->aimed = (real)fabs(bots_angle_difference(aim_yaw, brain->yaw)) < tolerance &&
 			(real)fabs(aim_pitch - brain->pitch) < tolerance;
 
-		/* (no melee or grenades from a seat: the vehicle's gun alone) */
+		/* (no melee or grenades from a seat: the vehicle's gun alone. No grenades with a flag or a ball in hand, which
+		the throw drops: checked on the unit itself, as goal_urgent can lag a pickup by the goal's next look) */
 		if (brain->seat_kind == _bots_seat_none && distance < BOTS_MELEE_RANGE + 0.6f && now >= brain->melee_time)
 		{
 			/* (within arm's reach) */
@@ -3378,7 +3379,7 @@ static void bots_fight(
 		}
 		else if (brain->seat_kind == _bots_seat_none && now >= brain->target_sighted_time && brain->aimed && weapon_index != NONE &&
 			distance > BOTS_GRENADE_RANGE_MINIMUM && distance < BOTS_GRENADE_RANGE_MAXIMUM && now >= brain->grenade_time &&
-			!brain->goal_urgent &&
+			!brain->goal_urgent && !bots_carries_objective(unit) &&
 			(unit->unit.grenade_counts[0] > 0 || unit->unit.grenade_counts[1] > 0))
 		{
 			/* (a grenade: thrown a little high, for its arc; of the other kind when the one in hand has run out) */
@@ -4779,16 +4780,22 @@ static boolean bots_goal_walk(
 	rise = (real)fabs(brain->goal_point.z - position->z);
 	if (brain->goal_kind == _bots_goal_hold && distance < brain->goal_radius && rise < 1.5f)
 	{
-		/* holding: about the spot, a new place in it every 2 or 3 seconds */
-		if (now >= brain->hold_until || bots_distance2d(position, &brain->hold_point) < 0.5f)
+		/* holding: about the spot, a new place in it every 2 or 3 seconds, waiting there till then (a new place the
+		moment it got there had it darting about). Guarding its own flag: a place 3 to 5.4 units from the flag, not
+		on it, kept 5 to 9 seconds (darting onto the flag looked like trying to pick it up; touching its own flag
+		at home does nothing) */
+		if (now >= brain->hold_until)
 		{
+			boolean guard = brain->goal_reason == _bots_reason_defend;
 			real angle = (real)(bots_random() % 628) / 100.f;
-			real reach = brain->goal_radius * 0.6f * (real)(bots_random() % 100) / 100.f;
+			real reach = brain->goal_radius * (guard ? 0.5f + 0.4f * (real)(bots_random() % 100) / 100.f :
+				0.6f * (real)(bots_random() % 100) / 100.f);
 
 			brain->hold_point = brain->goal_point;
 			brain->hold_point.x += reach * (real)cos(angle);
 			brain->hold_point.y += reach * (real)sin(angle);
-			brain->hold_until = now + 2 * BOTS_TICKS_PER_SECOND + (long)(bots_random() % BOTS_TICKS_PER_SECOND);
+			brain->hold_until = now + (guard ? 5 * BOTS_TICKS_PER_SECOND + (long)(bots_random() % (4 * BOTS_TICKS_PER_SECOND)) :
+				2 * BOTS_TICKS_PER_SECOND + (long)(bots_random() % BOTS_TICKS_PER_SECOND));
 		}
 		toward = &brain->hold_point;
 		brain->goal_direct_since = 0;
@@ -4948,7 +4955,9 @@ static boolean bots_goal_walk(
 	di = toward->x - position->x;
 	dj = toward->y - position->y;
 	length = (real)sqrt(di * di + dj * dj);
-	if (length < 0.05f)
+	/* (at its place while holding: stands there, within a stride of it; full speed to within 0.05 overshot and
+	stepped back and forth) */
+	if (length < 0.05f || (toward == &brain->hold_point && length < 0.6f))
 		return TRUE;
 	brain->move_i = di / length;
 	brain->move_j = dj / length;

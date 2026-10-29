@@ -199,7 +199,13 @@ void cheats_update(
 	void)
 {
 	cheats_network_client_enforce();
+#if defined(OXBOX_STRIP)
+	/* oxbox: no controller cheats (Back held with another button ran that button's line of cheats.txt, once the
+	cheat_controller global was set); retail Halo on the Xbox had none */
+	if (FALSE)
+#else
 	if (cheat.controller_enabled)
+#endif
 	{
 		short local_player_index;
 

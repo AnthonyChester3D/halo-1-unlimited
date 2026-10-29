@@ -859,8 +859,16 @@ void game_unload(
 		while (!map_status);
 
 		ui_widgets_close_all();
+#ifdef HALO_XBOX_TARGET
+		/* oxbox: a copy that failed while another map is wanted (the lobby closed under it, or a damaged folder
+		map): its map isn't the one being loaded, so the copy just ends (the damaged disc error ended the game; a
+		map that really can't be read says so when it's loaded) */
+		if (map_status == 2)
+			error(_error_silent, "a map's precache had failed: ended, not needed now");
+#else
 		if (map_status == 2)
 			display_error_damaged_media();
+#endif
 		cache_files_precache_map_end();
 	}
 

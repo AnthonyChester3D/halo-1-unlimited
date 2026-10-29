@@ -1806,3 +1806,157 @@ static short cached_map_files_find_map(
 
 	return NONE;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* ---------- oxbox: checking a folder map before it's loaded (port/linux/game/hmp_maps.c's map checks) */
+
+#include "../../port/third_party/zlib/zlib_prefixed.h"
+#ifndef FILE_SHARE_READ
+#define FILE_SHARE_READ 0x00000001
+#endif
+#ifndef ERROR_SHARING_VIOLATION
+#define ERROR_SHARING_VIOLATION 32L
+#endif
+#define CACHE_FILE_HEADER_SIGNATURE 'head'           /* (cache_files.c's) */
+#define CACHE_FILE_FOOTER_SIGNATURE 'foot'
+
+/* the quick check, from the map's header (2 KB): NULL when nothing's wrong, else what is. A map with a problem here
+fails every time it's loaded (the damaged disc error, at the end of the lobby's countdown) */
+char const *cache_files_map_problem(
+	char const *map_name)
+{
+	struct cache_file_header header;
+	char path[256];
+	HANDLE file;
+	unsigned long bytes_read = 0, size;
+
+	cache_file_get_map_path(map_name, path);
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return GetLastError() == ERROR_SHARING_VIOLATION ? NULL : "its .map file can't be opened";
+	size = GetFileSize(file, NULL);
+	if (!ReadFile(file, &header, sizeof(header), &bytes_read, NULL))
+		bytes_read = 0;
+	CloseHandle(file);
+	if (bytes_read != sizeof(header))
+		return "its .map file is shorter than a map's header";
+	if (!cache_file_header_verify(&header, path, FALSE))
+		return header.header_signature == CACHE_FILE_HEADER_SIGNATURE && header.version != 5 ?
+			"it's a map for another version of Halo" : "its .map file isn't a map (its header)";
+	if (header.scenario_type != _scenario_type_multiplayer)
+		return "it isn't a multiplayer map";
+	if (size <= sizeof(header) + 64)
+		return "its .map file is cut short (no map after the header)";
+	if (cached_map_files_find_free_map(header.file_length, header.scenario_type) == NONE)
+		return "it's too big for the Xbox's map cache";
+	return NULL;
+}
+
+/* the full check (opence.ini map_check = 1; its own thread, hmp_maps.c): the whole map read and unpacked, as loading
+it does, without writing it anywhere. work: 128 KB of memory for it. NULL when it unpacked whole, else what failed */
+static unsigned char *cache_files_check_heap;
+static unsigned long cache_files_check_heap_used, cache_files_check_heap_size;
+
+static voidpf cache_files_check_alloc(voidpf opaque, uInt items, uInt size)
+{
+	unsigned long bytes = ((unsigned long)items * size + 15) & ~15ul;
+	voidpf p;
+
+	(void)opaque;
+	if (cache_files_check_heap_used + bytes > cache_files_check_heap_size)
+		return Z_NULL;
+	p = cache_files_check_heap + cache_files_check_heap_used;
+	cache_files_check_heap_used += bytes;
+	return p;
+}
+
+static void cache_files_check_free(voidpf opaque, voidpf address)
+{
+	(void)opaque;
+	(void)address;
+}
+
+char const *cache_files_map_full_check(
+	char const *path,
+	void *work,
+	unsigned long work_size,
+	volatile long const *stop)
+{
+	enum { IN_SIZE = 32 * 1024, OUT_SIZE = 32 * 1024 };
+	unsigned char *in = (unsigned char *)work, *out = in + IN_SIZE;
+	struct cache_file_header header;
+	z_stream stream;
+	HANDLE file;
+	unsigned long bytes_read = 0, expected;
+	char const *why = NULL;
+	int result = Z_OK;
+
+	if (work_size < IN_SIZE + OUT_SIZE + 48 * 1024)
+		return "no memory to check it";
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return GetLastError() == ERROR_SHARING_VIOLATION ? "busy (being loaded): not checked" : "its .map file can't be opened";
+	if (!ReadFile(file, &header, sizeof(header), &bytes_read, NULL) || bytes_read != sizeof(header) ||
+		header.header_signature != CACHE_FILE_HEADER_SIGNATURE || header.footer_signature != CACHE_FILE_FOOTER_SIGNATURE ||
+		header.file_length <= (long)sizeof(header))
+	{
+		CloseHandle(file);
+		return "its .map file isn't a map (its header)";
+	}
+	expected = (unsigned long)header.file_length - sizeof(header);
+	cache_files_check_heap = out + OUT_SIZE;
+	cache_files_check_heap_size = work_size - IN_SIZE - OUT_SIZE;
+	cache_files_check_heap_used = 0;
+	memset(&stream, 0, sizeof(stream));
+	stream.zalloc = cache_files_check_alloc;
+	stream.zfree = cache_files_check_free;
+	if (inflateInit(&stream) != Z_OK)
+	{
+		CloseHandle(file);
+		return "no memory to check it";
+	}
+	while (result != Z_STREAM_END && !why)
+	{
+		if (stop && *stop)
+		{
+			why = "stopped";
+			break;
+		}
+		if (!stream.avail_in)
+		{
+			if (!ReadFile(file, in, IN_SIZE, &bytes_read, NULL))
+			{
+				why = "a read of its .map file failed (a bad spot on the drive?)";
+				break;
+			}
+			if (!bytes_read)
+			{
+				why = "its .map file ends before the map does (cut short: incomplete?)";
+				break;
+			}
+			stream.next_in = in;
+			stream.avail_in = (uInt)bytes_read;
+		}
+		stream.next_out = out;
+		stream.avail_out = OUT_SIZE;
+		result = inflate(&stream, Z_NO_FLUSH);
+		if (result != Z_OK && result != Z_STREAM_END && result != Z_BUF_ERROR)
+			why = "its packed map data is damaged (it doesn't unpack)";
+		else if (stream.total_out > expected)
+			why = "it unpacks to more than its header says";
+	}
+	if (!why && stream.total_out != expected)
+		why = "it unpacks to less than its header says (incomplete?)";
+	inflateEnd(&stream);
+	CloseHandle(file);
+	return why;
+}
+
+/* the map file's path (hmp_maps.c's full check: worked out on Halo's thread) */
+void cache_files_map_file_path(
+	char const *map_name,
+	char *path)
+{
+	cache_file_get_map_path(map_name, path);
+}
+#endif

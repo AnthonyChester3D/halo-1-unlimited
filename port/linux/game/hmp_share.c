@@ -128,6 +128,8 @@ static u32 host_rtt(void) { return 0; }   /* (the client's own measure: its conn
 #define REP_SENDING 1
 #define REP_UNAVAILABLE 2
 #define WHY_NOT_HOSTED 1                    /* REP_UNAVAILABLE's reason (in .streams, build 20): not the map the host has up now */
+#define WHY_CHECKING 2                      /* ...the host's own copy hasn't loaded on it yet (hmp_maps.c's map checks): it
+                                               sends only a map it knows loads, so a broken one reaches nobody */
 #define NAME_LEN 44
 #define MAX_FILES 5                         /* the .map, info .txt, preview.bin, series.bin, showcase.txt */
 #define MAX_MAP_SIZE (96u << 20)
@@ -731,6 +733,7 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
     if (q->magic != REQ_MAGIC || q->version != VERSION) why = "different map sharing version";
     else if (q->key[0] != '+' || !host_map || ieq(q->key, host_map) != 0) g_hrep.streams = WHY_NOT_HOSTED;   /* (changing maps: ask again) */
     else if (i < 0 || !hmp_map_path_c(i, -1, g_p1) || !map_identity(g_p1, &size, &chk)) why = "can't read its own copy";
+    else if (!hmp_maps_is_good(q->key)) g_hrep.streams = WHY_CHECKING;   /* (not yet loaded here: ask again) */
     else {
         g_hrep.map_chk = chk;
         g_hrep.map_version = hmp_maps_version(i);
@@ -1484,6 +1487,14 @@ static void cl_reply(u32 now) {
         cl_give_up(now, 0, "the host is on a test build that shares maps differently", (int)g_cl.r.version);
         return;
     }
+    if (g_cl.r.magic == REP_MAGIC && g_cl.r.status == REP_UNAVAILABLE && g_cl.r.streams == WHY_CHECKING && g_cl.notyet < 60) {
+        g_cl.notyet++;                                /* the host's copy is still loading on the host (up to 5 minutes) */
+        if (g_cl.notyet == 1) lg("client: the host is checking %s (loading its own copy) before it sends it; asking every 5 s", g_cl.key);
+        status("Map: the host is checking it", -1, 0);
+        cl_close();
+        g_cl.state = CL_WAIT; g_cl.retry_at = now + 5000;
+        return;
+    }
     if (g_cl.r.magic == REP_MAGIC && g_cl.r.status == REP_UNAVAILABLE && g_cl.r.streams == WHY_NOT_HOSTED && g_cl.notyet < 12) {
         g_cl.notyet++;                                /* the host is between maps (or this console hasn't seen its newest pick yet) */
         lg("client: the host isn't hosting %s right now (changing maps?); asking again in 5 s", g_cl.key);
@@ -2048,6 +2059,7 @@ void map_share_update(void) {
         else client_tick(now);
     }
     session_tick(server || client);
+    hmp_maps_check_tick();
     if (!server && !g_cl.state) g_status_on = 0;
     if (server && !host_sending()) g_status_on = 0;
     hmp_stats_tick();

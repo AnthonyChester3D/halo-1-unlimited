@@ -406,6 +406,9 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	showcase_seconds = N (the same) how long the main menu waits for a press before it starts (5 and up; 75)
 	showcase_bots = N    (the same) its matches' bots, 0 to 15 (else the map's suggested players, 4 to 10, less 1)
 	showcase_min_fps = N (the same) its bots drop out one at a time while it runs under N frames a second (15; 0: never)
+	showcase_map_seconds = N (the same) each map plays at most N seconds (90; 0: no limit, a minute and its shots)
+	map_check = 1        every folder map not yet known to load is read and unpacked whole once the menus are up, on a
+	                     thread of its own, and oxbox_log.txt lists each result and the maps that failed (testing)
 	net_test_screen = 1  (the online test builds) the network test's lines on the main menu too, not only in this log */
 int oxbox_setting_audio_effects = 1;
 int oxbox_setting_bot_log = 0;
@@ -564,6 +567,11 @@ static void read_settings(const char *path)
 			oxbox_setting_bot_log = value != 0;
 		else if (same_text(name, "perf_log"))
 			oxbox_setting_perf_log = value != 0;
+		else if (same_text(name, "map_check"))
+		{
+			extern int oxbox_setting_map_check;
+			oxbox_setting_map_check = value != 0;
+		}
 #if defined(OXBOX_SHOWCASE)
 		/* (the showcase screensaver: port/linux/game/showcase.c) */
 		else if (same_text(name, "showcase"))
@@ -585,6 +593,11 @@ static void read_settings(const char *path)
 		{
 			extern int oxbox_setting_showcase_min_fps;
 			oxbox_setting_showcase_min_fps = value;
+		}
+		else if (same_text(name, "showcase_map_seconds"))
+		{
+			extern int oxbox_setting_showcase_map_seconds;
+			oxbox_setting_showcase_map_seconds = value <= 0 ? 0 : value < 15 ? 15 : value > 3600 ? 3600 : value;
 		}
 #endif
 #if defined(OXBOX_NET_TEST)

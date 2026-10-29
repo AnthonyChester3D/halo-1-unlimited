@@ -113,7 +113,8 @@ Built with `-DOXBOX_SHOWCASE` added to `OXBOX_EXTRA` (`port/linux/game/showcase.
 - It plays without the network cable too (the game is the console's alone, as a split screen game is).
 - Settings in `opence.ini`: `showcase = 0` plays the attract movies instead; `showcase_seconds = N` (5 and up)
   changes the 75-second wait; `showcase_bots = N` (0 to 15) sets its bots; `showcase_min_fps = N` the frame rate
-  under which bots drop out (15; 0: never).
+  under which bots drop out (15; 0: never); `showcase_map_seconds = N` how long each map plays at most (90; 0: no
+  limit). A map with more shots than fit plays its first, a random pick of the others, and its last.
 - Without the switch, the build is byte for byte what it was.
 
 ## Bot tuning (a test build switch)

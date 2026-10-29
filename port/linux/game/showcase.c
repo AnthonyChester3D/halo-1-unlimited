@@ -28,8 +28,12 @@ window's preview plays the same), so a shot looks here as it looked there. The f
 cuts): out over a shot's last `fade` seconds, in over the next one's first.
 
 Which map: the folder maps with a showcase.txt, and the stock maps with a maps\showcase\<name>.txt (bloodgulch.txt,
-the level's own name: the same format; the installer adds the package's on a first install), not ones hidden in the map browser, favorites first, each group in a
-shuffled order, a map at a time. A map plays its shot list through (and again, until it has played a minute),
+the level's own name: the same format; the installer adds the package's on a first install), not ones hidden in the
+map browser, in a random order (seeded from the cycle counter: a fresh boot gave the same order each time), a
+favorite three times as likely to come next and a map in an "Artistic" genre twice (both: four times), a map at a
+time. A map plays at most 90 seconds (opence.ini showcase_map_seconds = N; 0: no limit): its shots in order when they
+fit, else the first, as many of the others as fit in a random order, and the last (up to 128 shots), so a map with
+many shots differs each time. It plays its shots through (and again, until it has played a minute or its limit),
 then the next map loads (through the main menu, as every system link game does, with the title music kept off);
 with one map, its list just plays on. The game is CTF where the map has it (its info.txt's "Gametypes:" line
 names CTF; every stock map), else Team Slayer, to 999 with no time limit and every vehicle the map places (the bots
@@ -105,10 +109,11 @@ int oxbox_setting_showcase = 1;
 int oxbox_setting_showcase_seconds = 0;
 int oxbox_setting_showcase_bots = -1;   /* showcase_bots = N: that many bots (0 to 15), else the map's suggestion */
 int oxbox_setting_showcase_min_fps = 15;   /* showcase_min_fps = N: bots drop out under N frames a second (0: never) */
+int oxbox_setting_showcase_map_seconds = 90;   /* showcase_map_seconds = N: each map at most N seconds (0: no limit) */
 
 /* ---------- constants */
 
-#define SHOWCASE_MAXIMUM_SHOTS 64
+#define SHOWCASE_MAXIMUM_SHOTS 128
 #define SHOWCASE_MAXIMUM_KEYS 1024
 #define SHOWCASE_MAXIMUM_MAPS 128
 #define SHOWCASE_KEY_LENGTH 48
@@ -118,7 +123,9 @@ int oxbox_setting_showcase_min_fps = 15;   /* showcase_min_fps = N: bots drop ou
 #define SHOWCASE_MENU_FADE_SECONDS 0.5f       /* the main menu to black, and back */
 #define SHOWCASE_LEAVE_FADE_SECONDS 0.35f     /* the game to black after a press */
 #define SHOWCASE_SETTLE_SECONDS 1.5f          /* black once the map has loaded (the bots spawning), then shot 1 */
-#define SHOWCASE_MAP_MINIMUM_SECONDS 60.0f    /* a map's list plays again until it has played this long */
+#define SHOWCASE_MAP_MINIMUM_SECONDS 60.0f    /* a map's list plays again until it has played this long (or its limit) */
+#define SHOWCASE_FAVORITE_WEIGHT 2             /* a map's chances of being next: 1, these more for a favorite... */
+#define SHOWCASE_ARTISTIC_WEIGHT 1             /* ...and for a map in a genre named "Artistic" (the map browser's) */
 #define SHOWCASE_RETRY_MILLISECONDS (10 * 60 * 1000)
 #define SHOWCASE_SCORE_TO_WIN 999
 #define SHOWCASE_MENU_SETTLE_SECONDS 0.5f      /* the main menu back between maps, before the next lobby */
@@ -195,7 +202,9 @@ static struct
 	real menu_seconds;              /* back at the main menu this long */
 	/* the map, and where its shots are */
 	char key[SHOWCASE_KEY_LENGTH];
-	short shot_index;
+	short plan[SHOWCASE_MAXIMUM_SHOTS];   /* the shots to play, in order (showcase_plan) */
+	short plan_count;
+	short shot_index;                     /* in the plan */
 	real shot_time;                 /* seconds into the shot (below 0: the settle before the first) */
 	real map_seconds;
 	boolean camera_valid;
@@ -581,7 +590,7 @@ static void showcase_view(
 static void showcase_camera_update(
 	boolean fade)
 {
-	struct showcase_shot const *shot = &showcase_file.shots[showcase.shot_index];
+	struct showcase_shot const *shot = &showcase_file.shots[showcase.plan[showcase.shot_index]];
 	double view[6], yaw, pitch, fov;
 	real t = showcase.shot_time;
 
@@ -660,11 +669,22 @@ static void showcase_swap_maps(
 	strcpy(showcase.maps[b], swap);
 }
 
-/* whether the map goes in the showcase's list: not hidden in the map browser, in this pass (favorites, then the
-rest), and its shots there */
+/* the cycle counter: the random numbers' seed (a fresh boot reaches the showcase at the same millisecond nearly
+every time, which gave the same order every time; the cycles between differ) */
+static unsigned long showcase_cycles(
+	void)
+{
+	unsigned long low, high;
+
+	__asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
+	return low ^ (high << 16) ^ (high >> 16);
+}
+
+/* whether the map goes in the showcase's list: not hidden in the map browser, and its shots there; weight: its
+chances of being next (more for a favorite, and for an "Artistic" one) */
 static boolean showcase_listed(
 	char const *key,
-	long pass)
+	unsigned long *weight)
 {
 	struct hmp_rating rating;
 	HANDLE file;
@@ -672,8 +692,10 @@ static boolean showcase_listed(
 	if (!key || strlen(key) >= SHOWCASE_KEY_LENGTH)
 		return FALSE;
 	hmp_stats_get(key, &rating);
-	if (rating.hidden || (rating.favorite != 0) != (pass == 0))
+	if (rating.hidden)
 		return FALSE;
+	*weight = 1 + (rating.favorite ? SHOWCASE_FAVORITE_WEIGHT : 0) +
+		(hmp_browse_in_genre(key, "artistic") ? SHOWCASE_ARTISTIC_WEIGHT : 0);
 	file = showcase_open(key);
 	if (file == INVALID_HANDLE_VALUE)
 		return FALSE;
@@ -682,42 +704,43 @@ static boolean showcase_listed(
 }
 
 /* the maps with shots (folder maps with a showcase.txt, stock maps with a maps\showcase\<name>.txt), in the order
-to show them: favorites first, each group shuffled */
+to show them: a random order, a favorite or an "Artistic" map more likely to come early (each place drawn from the
+maps left, by their weights) */
 static void showcase_find_maps(
 	void)
 {
-	long count, index, pass;
+	static unsigned long weights[SHOWCASE_MAXIMUM_MAPS];
+	long count, index, place;
 	char last[SHOWCASE_KEY_LENGTH];
 
 	strcpy(last, showcase.key);
-	if (!showcase.random)
-		showcase.random = system_milliseconds() | 1;
+	showcase.random ^= showcase_cycles() ^ system_milliseconds();
+	showcase.random |= 1;
 	if (!hmp_maps_count())
 		hmp_maps_scan();
 	count = hmp_maps_count();
 	showcase.map_count = 0;
 	showcase.map_next = 0;
-	for (pass = 0; pass < 2; pass++)
+	for (index = 0; index < count + HMP_STOCK_LEVELS && showcase.map_count < SHOWCASE_MAXIMUM_MAPS; index++)
 	{
-		short first = showcase.map_count;
+		char const *key = index < count ? hmp_maps_key(index) : hmp_maps_stock_level(index - count);
 
-		for (index = 0; index < count && showcase.map_count < SHOWCASE_MAXIMUM_MAPS; index++)
-		{
-			char const *key = hmp_maps_key(index);
+		if (showcase_listed(key, &weights[showcase.map_count]))
+			strcpy(showcase.maps[showcase.map_count++], key);
+	}
+	for (place = 0; place + 1 < showcase.map_count; place++)
+	{
+		unsigned long total = 0, pick;
 
-			if (showcase_listed(key, pass))
-				strcpy(showcase.maps[showcase.map_count++], key);
-		}
-		for (index = 0; index < HMP_STOCK_LEVELS && showcase.map_count < SHOWCASE_MAXIMUM_MAPS; index++)
-		{
-			char const *key = hmp_maps_stock_level(index);
-
-			if (showcase_listed(key, pass))
-				strcpy(showcase.maps[showcase.map_count++], key);
-		}
-		/* (Fisher-Yates) */
-		for (index = showcase.map_count - 1; index > first; index--)
-			showcase_swap_maps(index, first + (long)(showcase_random() % (unsigned long)(index - first + 1)));
+		for (index = place; index < showcase.map_count; index++)
+			total += weights[index];
+		pick = showcase_random() % total;
+		for (index = place; index + 1 < showcase.map_count && pick >= weights[index]; index++)
+			pick -= weights[index];
+		showcase_swap_maps(place, index);
+		pick = weights[place];
+		weights[place] = weights[index];
+		weights[index] = pick;
 	}
 	/* (not the map just shown first again) */
 	if (showcase.map_count > 1 && !strcmp(showcase.maps[0], last))
@@ -749,6 +772,63 @@ static boolean showcase_next_map(
 			break;
 	}
 	return FALSE;
+}
+
+/* ---------- private code: the shots */
+
+/* the least a map plays (its list again until then): a minute, or its limit when that's less */
+static real showcase_minimum_seconds(
+	void)
+{
+	int limit = oxbox_setting_showcase_map_seconds;
+
+	return limit > 0 && limit < SHOWCASE_MAP_MINIMUM_SECONDS ? (real)limit : SHOWCASE_MAP_MINIMUM_SECONDS;
+}
+
+/* the shots to play: all of them in order when they fit in the map's limit (showcase_map_seconds); else the first,
+as many of the others as fit in a random order, and the last, so a map with many shots differs each time */
+static void showcase_plan(
+	void)
+{
+	short count = showcase_file.shot_count;
+	short middle[SHOWCASE_MAXIMUM_SHOTS];
+	short middle_count = 0;
+	short index;
+	real total = 0.0f, room;
+
+	showcase.plan_count = 0;
+	for (index = 0; index < count; index++)
+		total += showcase_file.shots[index].seconds;
+	if (oxbox_setting_showcase_map_seconds <= 0 || count <= 2 || total <= (real)oxbox_setting_showcase_map_seconds)
+	{
+		for (index = 0; index < count; index++)
+			showcase.plan[showcase.plan_count++] = index;
+		return;
+	}
+	room = (real)oxbox_setting_showcase_map_seconds - showcase_file.shots[0].seconds -
+		showcase_file.shots[count - 1].seconds;
+	for (index = 1; index < count - 1; index++)
+		middle[middle_count++] = index;
+	for (index = middle_count - 1; index > 0; index--)   /* (Fisher-Yates) */
+	{
+		short other = (short)(showcase_random() % (unsigned long)(index + 1));
+		short swap = middle[index];
+
+		middle[index] = middle[other];
+		middle[other] = swap;
+	}
+	showcase.plan[showcase.plan_count++] = 0;
+	for (index = 0; index < middle_count; index++)
+	{
+		if (showcase_file.shots[middle[index]].seconds <= room)
+		{
+			showcase.plan[showcase.plan_count++] = middle[index];
+			room -= showcase_file.shots[middle[index]].seconds;
+		}
+	}
+	showcase.plan[showcase.plan_count++] = count - 1;
+	platform_log("showcase: %d of %d shots fit in %d seconds: the first, %d in a random order, the last",
+		(int)showcase.plan_count, (int)count, oxbox_setting_showcase_map_seconds, (int)showcase.plan_count - 2);
 }
 
 /* ---------- private code: the game */
@@ -1113,6 +1193,7 @@ void showcase_update(
 		showcase.alpha = 1.0f;
 		if (game_in_progress() && !main_menu_loaded && game_engine_running())
 		{
+			showcase_plan();
 			showcase.shot_index = 0;
 			showcase.shot_time = -SHOWCASE_SETTLE_SECONDS;
 			showcase.map_seconds = 0.0f;
@@ -1149,15 +1230,22 @@ void showcase_update(
 		showcase.shot_time += seconds;
 		showcase.map_seconds += seconds;
 		showcase_frame_rate(now);
-		while (showcase.shot_time >= showcase_file.shots[showcase.shot_index].seconds)
+		/* (its limit reached, a shot or not: on to the next map, fading as a press does) */
+		if (oxbox_setting_showcase_map_seconds > 0 && showcase.map_count > 1 &&
+			showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= (real)oxbox_setting_showcase_map_seconds)
 		{
-			showcase.shot_time -= showcase_file.shots[showcase.shot_index].seconds;
-			if (++showcase.shot_index >= showcase_file.shot_count)
+			showcase_leave(TRUE);
+			break;
+		}
+		while (showcase.shot_time >= showcase_file.shots[showcase.plan[showcase.shot_index]].seconds)
+		{
+			showcase.shot_time -= showcase_file.shots[showcase.plan[showcase.shot_index]].seconds;
+			if (++showcase.shot_index >= showcase.plan_count)
 			{
 				showcase.shot_index = 0;
-				/* the list played through: the next map, once this one has played a minute (with only one, its
-				list plays on) */
-				if (showcase.map_seconds >= SHOWCASE_MAP_MINIMUM_SECONDS &&
+				/* the plan played through: the next map, once this one has played a minute or its limit (with only
+				one, it plays on, shuffled again) */
+				if (showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= showcase_minimum_seconds() &&
 					(showcase.map_count > 1 || showcase.map_next < showcase.map_count))
 				{
 					showcase.shot_time = 0.0f;
@@ -1165,6 +1253,7 @@ void showcase_update(
 					showcase_leave(TRUE);
 					break;
 				}
+				showcase_plan();
 			}
 		}
 		if (showcase.state == _showcase_playing)
@@ -1175,7 +1264,7 @@ void showcase_update(
 		showcase.alpha += seconds / SHOWCASE_LEAVE_FADE_SECONDS;
 		/* (the camera flies on while it fades) */
 		if (showcase.camera_valid && game_in_progress() && !main_menu_loaded &&
-			showcase.shot_time + seconds < showcase_file.shots[showcase.shot_index].seconds)
+			showcase.shot_time + seconds < showcase_file.shots[showcase.plan[showcase.shot_index]].seconds)
 		{
 			showcase.shot_time += seconds;
 			showcase_camera_update(FALSE);

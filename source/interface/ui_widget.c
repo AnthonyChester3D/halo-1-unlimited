@@ -5375,6 +5375,22 @@ static void widget_instance_render_text_box(
 		color_alpha = 1.0f;
 	}
 #endif
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a map card that says the map hasn't the chosen gametype, in yellow; the map options' last word before a
+	delete, in red (hmp_browse.c) */
+	{
+		extern long hmp_browse_text_colour(wchar_t const *text);
+		long colour = *text ? hmp_browse_text_colour(*text) : 0;
+
+		if (colour)
+		{
+			color.red = 1.0f;
+			color.green = colour == 1 ? 0.82f : 0.25f;
+			color.blue = colour == 1 ? 0.18f : 0.2f;
+			color_alpha = 1.0f;
+		}
+	}
+#endif
 	color.alpha = alpha_modifier * color_alpha;
 	if (TEST_FLAG(definition->text_box_flags, _text_box_flashing_text_bit))
 	{
@@ -5418,6 +5434,25 @@ static void widget_instance_render_text_box(
 		}
 		ui_widget_port_text_wrap(*text, &bounds, width);
 	}
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the map options with a choice that can't be made (Delete, for Halo's own maps): the text drawn twice
+	over the same lines, the choices that can be made in the card's colour, that one in grey (hmp_browse.c) */
+	{
+		extern boolean hmp_browse_prompt_split(wchar_t const *text, wchar_t *usable, wchar_t *unusable, long size);
+		static wchar_t usable[160], unusable[160];
+
+		if (*text && hmp_browse_prompt_split(*text, usable, unusable, NUMBEROF(usable)))
+		{
+			real_argb_color grey = { 0.0f, 0.45f, 0.45f, 0.45f };
+
+			grey.alpha = color.alpha;
+			rasterizer_draw_unicode_string(&bounds, &clip, NULL, 0, usable);
+			draw_string_set_draw_mode(font_index, NONE, justification, 0, &grey);
+			rasterizer_draw_unicode_string(&bounds, &clip, NULL, 0, unusable);
+			return;
+		}
+	}
+#endif
 	if (string_has_icons_to_draw(*text))
 		draw_string_and_hack_in_icons(&bounds, &clip, NULL, 0, *text, FALSE);
 	else
@@ -8367,8 +8402,13 @@ static void root_process_event(
 	extern boolean hmp_game_dispatch(struct widget_instance *root, struct event_record *event);
 	extern void hmp_game_after_dispatch(struct widget_instance *root);
 	extern long hmp_options_dispatch(struct widget_instance *root, struct event_record *event);
-	long options = hmp_options_dispatch(widget, event);
+	extern boolean hmp_browse_prompt_event(struct event_record const *event);
+	long options;
 
+	/* (the map list's Black-held options take every event while they're up: port/linux/game/hmp_browse.c) */
+	if (hmp_browse_prompt_event(event))
+		return;
+	options = hmp_options_dispatch(widget, event);
 	if (options)
 	{
 		if (options == 2) *widget_deleted = TRUE;

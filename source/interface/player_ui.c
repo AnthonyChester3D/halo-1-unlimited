@@ -597,6 +597,14 @@ void player_ui_set_game_variant(
 	return;
 }
 
+/* port: the multiplayer gametype's game engine (player_ui_set_game_variant's: game_engine_ctf...), NONE before one
+is chosen (the map browser won't start a map without it: hmp_browse.c) */
+long player_ui_get_game_variant_engine(
+	void)
+{
+	return player_ui_globals.multiplayer_variant_specified ? player_ui_globals.multiplayer_variant.game_engine_index : NONE;
+}
+
 /* port: the PC options of the multiplayer gametype (player_ui_set_game_variant's) */
 void player_ui_set_game_variant_options(
 	struct game_variant_options const *options)

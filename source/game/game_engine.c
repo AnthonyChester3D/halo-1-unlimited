@@ -7615,9 +7615,102 @@ void game_engine_initialize(
 	return;
 }
 
+/* port: whether the map has what the gametype needs: its flags (both CTF flags, a hill, a ball spawn, a race flag)
+and a starting location for it. A map without them crashed the game (a CTF flag's position read from NULL, nowhere
+to spawn) */
+static boolean game_engine_map_supports(
+	long engine)
+{
+	struct scenario *scenario = global_scenario_get();
+	short need = NONE;
+	short count;
+	short index;
+
+	if (!scenario)
+		return TRUE;
+	switch (engine)
+	{
+	case game_engine_ctf:
+		if (find_netgame_flag(NULL, 0.0f, 0.0f, _netgame_flag_ctf_flag, 0) == NONE ||
+			find_netgame_flag(NULL, 0.0f, 0.0f, _netgame_flag_ctf_flag, 1) == NONE)
+		{
+			return FALSE;
+		}
+		break;
+	case game_engine_king:
+		need = _netgame_flag_hill;
+		break;
+	case game_engine_oddball:
+		need = _netgame_flag_oddball_ball_spawn;
+		break;
+	case game_engine_race:
+		need = _netgame_flag_race_track;
+		break;
+	}
+	if (need != NONE)
+	{
+		long flag_index;
+
+		for (flag_index = 0; flag_index < scenario->netgame_flags.count; flag_index++)
+		{
+			if (TAG_BLOCK_GET_ELEMENT(&scenario->netgame_flags, flag_index, struct scenario_netgame_flag)->type == need)
+				break;
+		}
+		if (flag_index >= scenario->netgame_flags.count)
+			return FALSE;
+	}
+	count = player_get_starting_location_count();
+	for (index = 0; index < count; index++)
+	{
+		if (match_game_type(engine, 4, player_get_starting_location(index)->game_types))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 void game_engine_initialize_for_new_map(
 	void)
 {
+	/* port: a gametype the map hasn't (the map browser stops this when the map's info.txt says so: hmp_browse.c):
+	Slayer instead of a crash, on every machine alike (each decides from the same map). Its own options zeroed
+	(Slayer's defaults); teams and the rest of the gametype as chosen */
+	if (game_engine && global_variant.game_engine_index != game_engine_slayer &&
+		!game_engine_map_supports(global_variant.game_engine_index) && game_engine_map_supports(game_engine_slayer))
+	{
+		error(
+			_error_silent,
+			"NETGAME MAP FAILURE: this map hasn't what gametype %d needs: playing Slayer",
+			global_variant.game_engine_index);
+		global_variant.game_engine_index = game_engine_slayer;   /* (the other engine never started: nothing to dispose) */
+		csmemset(&global_variant.game_engine_variant, 0, sizeof(global_variant.game_engine_variant));
+		if (global_variant.universal_variant.score_to_win < 10)
+			global_variant.universal_variant.score_to_win = 25;
+		game_engine = game_engines[game_engine_slayer];
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: a folder map's info .txt lists what it has, so the map browser won't start it with that gametype
+		again (hmp_browse.c). On the loading screen, before the game runs */
+		{
+			extern char const *cache_files_loaded_map_name(void);
+			extern boolean hmp_maps_note_gametypes(char const *level_name, char const *text);
+			static char const *const names[number_of_game_engines] = { NULL, "CTF", "Slayer", "Oddball", "King of the Hill", "Race" };
+			char const *map = cache_files_loaded_map_name();
+			char text[96];
+			long engine;
+
+			text[0] = 0;
+			for (engine = game_engine_ctf; engine <= game_engine_race; engine++)
+			{
+				if (!game_engine_map_supports(engine))
+					continue;
+				if (text[0])
+					strcat(text, ", ");
+				strcat(text, names[engine]);
+			}
+			if (map && map[0] == '+' && text[0] && hmp_maps_note_gametypes(map, text))
+				error(_error_silent, "wrote \"Gametypes: %s\" in %s's info .txt", text, map);
+		}
+#endif
+	}
 	if (game_engine)
 	{
 		game_engine_verify_current_map();

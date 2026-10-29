@@ -400,6 +400,11 @@ void console_startup(
 	FILE *file;
 	short newest_previous_command_index;
 
+#if defined(OXBOX_STRIP)
+	/* oxbox: no d:\init.txt: its lines ran as console commands at start-up, so a file in the game's folder could
+	turn on cheats (deathless, infinite ammo, game speed). Retail Halo on the Xbox never read it */
+	file = NULL;
+#else
 	if (!game_in_editor())
 	{
 		file = fopen("d:\\init.txt", "r");
@@ -408,6 +413,7 @@ void console_startup(
 	{
 		file = fopen("editor_d:\\init.txt", "r");
 	}
+#endif
 
 	if (file)
 	{

@@ -13,7 +13,10 @@ changes the sort, LT / RT jump between its groups, and the sort is remembered (h
 	Gametypes        CTF, King of the Hill, Oddball, Race (a map in each it has), Slayer only, Unknown
 	Name             A to Z, a group per letter
 
-Every sort ends with a Hidden group (maps hidden with Black held 1.5 s). Y makes a map a favorite (again: not).
+Every sort ends with a Hidden group. Black held 1.5 s opens the map's options on its card: Delete (a folder map, A
+twice: its folder goes from both maps folders; not Halo's maps, nor the map the game is on), Hide / Show again, Cancel
+(up / down, A, B); while they're up they take every button, so the list underneath stays put. Y makes a map a
+favorite (again: not).
 Each card's description starts with its group and "Favorite" / "Hidden". The screen shows the sort at the top right and
 "Y =FAVORITE  X =SORT" in its button bar. After a match, on the scores, Y favorites the map just played, and the scores
 say "<gametype> on <map>" under their title with the gametype's picture.
@@ -32,6 +35,7 @@ say "<gametype> on <map>" under their title with the gametype's picture.
 #include "interface/event_manager.h"
 #include "input/input.h"
 #include "game/game_engine.h"
+#include "interface/player_ui.h"
 #include "hmp.h"
 
 #include <string.h>
@@ -44,6 +48,7 @@ say "<gametype> on <map>" under their title with the gametype's picture.
 #define MAXIMUM_GENRES 32
 #define MAXIMUM_GENRE_ASSIGNMENTS 128
 #define HIDE_HOLD_MILLISECONDS 1500
+enum { PROMPT_DELETE, PROMPT_HIDE, PROMPT_CANCEL, PROMPT_CHOICES };
 #define INVALID_FILE ((HANDLE)-1)
 #define ICON_TEXTURE_WIDTH 64              /* (the gametype pictures: A8R8G8B8, swizzled, read from the XBE's file) */
 #define ICON_TEXTURE_HEIGHT 64
@@ -128,6 +133,7 @@ struct position_item
 void *__stdcall LocalAlloc(unsigned int flags, unsigned int bytes);
 void *__stdcall LocalFree(void *memory);
 char const *cache_files_loaded_map_name(void);
+char const *network_game_current_map_name(void);
 extern short draw_string_and_hack_in_icons_end;
 extern struct game_variant global_variant;
 
@@ -179,6 +185,16 @@ static struct
 	boolean black_down;
 	char const *tap_entry;
 	unsigned long tap_time;
+	/* Black held: the map's options (Delete, Hide / Show, Cancel) on its card, every button the prompt's */
+	boolean prompt, prompt_armed;           /* armed: Delete chosen once, A again deletes */
+	short prompt_choice;
+	char prompt_key[64];
+	long prompt_position;
+	struct widget_instance *prompt_list;
+	unsigned long prompt_seen, prompt_stick;
+	short swallow;                          /* the button that closed it + 1, ignored until pressed afresh (0: none) */
+	short prompt_grey;                      /* the prompt's line drawn in grey (Delete, when it can't be), or NONE */
+	wchar_t prompt_text[160];
 	wchar_t label[64], mark[32], text[160];
 	/* the postgame */
 	unsigned char pad_y[4];
@@ -726,6 +742,43 @@ wchar_t const *hmp_browse_label(long p)
 	return g.label;
 }
 
+/* the chosen gametype's title when entry's card says the map hasn't that gametype (its info.txt "Gametypes:" line,
+which Halo Map Porter writes from the map's own netgame flags); NULL when it has it, when the card doesn't say, for
+Slayer (any map), and for Halo's own maps (all of them). From the menus' card cache: nothing is read during a game */
+char const *hmp_browse_unsupported(char const *entry)
+{
+	static unsigned char const needs[6] = { 0, _gametype_ctf, 0, _gametype_oddball, _gametype_king, _gametype_race };
+	long engine = player_ui_get_game_variant_engine();
+	struct map_tags const *t;
+	if (!entry || engine < game_engine_ctf || engine > game_engine_race || !needs[engine]) return NULL;
+	t = tags_of(hmp_maps_entry(entry));
+	if (!t || !(t->gametypes & _gametype_known) || (t->gametypes & needs[engine])) return NULL;
+	return engine_titles[engine - 1];
+}
+
+/* why entry's map can't be loaded (hmp_maps.c's map checks: its header, or opence.ini map_check's full check), NULL
+when it can as far as is known; Halo's own maps, NULL */
+char const *hmp_browse_problem(char const *entry)
+{
+	long e = hmp_maps_entry(entry);
+	return e >= HMP_STOCK_LEVELS ? hmp_maps_problem(e - HMP_STOCK_LEVELS) : NULL;
+}
+
+/* the card's text says so (compose, hmp_maps.c): ui_widget.c draws it in yellow */
+static boolean starts_with(wchar_t const *text, char const *prefix)
+{
+	long k;
+	for (k = 0; prefix[k]; k++) if (text[k] != (unsigned char)prefix[k]) return FALSE;
+	return TRUE;
+}
+/* the card's text in a colour of its own (ui_widget.c): 1 yellow ("Does not support ...", compose in hmp_maps.c),
+   2 red (the prompt's last word before a delete); 0 as the tag has it */
+long hmp_browse_text_colour(wchar_t const *text)
+{
+	return starts_with(text, "Does not support ") || starts_with(text, "Problem: ") ? 1 :
+		starts_with(text, "Press A again to") ? 2 : 0;
+}
+
 wchar_t const *hmp_browse_mark(char const *entry)
 {
 	struct hmp_rating rating;
@@ -760,6 +813,12 @@ boolean hmp_browse_event(struct widget_instance *list, struct event_record const
 	if (!table || list->list.list_items != (void *)table || event->type != 3 /* _event_type_button */) return FALSE;
 	entry = selected >= 0 && selected < count ? table[selected] : NULL;
 	if (!entry) return FALSE;
+	if ((button == 0 || button == 12) && (hmp_browse_unsupported(entry) || hmp_browse_problem(entry)))   /* A, Start: not a map
+	                                                                                    without the gametype, or one that can't load */
+	{
+		if (press) ui_play_audio_feedback_sound(4);
+		return TRUE;
+	}
 	if (button == 2 || button == 5)                  /* X, White */
 	{
 		if (press)
@@ -787,12 +846,17 @@ boolean hmp_browse_event(struct widget_instance *list, struct event_record const
 		g.black_last = now;
 		if (g.black_entry && g.black_entry == entry && now - g.black_start >= HIDE_HOLD_MILLISECONDS)
 		{
-			struct hmp_rating rating;
+			long k;
 			g.black_entry = NULL;                    /* (done until Black is let go) */
-			hmp_stats_get(entry, &rating);
-			hmp_stats_set(entry, 2, !rating.hidden);
-			select_position(list, resort(g.sort, NULL, selected), 0);
-			ui_play_audio_feedback_sound(rating.hidden ? 2 : 3);
+			g.prompt = TRUE;                         /* the map's options: hmp_browse_prompt_event has the buttons now */
+			g.prompt_armed = FALSE;
+			g.prompt_choice = PROMPT_CANCEL;
+			for (k = 0; entry[k] && k < (long)sizeof(g.prompt_key) - 1; k++) g.prompt_key[k] = entry[k];
+			g.prompt_key[k] = 0;
+			g.prompt_position = selected;
+			g.prompt_list = list;
+			g.prompt_seen = g.prompt_stick = now;
+			ui_play_audio_feedback_sound(1);
 		}
 		return TRUE;
 	}
@@ -841,6 +905,7 @@ void hmp_browse_visible(char const *selected)
 Gametypes has its Y and X (the pictures at 78 and 250, the words at 100 and 272) */
 void hmp_browse_render(short selected, float alpha)
 {
+	g.prompt_seen = now_milliseconds();          /* (the prompt's list is still there) */
 	char **table = hmp_maps_table();
 	long font = tag_named('font', "ui\\large_ui");
 	char const *entry;
@@ -1047,6 +1112,162 @@ boolean hmp_browse_icon_read(long icon, void *buffer, long size)
 	return TRUE;
 }
 
+/* ---------- the map's options (Black held) */
+
+static void prompt_close(short button)
+{
+	g.prompt = FALSE;
+	g.prompt_armed = FALSE;
+	g.prompt_list = NULL;
+	g.swallow = (short)(button + 1);            /* (NONE + 1: none) */
+}
+
+/* the prompt's map deleted, hidden or shown again: the list rebuilt, at the same place (the next map) */
+static void prompt_relist(void)
+{
+	struct widget_instance *list = g.prompt_list;
+	if (!list) return;
+	list->list.list_items = (void *)hmp_maps_table();
+	select_position(list, resort(g.sort, NULL, g.prompt_position), 0);
+}
+
+/* whether the prompt's map can be deleted: a folder map, and not the map the lobby or game is on (why not: said in
+the log once) */
+static boolean prompt_can_delete(boolean say)
+{
+	char const *map = network_game_current_map_name();
+	/* (by its name: hmp_maps_entry knows the map list's own strings only, and the prompt keeps a copy, which it took
+	for one of Halo's maps: every Delete was refused, v1.43) */
+	if (g.prompt_key[0] != '+' || hmp_maps_find(g.prompt_key) == NONE) return FALSE;
+	if (map && !ieq(map, g.prompt_key))
+	{
+		if (say) hmp_log("browse: %s is the map the lobby or game is on: not deleted", g.prompt_key);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static void prompt_act(void)
+{
+	struct hmp_rating rating;
+	if (g.prompt_choice == PROMPT_CANCEL) { prompt_close(_gamepad_analog_button_a); ui_play_audio_feedback_sound(1); return; }
+	if (g.prompt_choice == PROMPT_HIDE)
+	{
+		hmp_stats_get(g.prompt_key, &rating);
+		hmp_stats_set(g.prompt_key, 2, !rating.hidden);
+		prompt_relist();
+		prompt_close(_gamepad_analog_button_a);
+		ui_play_audio_feedback_sound(rating.hidden ? 2 : 3);
+		return;
+	}
+	/* Delete: not Halo's maps, nor the map the game is on (hosted, or loaded); A twice */
+	if (!prompt_can_delete(TRUE))
+	{
+		ui_play_audio_feedback_sound(4);
+		return;
+	}
+	if (!g.prompt_armed) { g.prompt_armed = TRUE; ui_play_audio_feedback_sound(1); return; }
+	if (!hmp_maps_delete(g.prompt_key))
+	{
+		hmp_log("browse: couldn't delete %s", g.prompt_key);
+		prompt_close(_gamepad_analog_button_a);
+		ui_play_audio_feedback_sound(4);
+		return;
+	}
+	hmp_stats_set(g.prompt_key, 0, 0);
+	hmp_stats_set(g.prompt_key, 2, 0);
+	hmp_maps_scan();
+	prompt_relist();
+	prompt_close(_gamepad_analog_button_a);
+	ui_play_audio_feedback_sound(2);
+}
+
+/* every event of the menus, before Halo's (ui_widget.c): while the prompt is up it takes them all, every
+   controller's, so the list underneath doesn't move, choose or go back. TRUE when the event was the prompt's */
+boolean hmp_browse_prompt_event(struct event_record const *event)
+{
+	unsigned long now = now_milliseconds();
+	short move = 0;
+	if (g.swallow && event->type == 3 /* _event_type_button */ && event->data.button.index == g.swallow - 1)
+	{
+		if (event->data.button.value > 1) return TRUE;   /* (still held from closing the prompt) */
+		g.swallow = 0;
+	}
+	if (!g.prompt) return FALSE;
+	if (now - g.prompt_seen > 500) { prompt_close(NONE); return FALSE; }   /* (the list isn't drawn: it's gone) */
+	if (event->type == 1 /* _event_type_left_stick */)
+	{
+		if (now - g.prompt_stick >= 250 && (event->data.stick.y > 29490 || event->data.stick.y < -29490))
+		{
+			move = event->data.stick.y > 0 ? -1 : 1;
+			g.prompt_stick = now;
+		}
+	}
+	else if (event->type == 3 && event->data.button.value == 1)
+	{
+		switch (event->data.button.index)
+		{
+		case _gamepad_binary_button_dpad_up: move = -1; break;
+		case _gamepad_binary_button_dpad_down: move = 1; break;
+		case _gamepad_analog_button_a: prompt_act(); return TRUE;
+		case _gamepad_analog_button_b: prompt_close(_gamepad_analog_button_b); ui_play_audio_feedback_sound(1); return TRUE;
+		case _gamepad_analog_button_black: break;
+		default: if (g.prompt_armed) { g.prompt_armed = FALSE; ui_play_audio_feedback_sound(1); } break;
+		}
+	}
+	if (move)
+	{
+		short to = (short)(g.prompt_choice + move);
+		g.prompt_armed = FALSE;
+		if (to == PROMPT_DELETE && !prompt_can_delete(FALSE)) to = g.prompt_choice;   /* (greyed out: not a choice) */
+		if (to >= 0 && to < PROMPT_CHOICES && to != g.prompt_choice) { g.prompt_choice = to; ui_play_audio_feedback_sound(1); }
+	}
+	return TRUE;
+}
+
+/* the prompt on entry's card (compose, hmp_maps.c), NULL when it isn't up for it */
+wchar_t const *hmp_browse_prompt_text(char const *entry)
+{
+	struct hmp_rating rating;
+	wchar_t *o = g.prompt_text;
+	short k;
+	if (!g.prompt || !entry || ieq(entry, g.prompt_key)) return NULL;
+	if (g.prompt_armed) { put_text(o, "Press A again to\rDELETE this map\r(it can't be undone)"); return g.prompt_text; }
+	hmp_stats_get(entry, &rating);
+	g.prompt_grey = prompt_can_delete(FALSE) ? NONE : PROMPT_DELETE + 1;   /* (its line: after "This map:") */
+	o = put_text(o, "This map:\r");
+	for (k = 0; k < PROMPT_CHOICES; k++)
+	{
+		o = put_text(o, k == g.prompt_choice ? "> " : "   ");
+		o = put_text(o, k == PROMPT_DELETE ? "Delete" : k == PROMPT_HIDE ? (rating.hidden ? "Show again" : "Hide") : "Cancel");
+		if (k + 1 < PROMPT_CHOICES) o = put_text(o, "\r");
+	}
+	return g.prompt_text;
+}
+
+/* the prompt's text (the card being drawn: ui_widget.c) with a line greyed out: split in two of the same lines,
+the usable ones (the grey one a space) and the grey one alone (the others spaces). FALSE when it isn't that */
+boolean hmp_browse_prompt_split(wchar_t const *text, wchar_t *usable, wchar_t *unusable, long size)
+{
+	long k, line = 0;
+	boolean blank_u = FALSE, blank_g;
+	if (!g.prompt || g.prompt_armed || g.prompt_grey == NONE) return FALSE;
+	for (k = 0; g.prompt_text[k] && text[k] == g.prompt_text[k]; k++) ;
+	if (g.prompt_text[k] || text[k]) return FALSE;   /* (another card's text) */
+	if (k >= size) return FALSE;
+	for (k = 0; text[k]; k++)
+	{
+		wchar_t c = text[k];
+		if (c == '\r' || c == '\n') { usable[k] = unusable[k] = c; line++; continue; }
+		blank_u = line == g.prompt_grey;
+		blank_g = !blank_u;
+		usable[k] = blank_u ? ' ' : c;
+		unusable[k] = blank_g ? ' ' : c;
+	}
+	usable[k] = unusable[k] = 0;
+	return TRUE;
+}
+
 /* every frame: Black let go on the list */
 void hmp_browse_tick(void)
 {
@@ -1106,6 +1327,27 @@ char const *hmp_browse_stock_title(char const *level_name)
 		if (stock && !ieq(stock, level_name)) return stock_titles[k];
 	}
 	return NULL;
+}
+
+/* oxbox: whether a level is in a genre whose name has `word` in it ("artistic"), for the showcase's picks
+(showcase.c): its card's Genres line, or maps\genres.txt. From the menus' card cache; FALSE without it */
+boolean hmp_browse_in_genre(char const *level_name, char const *word)
+{
+	struct map_tags *t = level_name ? tags_of(hmp_maps_entry(level_name)) : NULL;
+	long k, n, j;
+	if (!t || !t->genres || !word || !word[0]) return FALSE;
+	for (n = 0; word[n]; n++) ;
+	for (k = 0; k < g.genre_count; k++)
+	{
+		char const *name = g.genre_names[k];
+		if (!(t->genres >> k & 1)) continue;
+		for (; *name; name++)
+		{
+			for (j = 0; j < n && name[j] && lower(name[j]) == lower(word[j]); j++) ;
+			if (j == n) return TRUE;
+		}
+	}
+	return FALSE;
 }
 
 /* oxbox: whether a level has CTF, for the showcase (showcase.c): every stock map does; a folder map when its card's

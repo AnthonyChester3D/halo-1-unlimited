@@ -208,6 +208,10 @@ cert = struct.unpack_from('<I', d, 0x118)[0] - base
 # (Test builds 01-18 used their own title ID, 0x4F430001 'OC' 0001.)
 TITLE_ID = struct.unpack_from('<I', d, cert + 0x8)[0]
 assert TITLE_ID == 0x4D530004, hex(TITLE_ID)
+# The certificate's title name (40 UTF-16 characters): "Halo 1 Unlimited", not "Halo", so a dashboard that lists
+# games by name shows it beside retail Halo instead of taking it for that one. (The title ID stays Halo's, as above.)
+TITLE_NAME = 'Halo 1 Unlimited'
+d[cert + 0xC:cert + 0xC + 80] = TITLE_NAME.encode('utf-16-le').ljust(80, b'\0')
 for i in range(nsec):
     hh = sh + i * 0x38
     r, rs = struct.unpack_from('<II', d, hh + 0xc)

@@ -923,6 +923,13 @@ static boolean director_update_controls(
 		}
 	}
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: no camera switching from the gamepad (Black held cycled the following, flying and first person
+	cameras, saying so on the screen, in the menus too, where Black held is the map list's options), nor the
+	flying camera's debug controls (the right stick's click); a script still sets cameras as it did */
+	switch_camera = FALSE;
+	director_get(local_player_index)->debug_controls = FALSE;
+#endif
 	return switch_camera;
 }
 

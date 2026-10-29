@@ -1185,6 +1185,51 @@ boolean cache_files_map_present(
 	return FALSE;
 }
 
+#ifdef HALO_XBOX_TARGET
+/* oxbox: a folder map that couldn't be copied into the cache twice (damaged, incomplete, or gone): instead of the
+damaged disc error, which ends the game for everyone in the lobby, this console says so in a dialog and doesn't
+load it. The host chooses another map; a client leaves the lobby (its host's game couldn't start with it in) */
+char cache_files_failed_map[64];
+
+static void cache_files_map_failed(
+	char const *map_name)
+{
+	extern struct network_game_client *global_network_game_client_get(void);
+	extern struct network_game_server *global_network_game_server_get(void);
+	extern void network_game_client_all_local_players_have_quit(void);
+	static wchar_t text[256];
+	char message[256];
+	char const *name = map_name + 1;
+	char const *slash;
+	long index;
+	boolean client = global_network_game_client_get() && !global_network_game_server_get();
+
+	extern void hmp_maps_forget_good(char const *key);
+
+	cache_files_precache_map_end();
+	hmp_maps_forget_good(map_name);
+	strncpy(cache_files_failed_map, map_name, sizeof(cache_files_failed_map) - 1);
+	cache_files_failed_map[sizeof(cache_files_failed_map) - 1] = 0;
+	if ((slash = strrchr(name, '/')) != NULL)
+		name = slash + 1;
+	error(_error_silent, "map '%s' failed to load twice: %s", map_name,
+		client ? "leaving the lobby" : "choose another map");
+	snprintf(message, sizeof(message), client ?
+		"The map %.40s\r\nfailed to load on this\r\nXbox: its file may be\r\ndamaged or incomplete.\r\nLeft the lobby." :
+		"The map %.40s\r\nfailed to load: its file\r\nmay be damaged or\r\nincomplete. Choose\r\nanother map.", name);
+	for (index = 0; message[index] && index < NUMBEROF(text) - 1; index++)
+		text[index] = (wchar_t)(unsigned char)message[index];
+	text[index] = 0;
+	if (client)
+	{
+		network_game_client_all_local_players_have_quit();
+		display_error_text_when_main_menu_loaded(text);
+	}
+	else
+		display_error_text_deferred(text, NONE);
+}
+#endif
+
 boolean cache_files_give_time_to_precache(
 	char const *map_name)
 {
@@ -1202,9 +1247,33 @@ boolean cache_files_give_time_to_precache(
 	there yet: precached once it is */
 	if (map_share_downloading(map_name))
 		return FALSE;
+#ifdef HALO_XBOX_TARGET
+	/* oxbox: a folder map that failed to load here (cache_files_map_failed): not tried again while it's the map
+	asked for; another map asked for clears it */
+	if (cache_files_failed_map[0])
+	{
+		if (!strcmp(cache_files_failed_map, map_name))
+			return FALSE;
+		cache_files_failed_map[0] = 0;
+	}
+#endif
 	if (cache_files_precache_map_loaded(map_name))
 	{
 		result = TRUE;
+#ifdef HALO_XBOX_TARGET
+		/* oxbox: a folder map that loaded: known to load, so map sharing may send it (hmp_maps.c's map checks) */
+		{
+			extern void hmp_maps_mark_good(char const *key);
+			static char marked[64];
+
+			if (map_name[0] == '+' && strncmp(marked, map_name, sizeof(marked) - 1) != 0)
+			{
+				strncpy(marked, map_name, sizeof(marked) - 1);
+				marked[sizeof(marked) - 1] = 0;
+				hmp_maps_mark_good(map_name);
+			}
+		}
+#endif
 	}
 	else
 	{
@@ -1220,7 +1289,31 @@ boolean cache_files_give_time_to_precache(
 			short status = cache_files_precache_map_status(&progress);
 
 			if (status == 2)
+			{
+#ifdef HALO_XBOX_TARGET
+				/* oxbox: a failed copy of a folder map (a read that failed, the copy cut off when a lobby closed
+				under it) is tried again once from the start before the damaged disc error, which ends the game;
+				the log says which map */
+				static char retried[64];
+
+				error(_error_silent, "precaching map '%s' failed", map_name);
+				if (map_name[0] == '+' && strncmp(retried, map_name, sizeof(retried) - 1) != 0)
+				{
+					strncpy(retried, map_name, sizeof(retried) - 1);
+					retried[sizeof(retried) - 1] = 0;
+					cache_files_precache_map_end();
+					error(_error_silent, "trying map '%s' again", map_name);
+					return FALSE;
+				}
+				retried[0] = 0;
+				if (map_name[0] == '+')
+				{
+					cache_files_map_failed(map_name);
+					return FALSE;
+				}
+#endif
 				display_error_damaged_media();
+			}
 			else if (status == 1)
 				cache_files_precache_map_end();
 		}
