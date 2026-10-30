@@ -15,8 +15,7 @@ static unsigned char const font[] = {
 
 #define TOP ((480 - SCREEN_ROWS * 16) / 2)
 
-/* a cell's width on the screen: 8 pixels, or 6 when the dashboard is set to widescreen (the TV stretches the 640x480
-picture to 16:9, so the text is drawn narrower and comes out its own shape; the signal is the same either way) */
+/* a cell's width on the screen: 8 pixels (draw_cell can draw narrower ones; installer 4 did for widescreen) */
 static int cell_width = 8, left = (640 - SCREEN_COLUMNS * 8) / 2;
 
 struct cell
@@ -31,11 +30,8 @@ static unsigned long row_background[SCREEN_ROWS];
 void screen_init(void)
 {
 	XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
-	if (XVideoGetEncoderSettings() & VIDEO_WIDESCREEN)
-	{
-		cell_width = 6;
-		left = (640 - SCREEN_COLUMNS * 6) / 2;
-	}
+	/* (a widescreen dashboard: the TV stretches this 640x480 picture to 16:9, the same pixels. Text drawn 6 pixels wide
+	to make up for it was unreadable (installer 4); it's drawn 8 wide, a little stretched, as before) */
 	memset(shown, 0, sizeof(shown));
 	screen_clear();
 }

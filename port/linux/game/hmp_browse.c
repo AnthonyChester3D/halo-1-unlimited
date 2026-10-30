@@ -1,8 +1,8 @@
 /*
 HMP_BROWSE.C
 
-Halo Universal's map browser (hmp.h; Halo Universal's browse.c). The map list can be sorted eight ways; X (or White)
-changes the sort, LT / RT jump between its groups, and the sort is remembered (hmp_stats.c):
+Halo Universal's map browser (hmp.h; Halo Universal's browse.c). The map list can be sorted eight ways; X
+changes the sort (White, with opence.ini showcase_preview = 1, plays the map's showcase), LT / RT jump between its groups, and the sort is remembered (hmp_stats.c):
 
 	Packs            Halo's order (order.txt, packs together): Halo's maps, then each pack, then your maps
 	Favorites        your favorites first, then the rest in Halo's order
@@ -820,20 +820,17 @@ boolean hmp_browse_event(struct widget_instance *list, struct event_record const
 		return TRUE;
 	}
 #if defined(OXBOX_SHOWCASE)
-	/* (White, with opence.ini showcase_preview = 1: the map's showcase, if it has one; else White sorts, as X does) */
+	/* (White, with opence.ini showcase_preview = 1: the map's showcase, if it has one) */
 	if (button == 5)
 	{
 		extern int oxbox_setting_showcase_preview;
 		boolean showcase_preview_request(char const *key);
 
-		if (oxbox_setting_showcase_preview)
-		{
-			if (press) ui_play_audio_feedback_sound(showcase_preview_request(entry) ? 1 : 4);
-			return TRUE;
-		}
+		if (press) ui_play_audio_feedback_sound(oxbox_setting_showcase_preview && showcase_preview_request(entry) ? 1 : 4);
+		return TRUE;
 	}
 #endif
-	if (button == 2 || button == 5)                  /* X, White */
+	if (button == 2)                                 /* X (White was the sort too: now the showcase preview) */
 	{
 		if (press)
 		{
