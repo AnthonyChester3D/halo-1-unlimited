@@ -4985,7 +4985,20 @@ static boolean bots_goal_walk(
 	/* (at its place while holding: stands there, within a stride of it; full speed to within 0.05 overshot and
 	stepped back and forth) */
 	if (length < 0.05f || (toward == &brain->hold_point && length < 0.6f))
+	{
+		/* (a guard at its place looks about slowly, a sweep either side of facing away from its flag, ten seconds a
+		sweep: where it looks eased round to (bots_act), not snapped from one way to another) */
+		if (toward == &brain->hold_point && brain->goal_reason == _bots_reason_defend)
+		{
+			real outward = (real)atan2(position->y - brain->goal_point.y, position->x - brain->goal_point.x);
+			real sweep = (real)sin((real)(now % (10 * BOTS_TICKS_PER_SECOND)) * 2.f * BOTS_PI /
+				(10.f * BOTS_TICKS_PER_SECOND));
+
+			brain->walk_yaw = outward + 0.9f * sweep;
+			brain->walk_has_yaw = TRUE;
+		}
 		return TRUE;
+	}
 	brain->move_i = di / length;
 	brain->move_j = dj / length;
 	/* (a guard about its own flag walks, as a guard would: under half speed, the stick part way) */
@@ -5270,8 +5283,11 @@ static void bots_act(
 	}
 	if (!brain->target_visible)
 	{
+		/* (a guard turns slowly, as a guard does: a third of the rate) */
 		if (brain->walk_has_yaw)
-			brain->yaw += bots_ease_turn(bots_angle_difference(brain->walk_yaw, brain->yaw), BOTS_TURN_PER_TICK);
+			brain->yaw += bots_ease_turn(bots_angle_difference(brain->walk_yaw, brain->yaw),
+				brain->goal_kind == _bots_goal_hold && brain->goal_reason == _bots_reason_defend ?
+				BOTS_TURN_PER_TICK / 3.f : BOTS_TURN_PER_TICK);
 		brain->pitch += PIN(-brain->pitch, -BOTS_PITCH_TURN_PER_TICK, BOTS_PITCH_TURN_PER_TICK);
 	}
 	while (brain->yaw >= 2.f * BOTS_PI)
