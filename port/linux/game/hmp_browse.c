@@ -819,6 +819,20 @@ boolean hmp_browse_event(struct widget_instance *list, struct event_record const
 		if (press) ui_play_audio_feedback_sound(4);
 		return TRUE;
 	}
+#if defined(OXBOX_SHOWCASE)
+	/* (White, with opence.ini showcase_preview = 1: the map's showcase, if it has one; else White sorts, as X does) */
+	if (button == 5)
+	{
+		extern int oxbox_setting_showcase_preview;
+		boolean showcase_preview_request(char const *key);
+
+		if (oxbox_setting_showcase_preview)
+		{
+			if (press) ui_play_audio_feedback_sound(showcase_preview_request(entry) ? 1 : 4);
+			return TRUE;
+		}
+	}
+#endif
 	if (button == 2 || button == 5)                  /* X, White */
 	{
 		if (press)

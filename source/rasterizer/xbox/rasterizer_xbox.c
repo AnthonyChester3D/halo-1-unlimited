@@ -1849,6 +1849,14 @@ boolean rasterizer_preinitialize__fill_you_up_with_the_devils_cock(
 
 		csmemset(&d3d_present_parameters, 0, sizeof(d3d_present_parameters));
 		d3d_present_parameters.Flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: 480p when the dashboard allows it (port/oxbox/oxbox_sdk.c) */
+		{
+			unsigned long oxbox_video_present_flags(void);
+
+			d3d_present_parameters.Flags |= oxbox_video_present_flags();
+		}
+#endif
 		d3d_present_parameters.Windowed = FALSE;
 		d3d_present_parameters.SwapEffect = D3DSWAPEFFECT_DISCARD;
 		d3d_present_parameters.EnableAutoDepthStencil = TRUE;
@@ -1866,6 +1874,22 @@ boolean rasterizer_preinitialize__fill_you_up_with_the_devils_cock(
 			RASTERIZER_DEVICE_CREATION_FLAGS,
 			&d3d_present_parameters,
 			&global_d3d_device);
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: a progressive device D3D won't make: 480i, as before */
+		if (result < 0 && (d3d_present_parameters.Flags & 0x40))
+		{
+			error(_error_silent, "480p device refused (%08lx): 480i", (unsigned long)result);
+			d3d_present_parameters.Flags &= ~0x40ul;
+			result = IDirect3D8_CreateDevice(
+				d3d,
+				D3DADAPTER_DEFAULT,
+				D3DDEVTYPE_HAL,
+				NULL,
+				RASTERIZER_DEVICE_CREATION_FLAGS,
+				&d3d_present_parameters,
+				&global_d3d_device);
+		}
+#endif
 		if (result >= 0)
 		{
 			success = TRUE;
@@ -2923,6 +2947,14 @@ boolean _rasterizer_initialize(
 		rasterizer_globals.fps_accumulation_frame_index = 1;
 		csmemset(&d3d_present_parameters, 0, sizeof(d3d_present_parameters));
 		d3d_present_parameters.Flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: 480p when the dashboard allows it (port/oxbox/oxbox_sdk.c) */
+		{
+			unsigned long oxbox_video_present_flags(void);
+
+			d3d_present_parameters.Flags |= oxbox_video_present_flags();
+		}
+#endif
 		d3d_present_parameters.Windowed = FALSE;
 		d3d_present_parameters.SwapEffect = D3DSWAPEFFECT_DISCARD;
 		d3d_present_parameters.EnableAutoDepthStencil = TRUE;
@@ -2971,6 +3003,22 @@ boolean _rasterizer_initialize(
 			RASTERIZER_DEVICE_CREATION_FLAGS,
 			&d3d_present_parameters,
 			&global_d3d_device);
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: a progressive device D3D won't make: 480i, as before */
+		if (result < 0 && (d3d_present_parameters.Flags & 0x40))
+		{
+			error(_error_silent, "480p device refused (%08lx): 480i", (unsigned long)result);
+			d3d_present_parameters.Flags &= ~0x40ul;
+			result = IDirect3D8_CreateDevice(
+				d3d,
+				D3DADAPTER_DEFAULT,
+				D3DDEVTYPE_HAL,
+				NULL,
+				RASTERIZER_DEVICE_CREATION_FLAGS,
+				&d3d_present_parameters,
+				&global_d3d_device);
+		}
+#endif
 		if (result >= 0)
 		{
 			success = TRUE;

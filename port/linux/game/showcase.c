@@ -110,6 +110,7 @@ int oxbox_setting_showcase_seconds = 0;
 int oxbox_setting_showcase_bots = -1;   /* showcase_bots = N: that many bots (0 to 15), else the map's suggestion */
 int oxbox_setting_showcase_min_fps = 15;   /* showcase_min_fps = N: bots drop out under N frames a second (0: never) */
 int oxbox_setting_showcase_map_seconds = 90;   /* showcase_map_seconds = N: each map at most N seconds (0: no limit) */
+int oxbox_setting_showcase_preview = 0;   /* showcase_preview = 1: White on a map in the map list plays its showcase */
 
 /* ---------- constants */
 
@@ -205,6 +206,12 @@ static struct
 	short plan[SHOWCASE_MAXIMUM_SHOTS];   /* the shots to play, in order (showcase_plan) */
 	short plan_count;
 	short shot_index;                     /* in the plan */
+	long shot_serial, checked_serial;     /* a shot started (each one), and the last one looked at (showcase_shot_check) */
+	long outside_serial;                  /* the last shot said to go outside the map partway */
+	short skipped_in_row;                 /* shots skipped one after another: the camera outside the map */
+	/* a preview (opence.ini showcase_preview = 1: White in the map list): this map's shots once, then the menus */
+	boolean preview;
+	char preview_key[SHOWCASE_KEY_LENGTH];
 	real shot_time;                 /* seconds into the shot (below 0: the settle before the first) */
 	real map_seconds;
 	boolean camera_valid;
@@ -680,6 +687,23 @@ static unsigned long showcase_cycles(
 	return low ^ (high << 16) ^ (high >> 16);
 }
 
+/* whether a map has shots (a preview: hidden or not) */
+static boolean showcase_listed_any(
+	char const *key,
+	unsigned long *weight)
+{
+	HANDLE file;
+
+	*weight = 1;
+	if (!key || strlen(key) >= SHOWCASE_KEY_LENGTH)
+		return FALSE;
+	file = showcase_open(key);
+	if (file == INVALID_HANDLE_VALUE)
+		return FALSE;
+	CloseHandle(file);
+	return TRUE;
+}
+
 /* whether the map goes in the showcase's list: not hidden in the map browser, and its shots there; weight: its
 chances of being next (more for a favorite, and for an "Artistic" one) */
 static boolean showcase_listed(
@@ -831,6 +855,55 @@ static void showcase_plan(
 		(int)showcase.plan_count, (int)count, oxbox_setting_showcase_map_seconds, (int)showcase.plan_count - 2);
 }
 
+static void showcase_leave(boolean next_map);
+
+/* each shot as it starts: a line in the log (which of the file's shots, where the camera is), and one whose camera
+starts outside the map (no cluster of its BSP holds that point: the screen showed the sky's colour, or black, and a
+piece of the level far off) is skipped, with a line saying so, rather than shown. Every shot in a row outside: the
+next map */
+static void showcase_shot_check(
+	void)
+{
+	short file_index;
+
+	if (showcase.shot_time < 0.0f || !showcase.camera_valid)
+		return;
+	if (showcase.checked_serial == showcase.shot_serial)
+	{
+		/* (a shot that started inside and goes outside partway: said once, shown as it is) */
+		if (showcase.camera.location.cluster_index == NONE && showcase.outside_serial != showcase.shot_serial)
+		{
+			showcase.outside_serial = showcase.shot_serial;
+			platform_log("showcase: shot %d of %d (the file's shot %d) goes outside the map %.1f s in, at (%.2f %.2f %.2f)",
+				(int)showcase.shot_index + 1, (int)showcase.plan_count, (int)showcase.plan[showcase.shot_index] + 1,
+				showcase.shot_time, showcase.camera.position.x, showcase.camera.position.y, showcase.camera.position.z);
+		}
+		return;
+	}
+	showcase.checked_serial = showcase.shot_serial;
+	file_index = showcase.plan[showcase.shot_index];
+	if (showcase.camera.location.cluster_index == NONE)
+	{
+		platform_log("showcase: shot %d of %d (the file's shot %d) starts outside the map at (%.2f %.2f %.2f): skipped",
+			(int)showcase.shot_index + 1, (int)showcase.plan_count, (int)file_index + 1, showcase.camera.position.x,
+			showcase.camera.position.y, showcase.camera.position.z);
+		if (++showcase.skipped_in_row >= showcase.plan_count)
+		{
+			platform_log("showcase: every shot starts outside the map: the next map");
+			showcase.alpha = 1.0f;
+			showcase_leave(TRUE);
+			return;
+		}
+		showcase.shot_time = showcase_file.shots[file_index].seconds;   /* (the next shot, next frame) */
+		showcase.alpha = 1.0f;
+		return;
+	}
+	showcase.skipped_in_row = 0;
+	platform_log("showcase: shot %d of %d (the file's shot %d, %.1f s) from (%.2f %.2f %.2f)", (int)showcase.shot_index + 1,
+		(int)showcase.plan_count, (int)file_index + 1, showcase_file.shots[file_index].seconds, showcase.camera.position.x,
+		showcase.camera.position.y, showcase.camera.position.z);
+}
+
 /* ---------- private code: the game */
 
 static void showcase_set_state(
@@ -969,7 +1042,7 @@ static void showcase_host(
 static void showcase_leave(
 	boolean next_map)
 {
-	showcase.chain = next_map && !showcase.user_ended;
+	showcase.chain = next_map && !showcase.user_ended && !showcase.preview;
 	switch (showcase.state)
 	{
 	case _showcase_menu_fade:
@@ -999,6 +1072,9 @@ static void showcase_back_at_menu(
 	}
 	bots_showcase(-1);
 	attract_mode_reset_timer();
+	if (showcase.preview)
+		platform_log("showcase: the preview is over");
+	showcase.preview = FALSE;
 	if (showcase.user_ended)
 		platform_log("showcase: ended by a press");
 	showcase_set_state(_showcase_menu_return);
@@ -1050,6 +1126,47 @@ boolean showcase_start(
 	return TRUE;
 }
 
+/* White on a map in the map list (hmp_browse.c), with opence.ini showcase_preview = 1: that map's shots, once, then
+the main menu. A lobby the map list is in is left first (the showcase hosts its own game). FALSE when the map has no
+shots (or the setting is off) */
+boolean showcase_preview_request(
+	char const *key)
+{
+	unsigned long weight;
+
+	if (!oxbox_setting_showcase_preview || showcase.state != _showcase_off || !key || !showcase_listed_any(key, &weight))
+		return FALSE;
+	strcpy(showcase.preview_key, key);
+	platform_log("showcase: a preview of %s (White in the map list): leaving the menus for it", key);
+	if (network_game_is_active())
+		network_game_abort();
+	return TRUE;
+}
+
+/* the preview asked for, once the main menu is up with no game */
+static void showcase_preview_start(
+	void)
+{
+	showcase.map_count = 1;
+	showcase.map_next = 0;
+	strcpy(showcase.maps[0], showcase.preview_key);
+	showcase.preview_key[0] = 0;
+	if (!showcase_next_map())
+	{
+		platform_log("showcase: the preview's showcase.txt couldn't be read");
+		return;
+	}
+	showcase.preview = TRUE;
+	showcase.user_ended = FALSE;
+	showcase.chain = FALSE;
+	showcase.input_time = event_manager_time_of_last_event();
+	showcase.last_time = system_milliseconds();
+	showcase.alpha = 0.0f;
+	ui_stop_main_menu_music();
+	platform_log("showcase: the preview of %s", showcase.maps[0]);
+	showcase_set_state(_showcase_menu_fade);
+}
+
 void showcase_update(
 	boolean main_menu_loaded)
 {
@@ -1057,7 +1174,11 @@ void showcase_update(
 	real seconds;
 
 	if (showcase.state == _showcase_off)
+	{
+		if (showcase.preview_key[0] && main_menu_loaded && main_menu_is_active() && !network_game_is_active())
+			showcase_preview_start();
 		return;
+	}
 	/* (the frame's time; a long gap, such as a map loading, counts as one frame) */
 	seconds = (real)(now - showcase.last_time) * 0.001f;
 	showcase.last_time = now;
@@ -1195,6 +1316,8 @@ void showcase_update(
 		{
 			showcase_plan();
 			showcase.shot_index = 0;
+			showcase.shot_serial++;
+			showcase.skipped_in_row = 0;
 			showcase.shot_time = -SHOWCASE_SETTLE_SECONDS;
 			showcase.map_seconds = 0.0f;
 			showcase.drop_seconds = -SHOWCASE_FPS_DROP_SECONDS;
@@ -1231,7 +1354,7 @@ void showcase_update(
 		showcase.map_seconds += seconds;
 		showcase_frame_rate(now);
 		/* (its limit reached, a shot or not: on to the next map, fading as a press does) */
-		if (oxbox_setting_showcase_map_seconds > 0 && showcase.map_count > 1 &&
+		if (oxbox_setting_showcase_map_seconds > 0 && (showcase.map_count > 1 || showcase.preview) &&
 			showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= (real)oxbox_setting_showcase_map_seconds)
 		{
 			showcase_leave(TRUE);
@@ -1240,13 +1363,14 @@ void showcase_update(
 		while (showcase.shot_time >= showcase_file.shots[showcase.plan[showcase.shot_index]].seconds)
 		{
 			showcase.shot_time -= showcase_file.shots[showcase.plan[showcase.shot_index]].seconds;
+			showcase.shot_serial++;
 			if (++showcase.shot_index >= showcase.plan_count)
 			{
 				showcase.shot_index = 0;
 				/* the plan played through: the next map, once this one has played a minute or its limit (with only
 				one, it plays on, shuffled again) */
-				if (showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= showcase_minimum_seconds() &&
-					(showcase.map_count > 1 || showcase.map_next < showcase.map_count))
+				if (showcase.preview || (showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= showcase_minimum_seconds() &&
+					(showcase.map_count > 1 || showcase.map_next < showcase.map_count)))
 				{
 					showcase.shot_time = 0.0f;
 					showcase.alpha = 1.0f;
@@ -1257,7 +1381,10 @@ void showcase_update(
 			}
 		}
 		if (showcase.state == _showcase_playing)
+		{
 			showcase_camera_update(TRUE);
+			showcase_shot_check();
+		}
 		break;
 
 	case _showcase_leaving:

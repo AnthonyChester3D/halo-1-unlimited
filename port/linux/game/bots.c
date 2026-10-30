@@ -402,6 +402,7 @@ static struct
 	unsigned long report_time;
 	long searches, searches_failed, arrivals, give_ups, teleports, ticks;
 	long failed_no_path, failed_ledge, failed_stall, teleport_hops;
+	long edge_stops;                        /* steps kept off a death cliff (bots_act) */
 	long sightings, firing_ticks, grenades, melees, pickups;
 	long jumps, crouch_jumps, jumps_landed, crouches, straight_up, straight_down, straight_done, overhangs;
 	unsigned long long probe_cycles;
@@ -628,6 +629,8 @@ static void bots_vehicle_seats(long vehicle_index, struct bots_seats *seats);
 static long bots_unit_team(long unit_index);
 short vehicle_bot_type(long vehicle_index);  /* vehicles.c's (port: the bots') */
 static boolean bots_goal_walk(struct bots_brain *brain, real_point3d const *position, long now);
+static real bots_ease_turn(real left, real most);
+static real bots_ease_aim(real error, real most);
 static boolean bots_route_to(struct bots_brain *brain, real_point3d const *position, short waypoint, long now);
 #if defined(OXBOX_BOT_TUNING)
 static void bots_brain_stagger(struct bots_brain *brain, long now);
@@ -2091,9 +2094,11 @@ static void bots_report(
 		bots_route.walk_cycles_maximum = bots_route.search_cycles_maximum = bots_route.fight_cycles_maximum = 0;
 		bots_route.sightings = bots_route.firing_ticks = bots_route.grenades = bots_route.melees = bots_route.pickups = 0;
 #if defined(OXBOX_TEST_BOTS)
-		bots_log("bots 10s: failed searches: %ld no path, %ld ledges, %ld no closer; %ld bots stepped onto teleporters",
-			bots_route.failed_no_path, bots_route.failed_ledge, bots_route.failed_stall, bots_route.teleport_hops);
+		bots_log("bots 10s: failed searches: %ld no path, %ld ledges, %ld no closer; %ld bots stepped onto teleporters; "
+			"%ld steps kept off a death cliff", bots_route.failed_no_path, bots_route.failed_ledge, bots_route.failed_stall,
+			bots_route.teleport_hops, bots_route.edge_stops);
 		bots_route.failed_no_path = bots_route.failed_ledge = bots_route.failed_stall = bots_route.teleport_hops = 0;
+		bots_route.edge_stops = 0;
 #endif
 	}
 	/* (the Xbox's processor: 733 MHz) */
@@ -3360,8 +3365,8 @@ static void bots_fight(
 		brain->aim_error_pitch = brain->aim_error_pitch * bots_skill()->aim_settle + 0.002f * bots_random_signed();
 		yaw_error = bots_angle_difference(aim_yaw, brain->yaw);
 		pitch_error = aim_pitch - brain->pitch;
-		brain->yaw += PIN(yaw_error, -bots_skill()->aim_turn, bots_skill()->aim_turn);
-		brain->pitch += PIN(pitch_error, -bots_skill()->aim_turn * 0.67f, bots_skill()->aim_turn * 0.67f);
+		brain->yaw += bots_ease_aim(yaw_error, bots_skill()->aim_turn);
+		brain->pitch += bots_ease_aim(pitch_error, bots_skill()->aim_turn * 0.67f);
 		tolerance = (real)atan2(0.35f * bots_skill()->fire_tolerance, distance > 0.5f ? distance : 0.5f);
 		if (tolerance < 0.03f)
 			tolerance = 0.03f;
@@ -3714,6 +3719,26 @@ static short bots_team_rank(
 	return rank;
 }
 
+/* how many bots are on a player's team */
+static short bots_team_bots(
+	struct player_datum const *player)
+{
+	short count = 0;
+	long index;
+
+	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+	{
+		struct player_datum *other = bots_player_at(index);
+
+		if (other && other->team_index == player->team_index &&
+			other->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST)
+		{
+			count++;
+		}
+	}
+	return count;
+}
+
 /* game_engine_ctf.c's (port: the bots') */
 boolean game_engine_ctf_bot_flag(long team_index, real_point3d *spot, long *weapon_index, boolean *at_home);
 
@@ -3754,8 +3779,10 @@ static void bots_goal_ctf(
 		brain->goal_urgent = TRUE;
 		return;
 	}
+	/* (one guard a team, and only a team of 3 or more bots: the second of them; every third bot guarded, two on a
+	team of 5, and they crowded the flag) */
 	defender = flags[other] == NONE ? TRUE : flags[team] == NONE ? FALSE :
-		bots_team_rank(absolute_player_index, player) % 3 == 1;
+		bots_team_rank(absolute_player_index, player) == 1 && bots_team_bots(player) >= 3;
 	/* its team's flag away from home: hunt the carrier, or touch the flag (the defenders, and anyone near) */
 	if (flags[team] != NONE && !at_home[team])
 	{
@@ -4794,7 +4821,7 @@ static boolean bots_goal_walk(
 			brain->hold_point = brain->goal_point;
 			brain->hold_point.x += reach * (real)cos(angle);
 			brain->hold_point.y += reach * (real)sin(angle);
-			brain->hold_until = now + (guard ? 5 * BOTS_TICKS_PER_SECOND + (long)(bots_random() % (4 * BOTS_TICKS_PER_SECOND)) :
+			brain->hold_until = now + (guard ? 8 * BOTS_TICKS_PER_SECOND + (long)(bots_random() % (7 * BOTS_TICKS_PER_SECOND)) :
 				2 * BOTS_TICKS_PER_SECOND + (long)(bots_random() % BOTS_TICKS_PER_SECOND));
 		}
 		toward = &brain->hold_point;
@@ -4961,6 +4988,12 @@ static boolean bots_goal_walk(
 		return TRUE;
 	brain->move_i = di / length;
 	brain->move_j = dj / length;
+	/* (a guard about its own flag walks, as a guard would: under half speed, the stick part way) */
+	if (toward == &brain->hold_point && brain->goal_reason == _bots_reason_defend)
+	{
+		brain->move_i *= 0.4f;
+		brain->move_j *= 0.4f;
+	}
 	brain->walk_yaw = (real)atan2(dj, di);
 	brain->walk_has_yaw = TRUE;
 	return TRUE;
@@ -5176,6 +5209,53 @@ static void bots_move_skills(
 	bots_route.probe_cycles += bots_cycles() - cycles;
 }
 
+/* a turn's step this tick, eased: a part of what's left (so it slows into where it's turning to, as a person's does,
+instead of snapping round at the full rate and stopping dead), at most `most`, and at least a little */
+static real bots_ease_turn(real left, real most)
+{
+	real step = left * 0.25f, least = 0.01f;
+
+	if (step > most) step = most;
+	if (step < -most) step = -most;
+	if (step > -least && step < least)
+		step = left > least ? least : left < -least ? -least : left;
+	return step;
+}
+
+/* an aim's step: a swing onto a new target eased as a turn is; small corrections (tracking a target) whole, so the
+aim stays as good as it was */
+static real bots_ease_aim(real error, real most)
+{
+	real step = (real)fabs(error) > 0.15f ? error * 0.45f : error;
+
+	return PIN(step, -most, most);
+}
+
+/* whether a step in this direction would go over a drop with no floor within 3 units below (a death cliff, the
+edge of Boarding Action's ships): looked at 1 and 1.8 units ahead */
+static boolean bots_edge_ahead(
+	real_point3d const *position,
+	real direction_i,
+	real direction_j)
+{
+	real length = (real)sqrt(direction_i * direction_i + direction_j * direction_j);
+	real ahead;
+
+	if (length < 0.05f)
+		return FALSE;
+	for (ahead = 1.f; ahead < 2.f; ahead += 0.8f)
+	{
+		real_point3d point, ground;
+
+		point.x = position->x + direction_i / length * ahead;
+		point.y = position->y + direction_j / length * ahead;
+		point.z = position->z + 0.3f;
+		if (bots_ground(&point, &ground) == NONE)
+			return TRUE;
+	}
+	return FALSE;
+}
+
 /* the bot's action from its walk and its fight: facing (turning at a person's speed), throttle, jump, crouch */
 static void bots_act(
 	struct bots_brain *brain,
@@ -5191,7 +5271,7 @@ static void bots_act(
 	if (!brain->target_visible)
 	{
 		if (brain->walk_has_yaw)
-			brain->yaw += PIN(bots_angle_difference(brain->walk_yaw, brain->yaw), -BOTS_TURN_PER_TICK, BOTS_TURN_PER_TICK);
+			brain->yaw += bots_ease_turn(bots_angle_difference(brain->walk_yaw, brain->yaw), BOTS_TURN_PER_TICK);
 		brain->pitch += PIN(-brain->pitch, -BOTS_PITCH_TURN_PER_TICK, BOTS_PITCH_TURN_PER_TICK);
 	}
 	while (brain->yaw >= 2.f * BOTS_PI)
@@ -5202,6 +5282,34 @@ static void bots_act(
 	action->desired_facing.yaw = brain->yaw;
 	action->desired_facing.pitch = brain->pitch;
 
+	/* (on foot, fighting or holding a spot: never a step over a death cliff. The route's own hops know the floor;
+	a strafe, or closing on a target, went straight off Boarding Action's edges) */
+	if (!brain->driving && brain->seat_kind == _bots_seat_none && (brain->target_visible || brain->goal_kind == _bots_goal_hold) &&
+		brain->unit_index != NONE && object_try_and_get(brain->unit_index))
+	{
+		real_point3d position;
+
+		object_get_origin(brain->unit_index, &position);
+		if (bots_edge_ahead(&position, brain->move_i, brain->move_j))
+		{
+			/* (along the edge instead, if that's floor; else stand) */
+			real side_i = -brain->move_j, side_j = brain->move_i;
+
+			if (!bots_edge_ahead(&position, side_i, side_j))
+			{
+				brain->move_i = side_i * 0.5f;
+				brain->move_j = side_j * 0.5f;
+			}
+			else if (!bots_edge_ahead(&position, -side_i, -side_j))
+			{
+				brain->move_i = -side_i * 0.5f;
+				brain->move_j = -side_j * 0.5f;
+			}
+			else
+				brain->move_i = brain->move_j = 0.f;
+			bots_route.edge_stops++;
+		}
+	}
 	/* the throttle is the unit's own: forward and left of where it faces */
 	length = (real)sqrt(brain->move_i * brain->move_i + brain->move_j * brain->move_j);
 	if (length > 1.f)

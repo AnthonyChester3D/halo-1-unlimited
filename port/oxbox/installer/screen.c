@@ -13,8 +13,11 @@ static unsigned char const font[] = {
 #include <hal/font_unscii_16.h>
 };
 
-#define LEFT ((640 - SCREEN_COLUMNS * 8) / 2)
 #define TOP ((480 - SCREEN_ROWS * 16) / 2)
+
+/* a cell's width on the screen: 8 pixels, or 6 when the dashboard is set to widescreen (the TV stretches the 640x480
+picture to 16:9, so the text is drawn narrower and comes out its own shape; the signal is the same either way) */
+static int cell_width = 8, left = (640 - SCREEN_COLUMNS * 8) / 2;
 
 struct cell
 {
@@ -28,6 +31,11 @@ static unsigned long row_background[SCREEN_ROWS];
 void screen_init(void)
 {
 	XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
+	if (XVideoGetEncoderSettings() & VIDEO_WIDESCREEN)
+	{
+		cell_width = 6;
+		left = (640 - SCREEN_COLUMNS * 6) / 2;
+	}
 	memset(shown, 0, sizeof(shown));
 	screen_clear();
 }
@@ -84,13 +92,19 @@ int screen_text(int row, int column, unsigned long colour, char const *format, .
 static void draw_cell(unsigned char *fb, int row, int column, struct cell const *cell)
 {
 	unsigned char const *glyph = font + cell->c * 16;
-	unsigned long *p = (unsigned long *)fb + (TOP + row * 16) * 640 + LEFT + column * 8;
+	unsigned long *p = (unsigned long *)fb + (TOP + row * 16) * 640 + left + column * cell_width;
 	int y, x;
 	for (y = 0; y < 16; y++, p += 640)
 	{
 		unsigned char bits = glyph[y];
-		for (x = 0; x < 8; x++)
-			p[x] = (bits & (0x80 >> x)) ? cell->colour : cell->background;
+		for (x = 0; x < cell_width; x++)
+		{
+			/* (narrower: each pixel takes the glyph's columns it covers, any of them set, so no stroke is lost) */
+			int from = x * 8 / cell_width, to = ((x + 1) * 8 + cell_width - 1) / cell_width, k, on = 0;
+			for (k = from; k < to && k < 8; k++)
+				on |= bits & (0x80 >> k);
+			p[x] = on ? cell->colour : cell->background;
+		}
 	}
 }
 

@@ -520,3 +520,36 @@ void oxbox_ftp_frame(int menus)
 		hmp_maps_scan();
 	}
 }
+
+/* ---------- the video mode: 480p when the dashboard allows it
+
+Halo asked D3D for no progressive scan, so it ran 480i on an HD cable (component, or an HDMI adapter reporting as one)
+even with 480p turned on in the dashboard, while the installer (nxdk) and the dashboards ran 480p: the TV re-synced
+at each switch. Now the game asks for 480p exactly when the installer gets it: an HDTV AV pack, NTSC, and the
+dashboard's 480p on (the AV encoder's settings, AvSendTVEncoderOption VIDEO_ENC_GET_SETTINGS, as nxdk's
+XVideoGetEncoderSettings reads them). Everything else stays 480i (or PAL) as it was; and if D3D won't make the
+device progressive, rasterizer_xbox.c makes it again without (480i). The same 640x480 frame is drawn either way. */
+
+#define OXBOX_PRESENT_PROGRESSIVE 0x00000040   /* (D3DPRESENTFLAG_PROGRESSIVE) */
+
+unsigned long oxbox_video_present_flags(void)
+{
+	typedef void (WINAPI *encoder_option_proc)(void *base, ULONG option, ULONG parameter, ULONG *result);
+	static int known;
+	static unsigned long flags;
+
+	if (!known)
+	{
+		encoder_option_proc encoder_option = (encoder_option_proc)oxbox_kernel_export(2);
+		ULONG settings = 0;
+
+		known = 1;
+		if (encoder_option)
+			encoder_option((void *)0xFD000000, 6, 0, &settings);
+		if ((settings & 0xFF) == 4 && (settings & 0xFF00) != 0x300 && (settings & 0x80000))
+			flags = OXBOX_PRESENT_PROGRESSIVE;
+		platform_log("video: AV pack %lu, encoder settings %08lx: %s", (unsigned long)(settings & 0xFF),
+			(unsigned long)settings, flags ? "480p (the dashboard's)" : "480i");
+	}
+	return flags;
+}

@@ -376,6 +376,71 @@ memory line, though xemu didn't. The flash is left alone.) */
 
 unsigned short oxbox_kernel_build;
 
+/* the CPU's clock: its cycles over a tenth of a second of the kernel's millisecond count (733 MHz on a stock Xbox,
+1.0 or 1.4 GHz with an upgraded CPU); 0 when the count doesn't move */
+static unsigned long cpu_mhz(void)
+{
+	unsigned long low0, high0, low1, high1, t0, t1, guard = 0;
+	unsigned long long cycles;
+
+	t0 = GetTickCount();
+	while (GetTickCount() == t0 && ++guard < 100000000ul) ;
+	t0 = GetTickCount();
+	__asm__ __volatile__("rdtsc" : "=a"(low0), "=d"(high0));
+	guard = 0;
+	while ((t1 = GetTickCount()) - t0 < 100 && ++guard < 400000000ul) ;
+	__asm__ __volatile__("rdtsc" : "=a"(low1), "=d"(high1));
+	if (t1 == t0)
+		return 0;
+	cycles = (((unsigned long long)high1 << 32) | low1) - (((unsigned long long)high0 << 32) | low0);
+	return (unsigned long)(cycles / ((unsigned long long)(t1 - t0) * 1000ull));
+}
+
+static void cpuid(unsigned long leaf, unsigned long *a, unsigned long *b, unsigned long *c, unsigned long *d)
+{
+	__asm__ __volatile__("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(0));
+}
+
+/* the hardware, for the log: the CPU (its clock, which one), the RAM, the GPU's clock (the NV2A's core PLL: a
+crystal of 16.667 MHz times N, over M and 2^P; 233 MHz stock), so testers' upgraded consoles (128 MB, a 1.4 GHz
+CPU, an overclocked GPU) show in their logs */
+static void report_hardware(unsigned long total_kb)
+{
+	unsigned long a, b, c, d, family, model, stepping, l2 = 0, mhz = cpu_mhz();
+	unsigned long nvpll = *(volatile unsigned long *)0xFD680500;
+	unsigned long n = nvpll >> 8 & 0xFF, m = nvpll & 0xFF, p = nvpll >> 16 & 7;
+	unsigned long gpu = m ? (unsigned long)(16666667ull * n / m >> p) / 1000000ul : 0;
+	char vendor[13];
+
+	cpuid(0, &a, &b, &c, &d);
+	memcpy(vendor, &b, 4);
+	memcpy(vendor + 4, &d, 4);
+	memcpy(vendor + 8, &c, 4);
+	vendor[12] = 0;
+	cpuid(1, &a, &b, &c, &d);
+	family = a >> 8 & 15;
+	model = a >> 4 & 15;
+	stepping = a & 15;
+	cpuid(0x80000000ul, &a, &b, &c, &d);
+	if (a >= 0x80000006ul)
+	{
+		cpuid(0x80000006ul, &a, &b, &c, &d);
+		l2 = c >> 16;
+	}
+	{
+		char cache[24];
+
+		cache[0] = 0;
+		if (l2)
+			snprintf(cache, sizeof(cache), ", %lu KB L2", l2);
+		/* (an emulator's clock is its own: xemu says about 900 MHz) */
+		platform_log("hardware: CPU %lu MHz (%s family %lu model %lu stepping %lu%s%s); RAM %lu MB; GPU %lu MHz "
+			"(NVPLL %08lx)", mhz, vendor, family, model, stepping,
+			family == 6 && model == 8 ? ", Coppermine: the stock CPU's kind" : family == 6 && model == 11 ?
+			", Tualatin: an upgraded CPU" : "", cache, (total_kb + 1023) / 1024, gpu, nvpll);
+	}
+}
+
 static void report_system(void)
 {
 	const unsigned short *version = oxbox_kernel_export(324);   /* XboxKrnlVersion */
@@ -407,6 +472,7 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	showcase_bots = N    (the same) its matches' bots, 0 to 15 (else the map's suggested players, 4 to 10, less 1)
 	showcase_min_fps = N (the same) its bots drop out one at a time while it runs under N frames a second (15; 0: never)
 	showcase_map_seconds = N (the same) each map plays at most N seconds (90; 0: no limit, a minute and its shots)
+	showcase_preview = 1 (the same) White on a map in the map list plays that map's showcase once, then the main menu
 	ftp = 1              a small FTP server on the game's folder while the menus are up (stopped while a map is
 	                     loaded); ftp_password = text (xbox, as the dashboards' FTP); ftp_port = N (21). Folder maps are copied into
 	                     the map cache afresh after a change through it (developers' map work)
@@ -622,6 +688,11 @@ static void read_settings(const char *path)
 			extern int oxbox_setting_showcase_min_fps;
 			oxbox_setting_showcase_min_fps = value;
 		}
+		else if (same_text(name, "showcase_preview"))
+		{
+			extern int oxbox_setting_showcase_preview;
+			oxbox_setting_showcase_preview = value != 0;
+		}
 		else if (same_text(name, "showcase_map_seconds"))
 		{
 			extern int oxbox_setting_showcase_map_seconds;
@@ -751,6 +822,7 @@ int oxbox_entry(int argc, char **argv, char **envp)
 		__oxbox_image_start, __oxbox_image_end, __oxbox_bss_start, __oxbox_bss_end);
 	platform_log("memory: %lu KB total, %lu KB free", memory.dwTotalPhys / 1024, memory.dwAvailPhys / 1024);
 	report_system();
+	report_hardware(memory.dwTotalPhys / 1024);
 	read_settings("D:\\opence.ini");
 	read_settings("T:\\opence.ini");
 	if (!oxbox_setting_audio_effects)

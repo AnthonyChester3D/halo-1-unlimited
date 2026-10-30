@@ -37,7 +37,7 @@ the installer itself. */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 3
+#define INSTALLER_VERSION 4
 #endif
 __attribute__((used)) static struct
 {
