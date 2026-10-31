@@ -111,12 +111,14 @@ int oxbox_setting_showcase_bots = -1;   /* showcase_bots = N: that many bots (0 
 int oxbox_setting_showcase_min_fps = 15;   /* showcase_min_fps = N: bots drop out under N frames a second (0: never) */
 int oxbox_setting_showcase_map_seconds = 90;   /* showcase_map_seconds = N: each map at most N seconds (0: no limit) */
 int oxbox_setting_showcase_preview = 0;   /* showcase_preview = 1: White on a map in the map list plays its showcase */
+int oxbox_setting_showcase_train = 0;     /* showcase_train = 1: the bot trainer (each map showcase_train_minutes) */
+int oxbox_setting_showcase_train_minutes = 10;
 
 /* ---------- constants */
 
 #define SHOWCASE_MAXIMUM_SHOTS 128
 #define SHOWCASE_MAXIMUM_KEYS 1024
-#define SHOWCASE_MAXIMUM_MAPS 128
+#define SHOWCASE_MAXIMUM_MAPS 256
 #define SHOWCASE_KEY_LENGTH 48
 #define SHOWCASE_LINE_LENGTH 256
 #define SHOWCASE_DEFAULT_FADE 0.5f
@@ -688,6 +690,359 @@ static unsigned long showcase_cycles(
 }
 
 /* whether a map has shots (a preview: hidden or not) */
+/* ---------- private code: the playlist (showcase_playlist.ini)
+
+Every map with showcase shots, by folder, in a file beside the game (d:\showcase_playlist.ini; T:\ when the game's
+folder can't be written), which the game writes once a boot from the maps it finds, keeping what the file said:
+	[stock] on                a folder: "off" leaves all its maps out ("stock": Halo's own, "maps": the maps folder's
+	bloodgulch on             loose map folders, any other: a pack's folder)
+	[CEFinest] on
+	Portent off               a map in a folder that's on: "off" leaves it out
+New maps come in "on". With no file, every map is on. The showcase (and the bot trainer, showcase_train = 1) plays only
+the maps it has on; the map browser's hidden maps are still left out of the showcase, not the trainer. */
+
+#define SHOWCASE_PLAYLIST_MAXIMUM 512
+
+int halo_linux_snprintf(char *buffer, size_t count, char const *format, ...);
+
+/* 0 when the two are the same but for case */
+static int showcase_icmp(
+	char const *a,
+	char const *b)
+{
+	for (;; a++, b++)
+	{
+		int x = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a, y = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+
+		if (x != y)
+			return x - y;
+		if (!x)
+			return 0;
+	}
+}
+#define SHOWCASE_PLAYLIST_TEXT (64 * 1024)
+
+static struct
+{
+	boolean read, exists, written;
+	short count;
+	/* (on the heap while the maps are listed, and let go after: no memory of the game's kept for it) */
+	struct showcase_playlist_entry
+	{
+		char name[SHOWCASE_KEY_LENGTH];    /* "[folder]", or a map's key ("+pack/folder", "+folder", a stock level's) */
+		boolean on;
+	} *entries;
+} showcase_playlist;
+
+static void showcase_playlist_free(
+	void)
+{
+	if (showcase_playlist.entries)
+		free(showcase_playlist.entries);
+	showcase_playlist.entries = NULL;
+	showcase_playlist.count = 0;
+}
+
+/* a map's folder in the playlist ("stock", "maps", a pack's), and its own name there */
+static void showcase_playlist_names(
+	char const *key,
+	char *folder,
+	char *name)
+{
+	char const *slash;
+
+	if (key[0] != '+')
+	{
+		char const *leaf = strrchr(key, '\\');
+
+		strcpy(folder, "stock");
+		strcpy(name, leaf ? leaf + 1 : key);
+		return;
+	}
+	slash = strchr(key, '/');
+	if (!slash)
+	{
+		strcpy(folder, "maps");
+		strcpy(name, key + 1);
+		return;
+	}
+	csstrncpy(folder, key + 1, (long)(slash - key - 1));
+	folder[slash - key - 1] = 0;
+	strcpy(name, slash + 1);
+}
+
+static short showcase_playlist_find(
+	char const *name)
+{
+	short index;
+
+	for (index = 0; index < showcase_playlist.count; index++)
+	{
+		if (!showcase_icmp(showcase_playlist.entries[index].name, name))
+			return index;
+	}
+	return NONE;
+}
+
+static void showcase_playlist_set(
+	char const *name,
+	boolean on)
+{
+	short index = showcase_playlist_find(name);
+
+	if (index == NONE)
+	{
+		if (!showcase_playlist.entries || showcase_playlist.count >= SHOWCASE_PLAYLIST_MAXIMUM ||
+			strlen(name) >= SHOWCASE_KEY_LENGTH)
+			return;
+		index = showcase_playlist.count++;
+		strcpy(showcase_playlist.entries[index].name, name);
+	}
+	showcase_playlist.entries[index].on = on;
+}
+
+/* the file's text (at most SHOWCASE_PLAYLIST_TEXT - 1 bytes): its length, or -1 when there's none */
+static long showcase_playlist_file(
+	char *text,
+	char const **path)
+{
+	static char const *const paths[] = {"d:\\showcase_playlist.ini", "T:\\showcase_playlist.ini"};
+	short index;
+
+	for (index = 0; index < 2; index++)
+	{
+		HANDLE file = CreateFileA(paths[index], GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+		DWORD got = 0;
+
+		if (file == INVALID_HANDLE_VALUE)
+			continue;
+		if (!ReadFile(file, text, SHOWCASE_PLAYLIST_TEXT - 1, &got, NULL))
+			got = 0;
+		CloseHandle(file);
+		text[got] = 0;
+		*path = paths[index];
+		return (long)got;
+	}
+	*path = paths[0];
+	return -1;
+}
+
+/* the file read into the entries (once, and again when asked) */
+static void showcase_playlist_read(
+	char *text)
+{
+	char const *path;
+	char *line, folder[SHOWCASE_KEY_LENGTH];
+	long length = showcase_playlist_file(text, &path);
+
+	showcase_playlist.count = 0;
+	showcase_playlist.read = TRUE;
+	showcase_playlist.exists = length >= 0;
+	if (!showcase_playlist.entries)
+		showcase_playlist.entries = (struct showcase_playlist_entry *)malloc(
+			SHOWCASE_PLAYLIST_MAXIMUM * sizeof(struct showcase_playlist_entry));
+	if (!showcase_playlist.entries)
+		showcase_playlist.exists = FALSE;   /* (no room: every map on) */
+	strcpy(folder, "maps");
+	for (line = length > 0 ? text : NULL; line && *line; )
+	{
+		char *end = line, *word, *state;
+		char name[SHOWCASE_KEY_LENGTH * 2 + 4];
+		boolean on;
+
+		while (*end && *end != '\n')
+			end++;
+		if (*end)
+			*end++ = 0;
+		/* (the line's words: a name, then on or off; anything after # left out) */
+		{
+			char *hash = strchr(line, '#');
+
+			if (hash)
+				*hash = 0;
+		}
+		for (word = line; *word == ' ' || *word == '\t'; word++)
+			;
+		state = word + strlen(word);
+		while (state > word && (state[-1] == ' ' || state[-1] == '\t' || state[-1] == '\r'))
+			*--state = 0;
+		while (state > word && state[-1] != ' ' && state[-1] != '\t')
+			state--;
+		on = !showcase_icmp(state, "on");
+		if (state > word && (on || !showcase_icmp(state, "off")))
+		{
+			char *name_end = state;
+
+			while (name_end > word && (name_end[-1] == ' ' || name_end[-1] == '\t' || name_end[-1] == '='))
+				name_end--;
+			*name_end = 0;
+			if (word[0] == '[' && name_end > word + 1 && name_end[-1] == ']')
+			{
+				name_end[-1] = 0;
+				csstrncpy(folder, word + 1, SHOWCASE_KEY_LENGTH - 1);
+				folder[SHOWCASE_KEY_LENGTH - 1] = 0;
+				name[0] = '[';
+				strcpy(name + 1, folder);
+				strcat(name, "]");
+				showcase_playlist_set(name, on);
+			}
+			else if (*word && strlen(folder) + strlen(word) + 3 < SHOWCASE_KEY_LENGTH)
+			{
+				/* (a map: its key from its folder) */
+				if (!showcase_icmp(folder, "stock"))
+				{
+					long stock;
+
+					strcpy(name, word);
+					for (stock = 0; stock < HMP_STOCK_LEVELS; stock++)
+					{
+						char const *level = hmp_maps_stock_level(stock);
+						char const *leaf = level ? strrchr(level, '\\') : NULL;
+
+						if (level && !showcase_icmp(leaf ? leaf + 1 : level, word))
+							strcpy(name, level);
+					}
+				}
+				else if (!showcase_icmp(folder, "maps"))
+				{
+					name[0] = '+';
+					strcpy(name + 1, word);
+				}
+				else
+				{
+					name[0] = '+';
+					strcpy(name + 1, folder);
+					strcat(name, "/");
+					strcat(name, word);
+				}
+				showcase_playlist_set(name, on);
+			}
+		}
+		line = end;
+	}
+}
+
+/* whether the playlist has the map on (no file: every map is) */
+static boolean showcase_playlist_allows(
+	char const *key)
+{
+	char folder[SHOWCASE_KEY_LENGTH], name[SHOWCASE_KEY_LENGTH], section[SHOWCASE_KEY_LENGTH + 2];
+	short index;
+
+	if (!showcase_playlist.exists || strlen(key) >= SHOWCASE_KEY_LENGTH)
+		return TRUE;
+	showcase_playlist_names(key, folder, name);
+	section[0] = '[';
+	strcpy(section + 1, folder);
+	strcat(section, "]");
+	index = showcase_playlist_find(section);
+	if (index != NONE && !showcase_playlist.entries[index].on)
+		return FALSE;
+	index = showcase_playlist_find(key);
+	return index == NONE || showcase_playlist.entries[index].on;
+}
+
+static boolean showcase_listed_any(char const *key, unsigned long *weight);
+
+/* the file written afresh from the maps with shots (once a boot, when the maps are known), what it said kept, new
+maps on; written only when it changed */
+static void showcase_playlist_write(
+	void)
+{
+	char *text = (char *)malloc(SHOWCASE_PLAYLIST_TEXT);
+	char *old = text ? (char *)malloc(SHOWCASE_PLAYLIST_TEXT) : NULL;
+	char const *path;
+	char folder[SHOWCASE_KEY_LENGTH], name[SHOWCASE_KEY_LENGTH], section[SHOWCASE_KEY_LENGTH + 2];
+	long count, index, length, old_length, maps = 0, pass;
+
+	showcase_playlist.written = TRUE;
+	if (!text || !old)
+	{
+		if (text)
+			free(text);
+		return;
+	}
+	showcase_playlist_read(old);
+	old_length = showcase_playlist_file(old, &path);
+	if (!hmp_maps_count())
+		hmp_maps_scan();
+	count = hmp_maps_count();
+	length = halo_linux_snprintf(text, SHOWCASE_PLAYLIST_TEXT,
+		"# Halo 1 Unlimited: the showcase's maps, every map with showcase shots, by folder (the game writes this file once\r\n"
+		"# a boot, keeping what it says). \"off\" after a folder leaves all its maps out; in a folder that's on, \"off\"\r\n"
+		"# after a map leaves that map out. New maps come in on. The showcase and the bot trainer (opence.ini\r\n"
+		"# showcase_train = 1) play the maps that are on. Edit it on your PC and copy it back.\r\n");
+	section[0] = 0;
+	/* (stock first, then the folder maps by folder, in the order the maps folder lists them) */
+	for (pass = 0; pass < 2; pass++)
+	{
+		long first;
+
+		for (first = 0; first < count + HMP_STOCK_LEVELS; first++)
+		{
+			char const *key = first < count ? hmp_maps_key(first) : hmp_maps_stock_level(first - count);
+			char group[SHOWCASE_KEY_LENGTH];
+			unsigned long weight;
+			boolean group_started = FALSE;
+
+			if (!key || (pass == 0) != (key[0] != '+'))
+				continue;
+			showcase_playlist_names(key, group, name);
+			if (!showcase_icmp(group, section))
+				continue;                  /* (its folder's written already) */
+			strcpy(section, group);
+			/* this folder's maps with shots, from here on */
+			for (index = first; index < count + HMP_STOCK_LEVELS && length < SHOWCASE_PLAYLIST_TEXT - 256; index++)
+			{
+				char const *other = index < count ? hmp_maps_key(index) : hmp_maps_stock_level(index - count);
+				short found;
+
+				if (!other || (pass == 0) != (other[0] != '+'))
+					continue;
+				showcase_playlist_names(other, folder, name);
+				if (showcase_icmp(folder, group) || !showcase_listed_any(other, &weight))
+					continue;
+				if (!group_started)
+				{
+					char bracket[SHOWCASE_KEY_LENGTH + 2];
+
+					bracket[0] = '[';
+					strcpy(bracket + 1, group);
+					strcat(bracket, "]");
+					found = showcase_playlist_find(bracket);
+					length += halo_linux_snprintf(text + length, SHOWCASE_PLAYLIST_TEXT - length, "\r\n[%s] %s\r\n", group,
+						found == NONE || showcase_playlist.entries[found].on ? "on" : "off");
+					group_started = TRUE;
+				}
+				found = showcase_playlist_find(other);
+				length += halo_linux_snprintf(text + length, SHOWCASE_PLAYLIST_TEXT - length, "%s %s\r\n", name,
+					found == NONE || showcase_playlist.entries[found].on ? "on" : "off");
+				maps++;
+			}
+		}
+	}
+	if (length > 0 && (old_length != length || memcmp(old, text, (size_t)length)))
+	{
+		HANDLE file = CreateFileA("d:\\showcase_playlist.ini", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		DWORD put = 0;
+
+		if (file == INVALID_HANDLE_VALUE)
+			file = CreateFileA("T:\\showcase_playlist.ini", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (file != INVALID_HANDLE_VALUE)
+		{
+			WriteFile(file, text, (DWORD)length, &put, NULL);
+			CloseHandle(file);
+		}
+		platform_log("showcase: showcase_playlist.ini %s: %ld maps with shots", put == (DWORD)length ? "written" :
+			"couldn't be written", maps);
+	}
+	else
+		platform_log("showcase: showcase_playlist.ini unchanged: %ld maps with shots", maps);
+	showcase_playlist_free();
+	free(old);
+	free(text);
+}
+
 static boolean showcase_listed_any(
 	char const *key,
 	unsigned long *weight)
@@ -713,13 +1068,18 @@ static boolean showcase_listed(
 	struct hmp_rating rating;
 	HANDLE file;
 
-	if (!key || strlen(key) >= SHOWCASE_KEY_LENGTH)
+	if (!key || strlen(key) >= SHOWCASE_KEY_LENGTH || !showcase_playlist_allows(key))
 		return FALSE;
+	/* (the trainer: every map the playlist has on, each as likely: hidden or a favorite, the bots learn it all the same) */
+	*weight = 1;
+	if (oxbox_setting_showcase_train)
+		goto shots;
 	hmp_stats_get(key, &rating);
 	if (rating.hidden)
 		return FALSE;
 	*weight = 1 + (rating.favorite ? SHOWCASE_FAVORITE_WEIGHT : 0) +
 		(hmp_browse_in_genre(key, "artistic") ? SHOWCASE_ARTISTIC_WEIGHT : 0);
+shots:
 	file = showcase_open(key);
 	if (file == INVALID_HANDLE_VALUE)
 		return FALSE;
@@ -738,6 +1098,16 @@ static void showcase_find_maps(
 	char last[SHOWCASE_KEY_LENGTH];
 
 	strcpy(last, showcase.key);
+	/* (the playlist read again: it may have been copied over since) */
+	{
+		char *text = (char *)malloc(SHOWCASE_PLAYLIST_TEXT);
+
+		if (text)
+		{
+			showcase_playlist_read(text);
+			free(text);
+		}
+	}
 	showcase.random ^= showcase_cycles() ^ system_milliseconds();
 	showcase.random |= 1;
 	if (!hmp_maps_count())
@@ -766,6 +1136,7 @@ static void showcase_find_maps(
 		weights[place] = weights[index];
 		weights[index] = pick;
 	}
+	showcase_playlist_free();
 	/* (not the map just shown first again) */
 	if (showcase.map_count > 1 && !strcmp(showcase.maps[0], last))
 		showcase_swap_maps(0, 1);
@@ -800,11 +1171,20 @@ static boolean showcase_next_map(
 
 /* ---------- private code: the shots */
 
+/* how long a map plays at most, in seconds (0: no limit): showcase_map_seconds, or the trainer's minutes */
+static int showcase_map_limit(
+	void)
+{
+	if (oxbox_setting_showcase_train)
+		return (oxbox_setting_showcase_train_minutes < 1 ? 1 : oxbox_setting_showcase_train_minutes) * 60;
+	return oxbox_setting_showcase_map_seconds;
+}
+
 /* the least a map plays (its list again until then): a minute, or its limit when that's less */
 static real showcase_minimum_seconds(
 	void)
 {
-	int limit = oxbox_setting_showcase_map_seconds;
+	int limit = showcase_map_limit();
 
 	return limit > 0 && limit < SHOWCASE_MAP_MINIMUM_SECONDS ? (real)limit : SHOWCASE_MAP_MINIMUM_SECONDS;
 }
@@ -823,7 +1203,9 @@ static void showcase_plan(
 	showcase.plan_count = 0;
 	for (index = 0; index < count; index++)
 		total += showcase_file.shots[index].seconds;
-	if (oxbox_setting_showcase_map_seconds <= 0 || count <= 2 || total <= (real)oxbox_setting_showcase_map_seconds)
+	/* (the trainer: every shot, in order, again and again: the camera matters less than the bots' time) */
+	if (oxbox_setting_showcase_train || oxbox_setting_showcase_map_seconds <= 0 || count <= 2 ||
+		total <= (real)oxbox_setting_showcase_map_seconds)
 	{
 		for (index = 0; index < count; index++)
 			showcase.plan[showcase.plan_count++] = index;
@@ -1178,6 +1560,12 @@ void showcase_update(
 	unsigned long now = system_milliseconds();
 	real seconds;
 
+	/* (the playlist written once a boot, at the main menu once the maps are known) */
+	if (!showcase_playlist.written && main_menu_loaded && main_menu_screen_is_active() && !network_game_is_active() &&
+		hmp_maps_count() > 0)
+	{
+		showcase_playlist_write();
+	}
 	if (showcase.state == _showcase_off)
 	{
 		if (showcase.preview_key[0] && main_menu_loaded && main_menu_is_active() && !network_game_is_active())
@@ -1359,8 +1747,8 @@ void showcase_update(
 		showcase.map_seconds += seconds;
 		showcase_frame_rate(now);
 		/* (its limit reached, a shot or not: on to the next map, fading as a press does) */
-		if (oxbox_setting_showcase_map_seconds > 0 && (showcase.map_count > 1 || showcase.preview) &&
-			showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= (real)oxbox_setting_showcase_map_seconds)
+		if (showcase_map_limit() > 0 && (showcase.map_count > 1 || showcase.preview || oxbox_setting_showcase_train) &&
+			showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= (real)showcase_map_limit())
 		{
 			showcase_leave(TRUE);
 			break;
@@ -1374,7 +1762,8 @@ void showcase_update(
 				showcase.shot_index = 0;
 				/* the plan played through: the next map, once this one has played a minute or its limit (with only
 				one, it plays on, shuffled again) */
-				if (showcase.preview || (showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= showcase_minimum_seconds() &&
+				if (showcase.preview || (!oxbox_setting_showcase_train &&
+					showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= showcase_minimum_seconds() &&
 					(showcase.map_count > 1 || showcase.map_next < showcase.map_count)))
 				{
 					showcase.shot_time = 0.0f;

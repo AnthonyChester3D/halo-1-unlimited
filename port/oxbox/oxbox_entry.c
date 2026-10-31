@@ -473,6 +473,9 @@ XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini
 	showcase_min_fps = N (the same) its bots drop out one at a time while it runs under N frames a second (15; 0: never)
 	showcase_map_seconds = N (the same) each map plays at most N seconds (90; 0: no limit, a minute and its shots)
 	showcase_preview = 1 (the same) White on a map in the map list plays that map's showcase once, then the main menu
+	showcase_train = 1   the bot trainer: the showcase plays each map of showcase_playlist.ini for showcase_train_minutes
+	                     (10), every shot in order and again, the hidden maps too, so the host's bots learn the maps
+	                     (bots_learned.txt, T:\bots_<map>.txt); showcase_seconds = 5 starts it soon after boot
 	ftp = 1              a small FTP server on the game's folder while the menus are up (stopped while a map is
 	                     loaded); ftp_password = text (xbox, as the dashboards' FTP); ftp_port = N (21). Folder maps are copied into
 	                     the map cache afresh after a change through it (developers' map work)
@@ -725,6 +728,16 @@ static void read_settings(const char *path)
 		{
 			extern int oxbox_setting_showcase_preview;
 			oxbox_setting_showcase_preview = value != 0;
+		}
+		else if (same_text(name, "showcase_train"))
+		{
+			extern int oxbox_setting_showcase_train;
+			oxbox_setting_showcase_train = value != 0;
+		}
+		else if (same_text(name, "showcase_train_minutes"))
+		{
+			extern int oxbox_setting_showcase_train_minutes;
+			oxbox_setting_showcase_train_minutes = value < 1 ? 1 : value > 240 ? 240 : value;
 		}
 		else if (same_text(name, "showcase_map_seconds"))
 		{

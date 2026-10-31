@@ -411,6 +411,7 @@ static struct
 	long edge_stops;                        /* steps kept off a death cliff (bots_act) */
 	long gap_hops, gap_jumps, gap_links_found, vehicle_links_learned;
 	boolean learned_dirty;                  /* what the bots learned changed since it was last saved */
+	long learned_save_time;                 /* game time of the last save (or the game's start) */
 	long sightings, firing_ticks, grenades, melees, pickups;
 	long jumps, crouch_jumps, jumps_landed, crouches, straight_up, straight_down, straight_done, overhangs;
 	unsigned long long probe_cycles;
@@ -1479,6 +1480,14 @@ static void bots_route_update(
 			bots_brain_reset(&bots_brains[index], NONE);
 	}
 	bots_route.game_time = now;
+	/* (and every 3 minutes of a game while it changed: a long game, the bot trainer's, or a console switched off) */
+	if (now < bots_route.learned_save_time)
+		bots_route.learned_save_time = now;
+	if (bots_route.learned_dirty && now - bots_route.learned_save_time >= 180 * BOTS_TICKS_PER_SECOND)
+	{
+		bots_learned_save();
+		bots_route.learned_save_time = now;
+	}
 	if (now - bots_route.forgive_time >= BOTS_FORGIVE_TICKS || now < bots_route.forgive_time)
 	{
 		/* (a link walked before that failed while bots crowded it gets another chance; one never walked, a third
