@@ -6221,8 +6221,8 @@ boolean network_game_server_reset_to_pregame(
 	return success;
 }
 
-#if defined(HALO_XBOX_TARGET)
-/* oxbox: the network game's map, the host's or the client's (port/linux/game/hmp_*.c); NULL outside one */
+/* oxbox: the network game's map, the host's or the client's (port/linux/game/hmp_*.c, and bots.c, which the PC
+builds have too); NULL outside one */
 char const *network_game_current_map_name(
 	void)
 {
@@ -6235,6 +6235,8 @@ char const *network_game_current_map_name(
 		return network_game_client_get_game(client)->map.name;
 	return NULL;
 }
+
+#if defined(HALO_XBOX_TARGET)
 
 /* oxbox: hosting a game in progress that every console in it has loaded (END GAME: port/linux/game/hmp_game.c) */
 boolean network_game_server_hosting_all_loaded(
