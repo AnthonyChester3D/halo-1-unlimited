@@ -46,10 +46,10 @@ machines, 16 players) are 0x226 and 0x434. */
 #define HALO_PORT_NETWORK_GAME_PLAYERS_END \
 	(HALO_PORT_NETWORK_GAME_PLAYERS_OFFSET + HALO_PORT_MAXIMUM_NETWORK_PLAYERS * HALO_PORT_NETWORK_PLAYER_SIZE)
 #define HALO_PORT_NETWORK_GAME_RANDOM_SEED_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 2)
-/* (then the gametype's PC options, struct game_variant_options: 0x1C bytes) */
+/* (then the gametype's PC options, struct game_variant_options: 0x2C bytes, OpenCE's gametypes' included) */
 #define HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0xA)
-#define HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x26)
-#define HALO_PORT_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x2A)
+#define HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x36)
+#define HALO_PORT_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x3A)
 
 /* ---------- system link protocol
 
@@ -67,8 +67,9 @@ in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the Xboxes' own games' version: 30 since the join request took OpenCE's version 40's pass (29 before) */
-#define HALO_PORT_NETWORK_VERSION 30
+/* oxbox: the Xboxes' own games' version: 31 since the game settings record carries OpenCE's gametypes (its options
+0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
+#define HALO_PORT_NETWORK_VERSION 31
 #else
 #define HALO_PORT_NETWORK_VERSION 29
 #endif

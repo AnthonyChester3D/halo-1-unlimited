@@ -476,12 +476,13 @@ symbols in this file:
 #include "tag_files/tag_files.h"
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "bots.h" /* oxbox: port/linux/game/bots.c */
+#include "game_modes.h" /* port: port/linux/game/game_modes.c (OpenCE's gametypes) */
 
 /* port: internet play's Discord presence (port/linux/src/p2p.c), and the
 server browser's listing of a public game (p2p_lobby.c) */
 void p2p_set_game_player_counts(int count, int maximum);
-void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int open,
-	int in_progress, int has_teams);
+void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int kind,
+	int open, int in_progress, int has_teams);
 
 /* ---------- constants */
 
@@ -1679,8 +1680,10 @@ static void network_game_server_list(
 	}
 #endif
 	/* (the scenario's name, not its path: the listing has 32 characters) */
-	p2p_set_game_listing(name, tag_name_strip_path(game->map.name), gametype, game->variant.game_engine_index, open,
-		in_progress, game->variant.universal_variant.teams);
+	/* port: (and its OpenCE gametype's kind: port/linux/game/game_modes.c) */
+	p2p_set_game_listing(name, tag_name_strip_path(game->map.name), gametype, game->variant.game_engine_index,
+		game_modes_kind(&game->variant, &game->variant_options), open, in_progress,
+		game->variant.universal_variant.teams);
 }
 
 boolean network_game_server_idle(

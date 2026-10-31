@@ -264,6 +264,7 @@ symbols in this file:
 #include "text/unicode.h"
 /* system_milliseconds(), for the settings update interval */
 #include "cseries/cseries_windows.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c (OpenCE's gametypes) */
 
 /* port/linux/game/network_distributed.c's */
 void network_distributed_handle_message(long machine_index, word const *message, word size);
@@ -789,8 +790,8 @@ boolean network_game_server_send_message_to_client_machine(
 }
 
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the crossplay experiment: the Xbox's game settings record (16 machines and players, gametype options of 0x1C
-bytes) in the PC builds' layout (128 and 128, options of 0x2C bytes: an OpenCE mode of none) */
+/* oxbox: the crossplay experiment: the Xbox's game settings record (16 machines and players) in the PC builds' layout
+(128 and 128); the gametype options, OpenCE's gametypes' included, are 0x2C bytes in both */
 enum
 {
 	PC_NETWORK_MAXIMUM = 128,
@@ -830,7 +831,7 @@ static void const *crossplay_settings_to_send(void const *game, long *game_size)
 	}
 	csmemcpy(pc + PC_GAME_PLAYERS_END, record + HALO_PORT_NETWORK_GAME_PLAYERS_END, 0xA);
 	csmemcpy(pc + PC_GAME_VARIANT_OPTIONS_OFFSET, record + HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET,
-		HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET - HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET);
+		sizeof(struct game_variant_options));
 	csmemcpy(pc + PC_GAME_LOCAL_DATA_OFFSET, record + HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET, 4);
 	*game_size = PC_GAME_SIZE;
 	return pc;
@@ -1861,6 +1862,9 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 			{
 				advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= HALO_PORT_ADVERTISED_IN_PROGRESS_FLAG;
 			}
+			/* (an OpenCE gametype's kind, the server browser's name for it: the byte after the flags) */
+			advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET + 1] = game_modes_kind(&game->variant,
+				&game->variant_options);
 			/* (open to joins: not while the machines load the game, nor
 			once it is over, nor in progress when no player can join it) */
 			if (network_game_server_get_state(server, NULL) == _network_game_server_state_ingame

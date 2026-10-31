@@ -60,6 +60,7 @@ OBJECTS.C
 /* oxbox: objects_update's and object_update's steps timed for the developers' perf log (test build 33,
 oxbox_perf.h), when opence.ini loads it */
 #include "oxbox_perf.h"
+#include "infection.h" /* port: port/linux/game/infection.c */
 #else
 #define OXBOX_PERF_OBJECT(type_or_event)
 #define OXBOX_PERF_OBJECT_MARK(step)
@@ -1821,7 +1822,9 @@ static void object_delete_initial_recursive(
 	if (game_engine_running() && object->object.type == _object_type_weapon)
 #endif
 	{
-		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 829, !(weapon_is_flag(object_index)));
+		/* port: (but an Infection zombie's skull: infection.c) */
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 829,
+			!weapon_is_flag(object_index) || infection_can_delete_skull(object_index));
 	}
 	
 	if (object->object.first_child_object_index!=NONE)

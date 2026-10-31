@@ -200,6 +200,7 @@ symbols in this file:
 #include "networking/network_client_message_handler.h"
 #include "networking/network_game_manager.h"
 #include "networking/network_messages.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c (OpenCE's gametypes) */
 
 /* port/linux/game/network_distributed.c's */
 void network_distributed_handle_message(long machine_index, word const *message, word size);
@@ -956,9 +957,10 @@ static struct network_game network_game_client_settings_staging;
 static long network_game_client_settings_staging_size = 0;
 
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the crossplay experiment: a PC host's game settings record (128 machines and players, network version 38's
-gametype options of 0x2C bytes), taken in whole and made the Xbox's (16 machines and players, options of 0x1C bytes)
-if the game fits: at most 16 machines and players, each machine and player index under 16, and no OpenCE gametype */
+/* oxbox: the crossplay experiment: a PC host's game settings record (128 machines and players), taken in whole and
+made the Xbox's (16 machines and players) if the game fits: at most 16 machines and players, each machine and player
+index under 16. Its gametype options (0x2C bytes in both, OpenCE's gametypes' included: port/linux/game/game_modes.c)
+are taken as they are, each in range */
 enum
 {
 	PC_NETWORK_MAXIMUM = 128,
@@ -992,12 +994,6 @@ static boolean crossplay_settings_to_xbox(struct network_game *game)
 			machine_count, player_count);
 		return FALSE;
 	}
-	if (options[0x1C] || options[0x1D])
-	{
-		network_event("crossplay experiment: the PC game plays an OpenCE gametype (mode %d, hardcore %d)", options[0x1C],
-			options[0x1D]);
-		return FALSE;
-	}
 	for (index = 0; index < player_count; index++)
 	{
 		byte const *player = pc + PC_GAME_PLAYERS_OFFSET + index * HALO_PORT_NETWORK_PLAYER_SIZE;
@@ -1028,9 +1024,10 @@ static boolean crossplay_settings_to_xbox(struct network_game *game)
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYER_COUNT_OFFSET, pc + PC_GAME_PLAYER_COUNT_OFFSET, 2);
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYERS_OFFSET, pc + PC_GAME_PLAYERS_OFFSET,
 		HALO_PORT_MAXIMUM_NETWORK_PLAYERS * HALO_PORT_NETWORK_PLAYER_SIZE);
-	/* (after the players: to the options, the options' first 0x1C bytes, the local data) */
+	/* (after the players: to the options, the options, each in range, the local data) */
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYERS_END, pc + PC_GAME_PLAYERS_END, 0xA);
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET, options, sizeof(struct game_variant_options));
+	game_modes_options_sanitize(&game->variant_options);
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET, pc + PC_GAME_LOCAL_DATA_OFFSET, 4);
 	/* (a PC game's most players, up to 128: the Xbox's 16 here; it leaves if the game grows past them) */
 	if (game->maximum_players > HALO_PORT_MAXIMUM_NETWORK_PLAYERS)

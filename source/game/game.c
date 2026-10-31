@@ -190,6 +190,7 @@ struct game_options;
 /* oxbox: the tick's steps timed for the developers' perf log (test build 32, oxbox_perf.h), when opence.ini loads it:
 each step's end a mark (the tick's start is game_update's profile section) */
 #include "oxbox_perf.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #undef profile_scope
 #define profile_scope(variable, statement) { statement OXBOX_PERF_MARK(variable##_step) }
 enum
@@ -594,7 +595,11 @@ void game_set_game_variant_options(
 	struct game_variant_options const *options)
 {
 	if (options)
+	{
 		game_variant_options_global = *options;
+		/* port: OpenCE's options in range (another machine's: game_modes.c) */
+		game_modes_options_sanitize(&game_variant_options_global);
+	}
 	else
 		game_variant_options_default(&game_variant_global, &game_variant_options_global);
 

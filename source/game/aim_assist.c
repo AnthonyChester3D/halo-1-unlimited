@@ -65,6 +65,7 @@ symbols in this file:
 #include "units/bipeds.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 
 /* ---------- constants */
 
@@ -505,6 +506,9 @@ boolean aim_assist(
 	short ignore_team_index,
 	struct aim_assist_target *target)
 {
+	/* port: Hardcore has no aim assist: no autoaim, no magnetism */
+	if (game_modes_aim_assist_off())
+		return FALSE;
 	if (scenario_leaf_index_from_point(position)!=NONE)
 	{
 		short cluster_index= TAG_BLOCK_GET_ELEMENT(

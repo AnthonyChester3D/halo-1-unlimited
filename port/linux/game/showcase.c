@@ -96,6 +96,9 @@ The log (oxbox_log.txt): a line when it starts, each map, and when it ends, and 
 #include <stdlib.h>
 #include <string.h>
 #include <xtl.h>
+#if defined(OXBOX_TEST_SHOWCASE_GAMETYPE)
+#include "game_modes.h"
+#endif
 
 void platform_log(char const *format, ...);
 short hmp_browse_suggested_players(char const *level_name);
@@ -1623,11 +1626,18 @@ void showcase_update(
 		if (!showcase.map_set && showcase.state_seconds >= SHOWCASE_LOBBY_MAP_SECONDS)
 		{
 			struct game_variant variant;
+#if defined(OXBOX_TEST_SHOWCASE_GAMETYPE)
+			struct game_variant_options test_options;
+#endif
 
 			network_game_server_change_map_name(server, showcase.key);
 			/* (CTF where the map has it, else Team Slayer: the bots go after the other team, or its flag, rather than
 			fighting where they spawn; every vehicle the map places, for them to drive and fly) */
-#if defined(OXBOX_TEST_SHOWCASE_VARIANT)
+#if defined(OXBOX_TEST_SHOWCASE_GAMETYPE)
+			/* (test builds: one of OpenCE's gametypes, game_modes.c's built-in one of that number (0 SWAT, 1 Infection,
+			2 Gun Game, 3 to 6 Hardcore Slayer, CTF, Oddball, King), for watching the bots play it) */
+			game_modes_gametype(OXBOX_TEST_SHOWCASE_GAMETYPE, &variant, &test_options);
+#elif defined(OXBOX_TEST_SHOWCASE_VARIANT)
 			/* (test builds: another game type, for watching the bots play it: OXBOX_TEST_SHOWCASE_VARIANT="oddball") */
 			variant = *game_engine_get_variant_by_name(&variant, OXBOX_TEST_SHOWCASE_VARIANT);
 #else
@@ -1642,6 +1652,9 @@ void showcase_update(
 				menus' options with their gametype) */
 				struct game_variant_options options = *player_ui_get_game_variant_options();
 
+#if defined(OXBOX_TEST_SHOWCASE_GAMETYPE)
+				options = test_options;
+#endif
 				options.vehicle_set[0] = options.vehicle_set[1] = VARIANT_VEHICLE_SET_PC;
 				player_ui_set_game_variant_options(&options);
 			}

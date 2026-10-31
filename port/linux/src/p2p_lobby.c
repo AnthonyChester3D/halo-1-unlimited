@@ -116,8 +116,8 @@ static const char signature_label[] = "hceu-lobby-1";
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: an Xbox's own ("X" and 1), which no OpenCE build will have: the
 Xbox's games speak our 16-machine layout (port/oxbox); 2 since the join request took
-OpenCE's version 40's pass */
-#define LOBBY_VERSION 0x5802
+OpenCE's version 40's pass, 3 since the game settings record carries OpenCE's gametypes */
+#define LOBBY_VERSION 0x5803
 #else
 #define LOBBY_VERSION HALO_PORT_NETWORK_VERSION
 #endif
@@ -189,6 +189,9 @@ static struct
 	char map[P2P_LISTING_MAP_SIZE + 1];
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
 	int engine_type;
+	/* the game's kind (an OpenCE gametype's mode, and Hardcore: game_modes.h's game_modes_kind), the stamp's first
+	byte, which the server browsers show */
+	int kind;
 	int flags;
 	int player_count, maximum_player_count;
 	/* the password's key (p2p_set_hosting_password), if it has one */
@@ -353,6 +356,8 @@ static int listing_make(unsigned char *bytes, int flags)
 	size += put_text(bytes + size, lobby.map, P2P_LISTING_MAP_SIZE);
 	size += put_text(bytes + size, lobby.gametype, P2P_LISTING_GAMETYPE_SIZE);
 	memset(bytes + size, 0, STAMP_SIZE);
+	/* (the stamp: the game's kind first) */
+	bytes[size] = (unsigned char)lobby.kind;
 #if defined(OXBOX_CROSSPLAY)
 	bytes[size + STAMP_XBOX_OFFSET] = 'O';
 	bytes[size + STAMP_XBOX_OFFSET + 1] = 'X';
@@ -878,8 +883,8 @@ void p2p_set_hosting_password(const char *password)
 	memset(key, 0, sizeof(key));
 }
 
-void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int open,
-	int in_progress, int has_teams)
+void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int kind,
+	int open, int in_progress, int has_teams)
 {
 	char new_name[P2P_LISTING_NAME_SIZE + 1];
 	char new_map[P2P_LISTING_MAP_SIZE + 1];
@@ -923,10 +928,10 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	}
 	if (!kind_changed &&
 		!strcmp(new_name, lobby.name) && !strcmp(new_map, lobby.map) && !strcmp(new_gametype, lobby.gametype) &&
-		engine_type == lobby.engine_type && flags == lobby.flags)
+		engine_type == lobby.engine_type && (kind & 0xFF) == lobby.kind && flags == lobby.flags)
 #else
 	if (!strcmp(new_name, lobby.name) && !strcmp(new_map, lobby.map) && !strcmp(new_gametype, lobby.gametype) &&
-		engine_type == lobby.engine_type && flags == lobby.flags)
+		engine_type == lobby.engine_type && (kind & 0xFF) == lobby.kind && flags == lobby.flags)
 #endif
 	{
 		return;
@@ -936,6 +941,7 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	memcpy(lobby.map, new_map, sizeof(lobby.map));
 	memcpy(lobby.gametype, new_gametype, sizeof(lobby.gametype));
 	lobby.engine_type = engine_type;
+	lobby.kind = kind & 0xFF;
 	lobby.flags = flags;
 	if (lobby.listed)
 		republish_soon(0);

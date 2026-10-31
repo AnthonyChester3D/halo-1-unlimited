@@ -235,6 +235,7 @@ symbols in this file:
 #include "bitmaps/bitmap_group.h"
 #include "cache/texture_cache.h"
 #include "effects/contrail_definitions.h"
+#include "infection.h" /* port: port/linux/game/infection.c */
 #endif
 
 /* port/linux/game/pal_tags.c's */
@@ -922,7 +923,9 @@ void weapon_delete(
 	if (game_engine_running())
 #endif
 	{
-		match_assert("c:\\halo\\SOURCE\\items\\weapons.c", 234, !weapon_is_flag(weapon_index));
+		/* port: (but an Infection zombie's skull: infection.c) */
+		match_assert("c:\\halo\\SOURCE\\items\\weapons.c", 234,
+			!weapon_is_flag(weapon_index) || infection_can_delete_skull(weapon_index));
 	}
 
 	return;

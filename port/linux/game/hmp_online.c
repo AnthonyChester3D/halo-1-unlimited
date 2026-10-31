@@ -561,7 +561,9 @@ int oxbox_online_stock_map(char const *map);
 
 int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind)
 {
-	return map && kind == 0 && maximum_players <= 16 && oxbox_online_stock_map(map);
+	/* (its kind: none, or an OpenCE gametype's this build plays: a mode it knows, Hardcore or not, game_modes.h) */
+	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= 16 &&
+		oxbox_online_stock_map(map);
 }
 
 /* whether a map is one of the Xbox's 13 multiplayer levels (by its name, or its path's last part), and no folder map

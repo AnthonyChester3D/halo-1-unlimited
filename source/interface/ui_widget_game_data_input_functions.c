@@ -3359,6 +3359,21 @@ static void variant_profile_update_cache_for_nwide_list(
 	return;
 }
 
+/* oxbox: the descriptions of OpenCE's built-in gametypes (port/linux/game/game_modes.c's, in its order), which follow
+the Xbox's 26 default ones (game_modes.h's GAME_MODES_FIRST_DEFAULT_PLAYLIST_PROFILE) */
+#define OXBOX_FIRST_OPENCE_PLAYLIST_PROFILE 26
+static wchar_t const *const oxbox_opence_gametype_descriptions[] =
+{
+	/* (a line each: '\r' ends one, as the map's strings do) */
+	L"No shields.\rA headshot with any\rweapon kills.",
+	L"Humans vs. zombies.\rA human who dies\rjoins the zombies.",
+	L"Each kill gives you\rthe next weapon. A\rkill with the last\rone wins.",
+	L"Team Slayer.\rNo motion sensor\ror aim assist.",
+	L"Capture the Flag.\rNo motion sensor\ror aim assist.",
+	L"Team Oddball.\rNo motion sensor\ror aim assist.",
+	L"King of the Hill.\rNo motion sensor\ror aim assist.",
+};
+
 static void mutliplayer_settings_select_list_update_displayed_items(
 	struct widget_instance *list_widget)
 {
@@ -3502,7 +3517,20 @@ static void mutliplayer_settings_select_list_update_displayed_items(
 					break;
 				}
 
-				if (descriptions_tag_index != NONE && label_box->parameters.text_box.text)
+				/* oxbox: OpenCE's built-in gametypes, after the Xbox's (game_modes.c), have no
+				string of the map's: their own */
+				if ((profile->flags >> 8) >= OXBOX_FIRST_OPENCE_PLAYLIST_PROFILE && label_box->parameters.text_box.text)
+				{
+					long opence_index = (profile->flags >> 8) - OXBOX_FIRST_OPENCE_PLAYLIST_PROFILE;
+
+					ustrncpy(
+						label_box->parameters.text_box.text,
+						opence_index < (long)NUMBEROF(oxbox_opence_gametype_descriptions) ?
+							oxbox_opence_gametype_descriptions[opence_index] : L"",
+						0xFF);
+					label_box->parameters.text_box.text[0xFF] = 0;
+				}
+				else if (descriptions_tag_index != NONE && label_box->parameters.text_box.text)
 				{
 					ustrncpy(
 						label_box->parameters.text_box.text,

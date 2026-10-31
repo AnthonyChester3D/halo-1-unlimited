@@ -276,8 +276,8 @@ int p2p_peer_key_hash(unsigned long virtual_address, unsigned char *identifier, 
 int p2p_peer_reached(const unsigned char *identifier, unsigned long *address) { return 0; }
 int p2p_reach_player(const unsigned char *key_hash) { return 0; }
 void p2p_set_answering_players(int on) { }
-void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int open,
-	int password, int players, int maximum) { }
+void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int kind,
+	int open, int in_progress, int has_teams) { }
 void p2p_set_game_player_counts(int count, int maximum) { }
 void p2p_set_hosting_allowed(int allowed) { }
 void p2p_set_hosting_password(const char *password) { }
