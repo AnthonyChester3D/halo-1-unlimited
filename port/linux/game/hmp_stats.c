@@ -2,7 +2,7 @@
 HMP_STATS.C
 
 Halo Universal's play stats, favorites, hidden maps and the remembered sort (hmp.h; Halo Universal's stats.c). Each
-console keeps T:\hmp_stats.txt (E:\TDATA\4d530004\hmp_stats.txt), one line per map:
+console keeps T:\hmp_stats.txt (E:\TDATA\4c4a4855\hmp_stats.txt), one line per map:
 
 	CEX\Abyss  plays=14  last=2026-10-12  first=2026-10-02  fav=0  hide=0  order=37
 

@@ -66,14 +66,23 @@ is newer (network_client_manager.c). A host advertises it, with its netcode,
 in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
-#define HALO_PORT_NETWORK_VERSION 29
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the crossplay experiment: the PC builds' version this Xbox's games say with crossplay = 1 */
-#define OXBOX_CROSSPLAY_VERSION 39
+/* oxbox: the Xboxes' own games' version: 30 since the join request took OpenCE's version 40's pass (29 before) */
+#define HALO_PORT_NETWORK_VERSION 30
+#else
+#define HALO_PORT_NETWORK_VERSION 29
+#endif
+#if defined(OXBOX_CROSSPLAY)
+/* oxbox: the crossplay experiment: the PC builds' version this Xbox's games say with crossplay = 1, and the oldest
+PC builds' version it joins (40: the join request's size) */
+#define OXBOX_CROSSPLAY_VERSION 41
+#define OXBOX_CROSSPLAY_VERSION_FIRST 40
 /* ... and the advertisement's flag an Xbox host sets (HALO_PORT_ADVERTISED_FLAGS_OFFSET; the PC builds use the low
 three, and look at no other): an Xbox's game of the PC builds' version is still an Xbox's (its folder maps are shared
 with other Xboxes; the games list shows an Xbox beside it) */
 #define OXBOX_ADVERTISED_XBOX_FLAG 0x80
+/* ... and the PC builds' flag of a dedicated server's game (network version 39 on) */
+#define OXBOX_ADVERTISED_DEDICATED_FLAG 0x04
 #endif
 /* ... the advertisement's reserved bytes: the version (a little-endian word),
 then flags */

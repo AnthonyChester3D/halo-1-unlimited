@@ -971,6 +971,8 @@ enum
 	PC_GAME_SIZE = PC_GAME_PLAYERS_END + 0x3A,
 };
 static byte crossplay_settings_staging[PC_GAME_SIZE];
+/* whether the PC game being joined is a dedicated server's (its advertisement's flag: network_client_manager.c) */
+boolean oxbox_crossplay_joined_dedicated = FALSE;
 static long crossplay_settings_staging_size = 0;
 
 /* the PC record in crossplay_settings_staging, as the Xbox's: FALSE if it doesn't fit */
@@ -1014,9 +1016,15 @@ static boolean crossplay_settings_to_xbox(struct network_game *game)
 	csmemcpy(record, pc, HALO_PORT_NETWORK_GAME_MACHINES_OFFSET);
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_MACHINES_OFFSET, pc + HALO_PORT_NETWORK_GAME_MACHINES_OFFSET,
 		HALO_PORT_MAXIMUM_NETWORK_MACHINES * HALO_PORT_NETWORK_MACHINE_SIZE);
-	/* (the machines' download marks are ours, not the PC's: the lobby would show a PC's own as a percentage) */
+	/* (the machines' marks are ours, not the PC's, which leaves its padding as it finds it: the lobby would show a crown
+	beside every machine and a PC's bytes as a percentage. The host's crown goes to its own machine, the first it made
+	(machine index 0), and to none on a dedicated server, which has no machine) */
 	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; index++)
+	{
+		NETWORK_MACHINE_HOST_MARK(&game->machines[index]) = (byte)(index < machine_count &&
+			!oxbox_crossplay_joined_dedicated && game->machines[index].machine_index == 0);
 		NETWORK_MACHINE_DOWNLOAD_MARK(&game->machines[index]) = 0;
+	}
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYER_COUNT_OFFSET, pc + PC_GAME_PLAYER_COUNT_OFFSET, 2);
 	csmemcpy(record + HALO_PORT_NETWORK_GAME_PLAYERS_OFFSET, pc + PC_GAME_PLAYERS_OFFSET,
 		HALO_PORT_MAXIMUM_NETWORK_PLAYERS * HALO_PORT_NETWORK_PLAYER_SIZE);

@@ -214,7 +214,7 @@ static u32 crc_upd(u32 c, const u8 *p, u32 n) {   /* CRC32 a piece at a time: st
 static char g_fd[320];                      /* WIN32_FIND_DATAA */
 static char g_p1[128], g_p2[128], g_p3[128];
 
-/* The maps folders: the game's (d:\maps) and T:\maps (E:\TDATA\4d530004\maps: Halo's own storage on the hard drive),
+/* The maps folders: the game's (d:\maps) and T:\maps (E:\TDATA\4c4a4855\maps: the game's own storage on the hard drive),
    where downloads go when the game's can't be written (a disc). Test build 19. */
 static const char *const k_root[2] = { "d:\\maps\\", "T:\\maps\\" };
 static const char *const k_root_name[2] = { "maps", "T:\\maps" };   /* (for the log) */
@@ -2063,6 +2063,10 @@ void map_share_update(void) {
     {
         void oxbox_ftp_frame(int menus);   /* (oxbox_sdk.c: the developers' FTP server, in the menus only) */
         oxbox_ftp_frame(loaded && ieq(loaded, "ui") == 0);
+        {
+            void oxbox_update_frame(int menus);   /* (oxbox_sdk.c: the look for a newer release, in the menus) */
+            oxbox_update_frame(loaded && ieq(loaded, "ui") == 0);
+        }
     }
     if (!server && !g_cl.state) g_status_on = 0;
     if (server && !host_sending()) g_status_on = 0;

@@ -68,9 +68,9 @@ topic of queries (p2p_lobby.c) */
 version, which their listings carry) */
 #define P2P_PC_LOBBY_SLOT_PREFIX "hceu/3/lobby/s/"
 #define P2P_PC_LOBBY_QUERY_TOPIC "hceu/3/lobby/q"
-/* (38 and 39: 39 only adds a dedicated server's flag) */
-#define P2P_PC_LOBBY_VERSION_FIRST 38
-#define P2P_PC_LOBBY_VERSION_LAST 39
+/* (40 and 41: 41 changes only the votes, which an Xbox drops) */
+#define P2P_PC_LOBBY_VERSION_FIRST 40
+#define P2P_PC_LOBBY_VERSION_LAST 41
 #endif
 #else
 #define P2P_LOBBY_SLOT_PREFIX "hceu/3/lobby/s/"

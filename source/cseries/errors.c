@@ -134,7 +134,7 @@ static void write_to_debug_file(
 	{
 #if defined(HALO_XBOX_TARGET)
 		/* oxbox: D: can't be written (a disc or an ISO): T:, Halo's title data on the hard drive
-		(E:\TDATA\4d530004); and neither: not tried again for each line (each try was a call to the drive) */
+		(E:\TDATA\4c4a4855); and neither: not tried again for each line (each try was a call to the drive) */
 		static boolean debug_file_unavailable = FALSE;
 		char const *path = "d:\\debug.txt";
 		FILE *opened;

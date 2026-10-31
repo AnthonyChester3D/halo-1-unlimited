@@ -616,6 +616,11 @@ struct message_client_join_game_request
 	byte join_token[0x10];
 	/* port: this machine's hardware id, as hex (p2p.c's p2p_hardware_id) */
 	char hardware_id[0x20];
+#if defined(OXBOX_CROSSPLAY)
+	/* oxbox: a Discord account's pass and its proof (OpenCE's network version 40), all zero from an Xbox */
+	byte link_pass[170];
+	byte link_proof[64];
+#endif
 };
 
 struct message_client_map_is_precached_pregame
@@ -743,7 +748,11 @@ typedef char message_client_broadcast_game_search_size_assert[
 typedef char message_client_ping_size_assert[
 	sizeof(struct message_client_ping) == 8 ? 1 : -1];
 typedef char message_client_join_game_request_size_assert[
+#if defined(OXBOX_CROSSPLAY)
+	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 ? 1 : -1];
+#else
 	sizeof(struct message_client_join_game_request) == 0x70 ? 1 : -1];
+#endif
 typedef char network_game_client_seconds_to_game_start_offset_assert[
 	offsetof(struct network_game_client, seconds_to_game_start) == NETWORK_GAME_CLIENT_TAIL_OFFSET + 0x10 ? 1 : -1];
 typedef char network_game_client_error_offset_assert[
@@ -1391,7 +1400,7 @@ boolean network_game_client_game_settings_updated(
 #if defined(OXBOX_NET_P2P)
 /* oxbox: whether the games list shows an advertised game: only one this Xbox can join (a game it can't is in the way:
 "we can't use it, don't show it"). One of this machine's network version, or with crossplay on (OXBOX_CROSSPLAY) one of
-the PC builds' 38 or 39 that an Xbox hosts (OXBOX_ADVERTISED_XBOX_FLAG), or a PC hosts on a stock map, for at most 16
+the PC builds' 40 or 41 that an Xbox hosts (OXBOX_ADVERTISED_XBOX_FLAG), or a PC hosts on a stock map, for at most 16
 players, playing no OpenCE gametype (port/linux/game/hmp_online.c) */
 static boolean oxbox_advertised_game_listed(
 	struct message_server_game_advertise const *advertisement)
@@ -1409,7 +1418,7 @@ static boolean oxbox_advertised_game_listed(
 		extern int oxbox_crossplay;
 		extern int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind);
 
-		if (oxbox_crossplay && version >= 38 && version <= 39)
+		if (oxbox_crossplay && version >= OXBOX_CROSSPLAY_VERSION_FIRST && version <= OXBOX_CROSSPLAY_VERSION)
 		{
 			/* (the kind: the advertisement's byte after the flags, from version 37) */
 			return (flags & OXBOX_ADVERTISED_XBOX_FLAG) ||
@@ -3255,14 +3264,20 @@ boolean network_game_client_advertised_game_compatible(
 		return TRUE;
 	}
 #if defined(OXBOX_CROSSPLAY)
-	/* oxbox: the crossplay experiment (opence.ini crossplay = 1): a PC host of version 38 or 39 joined anyway; its game
+	/* oxbox: the crossplay experiment (opence.ini crossplay = 1): a PC host of version 40 or 41 joined anyway; its game
 	settings record is made the Xbox's (network_client_message_handler.c) */
 	{
 		extern int oxbox_crossplay;
 
-		/* (38 and 39: 39 only adds a dedicated server's flag) */
-		if (theirs >= 38 && theirs <= 39 && distributed && oxbox_crossplay)
+		/* (40 and 41: 41 changes only the votes, which an Xbox drops, and adds a rejection code) */
+		if (theirs >= OXBOX_CROSSPLAY_VERSION_FIRST && theirs <= OXBOX_CROSSPLAY_VERSION && distributed && oxbox_crossplay)
 		{
+			extern boolean oxbox_crossplay_joined_dedicated;
+
+			/* (for the lobby's host crown: a dedicated server's game has none) */
+			if (tell)
+				oxbox_crossplay_joined_dedicated = (network_game_client_advertised_versions[game_index].flags &
+					OXBOX_ADVERTISED_DEDICATED_FLAG) != 0;
 			network_event("crossplay experiment: joining a host of network version %u anyway (this machine's is %u)",
 				theirs, ours);
 			return TRUE;

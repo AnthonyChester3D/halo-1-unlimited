@@ -449,6 +449,40 @@ void interface_draw_fullscreen_overlays(
 				rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, wide);
 			}
 		}
+		/* (the offer of a newer release, opence.ini update_check: oxbox_sdk.c; on the main menu alone, ui_widget.c giving
+		it A and B) */
+		if (!game_engine && main_menu_screen_is_active())
+		{
+			extern int oxbox_update_prompt_lines(wchar_t lines[5][100]);
+			extern void draw_quad(rectangle2d *bounds, pixel32 color);
+			wchar_t lines[5][100];
+			int count = oxbox_update_prompt_lines(lines);
+			long large = count ? tag_loaded('font', "ui\\large_ui") : NONE;
+
+			if (count && large != NONE)
+			{
+				real_argb_color color = { 1.0f, 1.0f, 1.0f, 1.0f };
+				real_argb_color yellow = { 1.0f, 1.0f, 0.85f, 0.3f };
+				rectangle2d bounds;
+				int line;
+
+				bounds.x0 = 40;
+				bounds.x1 = 600;
+				bounds.y0 = (short)(240 - 14 * count - 16);
+				bounds.y1 = (short)(240 + 14 * count + 16);
+				draw_quad(&bounds, 0xE0000000);
+				for (line = 0; line < count; line++)
+				{
+					draw_string_set_draw_mode(large, NONE, 2, 0, line >= count - 2 ? &yellow : &color);   /* (centred) */
+					draw_string_set_tab_stops(NULL, 0);
+					bounds.x0 = 48;
+					bounds.x1 = 592;
+					bounds.y0 = (short)(240 - 14 * count + 28 * line);
+					bounds.y1 = (short)(bounds.y0 + 28);
+					rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, lines[line]);
+				}
+			}
+		}
 		if (status && font != NONE)
 		{
 			real_argb_color color = { 1.0f, 1.0f, 0.85f, 0.3f };

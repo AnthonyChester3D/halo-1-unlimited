@@ -115,8 +115,9 @@ static const char signature_label[] = "hceu-lobby-1";
 (HALO_PORT_NETWORK_VERSION) */
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: an Xbox's own ("X" and 1), which no OpenCE build will have: the
-Xbox's games speak our 16-machine layout (port/oxbox) */
-#define LOBBY_VERSION 0x5801
+Xbox's games speak our 16-machine layout (port/oxbox); 2 since the join request took
+OpenCE's version 40's pass */
+#define LOBBY_VERSION 0x5802
 #else
 #define LOBBY_VERSION HALO_PORT_NETWORK_VERSION
 #endif

@@ -27,7 +27,7 @@ abi = ['--target=i686-linux-gnu', '-m32', '-fms-extensions', '-fshort-wchar', '-
        # Xbox code (MSVC, the libraries, the kernel) keeps the stack 4-byte aligned, not 16
        '-mstack-alignment=4',
        '-ffunction-sections', '-fdata-sections', '-fno-stack-protector', '-fno-asynchronous-unwind-tables',
-       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=49', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
+       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=54', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
 abi += [f'-fno-builtin-{n}' for n in ('wcslen', 'wcsnlen', 'wcschr', 'wcsrchr', 'wcscmp', 'wcsncmp', 'wcscpy', 'wcsncpy',
                                       'wcscat', 'wcsncat', 'wmemchr', 'wmemcmp', 'wmemcpy', 'wmemmove', 'wmemset')]
 gflags = ['-std=gnu89', '-D__STRICT_ANSI__', '-w', '-Wno-error=incompatible-pointer-types',
@@ -59,8 +59,11 @@ p2p_cflags = ' '.join(abi + ['-std=gnu11', '-w', '-Os', '-D_GNU_SOURCE', '-DHALO
                              '-Iport/third_party/kcp', '-Iport/third_party/monocypher', '-idirafter port/include/xdk'])
 
 print(f'game_cflags = {game_cflags}\nplat_cflags = {plat_cflags}\nzlib_cflags = {zlib_cflags}\nmusl_cflags = {musl_cflags}')
-print(f'net_cflags = {net_cflags}\np2p_cflags = {p2p_cflags}')
-for r in ('game', 'plat', 'zlib', 'musl', 'net', 'p2p'):
+# (the update check, port/oxbox/net/oxbox_update.c, and Mbed TLS under it: link.ld puts both in the XBE section OXUPD)
+TLS_FLAGS = f"-Iport/third_party/mbedtls/include -I{X}/net '-DMBEDTLS_CONFIG_FILE=\"oxbox_tls_config.h\"'"
+tls_cflags = ' '.join(abi + ['-std=gnu11', '-w', '-Os', TLS_FLAGS])
+print(f'net_cflags = {net_cflags}\np2p_cflags = {p2p_cflags}\ntls_cflags = {tls_cflags}')
+for r in ('game', 'plat', 'zlib', 'musl', 'net', 'p2p', 'tls'):
     print(f'rule cc_{r}\n  command = clang -MMD -MF $out.d ${r}_cflags -c $in -o $out 2> $out.err || (cat $out.err; exit 1)'
           f'\n  depfile = $out.d\n  deps = gcc\n  description = CC $in')
 print('rule copy\n  command = cp $in $out')
@@ -106,7 +109,11 @@ for s in (sorted(Path(LWIP, 'core').glob('*.c')) + sorted(Path(LWIP, 'core/ipv4'
           sorted(Path(LWIP, 'api').glob('*.c')) + [Path(LWIP, 'netif/ethernet.c')] +
           sorted(Path('port/third_party/nxdk_net').glob('*.c')) + sorted(Path(X, 'net').glob('*.c'))):
     add(s, 'net', 'net')
+    if s.name == 'oxbox_update.c':
+        print('  net_cflags = $net_cflags ' + TLS_FLAGS)
 if P2P:
+    for s in sorted(Path('port/third_party/mbedtls/library').glob('*.c')):
+        add(s, 'tls', 'mbedtls')
     # (copied beside nothing, as the port units above are: their own folder's platform.h is the PC's)
     for name in ('p2p.c', 'p2p_crypto.c', 'p2p_lobby.c', 'p2p_signal.c'):
         c = f'{B}/portcopy/{name}'

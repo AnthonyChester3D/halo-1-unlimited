@@ -439,6 +439,11 @@ struct message_client_join_game_request
 	byte join_game_token[JOIN_GAME_TOKEN_LENGTH];
 	/* port: the machine's hardware id, as hex, as it tells it (p2p.c) */
 	char hardware_id[0x20];
+#if defined(OXBOX_CROSSPLAY)
+	/* oxbox: a Discord account's pass and its proof (OpenCE's network version 40), all zero from an Xbox */
+	byte link_pass[170];
+	byte link_proof[64];
+#endif
 };
 
 struct message_client_settings_request

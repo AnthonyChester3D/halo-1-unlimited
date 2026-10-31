@@ -4,12 +4,12 @@ INCLUDE ovl.ld   /* OpenCE .bss over the retail game's unused code and globals (
 SECTIONS {
   . = 0x3B9000;
   __oxbox_image_start = .;
-  .text : { *(.text.oxbox_entry) *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o) .text .text.*) }
-  .rodata : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o) .rodata .rodata.*) }
-  .data : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o) .data .data.*) }
+  .text : { *(.text.oxbox_entry) *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .text .text.*) }
+  .rodata : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .rodata .rodata.*) }
+  .data : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .data .data.*) }
   .init_array : { __oxbox_init_start = .; KEEP(*(.init_array*)) __oxbox_init_end = .; }
   __oxbox_image_end = .;
-  .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o) .bss .bss.* COMMON)
+  .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .bss .bss.* COMMON)
                     __oxbox_bss_end = .; }
   /* the developers' perf log (port/oxbox/oxbox_perf.c), code, data and buffers, in its own XBE section (OXPERF, tools/mkxbe.py)
      after the image: not loaded at boot, only when opence.ini says perf_log = 1 (oxbox_sdk.c oxbox_perf_load) */
@@ -26,6 +26,15 @@ SECTIONS {
   __oxftp_load_end = .;
   .oxftp.bss (NOLOAD) : { *oxbox_ftp.o(.bss .bss.* COMMON) }
   __oxftp_end = .;
+  /* the update check (port/oxbox/net/oxbox_update.c) and Mbed TLS under it, likewise: OXUPD, loaded for the check and
+     unloaded after it (oxbox_sdk.c oxbox_update_frame) */
+  . = ALIGN(0x1000);
+  __oxupd_start = .;
+  .oxupd : { *oxbox_update.o(.text .text.* .rodata .rodata.* .data .data.*)
+             *mbedtls/library/*.o(.text .text.* .rodata .rodata.* .data .data.*) }
+  __oxupd_load_end = .;
+  .oxupd.bss (NOLOAD) : { *oxbox_update.o(.bss .bss.* COMMON) *mbedtls/library/*.o(.bss .bss.* COMMON) }
+  __oxupd_end = .;
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.gnu*) }
 }
 /* the overlay's .bss parts oxbox_entry zeroes (ovl.ld defines those it has) */

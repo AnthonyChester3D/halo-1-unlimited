@@ -37,7 +37,7 @@ the installer itself. */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 5
+#define INSTALLER_VERSION 8
 #endif
 __attribute__((used)) static struct
 {
@@ -52,7 +52,19 @@ __attribute__((used)) static struct
 #define NOTICES_PATH "D:\\THIRD_PARTY.txt"
 #define LOG_PATH "D:\\installer_log.txt"
 #define LAST_PATH "D:\\installer_last.txt" /* the folder of the last install that worked, first in the list next time */
+/* the updater: this installer's copy in each Halo folder it installs to (<Halo>\updater\default.xbe), and the note the
+game leaves beside it (the game's offer of a newer release: port/oxbox/oxbox_sdk.c) to have it update that folder and
+start the game again, with no buttons pressed */
+#define UPDATER_FOLDER "updater"
+#define AUTO_PATH "D:\\auto_update.txt"
+static int auto_mode;
 #define HALO_TITLE_ID 0x4D530004ul
+/* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
+and storage (E:\TDATA\4c4a4855): its profiles and gametypes are its own, and retail Halo's are never written. (v1.53
+alone had 'OC' 0002, 4f430002) */
+#define OWN_TITLE_FOLDER "4c4a4855"
+#define V153_TITLE_FOLDER "4f430002"
+#define HALO_TITLE_FOLDER "4d530004"
 #define MAX_XBE (16 * 1024 * 1024)
 static struct package package;
 static int package_ok, package_missing, signature;
@@ -890,6 +902,188 @@ static void install_showcase(struct halo *h)
 		say("Added %lu stock maps' showcase files (maps\\showcase)", wrote);
 }
 
+/* what the game reads of what's installed (<Halo>\opence_release.txt: the package's release and network version, for
+its look for a newer release), and this installer's copy as the folder's updater (<Halo>\updater\default.xbe), which
+the game starts to update it. Neither is needed to play: a failure is only said */
+static void install_updater(struct halo *h)
+{
+	char path[220], own[260], own_path[260];
+	FILE *file;
+	unsigned char *data;
+	unsigned long size;
+
+	text_print(path, sizeof(path), "%s\\opence_release.txt", h->path);
+	file = fopen(path, "w");
+	if (file)
+	{
+		fprintf(file, "release %lu\nnetwork %lu\n%s\n", package.release, package.network, package.name);
+		fclose(file);
+	}
+	else
+		say_in(COLOUR_YELLOW, "  (couldn't write opence_release.txt: the game won't look for updates)");
+	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER "\\default.xbe", h->path);
+	if (!from_device(own, own_path, sizeof(own_path)))
+	{
+		say_in(COLOUR_YELLOW, "  (this installer isn't on the hard drive: no updater copied)");
+		return;
+	}
+	if (!_stricmp(own_path, path))
+		return;                        /* (this is that folder's updater) */
+	data = read_whole(own_path, &size);
+	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER, h->path);
+	CreateDirectoryA(path, NULL);
+	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER "\\default.xbe", h->path);
+	if (!data || write_checked(path, data, size))
+		say_in(COLOUR_YELLOW, "  (couldn't copy the installer to updater\\default.xbe: the game can't update itself)");
+	else
+		say("Copied this installer to updater\\default.xbe (the game's updater)");
+	free(data);
+}
+
+/* a file copied (small: a save's), 0 when it was */
+static int copy_file(char const *from, char const *to)
+{
+	unsigned long size;
+	unsigned char *data = read_whole(from, &size);
+	HANDLE file;
+	DWORD put = 0;
+	int ok;
+	if (!data)
+		return 1;
+	file = create(to);
+	ok = file != INVALID_HANDLE_VALUE && WriteFile(file, data, size, &put, NULL) && put == size;
+	if (file != INVALID_HANDLE_VALUE)
+		ok = finish(file) && ok;
+	free(data);
+	if (!ok)
+		DeleteFileA(to);
+	return !ok;
+}
+
+/* the game's own files and folders in a title's storage (E:\TDATA\<title>) */
+static char const *const own_files[] = {"hmp_stats.txt", "hmp_good_maps.txt", "hmp_bad_maps.txt", "mapshare.txt",
+	"map_check.txt", "opence.ini", "opence_settings.txt", "maps", "opence_backup", "perf"};
+
+/* the saves of E:\UDATA\<from> that aren't in the game's own folder yet: copied (move 0: Halo's, which stay as they
+are) or moved (move 1: the game's own, from v1.53's folder); and the game's own files of E:\TDATA\<from> moved. Counts
+added to *saves, *moved, *failed */
+static void own_title_from(char const *from_title, int move, int *saves, int *moved, int *failed)
+{
+	char from[200], to[200], pattern[200];
+	WIN32_FIND_DATAA found;
+	HANDLE find;
+	unsigned i;
+
+	text_print(pattern, sizeof(pattern), "E:\\UDATA\\%s\\*", from_title);
+	find = FindFirstFileA(pattern, &found);
+	if (find != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			WIN32_FIND_DATAA file;
+			HANDLE files;
+			if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.')
+				continue;
+			text_print(from, sizeof(from), "E:\\UDATA\\%s\\%s", from_title, found.cFileName);
+			text_print(to, sizeof(to), "E:\\UDATA\\" OWN_TITLE_FOLDER "\\%s", found.cFileName);
+			if (exists(to))
+				continue;
+			if (move)
+			{
+				if (MoveFileA(from, to))
+					(*saves)++;
+				else
+					(*failed)++;
+				continue;
+			}
+			CreateDirectoryA(to, NULL);
+			text_print(pattern, sizeof(pattern), "E:\\UDATA\\%s\\%s\\*", from_title, found.cFileName);
+			files = FindFirstFileA(pattern, &file);
+			if (files == INVALID_HANDLE_VALUE)
+				continue;
+			do
+			{
+				if (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					continue;
+				text_print(from, sizeof(from), "E:\\UDATA\\%s\\%s\\%s", from_title, found.cFileName, file.cFileName);
+				text_print(to, sizeof(to), "E:\\UDATA\\" OWN_TITLE_FOLDER "\\%s\\%s", found.cFileName, file.cFileName);
+				if (copy_file(from, to))
+					(*failed)++;
+			} while (FindNextFileA(files, &file));
+			FindClose(files);
+			(*saves)++;
+		} while (FindNextFileA(find, &found));
+		FindClose(find);
+	}
+	for (i = 0; i < sizeof(own_files) / sizeof(own_files[0]); i++)
+	{
+		text_print(from, sizeof(from), "E:\\TDATA\\%s\\%s", from_title, own_files[i]);
+		text_print(to, sizeof(to), "E:\\TDATA\\" OWN_TITLE_FOLDER "\\%s", own_files[i]);
+		if (!exists(from) || exists(to))
+			continue;
+		if (MoveFileA(from, to))
+			(*moved)++;
+		else
+			(*failed)++;
+	}
+}
+
+/* the game's own save folder and storage (E:\UDATA\4c4a4855, E:\TDATA\4c4a4855), from what it used before:
+- v1.53's ('OC' 0002, 4f430002): its saves and files moved (no one else's title ID that we know of; only what's ours
+  by name is taken, and the folders removed only if that left them empty);
+- Halo's (4d530004, release 1 and the test builds before v1.53): each save copied, never moved (Halo's stay as they
+  are), and the game's own files in Halo's storage moved (retail Halo never used them).
+Nothing that's already in the game's folders is copied or moved over it. ('OC' 0001, which the first test builds used,
+is Open Crossing's: never touched here.) */
+static void own_title_folders(void)
+{
+	int saves = 0, moved = 0, failed = 0, old_saves = 0;
+
+	CreateDirectoryA("E:\\UDATA", NULL);
+	CreateDirectoryA("E:\\UDATA\\" OWN_TITLE_FOLDER, NULL);
+	CreateDirectoryA("E:\\TDATA", NULL);
+	CreateDirectoryA("E:\\TDATA\\" OWN_TITLE_FOLDER, NULL);
+	/* (the name the dashboards show for the save folder: UTF-16, as XAPI writes it) */
+	if (!exists("E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleMeta.xbx"))
+	{
+		static char const name[] = "TitleName=Halo 1 Unlimited\r\n";
+		unsigned short text[64];
+		HANDLE file;
+		DWORD put;
+		unsigned n = 0, k;
+		text[n++] = 0xFEFF;
+		for (k = 0; name[k] && n < 64; k++)
+			text[n++] = (unsigned char)name[k];
+		file = create("E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleMeta.xbx");
+		if (file != INVALID_HANDLE_VALUE)
+		{
+			WriteFile(file, text, n * 2, &put, NULL);
+			finish(file);
+		}
+	}
+	if (!exists("E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleImage.xbx"))
+		copy_file("E:\\UDATA\\" HALO_TITLE_FOLDER "\\TitleImage.xbx", "E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleImage.xbx");
+	own_title_from(V153_TITLE_FOLDER, 1, &old_saves, &moved, &failed);
+	own_title_from(HALO_TITLE_FOLDER, 0, &saves, &moved, &failed);
+	/* (v1.53's folders, if that emptied them: its TitleMeta.xbx and TitleImage.xbx first) */
+	DeleteFileA("E:\\UDATA\\" V153_TITLE_FOLDER "\\TitleMeta.xbx");
+	DeleteFileA("E:\\UDATA\\" V153_TITLE_FOLDER "\\TitleImage.xbx");
+	RemoveDirectoryA("E:\\UDATA\\" V153_TITLE_FOLDER);
+	RemoveDirectoryA("E:\\TDATA\\" V153_TITLE_FOLDER);
+	if (saves || old_saves || moved || failed)
+	{
+		say("Its own save folder (E:\\UDATA\\" OWN_TITLE_FOLDER "): %d of Halo's saves copied (Halo's are untouched)%s",
+			saves, old_saves ? "," : ";");
+		if (old_saves)
+			say("  %d moved from v1.53's folder (" V153_TITLE_FOLDER ");", old_saves);
+		say("  %d of its files moved to its own storage (E:\\TDATA\\" OWN_TITLE_FOLDER ")", moved);
+		if (failed)
+			say_in(COLOUR_YELLOW, "  (%d couldn't be copied or moved)", failed);
+		flush_drive("E:\\");
+	}
+}
+
 static int install(struct halo *h)
 {
 	char main[200], backup[200], temp[220], ui_map[200], error[256], line[SCREEN_COLUMNS + 8];
@@ -990,6 +1184,8 @@ static int install(struct halo *h)
 	}
 	if (h->state != INSTALLED)
 		install_showcase(h);
+	install_updater(h);
+	own_title_folders();
 	say_in(COLOUR_GREEN, "Done: OpenCE is this folder's default.xbe.");
 	return 0;
 }
@@ -1174,9 +1370,14 @@ static void offer_installer_update(void)
 	say("opence.oxpk carries installer version %lu. This installer is version %d.", package.installer_version,
 		INSTALLER_VERSION);
 	say("Updating puts it in place of this one (kept as installer_old.xbe), then starts it.");
-	say_in(COLOUR_YELLOW, "A: update the installer now   B: not now");
-	while ((b = wait_input()) != A && b != B)
-		;
+	if (auto_mode)
+		b = A;
+	else
+	{
+		say_in(COLOUR_YELLOW, "A: update the installer now   B: not now");
+		while ((b = wait_input()) != A && b != B)
+			;
+	}
 	if (b == A)
 		update_installer();
 	else
@@ -1301,9 +1502,14 @@ static int check_updates(void)
 	}
 	if (fresh.installer_version > INSTALLER_VERSION)
 		say("  It carries installer version %lu (this one is %d).", fresh.installer_version, INSTALLER_VERSION);
-	say_in(COLOUR_YELLOW, package_ok ? "A: use it in place of yours   B: keep yours" : "A: use it   B: back");
-	while ((b = wait_input()) != A && b != B)
-		;
+	if (auto_mode)
+		b = A;
+	else
+	{
+		say_in(COLOUR_YELLOW, package_ok ? "A: use it in place of yours   B: keep yours" : "A: use it   B: back");
+		while ((b = wait_input()) != A && b != B)
+			;
+	}
 	if (b == B)
 		goto discard;
 	package_free(&fresh);
@@ -1331,6 +1537,11 @@ discard:
 	package_free(&fresh);
 	DeleteFileA(DOWNLOAD_PATH);
 back:
+	if (auto_mode)
+	{
+		Sleep(1000);
+		return changed;
+	}
 	say_in(COLOUR_YELLOW, "B: back");
 	while (wait_input() != B)
 		;
@@ -1424,6 +1635,79 @@ static void look_again(struct halo *h)
 	}
 }
 
+/* the game's updater (AUTO_PATH beside it): this folder's Halo (the one above <Halo>\updater) updated to the latest
+signed package, then started, with no buttons pressed unless something goes wrong */
+static void auto_update(void)
+{
+	char own[260], folder[260], *slash;
+	struct halo *h = NULL;
+	int failed = 1;
+
+	auto_mode = 1;
+	log_file("auto update (the game's updater)");
+	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	if (from_device(own, folder, sizeof(folder)) && (slash = strrchr(folder, '\\')) != NULL)
+	{
+		*slash = 0;
+		slash = strrchr(folder, '\\');
+		if (slash && !_stricmp(slash + 1, UPDATER_FOLDER))
+		{
+			*slash = 0;
+			halo_count = 0;
+			add_halo(folder);
+			h = halo_count ? &halos[0] : NULL;
+		}
+	}
+	if (!h)
+	{
+		heading("Updating Halo 1 Unlimited");
+		say_in(COLOUR_RED, "This updater isn't in a Halo folder's updater folder: nothing to update.");
+		goto done;
+	}
+	/* (a newer package; and the installer it carries, which starts again and goes on from here) */
+	if (check_updates())
+		offer_installer_update();
+	if (!package_ok || signature != PACKAGE_SIGNED)
+	{
+		heading("Updating Halo 1 Unlimited");
+		say_in(COLOUR_RED, "There's no package signed by a key this updater trusts: nothing changed.");
+		goto done;
+	}
+	examine(h);
+	if (h->state == INSTALLED && h->up_to_date)
+	{
+		heading("Updating Halo 1 Unlimited");
+		say_in(COLOUR_GREEN, "%s is up to date (%s).", h->path, package.name);
+		failed = 0;
+		goto done;
+	}
+	if (!ready(h) || h->state == UNKNOWN)
+	{
+		heading("Updating Halo 1 Unlimited");
+		say_in(COLOUR_RED, "%s can't be updated here: start the installer itself to see why.", h->path);
+		goto done;
+	}
+	failed = install(h);
+done:
+	DeleteFileA(AUTO_PATH);
+	flush_own_drive();
+	if (failed)
+	{
+		say_in(COLOUR_YELLOW, "A or B: back to the game (as it was)");
+		{
+			int b;
+			while ((b = wait_input()) != A && b != B)
+				;
+		}
+	}
+	else
+		Sleep(1500);
+	auto_mode = 0;
+	if (h)
+		launch_halo(h);
+	launch(NULL);
+}
+
 int main(void)
 {
 	nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
@@ -1439,6 +1723,8 @@ int main(void)
 	}
 	notices_write();
 	package_read();
+	if (exists(AUTO_PATH))
+		auto_update();
 	offer_installer_update();
 	last_install_read();
 	if (last_install[0])

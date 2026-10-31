@@ -553,7 +553,7 @@ static char const *const stock_maps[] =
 	"boardingaction", "bloodgulch", "wizard", "putput", "longest",
 };
 
-/* whether a PC build's game (version 38 or 39) is one this Xbox can join, so the games list shows it (a listing's or
+/* whether a PC build's game (version 40 or 41) is one this Xbox can join, so the games list shows it (a listing's or
 an advertisement's): on one of the Xbox's stock levels (by its name, or its path's last part: not a Custom Edition map,
 nor one of the PC's own levels), for at most 16 players, playing no OpenCE gametype (the game's kind: its mode and
 Hardcore, 0 for none) */

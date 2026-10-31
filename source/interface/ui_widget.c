@@ -8408,6 +8408,17 @@ static void root_process_event(
 	/* (the map list's Black-held options take every event while they're up: port/linux/game/hmp_browse.c) */
 	if (hmp_browse_prompt_event(event))
 		return;
+#if defined(HALO_XBOX_TARGET)
+	/* (and the main menu's offer of a newer release, A and B, every other button kept from the menu: oxbox_sdk.c) */
+	{
+		extern int oxbox_update_prompt_button(int a, int b, int pressed);
+		boolean button = event->type == 3 /* _event_type_button */;
+
+		if (oxbox_update_prompt_button(button && event->data.button.index == _gamepad_analog_button_a,
+			button && event->data.button.index == _gamepad_analog_button_b, button && event->data.button.value == 1))
+			return;
+	}
+#endif
 	options = hmp_options_dispatch(widget, event);
 	if (options)
 	{

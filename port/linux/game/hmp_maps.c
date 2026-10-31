@@ -13,7 +13,7 @@ the retail XBE's addresses).
 			order.txt            optional: the pack's own order
 			Abyss\ ...
 
-T:\maps (E:\TDATA\4d530004\maps: Halo's own storage on the hard drive) is read the same way after d:\maps; a map in
+T:\maps (E:\TDATA\4c4a4855\maps: the game's own storage on the hard drive) is read the same way after d:\maps; a map in
 both is listed once (the higher "Version:" in its info .txt, else the newer .map; map sharing can switch to the copy
 that matches the host for a game, and switches back when the game is left: hmp_maps_unpin_all).
 

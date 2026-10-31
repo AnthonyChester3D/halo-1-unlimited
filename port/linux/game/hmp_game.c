@@ -332,8 +332,8 @@ static void saves_backup(void)
 	marker = CreateFileA("T:\\opence_backup\\backup.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (marker != INVALID_HANDLE_VALUE)
 	{
-		static char const text[] = "OpenCE copied Halo's profiles and gametypes here the first time it ran (one folder per save, "
-			"as in E:\\UDATA\\4d530004). Halo and OpenCE never read this folder.\r\n";
+		static char const text[] = "OpenCE copied its profiles and gametypes here the first time it ran (one folder per save, "
+			"as in E:\\UDATA\\4c4a4855). Halo and OpenCE never read this folder.\r\n";
 		WriteFile(marker, text, sizeof(text) - 1, &put, NULL);
 		CloseHandle(marker);
 	}

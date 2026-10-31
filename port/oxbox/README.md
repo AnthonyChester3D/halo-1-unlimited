@@ -125,6 +125,13 @@ Developers' tools (opence.ini, off by default):
   are up, stopped (its memory freed) while a map is loaded; its address at the bottom right of the menus. Its code is
   an XBE section of its own, OXFTP, loaded only with `ftp = 1`. A change in the maps folder rescans the map list, and
   folder maps are copied into the map cache afresh, so a new version of a map is what's played.
+- `update_check` (1 by default; 0: never; 2: on a test build too): once a boot, in the menus, the game fetches the
+  first 128 bytes of the latest release's package from GitHub (its header: release and network version) and, if it's
+  newer than `opence_release.txt` (the installer writes it), offers it on the main menu: A starts the updater (the
+  installer's copy in `updater\`, which it puts there when it installs) with a note, `auto_update.txt`, so it updates
+  this folder to the latest signed package and starts the game again; B asks again next boot. The check's code (and
+  Mbed TLS's, about 180 KB) is an XBE section of its own, OXUPD, loaded for the check and unloaded after it. Nothing is
+  sent but the request.
 - Without the switch, the build is byte for byte what it was.
 
 ## Bot tuning (a test build switch)

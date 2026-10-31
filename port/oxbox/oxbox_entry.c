@@ -73,7 +73,7 @@ static void log_open(void)
 	log_opened = 1;
 	log_file = CreateFileA("d:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
 		FILE_ATTRIBUTE_NORMAL, NULL);
-	/* (D: can't be written, as a disc or an ISO: T:, Halo's title data on the hard drive, E:\TDATA\4d530004) */
+	/* (D: can't be written, as a disc or an ISO: T:, the game's title data on the hard drive, E:\TDATA\4c4a4855) */
 	if (log_file == INVALID_HANDLE_VALUE)
 	{
 		log_file = CreateFileA("T:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
@@ -81,7 +81,7 @@ static void log_open(void)
 		if (log_file != INVALID_HANDLE_VALUE)
 		{
 			static const char note[] = "oxbox: D: can't be written (a disc or an ISO?): this log is T:\\oxbox_log.txt "
-				"(E:\\TDATA\\4d530004), debug.txt beside it\r\n";
+				"(E:\\TDATA\\4c4a4855), debug.txt beside it\r\n";
 			unsigned long done;
 
 			WriteFile(log_file, note, sizeof(note) - 1, &done, NULL);
@@ -660,6 +660,11 @@ static void read_settings(const char *path)
 		{
 			extern int oxbox_setting_ftp;
 			oxbox_setting_ftp = value != 0;
+		}
+		else if (same_text(name, "update_check"))
+		{
+			extern int oxbox_setting_update_check;
+			oxbox_setting_update_check = value;
 		}
 		else if (same_text(name, "ftp_port"))
 		{

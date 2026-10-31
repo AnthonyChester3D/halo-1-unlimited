@@ -1109,6 +1109,11 @@ boolean showcase_start(
 		return TRUE;
 	if (!oxbox_setting_showcase)
 		return FALSE;
+	{
+		extern int oxbox_update_prompt_showing(void);   /* (oxbox_sdk.c: the offer of a newer release waits for an answer) */
+		if (oxbox_update_prompt_showing())
+			return FALSE;
+	}
 	if (showcase.retry_after && (long)(system_milliseconds() - showcase.retry_after) < 0)
 		return FALSE;
 	showcase.retry_after = 0;

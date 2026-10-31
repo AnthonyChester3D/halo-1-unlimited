@@ -147,6 +147,21 @@ if ftp_end > ftp_start:
     add_section(d, 'OXFTP', 5, ftp_start, ftp_end - ftp_start, ftp_raw, len(ftpb))
     struct.pack_into('<I', d, 0x10c, ftp_start + ftp_size - base)   # size of image
     nsec += 1
+# the update check (port/oxbox/net/oxbox_update.c and Mbed TLS: link.ld's .oxupd and .oxupd.bss), likewise its own
+# section, OXUPD, right after OXFTP, loaded for the check and unloaded after it (oxbox_sdk.c oxbox_update_frame)
+upd_start, upd_load_end, upd_end = sym['__oxupd_start'], sym['__oxupd_load_end'], sym['__oxupd_end']
+upd_size = 0
+if upd_end > upd_start:
+    subprocess.run(['llvm-objcopy', '-O', 'binary', '--only-section=.oxupd', elf, os.path.join(os.path.dirname(elf), 'oxbox_update.bin')], check=True)
+    updb = open(os.path.join(os.path.dirname(elf), 'oxbox_update.bin'), 'rb').read()
+    assert len(updb) == upd_load_end - upd_start, (hex(len(updb)), hex(upd_load_end - upd_start))
+    assert ftp_size and upd_start == ftp_start + ftp_size and not upd_start & 0xFFF, (hex(upd_start), hex(ftp_start + ftp_size))
+    upd_raw = len(d)
+    d += updb + bytes((-len(updb)) % 0x1000)
+    upd_size = ((upd_end + 0xFFF) & ~0xFFF) - upd_start
+    add_section(d, 'OXUPD', 5, upd_start, upd_end - upd_start, upd_raw, len(updb))
+    struct.pack_into('<I', d, 0x10c, upd_start + upd_size - base)   # size of image
+    nsec += 1
 
 # mainXapiStartup: call main(0, 0, 0) -> call oxbox_entry(0, 0, 0)
 site = 0x15cb1
@@ -217,12 +232,18 @@ if mark > 0:
     struct.pack_into('<II', d, mark + 8, len(d), len(header))
     d += header
 cert = struct.unpack_from('<I', d, 0x118)[0] - base
-# Halo's own title ID, name and keys, as in the retail XBE (test build 19): the profiles and gametypes are the retail
-# game's, read and written in its formats and signed with its keys. What retail Halo can't share is kept apart:
-# the campaign checkpoint (game_state_xbox.c: opence.bin, not savegame.bin) and OpenCE's own settings (T:).
-# (Test builds 01-18 used their own title ID, 0x4F430001 'OC' 0001.)
+# The title ID: Halo 1 Unlimited's own, 0x4C4A4855 ('LJ' 'HU': Llama Juice, Halo Unlimited; v1.54 on), so its own save
+# folder (E:\UDATA\4c4a4855) and storage (T:, E:\TDATA\4c4a4855): its profiles and gametypes (OpenCE's gametype
+# options among them) are its own, and retail Halo's saves are never written. The installer copies Halo's saves into its
+# folder the first time (Halo's stay as they are) and moves the game's own files over from Halo's storage
+# (installer/main.c own_title_folders). The keys stay the retail XBE's: the saves are signed as Halo signs them, so a
+# copied profile reads. 'LJ' is no retail publisher's code (GameDB-XBOX's 1,343 releases), and no use of the ID is known.
+# (Test builds 01-18 had 'OC' 0001, which is Open Crossing's; test build 19 to v1.52 and release 1 had Halo's,
+# 0x4D530004; v1.53 had 'OC' 0002.)
 TITLE_ID = struct.unpack_from('<I', d, cert + 0x8)[0]
 assert TITLE_ID == 0x4D530004, hex(TITLE_ID)
+TITLE_ID = 0x4C4A4855
+struct.pack_into('<I', d, cert + 0x8, TITLE_ID)
 # The certificate's title name (40 UTF-16 characters): "Halo 1 Unlimited", not "Halo", so a dashboard that lists
 # games by name shows it beside retail Halo instead of taking it for that one. (The title ID stays Halo's, as above.)
 TITLE_NAME = 'Halo 1 Unlimited'
