@@ -820,13 +820,15 @@ boolean hmp_browse_event(struct widget_instance *list, struct event_record const
 		return TRUE;
 	}
 #if defined(OXBOX_SHOWCASE)
-	/* (White, with opence.ini showcase_preview = 1: the map's showcase, if it has one) */
+	/* (White, with opence.ini showcase_preview = 1: the map's showcase, if it has one, the error sound if it hasn't.
+	Without the setting White does nothing here, silently: a player who doesn't know the setting hears no error) */
 	if (button == 5)
 	{
 		extern int oxbox_setting_showcase_preview;
 		boolean showcase_preview_request(char const *key);
 
-		if (press) ui_play_audio_feedback_sound(oxbox_setting_showcase_preview && showcase_preview_request(entry) ? 1 : 4);
+		if (press && oxbox_setting_showcase_preview)
+			ui_play_audio_feedback_sound(showcase_preview_request(entry) ? 1 : 4);
 		return TRUE;
 	}
 #endif

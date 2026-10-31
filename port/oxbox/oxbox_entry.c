@@ -511,6 +511,34 @@ int oxbox_write_log_file(const char *name, const void *data, unsigned long size)
 	return 0;
 }
 
+/* a small data file read whole (at most size bytes): how many bytes, or -1 when it isn't there (port/linux/game/bots.c's
+learned links) */
+long oxbox_read_data_file(const char *path, void *data, unsigned long size)
+{
+	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	unsigned long got = 0;
+
+	if (file == INVALID_HANDLE_VALUE)
+		return -1;
+	if (!ReadFile(file, data, size, &got, NULL))
+		got = 0;
+	CloseHandle(file);
+	return (long)got;
+}
+
+/* ... and written whole: TRUE when it was */
+int oxbox_write_data_file(const char *path, const void *data, unsigned long size)
+{
+	HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	unsigned long written = 0;
+
+	if (file == INVALID_HANDLE_VALUE)
+		return 0;
+	WriteFile(file, data, size, &written, NULL);
+	CloseHandle(file);
+	return written == size;
+}
+
 /* (a byte loop: the compiler makes strcmp against a constant into bcmp, which this build has no copy of) */
 static int same_text(const char *a, const char *b)
 {

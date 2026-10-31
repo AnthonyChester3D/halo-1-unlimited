@@ -375,6 +375,12 @@ struct bots_waypoint
 	                                           out on it walks off before it sends anyone back) */
 	byte teleport_links;                    /* the links that are a teleporter's (a bit each): walk onto this
 	                                           waypoint, come out at the link's */
+	byte jump_links;                        /* links over a gap: walked straight, jumping at the edge (a bit each) */
+	byte jump_failed;                       /* links whose jump didn't make it: never tried as a jump again */
+	byte vehicle_once[BOTS_LINK_MAXIMUM];   /* per link: the vehicle types (vehicle_bot_type, a bit each) a driver got
+	                                           stuck on it once */
+	byte vehicle_bad[BOTS_LINK_MAXIMUM];    /* ... twice: those vehicles' drivers route around it (walkers don't
+	                                           mind: a tank that doesn't fit a door says nothing about a biped) */
 };
 
 struct bots_stuck_spot
@@ -403,6 +409,8 @@ static struct
 	long searches, searches_failed, arrivals, give_ups, teleports, ticks;
 	long failed_no_path, failed_ledge, failed_stall, teleport_hops;
 	long edge_stops;                        /* steps kept off a death cliff (bots_act) */
+	long gap_hops, gap_jumps, gap_links_found, vehicle_links_learned;
+	boolean learned_dirty;                  /* what the bots learned changed since it was last saved */
 	long sightings, firing_ticks, grenades, melees, pickups;
 	long jumps, crouch_jumps, jumps_landed, crouches, straight_up, straight_down, straight_done, overhangs;
 	unsigned long long probe_cycles;
@@ -484,6 +492,8 @@ struct bots_brain
 	boolean straight_after;                 /* the hop's corners end below (or above) its waypoint: then straight for
 	                                           it, up the ledge or off it */
 	boolean straight;                       /* finishing the hop straight */
+	boolean gap_hop;                        /* ... over a gap: jumping at its edge (a jump link) */
+	short vehicle_type;                     /* the vehicle it drives (vehicle_bot_type), while driving */
 	real yaw;                               /* where the bot faces (what its actions say) */
 	real pitch;
 	long arrival_time;                      /* the last arrival at a waypoint (or the brain's start) */
@@ -1112,12 +1122,271 @@ static void bots_route_build(
 	}
 }
 
+/* ---------- what the bots learned, kept between games (milestone 12)
+
+A host's bots learn the map's links as they walk them: which work (good), which don't (bad), which are gaps to jump
+(and which jumps failed), and which a kind of vehicle doesn't fit. That's saved when the map changes or a new game
+starts, and loaded when the map is next played, so they don't start from nothing each time:
+- a folder map's: bots_learned.txt in its folder (on the drive the map is on);
+- a stock map's: T:\bots_<map>.txt (a few KB each, 13 at most).
+A map can also come with what's known to work: bots.txt in a folder map's folder (d:\maps\bots\<map>.txt for a stock
+one), the same lines, read first and never written (Halo Map Porter can bake it from what testers' bots learned).
+The lines (text, one link each; points in world units, matched to the nearest waypoint within 0.6):
+    link <from x y z> <to x y z> [g] [b] [j] [J] [v<hex>]
+g walked, b unusable, j a jump over a gap, J a jump that failed, v the vehicle types (vehicle_bot_type: bit 0 the tank,
+1 the jeep, 4 the scout...) that don't fit. */
+
+#define BOTS_LEARNED_FILE_MAXIMUM (64 * 1024)
+
+static void bots_gap_failed(short from, short link);
+#define BOTS_LEARNED_MATCH 0.6f
+
+#if defined(HALO_XBOX_TARGET)
+long oxbox_read_data_file(const char *path, void *data, unsigned long size);
+int oxbox_write_data_file(const char *path, const void *data, unsigned long size);
+boolean hmp_map_file_path(char const *level_name, char *path, long size);
+
+/* the file for the current map: learned (TRUE) or baked (FALSE); FALSE when there's none */
+static boolean bots_learned_path(
+	boolean learned,
+	char *path,
+	long size)
+{
+	char const *leaf = bots_route.map;
+	long index, slash = NONE;
+
+	if (!bots_route.map[0])
+		return FALSE;
+	if (bots_route.map[0] == '+')
+	{
+		if (!hmp_map_file_path(bots_route.map, path, size))
+			return FALSE;
+		for (index = 0; path[index]; index++)
+		{
+			if (path[index] == '\\')
+				slash = index;
+		}
+		if (slash == NONE || slash + 20 >= size)
+			return FALSE;
+		csstrcpy(path + slash + 1, learned ? "bots_learned.txt" : "bots.txt");
+		return TRUE;
+	}
+	for (index = 0; bots_route.map[index]; index++)
+	{
+		if (bots_route.map[index] == '\\')
+			leaf = &bots_route.map[index + 1];
+	}
+	halo_linux_snprintf(path, size, learned ? "T:\\bots_%s.txt" : "d:\\maps\\bots\\%s.txt", leaf);
+	return TRUE;
+}
+
+static short bots_learned_nearest(
+	real_point3d const *point)
+{
+	short index, best = NONE;
+	real best_distance = BOTS_LEARNED_MATCH;
+
+	for (index = 0; index < bots_route.waypoint_count; index++)
+	{
+		real distance = bots_distance3d(&bots_route.waypoints[index].point, point);
+
+		if (distance < best_distance)
+		{
+			best = index;
+			best_distance = distance;
+		}
+	}
+	return best;
+}
+
+static boolean bots_learned_number(
+	char const **text,
+	real *value)
+{
+	char const *c = *text;
+	real sign = 1.f, number = 0.f, scale = 0.1f;
+	boolean digits = FALSE;
+
+	while (*c == ' ' || *c == '\t')
+		c++;
+	if (*c == '-')
+		sign = -1.f, c++;
+	while (*c >= '0' && *c <= '9')
+		number = number * 10.f + (real)(*c++ - '0'), digits = TRUE;
+	if (*c == '.')
+	{
+		for (c++; *c >= '0' && *c <= '9'; c++, scale *= 0.1f)
+			number += scale * (real)(*c - '0'), digits = TRUE;
+	}
+	*text = c;
+	*value = sign * number;
+	return digits;
+}
+
+static long bots_learned_read(
+	char const *path,
+	char *text)
+{
+	long size = oxbox_read_data_file(path, text, BOTS_LEARNED_FILE_MAXIMUM - 1);
+	long lines = 0;
+	char const *c = text;
+
+	if (size <= 0)
+		return 0;
+	text[size] = 0;
+	while (*c)
+	{
+		real numbers[6];
+		short k, from, to, link;
+		boolean good = FALSE, bad = FALSE, jump = FALSE, jump_failed = FALSE;
+		unsigned vehicles = 0;
+		char const *end = c;
+
+		while (*end && *end != '\n')
+			end++;
+		if (!csstrncmp(c, "link", 4))
+		{
+			c += 4;
+			for (k = 0; k < 6 && bots_learned_number(&c, &numbers[k]); k++)
+				;
+			if (k == 6)
+			{
+				for (; c < end; c++)
+				{
+					if (*c == 'g') good = TRUE;
+					else if (*c == 'b') bad = TRUE;
+					else if (*c == 'j') jump = TRUE;
+					else if (*c == 'J') jump_failed = TRUE;
+					else if (*c == 'v')
+					{
+						for (c++; c < end && ((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'f')); c++)
+							vehicles = vehicles * 16 + (unsigned)(*c <= '9' ? *c - '0' : *c - 'a' + 10);
+						c--;
+					}
+				}
+				from = bots_learned_nearest((real_point3d const *)&numbers[0]);
+				to = bots_learned_nearest((real_point3d const *)&numbers[3]);
+				if (from != NONE && to != NONE && from != to)
+				{
+					if (bots_link_index(from, to) == NONE && (good || jump))
+						bots_link_learn(from, to);
+					link = bots_link_index(from, to);
+					if (link != NONE)
+					{
+						struct bots_waypoint *waypoint = &bots_route.waypoints[from];
+
+						if (good)
+							waypoint->link_good[link] = TRUE;
+						if (bad && !good && waypoint->link_failures[link] < BOTS_LINK_FAILURES_UNUSABLE)
+							waypoint->link_failures[link] = BOTS_LINK_FAILURES_UNUSABLE;
+						if (jump)
+							waypoint->jump_links |= (byte)FLAG(link);
+						if (jump_failed)
+						{
+							waypoint->jump_failed |= (byte)FLAG(link);
+							waypoint->link_failures[link] = BOTS_LINK_FAILURES_CERTAIN;
+						}
+						waypoint->vehicle_bad[link] |= (byte)vehicles;
+						waypoint->vehicle_once[link] |= (byte)vehicles;
+						lines++;
+					}
+				}
+			}
+		}
+		c = *end ? end + 1 : end;
+	}
+	return lines;
+}
+#endif
+
+static void bots_learned_load(
+	void)
+{
+#if defined(HALO_XBOX_TARGET)
+	char path[260];
+	char *text = (char *)malloc(BOTS_LEARNED_FILE_MAXIMUM);
+	long baked = 0, learned = 0;
+
+	if (!text)
+		return;
+	if (bots_learned_path(FALSE, path, sizeof(path)))
+		baked = bots_learned_read(path, text);
+	if (bots_learned_path(TRUE, path, sizeof(path)))
+		learned = bots_learned_read(path, text);
+	free(text);
+	bots_route.learned_dirty = FALSE;
+	if ((baked || learned) && bots_log_enabled())
+		bots_log("bots: %s: %ld links known from the map's bots.txt, %ld learned in earlier games", bots_route.map, baked,
+			learned);
+#endif
+}
+
+static void bots_learned_save(
+	void)
+{
+#if defined(HALO_XBOX_TARGET)
+	char path[260];
+	char *text;
+	long length, lines = 0;
+	short from, link;
+
+	if (!bots_route.learned_dirty || !bots_learned_path(TRUE, path, sizeof(path)))
+		return;
+	bots_route.learned_dirty = FALSE;
+	if (!(text = (char *)malloc(BOTS_LEARNED_FILE_MAXIMUM)))
+		return;
+	length = halo_linux_snprintf(text, BOTS_LEARNED_FILE_MAXIMUM,
+		"# Halo 1 Unlimited: what the bots learned on %s (port/linux/game/bots.c). Deleting this file forgets it.\r\n"
+		"# link <from x y z> <to x y z>: g walked, b unusable, j a jump over a gap, J a jump that failed, v vehicle types\r\n",
+		bots_route.map);
+	for (from = 0; from < bots_route.waypoint_count && length > 0; from++)
+	{
+		struct bots_waypoint const *waypoint = &bots_route.waypoints[from];
+
+		for (link = 0; link < waypoint->link_count; link++)
+		{
+			struct bots_waypoint const *to = &bots_route.waypoints[waypoint->links[link]];
+			boolean bad = !waypoint->link_good[link] && waypoint->link_failures[link] >= BOTS_LINK_FAILURES_UNUSABLE;
+
+			if (TEST_FLAG(waypoint->teleport_links, link) || !(waypoint->link_good[link] || bad ||
+				TEST_FLAG(waypoint->jump_links, link) || waypoint->vehicle_bad[link]))
+				continue;
+			if (length >= BOTS_LEARNED_FILE_MAXIMUM - 128)
+				break;
+			length += halo_linux_snprintf(text + length, BOTS_LEARNED_FILE_MAXIMUM - length,
+				"link %.2f %.2f %.2f %.2f %.2f %.2f%s%s%s%s", waypoint->point.x, waypoint->point.y, waypoint->point.z,
+				to->point.x, to->point.y, to->point.z, waypoint->link_good[link] ? " g" : "", bad ? " b" : "",
+				TEST_FLAG(waypoint->jump_links, link) ? " j" : "", TEST_FLAG(waypoint->jump_failed, link) ? " J" : "");
+			if (waypoint->vehicle_bad[link])
+				length += halo_linux_snprintf(text + length, BOTS_LEARNED_FILE_MAXIMUM - length, " v%x",
+					(unsigned)waypoint->vehicle_bad[link]);
+			length += halo_linux_snprintf(text + length, BOTS_LEARNED_FILE_MAXIMUM - length, "\r\n");
+			lines++;
+		}
+	}
+	if (length > 0 && !oxbox_write_data_file(path, text, (unsigned long)length) && bots_log_enabled())
+		bots_log("bots: couldn't write %s", path);
+	else if (bots_log_enabled())
+		bots_log("bots: %ld links of what the bots learned on %s kept in %s", lines, bots_route.map, path);
+	free(text);
+#endif
+}
+
 static void bots_brain_reset(
 	struct bots_brain *brain,
 	long unit_index)
 {
 	short index;
 
+	/* (a bot gone in the middle of a jump over a gap, most likely fallen into it: that jump doesn't work) */
+	if (brain->gap_hop && brain->from_waypoint != NONE && brain->from_waypoint < bots_route.waypoint_count &&
+		brain->route_position < brain->route_count)
+	{
+		short link = bots_link_index(brain->from_waypoint, brain->route[brain->route_position]);
+
+		if (link != NONE)
+			bots_gap_failed(brain->from_waypoint, link);
+	}
 	csmemset(brain, 0, sizeof(*brain));
 	brain->unit_index = unit_index;
 	brain->destination = NONE;
@@ -1186,13 +1455,20 @@ static void bots_route_update(
 	{
 		if (bots_route.stuck_log_dirty)
 			bots_stuck_log_write();
+		bots_learned_save();
+		for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+			bots_brains[index].gap_hop = FALSE;
 		bots_route_build(map);
+		bots_learned_load();
 		bots_route.game_time = now;
 		for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
 			bots_brain_reset(&bots_brains[index], NONE);
 	}
 	else if (now < bots_route.game_time)
 	{
+		bots_learned_save();
+		for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+			bots_brains[index].gap_hop = FALSE;
 		for (index = 0; index < bots_route.waypoint_count; index++)
 		{
 			bots_route.waypoints[index].last_visit_time = -100000;
@@ -1223,6 +1499,125 @@ static void bots_route_update(
 	}
 }
 
+/* a jump over a gap that didn't make it: never tried as a jump again (on this console: bots_learned_save) */
+static void bots_gap_failed(
+	short from,
+	short link)
+{
+	struct bots_waypoint *waypoint = &bots_route.waypoints[from];
+
+	if (!TEST_FLAG(waypoint->jump_links, link) || TEST_FLAG(waypoint->jump_failed, link))
+		return;
+	waypoint->jump_failed |= (byte)FLAG(link);
+	waypoint->link_failures[link] = BOTS_LINK_FAILURES_CERTAIN;
+	bots_route.learned_dirty = TRUE;
+	if (bots_log_enabled())
+		bots_log("bots: the jump from waypoint %d to %d didn't make it: not tried again", (int)from, (int)waypoint->links[link]);
+}
+
+/* a driver stuck on a link: once, noted; twice, that kind of vehicle routes around it from now on */
+static void bots_link_vehicle_failed(
+	short from,
+	short link,
+	short vehicle_type)
+{
+	struct bots_waypoint *waypoint = &bots_route.waypoints[from];
+
+	if (vehicle_type < 0 || vehicle_type >= 8)
+		return;
+	if (!TEST_FLAG(waypoint->vehicle_once[link], vehicle_type))
+	{
+		waypoint->vehicle_once[link] |= (byte)FLAG(vehicle_type);
+		return;
+	}
+	if (TEST_FLAG(waypoint->vehicle_bad[link], vehicle_type))
+		return;
+	waypoint->vehicle_bad[link] |= (byte)FLAG(vehicle_type);
+	bots_route.vehicle_links_learned++;
+	bots_route.learned_dirty = TRUE;
+	if (bots_log_enabled())
+		bots_log("bots: vehicle type %d doesn't fit from waypoint %d to %d: its drivers go around", (int)vehicle_type,
+			(int)from, (int)waypoint->links[link]);
+}
+
+/* a link a walker couldn't walk (no path, or a ledge): a gap a biped can jump? Straight from one waypoint to the other,
+level or down a little, with ground on both sides, one stretch of nothing in between no longer than a running jump
+clears, and nothing in the way at chest height. Then it's a jump link: walked straight, jumping at the edge */
+#define BOTS_GAP_LINK_MAXIMUM 8.f           /* the waypoints this far apart at most */
+#define BOTS_GAP_MAXIMUM 1.6f               /* the gap itself at most (a running jump clears about 2) */
+#define BOTS_GAP_RISE_MAXIMUM 0.4f          /* the far side this much higher at most */
+#define BOTS_GAP_DROP_MAXIMUM 2.5f          /* ... this much lower at most */
+static void bots_gap_check(
+	short from,
+	short link)
+{
+	struct bots_waypoint *waypoint = &bots_route.waypoints[from];
+	real_point3d const *a = &waypoint->point;
+	real_point3d const *b = &bots_route.waypoints[waypoint->links[link]].point;
+	real distance = bots_distance2d(a, b), rise = b->z - a->z, step, gap = 0.f, longest = 0.f;
+	boolean ground_before = FALSE, ground_after = FALSE;
+	short count, k;
+
+	if (TEST_FLAG(waypoint->jump_links | waypoint->jump_failed | waypoint->teleport_links, link) ||
+		distance < 1.f || distance > BOTS_GAP_LINK_MAXIMUM || rise > BOTS_GAP_RISE_MAXIMUM || rise < -BOTS_GAP_DROP_MAXIMUM)
+		return;
+	count = (short)(distance / 0.25f);
+	step = distance / (real)count;
+	for (k = 1; k < count; k++)
+	{
+		real t = (real)k / (real)count;
+		real_point3d feet;
+		real height;
+
+		feet.x = a->x + (b->x - a->x) * t;
+		feet.y = a->y + (b->y - a->y) * t;
+		feet.z = a->z + rise * t;
+		if (bots_height_at(&feet, 0.f, 0.f, 0.6f, -1.5f, NONE, &height))
+		{
+			if (height > 0.45f)
+				return;                    /* (a step up or a wall on the way: not a gap to jump) */
+			if (gap > 0.f)
+				ground_after = TRUE;
+			else
+				ground_before = TRUE;
+			if (gap > longest)
+				longest = gap;
+			gap = 0.f;
+		}
+		else
+		{
+			if (ground_after)
+				return;                    /* (a second gap) */
+			gap += step;
+		}
+	}
+	if (gap > longest)
+		longest = gap;
+	if (!ground_before || longest < 0.3f || longest > BOTS_GAP_MAXIMUM)
+		return;
+	{
+		real_point3d chest = *a;
+		real_vector3d vector;
+
+		chest.z += 0.8f;
+		vector.i = b->x - a->x;
+		vector.j = b->y - a->y;
+		vector.k = rise;
+		if (bots_ray(&chest, &vector, NONE, NULL) < 1.f)
+			return;
+	}
+	waypoint->jump_links |= (byte)FLAG(link);
+	waypoint->link_failures[link] = 0;
+	bots_route.gap_links_found++;
+	bots_route.learned_dirty = TRUE;
+	if (bots_log_enabled())
+		bots_log("bots: a gap of %.1f from waypoint %d to %d: a jump link from now on", longest, (int)from,
+			(int)waypoint->links[link]);
+}
+
+static void bots_learned_save(void);
+static void bots_learned_load(void);
+
 static void bots_link_result(
 	short from,
 	short to,
@@ -1235,6 +1630,8 @@ static void bots_link_result(
 		return;
 	if (walked)
 	{
+		if (!bots_route.waypoints[from].link_good[index])
+			bots_route.learned_dirty = TRUE;
 		bots_route.waypoints[from].link_good[index] = TRUE;
 		bots_route.waypoints[from].link_failures[index] = 0;
 	}
@@ -1386,6 +1783,13 @@ static short bots_explore(
 			if (brain->driving && (TEST_FLAG(waypoint->teleport_links, link) || bots_route.waypoints[to].teleport_source))
 				continue;
 #endif
+			/* (a driver: not a link its kind of vehicle got stuck on twice, nor a gap to jump) */
+			if (brain->driving && !brain->flying && brain->vehicle_type >= 0 && brain->vehicle_type < 8 &&
+				(TEST_FLAG(waypoint->vehicle_bad[link], brain->vehicle_type) || TEST_FLAG(waypoint->jump_links, link)))
+				continue;
+			/* (a walker: a gap whose jump failed is as good as no link) */
+			if (!brain->driving && TEST_FLAG(waypoint->jump_links, link) && TEST_FLAG(waypoint->jump_failed, link))
+				continue;
 			link_cost = TEST_FLAG(waypoint->teleport_links, link) ? 1.f :
 				bots_distance3d(&waypoint->point, &bots_route.waypoints[to].point);
 			if (!waypoint->link_good[link])
@@ -1420,7 +1824,7 @@ static boolean bots_pick_destination(
 	short node;
 	short at;
 
-	brain->straight = brain->straight_after = FALSE;
+	brain->straight = brain->straight_after = brain->gap_hop = FALSE;
 	/* (an objective first: the route to the waypoint nearest it) */
 	if (brain->goal_kind && brain->goal_waypoint != NONE && bots_route_to(brain, position, brain->goal_waypoint, now))
 		return TRUE;
@@ -1570,12 +1974,26 @@ static void bots_hop_failed(
 	short target = brain->route_position < brain->route_count ? brain->route[brain->route_position] : NONE;
 	struct bots_waypoint const *from = brain->from_waypoint != NONE ? &bots_route.waypoints[brain->from_waypoint] : NULL;
 
+	short link = from ? bots_link_index(brain->from_waypoint, target) : NONE;
+
+	if (brain->gap_hop && link != NONE)
+	{
+		/* (a jump that didn't get there, wherever the bot ended up) */
+		bots_gap_failed(brain->from_waypoint, link);
+	}
 	/* (the link's fault only when the bot was still near its start: one that sidestepped off a ledge, or got
 	pushed somewhere, had another hop than the link's) */
-	if (from && bots_link_index(brain->from_waypoint, target) != NONE &&
+	else if (link != NONE &&
 		bots_distance2d(&brain->last_position, &from->point) < 3.f && (real)fabs(brain->last_position.z - from->point.z) < 1.5f)
 	{
-		bots_link_result(brain->from_waypoint, target, FALSE, certain);
+		if (brain->driving && !brain->flying)
+			bots_link_vehicle_failed(brain->from_waypoint, link, brain->vehicle_type);   /* (a vehicle's, not the link's) */
+		else
+		{
+			bots_link_result(brain->from_waypoint, target, FALSE, certain);
+			if (certain && !brain->driving)
+				bots_gap_check(brain->from_waypoint, link);
+		}
 	}
 	else if (target != NONE)
 	{
@@ -1588,7 +2006,7 @@ static void bots_hop_failed(
 	brain->route_count = 0;
 	brain->path_valid = FALSE;
 	brain->wants_search = FALSE;
-	brain->straight = brain->straight_after = FALSE;
+	brain->straight = brain->straight_after = brain->gap_hop = FALSE;
 	/* (not straight away: a bot somewhere its nearest waypoints are behind walls would spend every tick's search) */
 	if (brain->plan_retry_time < now + BOTS_HOP_FAILED_RETRY_TICKS)
 		brain->plan_retry_time = now + BOTS_HOP_FAILED_RETRY_TICKS;
@@ -1634,6 +2052,22 @@ static void bots_search(
 	brain->wants_search = FALSE;
 	brain->straight = FALSE;
 	brain->straight_after = FALSE;
+	brain->gap_hop = FALSE;
+	/* (a jump link: no search, straight for the waypoint, jumping at the gap's edge: bots_move_skills) */
+	if (!brain->driving && brain->from_waypoint != NONE)
+	{
+		short link = bots_link_index(brain->from_waypoint, brain->route[brain->route_position]);
+
+		if (link != NONE && TEST_FLAG(bots_route.waypoints[brain->from_waypoint].jump_links, link) &&
+			!TEST_FLAG(bots_route.waypoints[brain->from_waypoint].jump_failed, link))
+		{
+			start = brain->last_position;
+			bots_go_straight(brain, &start, &waypoint->point);
+			brain->gap_hop = TRUE;
+			bots_route.gap_hops++;
+			return;
+		}
+	}
 	if (start_surface_index == NONE)
 	{
 		/* (in the air, or off the walkable surfaces: straight at the waypoint, and again a little later) */
@@ -2100,6 +2534,11 @@ static void bots_report(
 		bots_route.failed_no_path = bots_route.failed_ledge = bots_route.failed_stall = bots_route.teleport_hops = 0;
 		bots_route.edge_stops = 0;
 #endif
+		if (bots_route.gap_hops || bots_route.gap_links_found || bots_route.vehicle_links_learned)
+			bots_log("bots 10s: gaps: %ld jump links found, %ld hops over one, %ld jumps at the edge; %ld links a vehicle "
+				"didn't fit", bots_route.gap_links_found, bots_route.gap_hops, bots_route.gap_jumps,
+				bots_route.vehicle_links_learned);
+		bots_route.gap_links_found = bots_route.gap_hops = bots_route.gap_jumps = bots_route.vehicle_links_learned = 0;
 	}
 	/* (the Xbox's processor: 733 MHz) */
 	bots_log("bots 10s: %d walking, %ld searches (%ld failed), %ld arrivals (%ld by teleporter), %ld give-ups; "
@@ -2171,6 +2610,20 @@ static boolean bots_arrive(
 {
 	short reached = brain->route[brain->route_position];
 
+	if (brain->driving && brain->from_waypoint != NONE && brain->vehicle_type >= 0 && brain->vehicle_type < 8)
+	{
+		short link = bots_link_index(brain->from_waypoint, reached);
+
+		if (link != NONE)
+		{
+			struct bots_waypoint *from = &bots_route.waypoints[brain->from_waypoint];
+
+			if (TEST_FLAG(from->vehicle_bad[link], brain->vehicle_type))
+				bots_route.learned_dirty = TRUE;
+			from->vehicle_once[link] &= (byte)~FLAG(brain->vehicle_type);
+			from->vehicle_bad[link] &= (byte)~FLAG(brain->vehicle_type);
+		}
+	}
 	bots_link_result(brain->from_waypoint, reached, TRUE, FALSE);
 	bots_link_learn(brain->from_waypoint, reached);
 	bots_route.waypoints[reached].last_visit_time = now;
@@ -2178,7 +2631,7 @@ static boolean bots_arrive(
 	bots_route.arrivals++;
 	if (brain->straight)
 		bots_route.straight_done++;
-	brain->straight = brain->straight_after = FALSE;
+	brain->straight = brain->straight_after = brain->gap_hop = FALSE;
 	brain->arrival_time = now;
 	brain->from_waypoint = reached;
 	brain->route_position++;
@@ -2250,7 +2703,7 @@ static void bots_walk(
 	{
 		/* (through a teleporter on the route: at the way out, the next hop; any other, a route from here) */
 		brain->path_valid = FALSE;
-		brain->straight = brain->straight_after = FALSE;
+		brain->straight = brain->straight_after = brain->gap_hop = FALSE;
 		brain->progress_point = position;
 		brain->progress_time = now;
 		if (!(brain->route_position < brain->route_count &&
@@ -2801,7 +3254,7 @@ static boolean bots_head_for(
 	short node;
 	short at;
 
-	brain->straight = brain->straight_after = FALSE;
+	brain->straight = brain->straight_after = brain->gap_hop = FALSE;
 	at = bots_explore(brain, position, now, cost, previous);
 	for (index = 0; index < bots_route.waypoint_count; index++)
 	{
@@ -4484,6 +4937,7 @@ static void bots_vehicle_update(
 				break;
 			}
 			brain->driving = TRUE;
+			brain->vehicle_type = vehicle_bot_type(vehicle_index);
 			brain->driver_aims = !bots_vehicle_has_gunner_seat(vehicle_index);
 			brain->flying = vehicle_bot_type(vehicle_index) == BOTS_VEHICLE_TYPE_ALIEN_FIGHTER;
 			bots_route.driving_ticks++;
@@ -4784,7 +5238,7 @@ static boolean bots_route_to(
 	brain->from_waypoint = at;
 	brain->path_valid = FALSE;
 	brain->wants_search = FALSE;
-	brain->straight = brain->straight_after = FALSE;
+	brain->straight = brain->straight_after = brain->gap_hop = FALSE;
 	brain->hop_closest = REAL_MAX;
 	brain->hop_stalls = 0;
 	brain->hop_deadline = 0;
@@ -4928,7 +5382,7 @@ static boolean bots_goal_walk(
 							brain->from_waypoint = at;
 							brain->path_valid = FALSE;
 							brain->wants_search = FALSE;
-							brain->straight = brain->straight_after = FALSE;
+							brain->straight = brain->straight_after = brain->gap_hop = FALSE;
 							brain->hop_closest = REAL_MAX;
 							brain->hop_stalls = 0;
 							brain->hop_deadline = 0;
@@ -5090,8 +5544,23 @@ static void bots_move_skills(
 	origin.z += BOTS_KNEE_HEIGHT;
 	plane.n.k = 0.f;
 	t_knee = bots_ray(&origin, &vector, unit_index, &plane);
-	/* (looking every 3 ticks; every tick with something close ahead) */
-	brain->probe_time = now + (t_knee < 1.f ? 1 : 3);
+	/* (looking every 3 ticks; every tick with something close ahead, or over a gap) */
+	brain->probe_time = now + (t_knee < 1.f || brain->gap_hop ? 1 : 3);
+	/* (a jump link: at the gap's edge, no ground just ahead, a running jump) */
+	if (brain->gap_hop && !brain->jump && !brain->jump_time && now >= brain->jump_wait_until)
+	{
+		real land;
+
+		if (!bots_height_at(&feet, di * (body.radius + 0.3f), dj * (body.radius + 0.3f), 0.3f, -0.6f, unit_index, &land))
+		{
+			brain->jump = TRUE;
+			brain->jump_crouch = FALSE;
+			brain->jump_time = now;
+			brain->jump_start_z = feet.z;
+			bots_route.gap_jumps++;
+			bots_route.jumps++;
+		}
+	}
 #if defined(OXBOX_TEST_BOTS)
 	if (brain->push_ticks == 8)
 	{
