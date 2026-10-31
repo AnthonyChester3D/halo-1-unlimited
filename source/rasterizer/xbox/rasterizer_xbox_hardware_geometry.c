@@ -69,6 +69,12 @@ symbols in this file:
 
 /* ---------- prototypes */
 
+#ifdef HALO_ANDROID
+/* port: the buffers made here are written once, so Android draws them
+from GL buffers of their own (port/linux/src/d3d8_gl.c) */
+void xgpu_static_buffer_add(const void *resource, unsigned long size, int indices);
+#endif
+
 /* ---------- globals */
 
 /* ---------- public code */
@@ -94,12 +100,10 @@ boolean rasterizer_vertex_buffer_new(
 	void const *vertices,
 	long buffer_size)
 {
-	/* BUG: The January XDK CreateVertexBuffer failure returns without writing
-	 * the output pointer (0x5de713..0x5de719); the original caller then tests
-	 * that uninitialized output (January function +0xb3). This inherited
-	 * failure-path bug is preserved; the Unlock restoration does not add it.
-	 */
-	D3DVertexBuffer *d3d_vertex_buffer;
+	/* port: NULL, the Xbox's bug fixed: a failed CreateVertexBuffer returns
+	without writing it (January 0x5de713..0x5de719), and the test below read
+	it uninitialised */
+	D3DVertexBuffer *d3d_vertex_buffer = NULL;
 	byte *locked_vertices;
 	boolean success;
 	short vertex_size;
@@ -164,6 +168,9 @@ boolean rasterizer_vertex_buffer_new(
 			if (result >= 0)
 			{
 				success = TRUE;
+#ifdef HALO_ANDROID
+				xgpu_static_buffer_add(d3d_vertex_buffer, (unsigned long)buffer_size, 0);
+#endif
 			}
 			else
 			{
@@ -294,6 +301,9 @@ boolean rasterizer_triangle_buffer_new(
 			if (result >= 0)
 			{
 				success = TRUE;
+#ifdef HALO_ANDROID
+				xgpu_static_buffer_add(d3d_index_buffer, (unsigned long)buffer_size, 1);
+#endif
 			}
 			else
 			{

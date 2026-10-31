@@ -577,7 +577,7 @@ static void read_strings(struct reader *reader, const XML_Char **attributes)
 {
 	struct halo_menus *menus = &reader->menus;
 	struct halo_menu_strings strings;
-	struct attribute table[] = { { "name", &strings.name } };
+	struct attribute table[] = { { "name", &strings.name }, { "map", &strings.map } };
 
 	memset(&strings, 0, sizeof(strings));
 	strings.first = menus->string_count;
@@ -594,11 +594,16 @@ static void read_string(struct reader *reader, const XML_Char **attributes, long
 {
 	struct halo_menus *menus = &reader->menus;
 	const char *text = NULL;
-	struct attribute table[] = { { "text", &text } };
+	long map = HALO_MENU_NONE, map_given = 0;
+	struct attribute table[] = { { "text", &text }, { "map", NULL, &map, &map_given } };
 
 	read_attributes(reader, "string", attributes, table, sizeof(table) / sizeof(*table));
 	if (!reader->failed && !text)
 		reader_error(reader, "a <string> needs text");
+	if (!reader->failed && map_given && (map < 0 || !menus->string_lists[owner].map))
+		reader_error(reader, "a <string>'s map= is an index in its <strings>' map list");
+	GROW(reader, menus->string_maps, menus->string_count);
+	menus->string_maps[menus->string_count] = map_given ? map : HALO_MENU_NONE;
 	GROW(reader, menus->strings, menus->string_count);
 	menus->strings[menus->string_count++] = text ? text : "";
 	menus->string_lists[owner].count++;
@@ -1031,6 +1036,15 @@ static struct
 	int failed;
 } art[MAXIMUM_ART];
 static long art_count;
+/* a bit of 4096 for each bitmap's Data (art_filter_bit): a texture whose
+bit is clear is no menu's, found without searching the bitmaps, as the
+renderer asks for each texture it binds */
+static unsigned char art_filter[512];
+
+static unsigned long art_filter_bit(unsigned long data)
+{
+	return (unsigned long)((data * 2654435761UL) & 0xFFFFFFFFUL) >> 20;
+}
 
 void halo_menus_art_register(void const *texture, char const *png)
 {
@@ -1067,6 +1081,7 @@ void halo_menus_art_register(void const *texture, char const *png)
 	memset(&art[index], 0, sizeof(art[index]));
 	art[index].data = data;
 	art[index].png = strdup(png);
+	art_filter[art_filter_bit(data) >> 3] |= (unsigned char)(1 << (art_filter_bit(data) & 7));
 }
 
 void halo_menus_art_forget(void)
@@ -1083,12 +1098,16 @@ void halo_menus_art_forget(void)
 		}
 	}
 	art_count = 0;
+	memset(art_filter, 0, sizeof(art_filter));
 }
 
 unsigned int menu_art_texture(unsigned long data, unsigned long *levels)
 {
+	unsigned long bit = art_filter_bit(data);
 	long index;
 
+	if (!(art_filter[bit >> 3] & 1 << (bit & 7)))
+		return 0;
 	for (index = 0; index < art_count; index++)
 	{
 		if (art[index].data == data)

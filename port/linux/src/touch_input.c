@@ -27,6 +27,9 @@ void host_touch_rumble(unsigned int low, unsigned int high);
 void host_touch_scene(int scene);
 void host_touch_bindings(const int *controls);
 #endif
+#ifdef HALO_ANDROID
+int host_touch_devices(void);
+#endif
 
 /* the game's (port/linux/game/touch_game.c) */
 int touch_game_cinematic_skippable(void);
@@ -169,6 +172,25 @@ void touch_input_menu_read(struct platform_ui_pointer *pointer)
 	pointer->touch = TRUE;
 }
 
+/* port/linux/game/network_chat.c: its on-screen keyboard is up, which
+takes the taps outside the menus */
+extern short network_chat_controller(void);
+
+/* the taps for that keyboard since it last took them, and the latest's
+place (0 to 1 of the window) */
+static int chat_taps;
+static float chat_tap_x, chat_tap_y;
+
+int touch_input_chat_taps(float *x, float *y)
+{
+	int taps = chat_taps;
+
+	*x = chat_tap_x;
+	*y = chat_tap_y;
+	chat_taps = 0;
+	return taps;
+}
+
 void touch_input_gamepad(XINPUT_GAMEPAD *pad)
 {
 	/* outside the menus the touchscreen only skips a cinematic that can be
@@ -179,7 +201,17 @@ void touch_input_gamepad(XINPUT_GAMEPAD *pad)
 
 		menu_setup();
 		touch_menu_read(&menu, &output);
-		if (output.clicks && touch_game_cinematic_skippable())
+		/* (or, while the text chat's on-screen keyboard is up, its keys) */
+		if (output.clicks && (network_chat_controller() == 0))
+		{
+			int width = 0, height = 0;
+
+			platform_video_drawable_size(&width, &height);
+			chat_taps += output.clicks;
+			chat_tap_x = width > 0 ? output.click_x / (float)width : 0.0f;
+			chat_tap_y = height > 0 ? output.click_y / (float)height : 0.0f;
+		}
+		else if (output.clicks && touch_game_cinematic_skippable())
 		{
 			skip_polls = TOUCH_PRESS_POLLS;
 			platform_log("touch: A pressed to skip a cinematic");
@@ -235,6 +267,24 @@ static int touch_controls_setting(void)
 	return setting;
 }
 
+#ifdef HALO_ANDROID
+/* the overlay's devices (port/android/host/host_touch.c's
+HOST_TOUCH_DEVICE_*) */
+#define TOUCH_DEVICE_TOUCHSCREEN 1
+#define TOUCH_DEVICE_CONTROLLER 2
+
+int touch_input_screen_buttons(void)
+{
+	int devices = host_touch_devices();
+	int setting = touch_controls_setting();
+
+	/* (TouchControls.java's shown(), but for the scene) */
+	if (setting == _touch_scene_off || !(devices & TOUCH_DEVICE_TOUCHSCREEN))
+		return FALSE;
+	return setting == _touch_scene_on || !(devices & TOUCH_DEVICE_CONTROLLER);
+}
+#endif
+
 void touch_input_controls(XINPUT_GAMEPAD *pad, int menus)
 {
 	/* SDL's gamepad buttons, in order (SDL_GamepadButton); the first four
@@ -257,9 +307,11 @@ void touch_input_controls(XINPUT_GAMEPAD *pad, int menus)
 	int index;
 
 	/* (the controls show only in a game: not while it starts, at the main
-	menu, in a menu or during a cinematic) */
+	menu, in a menu or during a cinematic; nor while the text chat's
+	on-screen keyboard is up, whose keys the fingers then tap) */
 	host_touch_scene(_touch_scene_known | touch_controls_setting() |
-		(menus || !touch_game_playing() || touch_game_cinematic_playing() ? _touch_scene_menus : 0));
+		(menus || !touch_game_playing() || touch_game_cinematic_playing() || (network_chat_controller() == 0) ?
+			_touch_scene_menus : 0));
 	/* (the profile's mapping, for the buttons' names; only when it changes) */
 	touch_game_button_controls(bindings);
 	if (!bindings_known || memcmp(bindings, bindings_sent, sizeof(bindings)))

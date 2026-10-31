@@ -14,7 +14,12 @@ srcs = sorted(p for p in Path(game['root']).rglob('*.c')
 PC_ONLY = ('custom_edition_', 'tag_validate', 'map_share', 'render_interpolation', 'menu_functions', 'menu_tags',
            # (test build 14: OpenCE's PC extras, all switched off on the Xbox: port/oxbox/oxbox_port_game.c)
            'first_person_legs', 'object_mesh', 'shield_glow', 'shield_color', 'view_fov', 'loose_sounds',
-           'network_votekick', 'network_voice', 'hud_hires_tags', 'object_bounds_cache')
+           'network_votekick', 'network_voice', 'hud_hires_tags', 'object_bounds_cache',
+           # (the OpenCE merge's PC extras, 600 KB of the Xbox's memory: streamer mode's word filter, campaign co-op's
+           # extra vehicles, the CPU structure culling, OpenCE's split-screen bots, tag mods, text chat, a dedicated
+           # server's VPN door: port/oxbox/oxbox_port_game.c answers them as off)
+           'text_filter', 'coop_vehicles', 'structure_culling', 'local_bots', 'bots_combat', 'mod_', 'mods.',
+           'network_chat', 'network_link')
 port_game = sorted(p for p in Path(cfg['game_sources']).glob('*.c') if not p.name.startswith(PC_ONLY))
 B = 'build-xbox'
 X = 'port/oxbox'
@@ -96,10 +101,13 @@ for s in srcs + port_game + [Path('port/third_party/stb_vorbis/stb_vorbis.c')]:
     if flags:
         print('  game_cflags = $game_cflags ' + ' '.join(flags))
 # port units reused as they are, compiled beside our platform.h (they include "platform.h")
-for name in ('halo_linker_common.c', 'msvc_wide.c'):
+# (and the dedicated server's platform side, which compiles to its stubs in a build without a server, HALO_SERVER_BUILD 0
+# (server_mode.h): the game's calls into it answered "no server")
+for name in ('halo_linker_common.c', 'msvc_wide.c', 'server_mode.c', 'server_json.c', 'server_log.c', 'server_master.c',
+             'server_netlist.c', 'server_console.c', 'server_events.c'):
     c = f'{B}/portcopy/{name}'
     print(f'build {c}: copy port/linux/src/{name}')
-    o = obj(name, 'portcopy'); objs.append(o); print(f'build {esc(o)}: cc_plat {c}\n  plat_cflags = $plat_cflags -I{X}/include')
+    o = obj(name, 'portcopy'); objs.append(o); print(f'build {esc(o)}: cc_plat {c}\n  plat_cflags = $plat_cflags -I{X}/include -idirafter port/linux/src')
 for name in ('adler32.c', 'crc32.c', 'inffast.c', 'inflate.c', 'inftrees.c', 'uncompr.c', 'zutil.c'):
     add(f'port/third_party/zlib/{name}', 'zlib', 'zlib')
 for s in sorted(Path('port/third_party/musl-math/src').glob('*.c')):

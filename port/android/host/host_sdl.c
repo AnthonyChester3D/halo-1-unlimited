@@ -212,6 +212,31 @@ int host_sdl_poll_event(void *event)
 	return 1;
 }
 
+/* ---------- text input (Android's keyboard while a name is typed:
+sdl_platform.c). What it types arrives as key events, which the guest reads;
+its text events are not (their text is a pointer) */
+
+int host_sdl_text_input(uint32_t window, int type)
+{
+	SDL_Window *object = handle_get(window, _handle_window);
+	SDL_PropertiesID properties;
+
+	if (!object)
+		return 0;
+	if (type < 0)
+	{
+		SDL_StopTextInput(object);
+		return 0;
+	}
+	properties = SDL_CreateProperties();
+	SDL_SetNumberProperty(properties, SDL_PROP_TEXTINPUT_TYPE_NUMBER, type);
+	SDL_SetBooleanProperty(properties, SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, false);
+	SDL_SetBooleanProperty(properties, SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN, false);
+	SDL_StartTextInputWithProperties(object, properties);
+	SDL_DestroyProperties(properties);
+	return SDL_TextInputActive(object) ? 1 : 0;
+}
+
 /* ---------- gamepads */
 
 int host_sdl_get_gamepads(uint32_t *ids, int capacity)
@@ -499,6 +524,11 @@ void host_sdl_get_clipboard_text(char *buffer, uint32_t size)
 	SDL_free(text);
 }
 
+int host_sdl_open_url(const char *url)
+{
+	return SDL_OpenURL(url) ? 1 : 0;
+}
+
 int host_sdl_show_toast(const char *message, int duration, int gravity, int x, int y)
 {
 	return SDL_ShowAndroidToast(message, duration, gravity, x, y) ? 1 : 0;
@@ -509,4 +539,36 @@ int host_sdl_show_toast(const char *message, int duration, int gravity, int x, i
 int host_sdl_show_simple_message_box(uint32_t flags, const char *title, const char *message)
 {
 	return SDL_ShowSimpleMessageBox((SDL_MessageBoxFlags)flags, title, message, NULL) ? 1 : 0;
+}
+
+/* ---------- a question for the player (the mods at startup: port_mods.c) */
+
+int host_sdl_show_message_box(uint32_t flags, const char *title, const char *message, int default_index,
+	const char *button0, const char *button1, const char *button2)
+{
+	const char *labels[3] = { button0, button1, button2 };
+	SDL_MessageBoxButtonData buttons[3];
+	SDL_MessageBoxData question;
+	int count = 0;
+	int answer = -1;
+	int index;
+
+	for (index = 0; index < 3; index++)
+	{
+		if (!labels[index])
+			continue;
+		buttons[count].flags = index == default_index ?
+			SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT : 0;
+		buttons[count].buttonID = index;
+		buttons[count].text = labels[index];
+		count++;
+	}
+	question.flags = (SDL_MessageBoxFlags)flags;
+	question.window = NULL;
+	question.title = title;
+	question.message = message;
+	question.numbuttons = count;
+	question.buttons = buttons;
+	question.colorScheme = NULL;
+	return SDL_ShowMessageBox(&question, &answer) ? answer : -1;
 }

@@ -100,6 +100,14 @@ the bitmap has exactly two frames; the game's functions choose others.
 
 A list of texts, which widgets show by number. `\n` starts a new line.
 
+A list may name the PC version's list of the same texts with `map=` (its tag,
+`ui\shell\main_menu\main_menu_options`), and each of its texts that is one
+of that list's its number there (`<string text="NEW CAMPAIGN" map="0"/>`).
+Each Custom Edition has that list in its language in its `loc.map`: with
+`display.menu_language = "maps"`, a text with a number is the list's from
+the `loc.map` in `custom_maps`, when it has the list and the number. A text
+without one (the port's own) is always the file's.
+
 ### `<widget>`
 
 A screen, or a part of one. Its children are `<widget>` elements in it, or
@@ -183,7 +191,9 @@ difficulty` are the port's, as the Xbox's take the Xbox's widgets. The
 settings screens': `port settings save` (OK) writes the settings changed
 (config.toml's, or `profile.<field>`: the profile being edited) and applies
 them, `port settings defaults` shows the defaults, `port settings help` the
-help of the row chosen; Controls Setup's `controls ...` bind the keyboard
+help of the row chosen; HDR Calibration's `port hdr calibration` (a
+`<data>`) has the renderer draw the pattern of the row chosen at the values
+shown; Controls Setup's `controls ...` bind the keyboard
 and mouse's controls (Enter takes the next key or button pressed; left and
 right choose which of two; Escape cancels, Delete clears); Change Color's
 `color picker ...` (the Xbox's names) set the profile's colour. The others
@@ -206,3 +216,6 @@ map=...>`), else a placeholder, placed where the PC version's picture is in
 its frame (`--pictures`: only where, not the picture, is read);
 `NON_HANDDRAWN.md` lists both. It needs `rsvg-convert`, Pillow, NumPy and
 SciPy.
+
+Port-owned settings screens can be regenerated without PC tags with
+`python tools/ce_menus.py --settings-only`; new screens are registered for embedding.

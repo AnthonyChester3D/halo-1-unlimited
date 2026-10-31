@@ -1385,8 +1385,6 @@ boolean hmp_browse_has_ctf(char const *level_name)
 	return level_tags(level_name, &t) && (t.gametypes & _gametype_known) && (t.gametypes & _gametype_ctf);
 }
 
-#endif /* HALO_XBOX_TARGET */
-
 
 /* ---------- the lobby's machine names (ui_widget_game_data_input_functions.c) */
 
@@ -1470,3 +1468,5 @@ void hmp_lobby_text_drawn(struct widget_instance *widget, rectangle2d const *bou
 		(unsigned long)(long)(color.blue * 255.0f + 0.5f);
 	draw_bitmap_in_rect(icon_bitmap(6), &icon, NULL /* (all of it) */, NULL, argb, NULL, TRUE);
 }
+
+#endif /* HALO_XBOX_TARGET */

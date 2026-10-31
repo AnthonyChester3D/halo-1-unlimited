@@ -139,6 +139,8 @@ long halo_screen_width(void) { return 640; }
 long halo_screen_commit(void) { return 640; }
 float halo_screen_scale(void) { return 1.0f; }
 void halo_screen_ui_offset(unsigned char centered) { }
+void halo_screen_ui_offset_view(long view_width) { }
+long halo_screen_ui_offset_current(void) { return 0; }
 void halo_screen_anti_alias(short x0, short y0, short x1, short y1) { }
 long halo_shadow_map_scale(void) { return 1; }
 int halo_interpolation_enabled(void) { return 0; }

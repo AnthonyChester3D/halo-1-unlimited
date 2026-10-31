@@ -49,6 +49,12 @@ The host also makes up for scripts written for one player: vitality they
 set on player0 is set on every player (a10's shields), and a Pelican's
 Warthog drop brings more Warthogs in a larger game.
 
+Friendly fire between two players is also each player's own choice
+(network.coop_own_friendly_fire): both must play with it. A client's input
+says its choice, and the host, which alone deals damage, keeps everyone's.
+A player away from the controls for over 70 seconds is hurt by every
+player, whatever either chose, until their next input.
+
 Skipping a cutscene is a vote. Pressing the skip key during a skippable
 cutscene votes (a client sends its vote to the host every tick), and the
 host skips once more than half the machines have voted. The skip itself is
@@ -111,9 +117,14 @@ index and tag, since the map placed them at the same index everywhere.
 #include "sound/sound_definitions.h"
 #include "units/units.h"
 #include "coop_enemies.h"
+#include "coop_pickups.h"
+#include "coop_vehicles.h"
 #include "coop_spectate.h"
 #include "network_coop.h"
 #include "network_distributed.h"
+#include "../src/server_events.h" /* port: port/linux/src/server_events.c */
+#include "../src/server_json.h" /* port: port/linux/src/server_json.c */
+#include "../src/server_log.h" /* port: port/linux/src/server_log.c */
 
 /* ---------- constants */
 
@@ -168,6 +179,9 @@ enum
 	/* the types network_objects.c syncs; the object names sync skips them */
 	NETWORKED_OBJECT_TYPES = _object_mask_biped | _object_mask_vehicle | _object_mask_weapon | _object_mask_equipment,
 
+	/* a player with no input for longer than this is away from the controls:
+	every player's fire hurts them */
+	FRIENDLY_FIRE_AWAY_TICKS = 70 * TICKS_PER_SECOND,
 	/* the host forgets a client's skip vote it hasn't heard again for this long */
 	SKIP_VOTE_HELD_TICKS = TICKS_PER_SECOND,
 	/* After a skip the cutscene stays skippable until the script reaches
@@ -526,6 +540,18 @@ static struct
 	boolean refresh;
 } host_resend;
 
+/* Checkpoints restore player_data, but not the live machines' player
+table. A team wipe may rewind only while both still name the saved team. */
+struct coop_checkpoint_players
+{
+	long players[MAXIMUM_TRACKED_PLAYERS];
+	long machine_players[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_LOCAL_PLAYERS];
+	short count;
+	boolean valid;
+};
+
+static struct coop_checkpoint_players checkpoint_players;
+
 /* client: the host's snap count last seen for each of its groups */
 static struct
 {
@@ -574,6 +600,13 @@ static struct
 static void client_play_presentation(void);
 /* unit_scripting_commands.c */
 void unit_scripting_set_current_vitality_of(long unit_index, real body_vitality, real shield_vitality);
+/* port_config.c */
+int config_boolean(char const *name);
+long config_integer(char const *name);
+char const *config_string(char const *name);
+int halo_server_mode(void);
+/* p2p_lobby.c: chosen visibility, independent of listing transport state */
+int p2p_hosting_listed(void);
 
 /* ---------- private code */
 
@@ -997,6 +1030,17 @@ host_sent_devices[MAXIMUM_OBJECTS_PER_MAP];
 /* host: the structure BSP each client player's machine last said it has,
 NONE before its first input */
 static short host_player_structure_bsps[MAXIMUM_TRACKED_PLAYERS];
+
+/* host: each player's friendly fire, by the player's absolute index: whether
+they chose to play without it, the buttons of their last input, and the ticks
+since an input showed them at the controls */
+static struct friendly_fire_player
+{
+	long player_index;
+	boolean declined;
+	unsigned long control_flags;
+	long idle_ticks;
+} host_friendly_fire[MAXIMUM_TRACKED_PLAYERS];
 
 /* host, each tick: the devices that moved or changed power (and, with the
 resent state, all that ever have) */
@@ -1943,6 +1987,66 @@ static short coop_player_count(
 	return count;
 }
 
+/* host: the player's friendly fire, begun again for a new player in the place
+of one who left (NULL: no such player) */
+static struct friendly_fire_player *host_friendly_fire_player(
+	long player_index)
+{
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+	struct friendly_fire_player *entry;
+
+	if (player_index == NONE || absolute_index >= MAXIMUM_TRACKED_PLAYERS)
+		return NULL;
+	entry = &host_friendly_fire[absolute_index];
+	if (entry->player_index != player_index)
+	{
+		csmemset(entry, 0, sizeof(*entry));
+		entry->player_index = player_index;
+	}
+	return entry;
+}
+
+/* host, each tick: the host's own players' choice, and how long each player
+has been away from the controls. The input the tick ran for them shows them
+there if a button was pressed or let go, or a stick or the trigger is held
+(the game itself turns a player's view and chooses their weapon). */
+static void host_friendly_fire_update(
+	void)
+{
+	long update_number = update_server_ticked_update_number();
+	short action_count = 0;
+	struct player_action const *actions =
+		update_number != NONE ? update_server_update_actions(update_number, &action_count) : NULL;
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	data_iterator_new(&iterator, player_data);
+	while ((player = data_iterator_next(&iterator)) != NULL)
+	{
+		short absolute_index = (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
+		struct friendly_fire_player *entry = host_friendly_fire_player(iterator.datum_index);
+		struct player_action const *action;
+
+		if (!entry)
+			continue;
+		if (player->local_player_index != NONE)
+			entry->declined = !network_coop_own_friendly_fire();
+		if (!actions || absolute_index >= action_count)
+			continue;
+		action = &actions[absolute_index];
+		if (action->control_flags != entry->control_flags || action->throttle.i != 0.0f ||
+			action->throttle.j != 0.0f || action->primary_trigger != 0.0f)
+		{
+			entry->idle_ticks = 0;
+		}
+		else if (entry->idle_ticks <= FRIENDLY_FIRE_AWAY_TICKS)
+		{
+			entry->idle_ticks++;
+		}
+		entry->control_flags = action->control_flags;
+	}
+}
+
 static boolean tag_name_has(
 	long definition_index,
 	char const *text)
@@ -2040,8 +2144,10 @@ void network_coop_new_game(
 	if (host_sent_devices)
 		csmemset(host_sent_devices, 0, MAXIMUM_OBJECTS_PER_MAP * sizeof(struct host_sent_devices_entry));
 	csmemset(host_player_structure_bsps, NONE, sizeof(host_player_structure_bsps));
+	csmemset(host_friendly_fire, 0, sizeof(host_friendly_fire));
 	csmemset(&host_sent_screen_effect, 0, sizeof(host_sent_screen_effect));
 	csmemset(&host_resend, 0, sizeof(host_resend));
+	csmemset(&checkpoint_players, 0, sizeof(checkpoint_players));
 	csmemset(&players_vitality, 0, sizeof(players_vitality));
 	host_attachment_count = 0;
 	host_looping_sound_count = 0;
@@ -2053,6 +2159,116 @@ void network_coop_new_game(
 	skip_vote.cooldown_until = 0;
 	skip_vote.skip_save_written = FALSE;
 	coop_enemies_new_game();
+	coop_pickups_new_game();
+	coop_vehicles_new_game();
+}
+
+/* game_state.c calls only after the checkpoint file was written. This
+metadata stays outside the saved image, as the live machine table does. */
+void network_coop_checkpoint_saved(
+	void)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	short machine_index;
+	short local_player_index;
+
+	checkpoint_players.valid = FALSE;
+	checkpoint_players.count = 0;
+	if (!coop_host())
+		return;
+	csmemset(checkpoint_players.players, NONE, sizeof(checkpoint_players.players));
+	data_iterator_new(&iterator, player_data);
+	while ((player = data_iterator_next(&iterator)) != NULL)
+	{
+		short index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
+
+		if (player->quit_out_of_game)
+			continue;
+		if (!VALID_INDEX(index, MAXIMUM_TRACKED_PLAYERS))
+			return;
+		checkpoint_players.players[index] = iterator.datum_index;
+		checkpoint_players.count++;
+	}
+	for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
+	{
+		long *players = machine_get_player_list(machine_index);
+
+		for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
+			checkpoint_players.machine_players[machine_index][local_player_index] = players[local_player_index];
+	}
+	checkpoint_players.valid = checkpoint_players.count > 0;
+}
+
+static boolean checkpoint_players_match(
+	void)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	short count = 0;
+	short machine_index;
+	short local_player_index;
+
+	if (!checkpoint_players.valid)
+		return FALSE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = data_iterator_next(&iterator)) != NULL)
+	{
+		short index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
+
+		if (player->quit_out_of_game)
+			continue;
+		if (!VALID_INDEX(index, MAXIMUM_TRACKED_PLAYERS) ||
+			checkpoint_players.players[index] != iterator.datum_index)
+		{
+			return FALSE;
+		}
+		count++;
+	}
+	if (count != checkpoint_players.count)
+		return FALSE;
+	for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
+	{
+		long *players = machine_get_player_list(machine_index);
+
+		for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
+		{
+			if (checkpoint_players.machine_players[machine_index][local_player_index] != players[local_player_index])
+				return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+/* Only the host chooses. Unknown values use the automatic policy too;
+PUBLIC is a visibility choice, including games protected by a password. */
+/* whether the game hosted is public, for network.coop_team_wipe "auto": a
+player's listed lobby (p2p_hosting_listed), or a dedicated server's
+server.public with internet play, which its lobby's own flag does not say */
+static boolean network_coop_hosting_public(
+	void)
+{
+	if (halo_server_mode())
+		return config_boolean("server.public") && config_boolean("network.online");
+	return p2p_hosting_listed() != 0;
+}
+
+boolean network_coop_wipe_reverts(
+	void)
+{
+	char const *mode;
+
+	if (!coop_host())
+		return FALSE;
+	mode = config_string("network.coop_team_wipe");
+	if (!strcmp(mode, "respawn") || (strcmp(mode, "revert") && network_coop_hosting_public()))
+		return FALSE;
+	if (!checkpoint_players_match())
+	{
+		error(_error_silent, "co-op: team wipe respawns without a revert: no checkpoint with the current players and machines");
+		return FALSE;
+	}
+	return TRUE;
 }
 
 /* A network game on a campaign scenario with no game engine. Checking the
@@ -2075,6 +2291,191 @@ boolean network_coop_player_collisions(
 	if (!network_coop_active() || !(game = network_game_get_game()))
 		return TRUE;
 	return !TEST_FLAG(game->cooperative_flags, _network_game_cooperative_no_player_collisions_bit);
+}
+
+boolean network_coop_ally_friendly_fire(
+	void)
+{
+	struct network_game *game;
+
+	if (!network_coop_active() || !(game = network_game_get_game()))
+		return TRUE;
+	return !TEST_FLAG(game->cooperative_flags, _network_game_cooperative_no_ally_friendly_fire_bit);
+}
+
+boolean network_coop_own_friendly_fire(
+	void)
+{
+	return config_boolean("network.coop_own_friendly_fire") != 0;
+}
+
+void network_coop_note_player_friendly_fire(
+	long player_index,
+	boolean friendly_fire)
+{
+	struct friendly_fire_player *entry = coop_host() ? host_friendly_fire_player(player_index) : NULL;
+
+	if (entry)
+		entry->declined = !friendly_fire;
+}
+
+boolean network_coop_players_friendly_fire(
+	long attacker_player_index,
+	long victim_player_index)
+{
+	struct friendly_fire_player *attacker, *victim;
+
+	/* (a client deals no damage, and a player's own fire is the game's) */
+	if (!coop_host() || attacker_player_index == victim_player_index)
+		return TRUE;
+	attacker = host_friendly_fire_player(attacker_player_index);
+	victim = host_friendly_fire_player(victim_player_index);
+	if (!attacker || !victim)
+		return TRUE;
+	/* one who is away is hurt whatever either chose; else both must play
+	with it */
+	return victim->idle_ticks > FRIENDLY_FIRE_AWAY_TICKS || (!attacker->declined && !victim->declined);
+}
+
+boolean network_coop_player_away(
+	long player_index)
+{
+	struct friendly_fire_player *entry;
+
+	if (!coop_host())
+		return FALSE;
+	entry = host_friendly_fire_player(player_index);
+	return entry && entry->idle_ticks > FRIENDLY_FIRE_AWAY_TICKS;
+}
+
+boolean network_coop_host_dedicated(
+	void)
+{
+	struct network_game *game;
+
+	if (game_connection() == _game_connection_network_server)
+		return halo_server_mode() != 0;
+	if (!network_coop_active() || !(game = network_game_get_game()))
+		return FALSE;
+	return TEST_FLAG(game->cooperative_flags, _network_game_cooperative_dedicated_bit);
+}
+
+boolean network_coop_bsp_switch_majority(
+	void)
+{
+	return coop_host() && halo_server_mode() && strcmp(config_string("server.coop_bsp_switch"), "anyone") != 0;
+}
+
+long network_coop_bsp_switch_cooldown_ticks(
+	void)
+{
+	long seconds;
+
+	if (!coop_host() || !halo_server_mode())
+		return 0;
+	seconds = config_integer("server.coop_bsp_switch_cooldown_seconds");
+	return seconds < 0 ? 0 : MIN(seconds, 300) * TICKS_PER_SECOND;
+}
+
+/* how often a player waiting at a loading zone is told so */
+#define BSP_SWITCH_WAITING_TICKS (3 * TICKS_PER_SECOND)
+
+void network_coop_tell_bsp_switch_waiting(
+	long player_index,
+	long more,
+	long in,
+	long total)
+{
+	static long told_times[MAXIMUM_TRACKED_PLAYERS];
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+	long machine_index = distributed_player_machine((short)absolute_index);
+	char text[128];
+
+	if (!coop_host() || absolute_index >= MAXIMUM_TRACKED_PLAYERS ||
+		(told_times[absolute_index] && game_time_get() - told_times[absolute_index] < BSP_SWITCH_WAITING_TICKS &&
+			game_time_get() >= told_times[absolute_index]))
+	{
+		return;
+	}
+	told_times[absolute_index] = game_time_get() ? game_time_get() : 1;
+	if (more > 0)
+		snprintf(text, sizeof(text), "Waiting for %ld more player%s to cross (%ld of %ld)", more, more == 1 ? "" : "s",
+			in, total);
+	else
+		snprintf(text, sizeof(text), "The loading zone opens in %ld seconds", total);
+	if (machine_index == NONE)
+	{
+		short local_player_index = player_get(player_index)->local_player_index;
+		wchar_t wide[128];
+		long index;
+
+		if (local_player_index == NONE)
+			return;
+		for (index = 0; text[index] && index < (long)NUMBEROF(wide) - 1; index++)
+			wide[index] = (wchar_t)(unsigned char)text[index];
+		wide[index] = 0;
+		hud_print_message(local_player_index, wide);
+		return;
+	}
+	distributed_send_notice_to_machine(machine_index, text);
+}
+
+void network_coop_note_bsp_switch(
+	short from,
+	short to,
+	long const *player_indices,
+	long count)
+{
+	char names[96] = "", notice[160];
+	struct server_json json;
+	long index;
+
+	if (!coop_host())
+		return;
+	server_json_begin(&json);
+	server_json_object_begin(&json, NULL);
+	server_json_string(&json, "event", "coop_bsp_switch");
+	server_json_integer(&json, "from", from);
+	server_json_integer(&json, "to", to);
+	server_json_array_begin(&json, "players");
+	for (index = 0; index < count; index++)
+	{
+		char name[16] = "";
+
+		if (player_indices[index] == NONE)
+			continue;
+		{
+			struct player_datum *player = player_get(player_indices[index]);
+			long character;
+
+			/* (printable ASCII of the player's name) */
+			for (character = 0; character < (long)NUMBEROF(player->name) && player->name[character] &&
+				character < (long)sizeof(name) - 1; character++)
+			{
+				name[character] = player->name[character] >= 0x20 && player->name[character] < 0x7F ?
+					(char)player->name[character] : '?';
+			}
+			name[character] = 0;
+		}
+		server_json_string(&json, NULL, name);
+		if (strlen(names) + strlen(name) + 3 < sizeof(names))
+		{
+			if (names[0])
+				strcat(names, index == count - 1 ? " and " : ", ");
+			strcat(names, name);
+		}
+	}
+	server_json_array_end(&json);
+	server_json_object_end(&json);
+	if (halo_server_mode())
+	{
+		server_event_add("game", server_json_text(&json));
+		server_log(_server_log_info, "coop", "the loading zone to part %d crossed by %s (from part %d)", to,
+			names[0] ? names : "nobody", from);
+	}
+	server_json_free(&json);
+	snprintf(notice, sizeof(notice), "%s moved the team on", names[0] ? names : "A player");
+	distributed_send_notice(notice);
 }
 
 boolean network_coop_devices_remote(
@@ -2721,7 +3122,10 @@ void network_coop_host_tick(
 		return;
 	host_resend_update();
 	players_vitality_keep();
+	host_friendly_fire_update();
 	coop_enemies_update();
+	coop_pickups_update();
+	coop_vehicles_update();
 	host_count_skip_votes();
 	host_presentation(&message.presentation);
 	send_to_clients(&message, _distributed_message_coop_presentation, 1, sizeof(message.presentation));
@@ -3102,16 +3506,17 @@ static void client_presentation_apply(
 	{
 		client_cinematic_end();
 	}
-	/* Use the host's camera while its scripts control it. Spectate instead
-	when the cutscene leaves the camera with the player, or when the watched
-	teammate rides an AI-flown Pelican (a level's insertion): shots filmed
-	beside a moving Pelican shake against this machine's copy of it. A player
-	with no unit and nobody to watch also gets the host's view, rather than
-	a dead camera at the world origin. */
-	client_host_camera_set((coop_presentation.cinematic_started && presentation->camera_scripted &&
-		!coop_spectate_watching_rider(0)) || coop_spectate_nothing_to_watch(0));
-	if (coop_presentation.cinematic_started)
-		cinematic_show_letterbox(TEST_FLAG(presentation->flags, _presentation_letterbox_bit));
+	/* Use the host's camera while its scripts control it, a dead player's
+	too: the cutscene's camera wins over spectating (shots filmed by a moving
+	Pelican follow this machine's copy of it: camera_object_offset). Spectate
+	instead only when the cutscene leaves the camera with the player. A
+	player with no unit and nobody to watch also gets the host's view,
+	rather than a dead camera at the world origin. */
+	client_host_camera_set((coop_presentation.cinematic_started && presentation->camera_scripted) ||
+		coop_spectate_nothing_to_watch(0));
+	/* (also outside a cinematic: a cutscene that leaves the players their
+	controls shows the bars too) */
+	cinematic_show_letterbox(TEST_FLAG(presentation->flags, _presentation_letterbox_bit));
 	objects_port_set_activating_cluster((short)(presentation->activating_cluster - 1));
 	if (coop_presentation.host_camera)
 	{

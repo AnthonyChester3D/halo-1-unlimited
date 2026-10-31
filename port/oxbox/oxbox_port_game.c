@@ -168,3 +168,161 @@ own, as stock */
 void object_bounds_cache_update(long object_index, void const *center, real radius) { }
 void object_bounds_cache_invalidate(void) { }
 boolean object_bounds_cache_out_of_reach(long object_index, void const *point, real radius) { return 0; }
+
+/* ---------- OpenCE's PC hooks after the merge with OpenCE of Oct 31 2026 (the Server branch), answered as the Xbox
+plays: stock model detail, no remapped controller, no tone mapping, no Custom Edition bitmaps, no server */
+unsigned char const controller_remap_controls[10] = {0, 1, 2, 3, 4, 5, 6, 7, 10, 11};
+int controller_remap_read(short port, unsigned char *buttons) { return 0; }
+int controller_remap_connected(short port) { return 0; }
+unsigned int controller_remap_held(short port) { return 0; }
+unsigned int controller_remap_pressed(short port, unsigned int mask) { return 0; }
+void controller_remap_input_reset(void) { }
+struct bitmap_data;
+boolean custom_edition_bitmap_drawable(struct bitmap_data *bitmap) { return 1; }
+void custom_edition_bitmaps_dispose(void) { }
+boolean custom_edition_loaded_reordered_bitmaps_find(void) { return 0; }
+void d3d8_gl_set_height_fade(float inverse_softness, float height, float offset, float scale) { }
+int halo_chat_touch_layout(void) { return 0; }
+void halo_custom_edition_hud_meter(int active) { }
+int halo_fixed_step(void) { return 0; }
+int halo_linux_debug_camera_input(int *middle, int *up, int *down, float *wheel) { return 0; }
+float halo_model_detail_scale(int level) { return 1.0f; }
+int halo_model_detail_stock(void) { return 1; }
+void halo_screen_tone_map(short x0, short y0, short x1, short y1) { }
+unsigned long network_client_timeout_milliseconds(void) { return 15000; }   /* (OpenCE's default, 15 seconds) */
+struct icon_hud_element_definition;
+boolean hud_hires_button_draw(struct icon_hud_element_definition const *icon, void const *bounds, void const *color)
+{
+	return 0;
+}
+struct bitmap_data const *hud_hires_crosshair_bitmap(struct bitmap_data const *bitmap, short sequence_index,
+	short frame_index)
+{
+	return bitmap;
+}
+boolean object_bounds_cache_missed_by_vector(long object_index, void const *point, void const *vector) { return 0; }
+void network_votekick_draw(short local_player_index) { }
+int map_share_map_downloaded(char const *map_name) { return 0; }
+void master_list_browse(int on) { }
+struct widget_instance;
+unsigned char pc_menu_screen_reads_every_controller(struct widget_instance const *widget) { return 0; }
+unsigned char pc_menu_screen_routes_by_controller(struct widget_instance const *widget) { return 0; }
+int player_link_join_fill(unsigned long host_virtual_address, unsigned char *pass, unsigned char *proof) { return 0; }
+int player_link_join_refused(int rejection_code) { return 0; }
+void player_link_join_reset(void) { }
+int player_link_pass_shown(const unsigned char *pass) { return 0; }
+int player_link_server_check(const unsigned char *pass, const unsigned char *proof, unsigned long virtual_address,
+	char *discord_id, int discord_id_size, char *discord_name, int discord_name_size, unsigned long *created,
+	char *why, int why_size)
+{
+	return 0;
+}
+long port_mods_at(long position) { return -1; }
+long port_mods_count(void) { return 0; }
+/* (an address for the log, whole: the Xbox's log stays on the Xbox) */
+int halo_linux_snprintf(char *buffer, unsigned int count, char const *format, ...);
+const char *log_address_ipv4(unsigned long network_address, unsigned short network_port, char *text, int size)
+{
+	unsigned char const *b = (unsigned char const *)&network_address;
+
+	halo_linux_snprintf(text, (unsigned int)size, "%u.%u.%u.%u:%u", b[0], b[1], b[2], b[3],
+		(unsigned)(unsigned short)((network_port >> 8) | (network_port << 8)));
+	return text;
+}
+const char *log_address(const unsigned char *bytes, int length, int port, char *text, int size)
+{
+	if (length == 4)
+		halo_linux_snprintf(text, (unsigned int)size, "%u.%u.%u.%u:%d", bytes[0], bytes[1], bytes[2], bytes[3], port);
+	else
+		halo_linux_snprintf(text, (unsigned int)size, "(IPv6):%d", port);
+	return text;
+}
+/* (no mods on the Xbox: port/linux/src/port_mods.c) */
+int port_mods_describe(long index, char *text, unsigned long size, const char *map_name) { return 0; }
+long port_mods_file_find(const char *tag_file, const char *map_name) { return -1; }
+const char *port_mods_file_mod(long file) { return ""; }
+long port_mods_file_order(long file) { return 0; }
+const char *port_mods_file_path(long file) { return ""; }
+int port_mods_file_read(long file, unsigned long offset, void *buffer, unsigned long size) { return 0; }
+int port_mods_file_stamp(long file, unsigned long *size, unsigned long stamp[2]) { return 0; }
+int port_mods_list(char *text, unsigned long size) { if (size) text[0] = 0; return 0; }
+long port_mods_played(void) { return 0; }
+long port_mods_scan(void) { return 0; }
+unsigned long port_mods_scans(void) { return 0; }
+void render_interpolation_object_point(long object_index, void *point) { }
+void tag_validate_custom_edition_note_structure_bsp(void *tag_header, unsigned long tag_data_bytes, long bsp_index,
+	void *bsp, unsigned long bsp_bytes, unsigned long bsp_address, char const *map_name)
+{
+}
+
+/* ---------- the OpenCE merge's PC extras (gen_xbox.py's PC_ONLY: 600 KB of the Xbox's memory), each off */
+
+/* streamer mode's word filter (text_filter*.c): everything drawn as it is */
+char const *text_filter_string(char const *string) { return string; }
+unsigned short const *text_filter_unicode(unsigned short const *string) { return string; }
+void text_filter_suspend(void) { }
+void text_filter_resume(void) { }
+
+/* campaign co-op's extra vehicles (coop_vehicles.c): a host of none */
+void coop_vehicles_new_game(void) { }
+void coop_vehicles_register(long object_index, void const *source) { }
+void coop_vehicles_update(void) { }
+void coop_vehicles_before_save(void) { }
+void coop_vehicles_after_load(void) { }
+
+/* the CPU's structure culling (structure_culling.c): the original walk of the visible surfaces, as before the merge */
+boolean structure_culling_traverse(void *structure) { return 0; }
+void structure_culling_initialize(void) { }
+void structure_culling_dispose(void) { }
+void structure_culling_structure_bsp_loaded(void) { }
+void structure_culling_set_tests(long tests) { }
+void structure_culling_debug(boolean enable) { }
+void structure_culling_render_debug(void) { }
+
+/* OpenCE's split-screen bots (local_bots.c; Halo 1 Unlimited's own bots are bots.c): none wanted */
+long bots_wanted_count(void) { return 0; }
+short bots_teams(void) { return 0; }
+int bots_machine_is_bot(long machine_index) { return 0; }
+void bots_network_player(long bot_index, void *player) { }
+void bots_update_actions(void *actions) { }
+void bots_initialize_for_new_map(void) { }
+void bots_dispose_from_old_map(void) { }
+
+/* tag mods (mods.c, mod_*.c; their files are port_mods.c's, also stubbed): none */
+void mods_tags_loaded(char const *map_name) { }
+void mods_tags_unloaded(void) { }
+void mods_reload(void) { }
+void mods_enable(boolean enabled) { }
+void mods_list(void) { }
+boolean mod_bitmaps_contain(void const *bitmap) { return 0; }
+boolean mod_sounds_read(void const *permutation, void *buffer) { return 0; }
+
+/* text chat (network_chat.c): lines from a PC host are passed over; their entries' sizes are kept, so a stream
+holding them still reads */
+unsigned short network_chat_line_entry_size(void) { return 68; }     /* (struct distributed_chat_line) */
+unsigned short network_chat_config_entry_size(void) { return 4; }    /* (struct distributed_chat_config) */
+void network_chat_handle_up(long machine_index, void const *entries, boolean from_stream) { }
+void network_chat_handle_down(void const *entries, boolean from_stream) { }
+void network_chat_handle_config(void const *entries, boolean from_stream) { }
+void network_chat_host_notice(char const *text) { }
+boolean network_chat_name_blocked(unsigned short const *name, short length) { return 0; }
+boolean network_chat_typing(void) { return 0; }
+short network_chat_controller(void) { return -1; }
+void network_chat_note_motion_sensor(short local_player_index, short left, short top) { }
+void network_chat_draw(short local_player_index) { }
+short network_chat_host_mute_minutes(short player_index) { return 0; }
+void network_chat_host_mute(short player_index, boolean mute) { }
+
+/* a dedicated server's VPN door and linked accounts (network_link.c): an Xbox is never one, so nothing refused */
+void network_link_set_machine_pass(long machine_index, void const *pass, void const *proof, char const *name) { }
+void network_link_check_pass(long machine_index, unsigned long address) { }
+short network_link_door(void const *game, long machine_index, unsigned long real_address, boolean local) { return -1; }
+short network_link_address_limit(void const *game, long machine_index, unsigned long real_address, boolean local)
+{
+	return -1;
+}
+boolean network_link_machine_verified(long machine_index, char *discord_id, long discord_id_size, char *discord_name,
+	long discord_name_size)
+{
+	return 0;
+}

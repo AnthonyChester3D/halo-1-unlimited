@@ -55,6 +55,8 @@ float floorf(float x) { return (float)round_with(x, 0x0400); }
 float ceilf(float x) { return (float)round_with(x, 0x0800); }
 float truncf(float x) { return (float)round_with(x, 0x0C00); }
 
+/* (halo_math.h's fmod is halo_fmod, whose own fallback calls this one) */
+#undef fmod
 double fmod(double x, double y)
 {
 	double r;
@@ -64,6 +66,8 @@ double fmod(double x, double y)
 }
 
 float fmodf(float x, float y) { return (float)fmod(x, y); }
+float cosf(float x) { return (float)cos(x); }
+float sinf(float x) { return (float)sin(x); }
 
 double scalbn(double x, int n)
 {

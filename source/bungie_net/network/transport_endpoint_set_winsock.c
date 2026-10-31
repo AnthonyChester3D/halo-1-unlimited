@@ -253,9 +253,11 @@ void transport_pop_key(
 	return;
 }
 
-short transport_initialize(
+long transport_initialize(
 	void)
 {
+	long result = _transport_error_none;
+
 #if defined(OXBOX_NET_LWIP)
 	/* oxbox: the online builds' XNet is our own (port/oxbox/net/oxbox_lwip_ws.c, on lwIP): XNetStartup below starts
 	it, and XNetGetTitleXnAddr never says "pending" (the address comes when DHCP, or the link-local fallback, gives
@@ -266,17 +268,17 @@ short transport_initialize(
 		WSADATA info = { 0 };
 		XNetStartupParams startup_params = { 0 };
 		DWORD link_status;
-		DWORD address_status;
-		unsigned long deadline;
 		FILE *bypass_file;
-		short wsa_error;
 
 		startup_params.cfgSizeOfStruct = sizeof(startup_params);
+		startup_params.cfgFlags = 0;
 		startup_params.cfgPrivatePoolSizeInPages = 24;
 		startup_params.cfgEnetReceiveQueueLength = 8;
 		startup_params.cfgIpFragMaxSimultaneous = 4;
 		startup_params.cfgIpFragMaxPacketDiv256 = 8;
 		startup_params.cfgSockMaxSockets = 128;
+		startup_params.cfgSockDefaultRecvBufsizeInK = 0;
+		startup_params.cfgSockDefaultSendBufsizeInK = 0;
 		startup_params.cfgKeyRegMax = 1;
 		startup_params.cfgSecRegMax = 32;
 #ifdef HALO_XBOX_TARGET
@@ -301,6 +303,9 @@ short transport_initialize(
 			(link_status & XNET_ETHERNET_LINK_FULL_DUPLEX) ? " in full-duplex mode" : "",
 			(link_status & XNET_ETHERNET_LINK_HALF_DUPLEX) ? " in half-duplex mode" : "");
 
+		/* January stores these two fields a second time here. */
+		startup_params.cfgSizeOfStruct = sizeof(startup_params);
+		startup_params.cfgFlags = 0;
 #if defined(OXBOX_STRIP)
 		/* oxbox: a development kit's switch (XNET_STARTUP_BYPASS_SECURITY), not retail's */
 		bypass_file = NULL;
@@ -327,49 +332,65 @@ short transport_initialize(
 #endif
 
 		if (XNetStartup(&startup_params) != 0)
-			return _transport_error_not_initialized;
-
-		wsa_error = WSAStartup(MAKEWORD(2, 0), &info);
-		if (wsa_error != 0)
 		{
-			XNetCleanup();
-			winsock_error_to_string(wsa_error);
-			return _transport_error_not_initialized;
+			result = _transport_error_not_initialized;
 		}
-
-		deadline = system_milliseconds() + 10000;
-		do
+		else
 		{
-			address_status = XNetGetTitleXnAddr(&global_address);
-			if (system_milliseconds() > deadline ||
-				address_status == XNET_GET_XNADDR_NONE)
+			short wsa_error = WSAStartup(MAKEWORD(2, 0), &info);
+
+			if (wsa_error != 0)
 			{
-#if defined(OXBOX_NET_TEST)
+				XNetCleanup();
+				winsock_error_to_string(wsa_error);
+
+				return _transport_error_not_initialized;
+			}
+			else
+			{
+				unsigned long deadline = system_milliseconds() + 10000;
+				DWORD address_status;
+
+				do
 				{
+					address_status = XNetGetTitleXnAddr(&global_address);
+					if (system_milliseconds() > deadline)
+					{
+						address_status = XNET_GET_XNADDR_NONE;
+						break;
+					}
+				}
+				while (address_status == XNET_GET_XNADDR_PENDING);
+
+				if (address_status == XNET_GET_XNADDR_NONE)
+				{
+#if defined(OXBOX_NET_TEST)
 					void oxbox_net_test_no_network(unsigned long status);
 
 					oxbox_net_test_no_network(address_status);
-				}
 #endif
-				WSACleanup();
-				XNetCleanup();
-				return _transport_error_not_initialized;
+					WSACleanup();
+					XNetCleanup();
+					result = _transport_error_not_initialized;
+				}
+				else
+				{
+					XNetRandom(global_nonce, sizeof(global_nonce));
+					result = _transport_error_none;
+					transport_initialized = TRUE;
+#if defined(OXBOX_NET_TEST)
+					{
+						void oxbox_net_test_start(void);
+
+						oxbox_net_test_start();
+					}
+#endif
+				}
 			}
 		}
-		while (address_status == XNET_GET_XNADDR_PENDING);
-
-		XNetRandom(global_nonce, sizeof(global_nonce));
-		transport_initialized = TRUE;
-#if defined(OXBOX_NET_TEST)
-		{
-			void oxbox_net_test_start(void);
-
-			oxbox_net_test_start();
-		}
-#endif
 	}
 
-	return _transport_error_none;
+	return result;
 }
 
 void transport_client_stop(
@@ -519,18 +540,25 @@ static int __cdecl poll_ep_array_compare_proc(
 	void const *a,
 	void const *b)
 {
-	struct transport_endpoint *endpoint_a = *(struct transport_endpoint *const *)a;
-	struct transport_endpoint *endpoint_b = *(struct transport_endpoint *const *)b;
+	int result;
 
-	if (!endpoint_a && endpoint_b)
+	a = *(struct transport_endpoint const *const *)a;
+	b = *(struct transport_endpoint const *const *)b;
+
+	if (!a && b)
 	{
-		return 1;
+		result = 1;
 	}
-	else if (endpoint_a && !endpoint_b)
+	else if (a && !b)
 	{
-		return -1;
+		result = -1;
 	}
-	return 0;
+	else
+	{
+		result = 0;
+	}
+
+	return result;
 }
 
 /* ---------- public code */

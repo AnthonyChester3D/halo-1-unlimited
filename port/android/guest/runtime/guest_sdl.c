@@ -82,6 +82,13 @@ char *SDL_GetClipboardText(void)
 	return strdup(buffer);
 }
 
+/* ---------- the browser (a Discord link's page: player_link.c) */
+
+bool SDL_OpenURL(const char *url)
+{
+	return host_sdl_open_url(url) != 0;
+}
+
 bool SDL_ShowAndroidToast(const char *message, int duration, int gravity, int xoffset, int yoffset)
 {
 	return host_sdl_show_toast(message, duration, gravity, xoffset, yoffset) != 0;
@@ -93,6 +100,31 @@ bool SDL_ShowSimpleMessageBox(SDL_MessageBoxFlags flags, const char *title, cons
 {
 	(void)window;
 	return host_sdl_show_simple_message_box((unsigned int)flags, title, message) != 0;
+}
+
+/* (up to three buttons, their ids those of the guest's) */
+bool SDL_ShowMessageBox(const SDL_MessageBoxData *data, int *buttonid)
+{
+	const char *labels[3] = { NULL, NULL, NULL };
+	int default_index = -1;
+	int index;
+	int chosen;
+
+	if (!data || data->numbuttons < 1 || data->numbuttons > 3)
+		return false;
+	for (index = 0; index < data->numbuttons; index++)
+	{
+		labels[index] = data->buttons[index].text;
+		if (data->buttons[index].flags & SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT)
+			default_index = index;
+	}
+	chosen = host_sdl_show_message_box((unsigned int)data->flags, data->title, data->message, default_index,
+		labels[0], labels[1], labels[2]);
+	if (chosen < 0 || chosen >= data->numbuttons)
+		return false;
+	if (buttonid)
+		*buttonid = data->buttons[chosen].buttonID;
+	return true;
 }
 
 void SDL_Delay(Uint32 milliseconds)

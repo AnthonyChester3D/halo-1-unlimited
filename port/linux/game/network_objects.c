@@ -23,8 +23,8 @@ same datum index (identifier and all), so that any message can name one:
   bodies), each client those near its players every tick and those further
   less often, with each as it comes to rest, and to every client a few of
   those at rest, round the lot; a client moves its copies there, a little
-  off half of the way each tick, further (or come to rest) drawn gliding from
-  where they were rather than jumping (render_interpolation.c).
+  off half of the way each tick, further (or come to rest) drawn gliding
+  from where they were rather than jumping (render_interpolation.c).
   A client's own player's vehicle is its own, as its own player's unit is:
   it sends the host where it drives it at which of its ticks, which the host
   takes within what the vehicle can have moved at its next tick, and tells
@@ -145,15 +145,12 @@ enum
 	/* ... those of the kinds the host has, made since the last tick, checked
 	(more, and all of them are) */
 	MAXIMUM_CLIENT_NEW_OBJECTS = 1024,
-#if defined(OXBOX_CROSSPLAY)
 	/* ... the host's inventories it could not apply in full yet, one for
 	each unit that carries anything (a vehicle is a unit, its weapons are
 	objects) whose objects the stream has not brought: most of them while
 	it joins, few after. Room for as many as there are players; past that
-	the oldest goes, and its unit waits for the host's next inventory of it
-	(OpenCE 667c2f29, 07c8430b) */
+	the oldest goes, and its unit waits for the host's next inventory of it */
 	MAXIMUM_CLIENT_RETRIED_INVENTORIES = MAXIMUM_TRACKED_PLAYERS,
-#endif
 	MAXIMUM_ENTRIES_PER_MESSAGE = 64,
 	/* the objects the host has at the same indices everywhere */
 	NETWORKED_OBJECT_TYPES =
@@ -213,6 +210,20 @@ fourth (as it sends players, network_distributed.c) */
 #define MIDDLE_OBJECT_DISTANCE 60.0f
 #define FAR_OBJECT_DISTANCE 120.0f
 
+/* a step of an unsteered vehicle's path (world units a tick). Further than
+this in one tick, the host moved it some other way (a teleport), which is
+not carried on as the path */
+#define UNSTEERED_PATH_STEP 4.0f
+/* the most ticks an unsteered vehicle's glide between samples covers: twice
+the longest the host leaves between a moving object's states. A record left
+from before (driven since, or at rest for long) glides no slower, and a jump
+is judged against no more than this. */
+#define UNSTEERED_PATH_MAXIMUM_TICKS (2 * MAXIMUM_OBJECT_PERIOD_TICKS)
+/* the most ticks an unsteered vehicle goes on along its path past the newest
+sample, when the next is late (the longest the host leaves between a moving
+object's states); as long again it takes to come back to the newest, if
+none came (the host's has stopped) */
+#define UNSTEERED_PATH_LATE_TICKS MAXIMUM_OBJECT_PERIOD_TICKS
 /* world units */
 #define REMOTE_OBJECT_TOLERANCE 0.05f
 /* ... and the cosine of the angle (an object at rest turned) */
@@ -430,6 +441,34 @@ static struct
 	long object_index;
 	long time;
 } objects_client_dead[MAXIMUM_TRACKED_OBJECTS];
+#if defined(HALO_XBOX_TARGET)
+/* (the Xbox: a slot by the absolute index's low bits, the object index the
+check, as for an object the client hadn't had: 175 KB less than one per
+object; two unsteered vehicles that share a slot start their glides again) */
+#define UNSTEERED_PATH_SLOTS 256
+#define UNSTEERED_PATH(absolute_index) objects_client_unsteered_path[(absolute_index) & (UNSTEERED_PATH_SLOTS - 1)]
+#else
+#define UNSTEERED_PATH_SLOTS MAXIMUM_TRACKED_OBJECTS
+#define UNSTEERED_PATH(absolute_index) objects_client_unsteered_path[absolute_index]
+#endif
+/* ... the host samples an unsteered vehicle is drawn between: where it was,
+where the host has it now, the ticks the glide between them takes, the host's
+tick of the newest, and the path's velocity between the host's last two
+(distributed_client_note_unsteered_path) */
+static struct
+{
+	long object_index;
+	long time;
+	long host_time;
+	real interval;
+	real_vector3d velocity;
+	real_point3d previous_position;
+	real_point3d latest_position;
+	real_vector3d previous_forward;
+	real_vector3d previous_up;
+	real_vector3d latest_forward;
+	real_vector3d latest_up;
+} objects_client_unsteered_path[UNSTEERED_PATH_SLOTS];
 /* ... its own objects made since the last tick (of any kind: those of the
 kinds the host has go), and whether to look through all the objects
 instead (the host's all told, too many made, or made where it cannot say) */
@@ -469,7 +508,6 @@ static struct distributed_picked_up_weapon
 	long definition_index;
 	long time;
 } objects_client_picked_up_weapons[MAXIMUM_LOCAL_PLAYERS];
-#if defined(OXBOX_CROSSPLAY)
 /* ... the host's inventories that named a unit or a weapon not here yet. An
 inventory goes as a datagram, and units and weapons are made on the stream,
 which can trail it, so a player just spawned can be told what it carries
@@ -484,7 +522,6 @@ static struct distributed_retried_inventory
 	long time;
 } objects_client_retried_inventories[MAXIMUM_CLIENT_RETRIED_INVENTORIES];
 static short objects_client_retried_inventory_count;
-#endif
 /* ... whether it failed to make one of the host's objects since it last
 asked for them (it says so when it asks again) */
 static boolean objects_client_ask_again;
@@ -633,17 +670,14 @@ boolean network_objects_may_delete(
 		objects_client_has[absolute_index] != object_index;
 }
 
-#if defined(OXBOX_CROSSPLAY)
-/* (OpenCE 956387d8) whether a client is in distributed_client_delete:
-deleting an object on the host's word, or one of its own the host never told
-it of; a flag or ball among them, which the game itself never deletes
-(objects.c, weapons.c) */
+/* whether a client is in distributed_client_delete: deleting an object on
+the host's word, or one of its own the host never told it of; a flag or
+ball among them, which the game itself never deletes (objects.c, weapons.c) */
 boolean network_objects_client_deleting(
 	void)
 {
 	return objects_client_deleting;
 }
-#endif
 
 /* the map's objects placed (game.c): a client's own come from the upper
 half from now on */
@@ -2292,14 +2326,12 @@ static void distributed_client_delete(
 		return;
 	if (TEST_FLAG(_object_mask_item, object->object.type))
 		distributed_client_release_item(object_index, TRUE);
-#if defined(OXBOX_CROSSPLAY)
-	/* (a flag or ball, which the game never deletes but a host may: a
-	release build's assertions do not stop it. Out of its carrier's hands
-	above, as any weapon; and the goal its game type shows at it goes too.
-	OpenCE 956387d8) */
+	/* (a flag or ball, which the game never deletes but a host has, for a
+	reason not known: the client follows its word all the same. Out of its
+	carrier's hands above, as any weapon; and the goal its game type shows
+	at it goes too) */
 	if (object->object.type == _object_type_weapon && game_engine_running() && weapon_is_flag(object_index))
 		game_engine_objective_weapon_deleted(object_index);
-#endif
 	if (TEST_FLAG(_object_mask_unit, object->object.type))
 	{
 		struct unit_datum *unit = unit_get(object_index);
@@ -2694,6 +2726,9 @@ static boolean distributed_client_correct_own_vehicle(
 	{
 		return FALSE;
 	}
+	/* (driving: the round trip as the host has its vehicle, the latency
+	meter's) */
+	distributed_note_own_round_trip(time);
 	{
 		struct distributed_own_vehicle const *own =
 			&objects_client_own_vehicles[local_player_index][time & (OWN_VEHICLE_POSITION_TICKS - 1)];
@@ -2769,9 +2804,138 @@ static void distributed_client_dead_vehicle(
 	object_damage_update(object_index);
 }
 
+/* the facing a fraction t of the way from one sample to the next */
+static void unsteered_blend_facing(
+	real_vector3d const *forward0,
+	real_vector3d const *up0,
+	real_vector3d const *forward1,
+	real_vector3d const *up1,
+	real t,
+	real_vector3d *forward,
+	real_vector3d *up)
+{
+	real_matrix4x3 from;
+	real_matrix4x3 to;
+	real_matrix4x3 blended;
+	real_quaternion rotation0;
+	real_quaternion rotation1;
+	real_quaternion rotation;
+
+	matrix4x3_rotation_from_vectors(&from, forward0, up0);
+	matrix4x3_rotation_from_vectors(&to, forward1, up1);
+	matrix4x3_rotation_to_quaternion(&from, &rotation0);
+	matrix4x3_rotation_to_quaternion(&to, &rotation1);
+	quaternions_interpolate_and_normalize(&rotation0, &rotation1, t, &rotation);
+	matrix4x3_rotation_from_quaternion(&blended, &rotation);
+	*forward = blended.forward;
+	*up = blended.up;
+}
+
+/* Client: the next host sample of an unsteered vehicle, of the host's tick
+host_time. The path's velocity is the host's last two samples' difference
+over the host's ticks between them (not when they arrived, which a late or
+bunched message would make uneven). The picture moves from where the vehicle
+is to the sample at that speed, so it keeps its pace whether it was behind or
+gone on past the last sample, and goes on along the path if the next sample
+is late (distributed_client_carry_unsteered_vehicles). One the host has at
+rest stops at the sample. The host's physics velocity is not used: a lifepod
+swings about the path, and a Pelican's spin flaps its fins. A jump further
+than a step of the path is taken whole. */
+static void distributed_client_note_unsteered_path(
+	long object_index,
+	real_point3d const *host_position,
+	real_vector3d const *host_forward,
+	real_vector3d const *host_up,
+	long host_time,
+	boolean host_at_rest)
+{
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+	struct object_datum *object;
+	long now;
+	long since;
+	boolean same;
+	real_vector3d step;
+	real limit;
+	real_vector3d velocity;
+	real speed_squared;
+	real interval;
+
+	/* (rest uses this glide too: a late sample holds at the newest) */
+	if (absolute_index < 0 || absolute_index >= MAXIMUM_TRACKED_OBJECTS ||
+		!host_position || !host_forward || !host_up)
+	{
+		return;
+	}
+	object = object_get(object_index);
+	now = game_time_get();
+	same = UNSTEERED_PATH(absolute_index).object_index == object_index;
+	/* (an older sample than the newest, or the same tick's again) */
+	if (same && host_time - UNSTEERED_PATH(absolute_index).host_time < 1)
+		return;
+	since = same ? host_time - UNSTEERED_PATH(absolute_index).host_time : 0;
+	if (since < 1)
+		since = 1;
+	if (since > UNSTEERED_PATH_MAXIMUM_TICKS)
+		since = UNSTEERED_PATH_MAXIMUM_TICKS;
+	step.i = host_position->x - object->object.position.x;
+	step.j = host_position->y - object->object.position.y;
+	step.k = host_position->z - object->object.position.z;
+	limit = (real)since * UNSTEERED_PATH_STEP;
+	/* (a teleport is not a step of the path: leave it where the host put it) */
+	if (!same || !(step.i * step.i + step.j * step.j + step.k * step.k <= limit * limit))
+	{
+		UNSTEERED_PATH(absolute_index).object_index = object_index;
+		UNSTEERED_PATH(absolute_index).time = now;
+		UNSTEERED_PATH(absolute_index).host_time = host_time;
+		UNSTEERED_PATH(absolute_index).interval = 1.0f;
+		UNSTEERED_PATH(absolute_index).velocity = *global_zero_vector3d;
+		UNSTEERED_PATH(absolute_index).previous_position = *host_position;
+		UNSTEERED_PATH(absolute_index).latest_position = *host_position;
+		UNSTEERED_PATH(absolute_index).previous_forward = *host_forward;
+		UNSTEERED_PATH(absolute_index).previous_up = *host_up;
+		UNSTEERED_PATH(absolute_index).latest_forward = *host_forward;
+		UNSTEERED_PATH(absolute_index).latest_up = *host_up;
+		object->object.translational_velocity = *global_zero_vector3d;
+		object->object.angular_velocity = *global_zero_vector3d;
+		object_set_position(object_index, host_position, host_forward, host_up);
+		return;
+	}
+	/* the path's velocity, sample to sample on the host's clock */
+	velocity.i = (host_position->x - UNSTEERED_PATH(absolute_index).latest_position.x) / (real)since;
+	velocity.j = (host_position->y - UNSTEERED_PATH(absolute_index).latest_position.y) / (real)since;
+	velocity.k = (host_position->z - UNSTEERED_PATH(absolute_index).latest_position.z) / (real)since;
+	if (host_at_rest)
+		velocity = *global_zero_vector3d;
+	speed_squared = velocity.i * velocity.i + velocity.j * velocity.j + velocity.k * velocity.k;
+	/* the glide to the sample at that speed: no faster than twice it, nor
+	slower than half (behind or ahead of the path by more, it closes the
+	distance); one at rest over the samples' gap */
+	interval = (real)since;
+	if (speed_squared > 1.0e-6f)
+	{
+		interval = (real)sqrt((double)((step.i * step.i + step.j * step.j + step.k * step.k) / speed_squared));
+		if (!(interval >= 0.5f * (real)since))
+			interval = 0.5f * (real)since;
+		if (interval > 2.0f * (real)since)
+			interval = 2.0f * (real)since;
+	}
+	UNSTEERED_PATH(absolute_index).previous_position = object->object.position;
+	UNSTEERED_PATH(absolute_index).previous_forward = object->object.forward;
+	UNSTEERED_PATH(absolute_index).previous_up = object->object.up;
+	UNSTEERED_PATH(absolute_index).latest_position = *host_position;
+	UNSTEERED_PATH(absolute_index).latest_forward = *host_forward;
+	UNSTEERED_PATH(absolute_index).latest_up = *host_up;
+	UNSTEERED_PATH(absolute_index).interval = interval;
+	UNSTEERED_PATH(absolute_index).velocity = velocity;
+	UNSTEERED_PATH(absolute_index).time = now;
+	UNSTEERED_PATH(absolute_index).host_time = host_time;
+	UNSTEERED_PATH(absolute_index).object_index = object_index;
+}
+
 void network_objects_handle_states(
 	void const *entries,
-	short count)
+	short count,
+	long host_time)
 {
 	struct distributed_object_state const *states = (struct distributed_object_state const *)entries;
 	short index;
@@ -2866,6 +3030,13 @@ void network_objects_handle_states(
 		if (!own_vehicle)
 			SET_FLAG(object->object.flags, _object_at_rest_bit, at_rest);
 		distributed_body_set_at_rest(state->object_index, at_rest);
+		/* (no snap onto the host: the carry moves it across the gap) */
+		if (distributed_vehicle_unsteered(state->object_index))
+		{
+			distributed_client_note_unsteered_path(state->object_index, &state->position, &forward, &up,
+				host_time, TEST_FLAG(state->flags, _distributed_object_at_rest_bit));
+			continue;
+		}
 		dx = state->position.x - object->object.position.x;
 		dy = state->position.y - object->object.position.y;
 		dz = state->position.z - object->object.position.z;
@@ -2976,7 +3147,6 @@ static boolean distributed_client_own_settled(
 	return game_time_get() - time > (long)ceil(round_trip) + INVENTORY_INTERVAL_TICKS + OWN_INVENTORY_MARGIN_TICKS;
 }
 
-#if defined(OXBOX_CROSSPLAY)
 /* whether the weapon the host has in a slot is here (none always is) */
 static boolean distributed_client_weapon_here(
 	long weapon_index)
@@ -3050,7 +3220,6 @@ static void distributed_client_forget_retried_inventory(
 		}
 	}
 }
-#endif
 
 /* the unit carries what the host's does */
 static void distributed_client_apply_inventory(
@@ -3064,14 +3233,12 @@ static void distributed_client_apply_inventory(
 #if defined(HALO_XBOX_TARGET)
 	objects_client_inventory_counts.entries++;
 #endif
-#if defined(OXBOX_CROSSPLAY)
 	/* (what is here of it now, and the rest once it is: the newest of the
-	unit's is the one kept. OpenCE 667c2f29, 07c8430b) */
+	unit's is the one kept) */
 	if (distributed_client_inventory_whole(inventory))
 		distributed_client_forget_retried_inventory(inventory->unit_index);
 	else
 		distributed_client_retry_inventory(inventory);
-#endif
 	if (!network_objects_client_has(inventory->unit_index) ||
 		!object_try_and_get_and_verify_type(inventory->unit_index, _object_mask_unit))
 	{
@@ -3134,8 +3301,7 @@ static void distributed_client_apply_inventory(
 		if (weapon_index == wanted_index)
 			continue;
 		/* (not here yet: as it is, until it is) */
-		if (wanted_index != NONE &&
-			(!network_objects_client_has(wanted_index) || !object_try_and_get_and_verify_type(wanted_index, _object_mask_weapon)))
+		if (!distributed_client_weapon_here(wanted_index))
 		{
 #if defined(HALO_XBOX_TARGET)
 			/* (oxbox: logged when one of its own players' weapons is still not here a second on) */
@@ -3230,6 +3396,27 @@ static void distributed_client_apply_inventory(
 				distributed_client_own_settled(own->grenade_times[grenade_type]))
 			{
 				unit->unit.grenade_counts[grenade_type] = count;
+			}
+		}
+		/* an AI unit's grenade type: the host's actor chose it as it gave the
+		unit its grenades (unit_add_grenade_type_to_inventory), and a client
+		has no actors. Without one, the throws the host's control starts
+		never begin here (unit_throw_grenade_begin), and the grenades, whose
+		blasts the host's damage brings, are never seen. The type it carries
+		is it; not changed in the middle of a throw */
+		if (!own && unit->unit.player_index == NONE &&
+			unit->unit.grenade_throw_state == _unit_grenade_throw_idle &&
+			(unit->unit.current_grenade_index == NONE ||
+				unit->unit.grenade_counts[unit->unit.current_grenade_index] == 0))
+		{
+			for (grenade_type = 0; grenade_type < NUMBER_OF_UNIT_GRENADE_TYPES; grenade_type++)
+			{
+				if (unit->unit.grenade_counts[grenade_type] > 0)
+				{
+					unit->unit.current_grenade_index = grenade_type;
+					unit->unit.desired_grenade_index = grenade_type;
+					break;
+				}
 			}
 		}
 	}
@@ -3487,10 +3674,16 @@ static void distributed_client_remove_own_objects(
 	objects_client_new_object_count = 0;
 }
 
-/* Client: keeps each AI-driven vehicle (such as a Pelican on its flight
-path) moving at the velocity the host last sent. These vehicles are held at
-rest here, and a distant one is only updated every few ticks, so otherwise
-it would stop between updates and jump on each one. */
+/* Client: moves each unsteered vehicle from where it was to the host's newest
+sample (distributed_client_note_unsteered_path). Past that, with no newer
+sample, it goes on at the path's velocity for UNSTEERED_PATH_LATE_TICKS (a
+late sample then finds it moving), then comes back to the newest sample over
+as long and holds there (the host's has stopped). A Pelican its pilot flies,
+and a recording's lifepod. Its velocity is its path's while it moves on, for
+what reads it (the engine's pitch, the wheels' turn, a passenger who gets
+out), and none once it comes back or holds; its spin is none (the host's
+flaps a Pelican's fins). One already holding at the newest sample is not
+placed again. */
 static void distributed_client_carry_unsteered_vehicles(
 	void)
 {
@@ -3500,41 +3693,99 @@ static void distributed_client_carry_unsteered_vehicles(
 	object_iterator_new(&iterator, _object_mask_vehicle, 0);
 	while ((object = object_iterator_next(&iterator)) != NULL)
 	{
-		real_vector3d const *velocity = &object->object.translational_velocity;
-		real_vector3d axis = object->object.angular_velocity;
-		real_vector3d forward = object->object.forward;
-		real_vector3d up = object->object.up;
+		long absolute_index;
+		long since;
+		real interval;
+		real alpha;
+		real late;
 		real_point3d position;
-		real angle;
+		real_vector3d forward;
+		real_vector3d up;
+		real_vector3d velocity;
 
-		if (object->object.parent_object_index != NONE || unit_get(iterator.index)->unit.driver_object_index == NONE ||
-			!distributed_vehicle_unsteered(iterator.index))
+		if (object->object.parent_object_index != NONE || !distributed_vehicle_unsteered(iterator.index))
+			continue;
+		absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.index);
+		if (absolute_index < 0 || absolute_index >= MAXIMUM_TRACKED_OBJECTS ||
+			UNSTEERED_PATH(absolute_index).object_index != iterator.index)
 		{
 			continue;
 		}
-		angle = normalize3d(&axis);
-		if (velocity->i == 0.0f && velocity->j == 0.0f && velocity->k == 0.0f && angle == 0.0f)
-			continue;
-		position.x = object->object.position.x + velocity->i;
-		position.y = object->object.position.y + velocity->j;
-		position.z = object->object.position.z + velocity->k;
-		/* rotate the same way physics.c applies angular velocity */
-		if (angle != 0.0f)
+		since = game_time_get() - UNSTEERED_PATH(absolute_index).time;
+		interval = UNSTEERED_PATH(absolute_index).interval;
+		if (!(interval >= 0.5f))
+			interval = 0.5f;
+		if (since < 0)
+			since = 0;
+		alpha = (real)since / interval;
+		if (alpha > 1.0f)
+			alpha = 1.0f;
+		/* past the newest sample: on along the path, then back to it */
+		late = (real)since - interval;
+		if (late > 2.0f * (real)UNSTEERED_PATH_LATE_TICKS)
+			late = 0.0f;
+		else if (late > (real)UNSTEERED_PATH_LATE_TICKS)
+			late = 2.0f * (real)UNSTEERED_PATH_LATE_TICKS - late;
+		if (!(late > 0.0f))
+			late = 0.0f;
+		velocity = UNSTEERED_PATH(absolute_index).velocity;
+		if (alpha >= 1.0f && late == 0.0f &&
+			object->object.position.x == UNSTEERED_PATH(absolute_index).latest_position.x &&
+			object->object.position.y == UNSTEERED_PATH(absolute_index).latest_position.y &&
+			object->object.position.z == UNSTEERED_PATH(absolute_index).latest_position.z)
 		{
-			real_matrix4x3 rotation;
-
-			matrix4x3_rotation_from_axis_and_angle(&rotation, &axis, (real)sin(angle), (real)cos(angle));
-			matrix4x3_transform_vector(&rotation, &object->object.forward, &forward);
-			matrix4x3_transform_vector(&rotation, &object->object.up, &up);
+			object->object.translational_velocity = *global_zero_vector3d;
+			object->object.angular_velocity = *global_zero_vector3d;
+			continue;
 		}
-		if (distributed_transform_valid(&position, &forward, &up, NULL, NULL, &forward, &up))
-			object_set_position(iterator.index, &position, &forward, &up);
+		position.x = UNSTEERED_PATH(absolute_index).previous_position.x +
+			(UNSTEERED_PATH(absolute_index).latest_position.x -
+				UNSTEERED_PATH(absolute_index).previous_position.x) * alpha;
+		position.y = UNSTEERED_PATH(absolute_index).previous_position.y +
+			(UNSTEERED_PATH(absolute_index).latest_position.y -
+				UNSTEERED_PATH(absolute_index).previous_position.y) * alpha;
+		position.z = UNSTEERED_PATH(absolute_index).previous_position.z +
+			(UNSTEERED_PATH(absolute_index).latest_position.z -
+				UNSTEERED_PATH(absolute_index).previous_position.z) * alpha;
+		unsteered_blend_facing(
+			&UNSTEERED_PATH(absolute_index).previous_forward,
+			&UNSTEERED_PATH(absolute_index).previous_up,
+			&UNSTEERED_PATH(absolute_index).latest_forward,
+			&UNSTEERED_PATH(absolute_index).latest_up,
+			alpha,
+			&forward,
+			&up);
+		if (alpha >= 1.0f)
+		{
+			position.x += velocity.i * late;
+			position.y += velocity.j * late;
+			position.z += velocity.k * late;
+		}
+		if (!distributed_transform_valid(&position, &forward, &up, NULL, NULL, &forward, &up))
+			continue;
+		if (alpha < 1.0f)
+		{
+			object->object.translational_velocity.i =
+				(UNSTEERED_PATH(absolute_index).latest_position.x -
+					UNSTEERED_PATH(absolute_index).previous_position.x) / interval;
+			object->object.translational_velocity.j =
+				(UNSTEERED_PATH(absolute_index).latest_position.y -
+					UNSTEERED_PATH(absolute_index).previous_position.y) / interval;
+			object->object.translational_velocity.k =
+				(UNSTEERED_PATH(absolute_index).latest_position.z -
+					UNSTEERED_PATH(absolute_index).previous_position.z) / interval;
+		}
+		else if ((real)since - interval <= (real)UNSTEERED_PATH_LATE_TICKS)
+			object->object.translational_velocity = velocity;
+		else
+			object->object.translational_velocity = *global_zero_vector3d;
+		object->object.angular_velocity = *global_zero_vector3d;
+		object_set_position(iterator.index, &position, &forward, &up);
 	}
 }
 
-#if defined(OXBOX_CROSSPLAY)
 /* the kept inventories all of whose unit and weapons have come: applied once,
-as if they had come now (OpenCE 667c2f29, 07c8430b) */
+as if they had come now */
 static void distributed_client_apply_retried_inventories(
 	void)
 {
@@ -3561,7 +3812,7 @@ static void distributed_client_apply_retried_inventories(
 		}
 	}
 }
-#endif
+
 
 void network_objects_client_tick(
 	void)
@@ -3582,9 +3833,7 @@ void network_objects_client_tick(
 			(word)sizeof(message), _distributed_to_host_reliably);
 		objects_client_ask_again = FALSE;
 	}
-#if defined(OXBOX_CROSSPLAY)
 	distributed_client_apply_retried_inventories();
-#endif
 	if (objects_client_synchronized)
 		distributed_client_remove_own_objects();
 	/* (too many to look at one by one later: all of them) */
@@ -3673,10 +3922,13 @@ void network_objects_client_tick(
 	distributed_client_note_own_inventories();
 	distributed_client_send_vehicles();
 	distributed_client_carry_unsteered_vehicles();
-	/* (who it is, as its Discord told it: once its ready went, which makes
+	/* (who it is, as its Discord told it, and its build: once its ready went, which makes
 	it a machine the host takes messages of) */
 	if (objects_client_ready_time != NONE)
+	{
 		distributed_client_send_identity();
+		distributed_client_send_build();
+	}
 }
 
 /* ---------- the game */
@@ -3708,6 +3960,9 @@ void network_objects_new_game(
 		objects_host_inventories[absolute_index].ammunition_time = NONE;
 		objects_client_has[absolute_index] = NONE;
 		objects_client_dead[absolute_index].object_index = NONE;
+		UNSTEERED_PATH(absolute_index).object_index = NONE;
+		UNSTEERED_PATH(absolute_index).time = NONE;
+		UNSTEERED_PATH(absolute_index).interval = 0;
 	}
 	objects_host_told_count = 0;
 	objects_host_resting_cursor = 0;
@@ -3732,9 +3987,7 @@ void network_objects_new_game(
 	objects_client_creating = FALSE;
 	objects_client_deleting = FALSE;
 	objects_client_new_object_count = 0;
-#if defined(OXBOX_CROSSPLAY)
 	objects_client_retried_inventory_count = 0;
-#endif
 	objects_client_check_all = TRUE;
 	objects_client_local_free_index = LOCAL_OBJECTS_FIRST_INDEX;
 	objects_client_object_count = NONE;

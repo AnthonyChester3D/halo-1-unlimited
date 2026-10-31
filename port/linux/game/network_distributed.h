@@ -125,8 +125,58 @@ enum
 	_distributed_message_map_share_offer = 84,
 	_distributed_message_map_share_sources = 85,
 	_distributed_message_map_share_progress = 86,
+	/* the text chat (network_chat.c): a player's line to the host,
+	reliably, which takes it only from the player's own machine's stream; and
+	the line the host sends on to each machine that hears it, reliably */
+	_distributed_message_chat_up = 87,
+	_distributed_message_chat_down = 88,
+	/* the host's text chat settings (network_chat.c): whether its players
+	may chat and send links, to every client, reliably */
+	_distributed_message_chat_config = 89,
+
+	/* the host's mouse aim assist policy (network_aim_assist.c), to every
+	client, reliably, when it is ready and when the policy changes */
+	_distributed_message_aim_assist_policy = 90,
+	/* the host's shield effects (network_shield_effects.c), to every client,
+	reliably, when it is ready and when they change */
+	_distributed_message_shield_effects = 91,
+	/* a client's build, as it tells it: its number, configuration, the
+	GitHub repository it is made from, its label and the mods it plays
+	(reliable, once a game, with its ready: distributed_client_send_build).
+	A host without it drops it as a kind it does not know */
+	_distributed_message_client_build = 92,
+	/* where a client's players' shots leave from when not from their
+	units' cameras (a VR build's hand), to the host, unreliably, every tick
+	while they do (network_damage.c): its line of sight check's */
+	_distributed_message_fire_origins = 93,
+	/* a dedicated server's vote for the next game (network_map_vote.c), in
+	the lobby too, reliably: the host's choices and their votes, to every
+	client, once a second and as they change, and the one that won; a
+	client's choice, to the host, which takes it only from the machine's own
+	stream */
+	_distributed_message_map_vote = 94,
+	_distributed_message_map_vote_choice = 95,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
+};
+
+/* a client's build, as text (every field printable ASCII and ended; mods a
+line each, "folder version", in the load order) */
+enum
+{
+	DISTRIBUTED_CLIENT_BUILD_NUMBER_SIZE = 12,
+	DISTRIBUTED_CLIENT_BUILD_FLAVOR_SIZE = 16,
+	DISTRIBUTED_CLIENT_BUILD_REPOSITORY_SIZE = 144,
+	DISTRIBUTED_CLIENT_BUILD_VERSION_SIZE = 64,
+	DISTRIBUTED_CLIENT_BUILD_MODS_SIZE = 512,
+};
+struct distributed_client_build
+{
+	char number[DISTRIBUTED_CLIENT_BUILD_NUMBER_SIZE];
+	char flavor[DISTRIBUTED_CLIENT_BUILD_FLAVOR_SIZE];
+	char repository[DISTRIBUTED_CLIENT_BUILD_REPOSITORY_SIZE];
+	char version[DISTRIBUTED_CLIENT_BUILD_VERSION_SIZE];
+	char mods[DISTRIBUTED_CLIENT_BUILD_MODS_SIZE];
 };
 
 /* where a message goes */
@@ -205,6 +255,8 @@ a longer message is split where a batch is full */
 unreliable ones gathered into one datagram a machine each tick */
 void distributed_send(void *message, byte type, short count, word size, short destination);
 void distributed_client_send_identity(void);
+/* (a client) its build, to the host, once a game */
+void distributed_client_send_build(void);
 /* ... unreliably to one client (the host) */
 void distributed_send_to_machine(long machine_index, void *message, byte type, short count, word size);
 /* ... reliably to one client (the host) */
@@ -235,6 +287,23 @@ real distributed_own_round_trip_ticks(void);
 back, as the host measures it) in milliseconds: 0 for the host's own
 players, NONE before it is known */
 long distributed_player_ping(short player_index);
+/* the latency meter (latency_meter.c): the round trips above timed in
+milliseconds by when this machine sent the tick they come back naming,
+nothing more sent; what is shown of them is refreshed twice a second in the
+tick (with Latency meter On), so the render reads it whole. (A client) its
+round trip to the host, NONE before it is known or on the host */
+long distributed_own_ping(void);
+/* a player's round trip as this machine times it: the host each client's
+(its own players' 0), a client its own players'; NONE for another's, or
+before it is known */
+long distributed_player_measured_ping(short player_index);
+/* (the host) its slowest client's, NONE for none */
+long distributed_slowest_client_ping(void);
+/* (a client) the host has sent nothing for two seconds */
+boolean distributed_connection_problem(void);
+/* (a client) the host has its players (or its vehicle) at that tick of this
+machine's, as told now: its own round trip timed */
+void distributed_note_own_round_trip(long time);
 /* (the host, in its tick) the client machine a player is on, NONE for none
 (the host's own players') */
 long distributed_player_machine(short player_index);
@@ -273,6 +342,23 @@ real distributed_vitality_unpack(word value);
 (machine_index; NONE: the host's own) */
 void distributed_send_notice(char const *text);
 void distributed_send_notice_to_machine(long machine_index, char const *text);
+/* (the host: a dedicated server's ban command) the next ban's reason and end
+(seconds since 1970; 0: for ever), written in its bans.txt line */
+void network_distributed_ban_details(char const *reason, unsigned long until);
+/* (the host: a dedicated server's sv_ban_address) a ban's line in bans.txt
+for an address (its text; "none" for none), a hardware id and a verified
+Discord account's id (each empty for none), as the ban command writes one:
+TRUE if it was written */
+boolean network_distributed_ban_record(char const *address, char const *hardware_id, char const *discord_id,
+	char const *names, char const *reason, unsigned long until);
+/* (the host) a client machine's Discord account, its id and username: a
+verified one's (a pass that checked, network_link.c), else the one it told
+(empty for none); TRUE if it is verified */
+boolean network_distributed_machine_discord(long machine_index, char *discord_id, long discord_id_size,
+	char *discord_name, long discord_name_size);
+/* whether the next ban drops its machine and keeps it out without its line
+in bans.txt (network_distributed_ban_record wrote it) */
+void network_distributed_ban_unrecorded(boolean unrecorded);
 /* (the host) the names of a client machine's players, in ASCII */
 void distributed_machine_player_names(long machine_index, char *names, long size);
 /* (the host) a client machine's real IPv4 address (host byte order): an
@@ -280,6 +366,9 @@ internet play peer's endpoint, not its stand-in; 0 if not known */
 unsigned long distributed_machine_real_address(long machine_index);
 /* ... and the real address of a machine's address, as it joined from */
 unsigned long distributed_real_address(unsigned long address);
+/* (the host) a client machine's build as it told it: FALSE if it told none
+(a build before the message, or not yet) */
+boolean distributed_machine_client_build(long machine_index, struct distributed_client_build *build);
 
 /* ---------- prototypes/NETWORK_VOTEKICK.C */
 
@@ -293,6 +382,19 @@ word network_votekick_request_entry_size(void);
 /* (a client) the host's count */
 void network_votekick_handle_status(void const *entries);
 word network_votekick_status_entry_size(void);
+
+/* ---------- prototypes/NETWORK_CHAT.C */
+
+/* (the host) a client's line; from_stream: it came over the machine's own
+stream (anything else is refused) */
+void network_chat_handle_up(long machine_index, void const *entries, boolean from_stream);
+/* (a client) a line the host sent on; from_stream: it came over the host's
+connection's stream (anything else is refused) */
+void network_chat_handle_down(void const *entries, boolean from_stream);
+word network_chat_line_entry_size(void);
+/* (a client) the host's chat settings; from_stream: as above */
+void network_chat_handle_config(void const *entries, boolean from_stream);
+word network_chat_config_entry_size(void);
 
 /* ---------- prototypes/NETWORK_ACTORS.C */
 
@@ -356,7 +458,8 @@ again, having failed to make one of them */
 void network_objects_client_asked(long machine_index, boolean again);
 void network_objects_handle_changes(void const *entries, short count);
 void network_objects_handle_synchronized(void);
-void network_objects_handle_states(void const *entries, short count);
+/* (host_time: the message's, the host's tick its states are of) */
+void network_objects_handle_states(void const *entries, short count, long host_time);
 void network_objects_handle_inventories(void const *entries, short count);
 /* (a client) its own player picked up the weapon, to ready once its unit has it */
 void network_objects_client_picked_up_weapon(short local_player_index, long unit_index, long definition_index);
@@ -390,6 +493,12 @@ void network_damage_host_tick(void);
 void network_damage_client_tick(void);
 void network_damage_handle_events(void const *entries, short count);
 void network_damage_handle_reports(long machine_index, void const *entries, short count);
+void network_damage_handle_fire_origins(long machine_index, void const *entries, short count);
 word network_damage_entry_size(byte type);
+/* what says where a local player's shots leave from when that is not their
+unit's camera: the offset from it (world units), FALSE when they leave from
+the camera; NULL (the default) for a build whose shots always do */
+typedef boolean (*network_damage_fire_origin_source)(short local_player_index, real_vector3d *offset);
+void network_damage_set_fire_origin_source(network_damage_fire_origin_source source);
 
 #endif // __NETWORK_DISTRIBUTED_H

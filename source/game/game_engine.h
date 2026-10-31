@@ -92,6 +92,12 @@ struct ctf_variant
 	boolean flag_must_reset;
 	boolean flag_at_home_to_score;
 	long single_flag_time;
+	/* port: Kills Score (the editor's): a kill scores a point for the
+	killer's team, and a capture is worth points_per_capture (5 to 100, 25 by
+	default) in place of one; the score to win is in captures, each worth
+	that much. Off (0): the Xbox's capture the flag */
+	long points_per_capture;
+	long kills_score;
 };
 
 struct slayer_variant
@@ -104,6 +110,9 @@ struct slayer_variant
 struct king_variant
 {
 	boolean moving_hill;
+	/* port: Multi-Hill: this many hills in play at once (2 to 5), else one
+	(game_engine_king.c). Zero in January's gametypes, whose union keeps it */
+	byte multi_hill;
 };
 
 /* the balls of an oddball game */
@@ -275,8 +284,10 @@ struct game_variant_options
 	kill takes the victim back a weapon */
 	byte gun_game_order;
 	boolean gun_game_melee_demotes;
-	/* port: Teamplay Options' FORCE TEAM SPAWNS (OpenCE's; kept for its
-	place: the Xbox doesn't use it yet) */
+	/* port: Teamplay Options' FORCE TEAM SPAWNS: a team game other than CTF
+	spawns its players as CTF does, only at the map's CTF starting locations
+	of their own team (game_engine_get_starting_location_rating). Taken from
+	reserved, which older builds zero and ignore: the host alone picks spawns */
 	boolean force_team_spawns;
 	byte reserved[5];
 };
@@ -284,11 +295,6 @@ struct game_variant_options
 typedef char verify_game_variant_options_size[sizeof(struct game_variant_options) == 0x2C ? 1 : -1];
 /* (builds before OpenCE's gametypes saved and sent only the first 0x1C bytes) */
 #define GAME_VARIANT_OPTIONS_V1_SIZE 0x1C
-
-/* port: a loadout weapon's (_loadout_weapon_*) definition, NONE if the map
-has none */
-long game_engine_loadout_weapon_definition(
-	byte weapon);
 
 struct game_engine
 {
@@ -419,6 +425,10 @@ void game_variant_options_default(
 	struct game_variant_options *options);
 void game_engine_playlist_initialize(
 	void);
+/* port: a loadout weapon's (_loadout_weapon_*) definition, NONE if the map
+has none */
+long game_engine_loadout_weapon_definition(
+	byte weapon);
 
 long game_globals_get_weapon(
 	struct game_globals *game_globals,
@@ -475,6 +485,8 @@ void get_postgame_hilite_colors(
 boolean game_engine_running(
 	void);
 boolean game_engine_showing_postgame(
+	void);
+boolean game_engine_in_play(
 	void);
 
 boolean game_engine_get_state_message(
@@ -666,10 +678,8 @@ boolean game_engine_should_end_game(
 void game_engine_clear_goal_position(
 	short goal_index);
 
-#if defined(OXBOX_CROSSPLAY)
 void game_engine_objective_weapon_deleted(
 	long weapon_index);
-#endif
 
 long get_flag_definition_index(
 	void);

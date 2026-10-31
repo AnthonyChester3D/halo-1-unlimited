@@ -142,7 +142,7 @@ RETICLES = {
         14: "reticle_30.svg",  # (no weapon's; a small chevron)
     },
     HUD + "sniper\\hud_reticles_scope": {
-        0: "reticle_18.svg",   # sniper rifle
+        0: "sniper_diamond.svg",   # Xbox sniper rifle, local redraw
     },
 }
 # the zoom labels beside the sniper's reticle, by sequence and sprite: no
@@ -641,6 +641,10 @@ def reticles(arguments) -> None:
             # (named as layout names them)
             name = tag[len(HUD):].replace("combined\\", "").replace("\\", "__").replace(" ", "_") + f"__{index}"
             old = next((entry for entry in entries if entry["name"] == name), None)
+            if old and old.get("correction"):
+                # Explicitly laid out corrections must not be fitted back to
+                # the old artwork. Rebuild with tools/hud_corrections.py.
+                continue
             cells = {}
             for sequence_index, sequence in enumerate(group["sequences"]):
                 for sprite_index, sprite in enumerate(sequence):
@@ -654,8 +658,9 @@ def reticles(arguments) -> None:
                 exact = sorted(redraws[sequence] for sequence, _ in numbers if sequence in redraws)
                 text = next((labels[number] for number in sorted(numbers) if number in labels), None)
                 if exact:
-                    svg = "hud2_left_reticles__" + exact[0]
-                    shutil.copyfile(source / exact[0], ASSETS / "svg" / svg)
+                    svg = exact[0] if exact[0] == "sniper_diamond.svg" else "hud2_left_reticles__" + exact[0]
+                    if svg != "sniper_diamond.svg":
+                        shutil.copyfile(source / exact[0], ASSETS / "svg" / svg)
                     score, per_texel, corner = fit_reticle(ASSETS / "svg" / svg, alpha)
                     what = exact[0]
                 elif text:
@@ -699,7 +704,7 @@ def reticles(arguments) -> None:
                 if position is None:
                     position = max(i for i, e in enumerate(entries) if e["tag"].startswith(folder))
                 entries.insert(position + 1, entry)
-    used = {cell["svg"] for entry in entries for cell in entry["cells"]}
+    used = {cell["svg"] for entry in entries for cell in entry["cells"] if "svg" in cell}
     for svg in (ASSETS / "svg").glob("*.svg"):
         if svg.name not in used:
             svg.unlink()
@@ -761,15 +766,15 @@ def recipe(texels: np.ndarray, kind: str) -> np.ndarray:
     return result
 
 
-def meter_thresholds(texels: np.ndarray, values: list) -> np.ndarray:
+def meter_thresholds(texels: np.ndarray, values: list, quantize: bool = False) -> np.ndarray:
     """Categorical segment data, independent of antialiased edge RGB/alpha.
 
     Each solid-colour shape's opaque stroke supplies its exact threshold.
     Assign that value to its whole core, then extend it to the nearest edge
     and transparent texel. Low-alpha SVG texels cannot supply reliable RGB:
     unpremultiplying 8-bit colour there can turn 150 into 128 (or 60 into 0).
-    This is only for the explicitly listed discrete health sprites; shield
-    and ammunition gradients retain their existing continuous data.
+    This is only for explicitly listed discrete health and ammunition
+    sprites; shield and other continuous gradients retain their data.
     """
     from scipy import ndimage
 
@@ -782,9 +787,16 @@ def meter_thresholds(texels: np.ndarray, values: list) -> np.ndarray:
         if not len(opaque):
             continue
         colours = np.unique(opaque, axis=0)
-        if len(colours) != 1 or not np.all(colours[0] == colours[0, 0]):
-            raise ValueError("discrete meter shape must have one solid grey threshold")
-        value = int(colours[0, 0])
+        if quantize:
+            # Ammunition redraws use a gradient across separate bullets.
+            # The counter consumes whole bullets: keep each one's integer
+            # threshold constant through its antialiased edge and mip levels.
+            centre = float(np.median(opaque[:, 0]))
+            value = min(values, key=lambda candidate: abs(candidate - centre))
+        else:
+            if len(colours) != 1 or not np.all(colours[0] == colours[0, 0]):
+                raise ValueError("discrete meter shape must have one solid grey threshold")
+            value = int(colours[0, 0])
         if value not in values:
             raise ValueError(f"unexpected discrete meter threshold {value}")
         exact[core] = value
@@ -809,7 +821,7 @@ def add_meter_thresholds(image: np.ndarray, entry: dict) -> np.ndarray:
             # The meter's blue is still the original greyscale artwork data.
             source = texels.copy()
             source[..., :3] = source[..., 2:3]
-            texels[..., 0] = meter_thresholds(source, cell["thresholds"])
+            texels[..., 0] = meter_thresholds(source, cell["thresholds"], cell.get("quantize_thresholds", False))
     return image
 
 
@@ -817,6 +829,25 @@ def build_asset(entry: dict, renders: dict) -> np.ndarray:
     scale = entry["scale"]
     image = np.zeros((entry["height"] * scale, entry["width"] * scale, 4), np.uint8)
     for cell in entry["cells"]:
+        if "source_png" in cell:
+            # Supplied monochrome pictures: luminance becomes coverage,
+            # retaining their antialiasing and all interior cutouts. Never
+            # threshold, trace or reconstruct the artwork or its lettering.
+            source = Image.open(ASSETS / cell["source_png"]).convert("L")
+            left, top, right, bottom = cell["crop"]
+            if not 0 <= left < right <= source.width or not 0 <= top < bottom <= source.height:
+                raise ValueError("correction crop outside supplied image")
+            alpha = source.crop(cell["crop"])
+            x0, y0, x1, y1 = [round(v * scale) for v in cell["xbox"]]
+            if not 0 <= x0 < x1 <= image.shape[1] or not 0 <= y0 < y1 <= image.shape[0]:
+                raise ValueError("correction cell outside atlas")
+            ratio = min((x1-x0)/alpha.width, (y1-y0)/alpha.height)
+            alpha = alpha.resize((max(1, round(alpha.width*ratio)), max(1, round(alpha.height*ratio))), Image.Resampling.LANCZOS)
+            x0 += (x1-x0-alpha.width)//2
+            y0 += (y1-y0-alpha.height)//2
+            # HUD blend mode expects premultiplied white: RGB equals alpha.
+            image[y0:y0+alpha.height, x0:x0+alpha.width] = np.asarray(alpha)[..., None]
+            continue
         # (the redraw drawn at the texture's scale, its coordinates with it:
         # a whole multiple of the redraw's for the PC sheets', any for the
         # reticles')
@@ -851,6 +882,11 @@ def thresholds(arguments) -> None:
 def build(arguments) -> None:
     description = json.loads(LAYOUT.read_text())
     names = {f"{entry['name']}.png" for entry in description["assets"]}
+    # Other map families own their layouts and generated pictures. A native
+    # rebuild must not treat their independently generated atlases as stale.
+    ce_layout = ASSETS / "ce_layout.json"
+    if ce_layout.is_file():
+        names.update(f"{entry['name']}.png" for entry in json.loads(ce_layout.read_text())["assets"])
     for stale in ASSETS.glob("*.png"):
         if stale.name not in names:
             stale.unlink()

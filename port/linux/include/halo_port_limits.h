@@ -71,7 +71,7 @@ Raise it with any change to what the machines send each other. */
 0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
 #define HALO_PORT_NETWORK_VERSION 31
 #else
-#define HALO_PORT_NETWORK_VERSION 29
+#define HALO_PORT_NETWORK_VERSION 41
 #endif
 #if defined(OXBOX_CROSSPLAY)
 /* oxbox: the crossplay experiment: the PC builds' version this Xbox's games say with crossplay = 1, and the oldest
@@ -86,15 +86,20 @@ with other Xboxes; the games list shows an Xbox beside it) */
 #define OXBOX_ADVERTISED_DEDICATED_FLAG 0x04
 #endif
 /* ... the advertisement's reserved bytes: the version (a little-endian word),
-then flags */
+then flags, then the game's kind (an OpenCE gametype's mode, and Hardcore:
+port/linux/game/game_modes.h's game_modes_kind), for the server browser */
 #define HALO_PORT_ADVERTISED_VERSION_OFFSET 0
 #define HALO_PORT_ADVERTISED_FLAGS_OFFSET 2
+#define HALO_PORT_ADVERTISED_KIND_OFFSET 3
 /* ... the host plays the distributed netcode (always, since the lockstep
 netcode was removed; hosts of version 4 built before then may not) */
 #define HALO_PORT_ADVERTISED_DISTRIBUTED_FLAG 0x01
 /* ... the game is under way (loading, playing or over), not in its lobby:
 the menus show it before joining it (hosts built before then never set it) */
 #define HALO_PORT_ADVERTISED_IN_PROGRESS_FLAG 0x02
+/* ... the host is a dedicated server, with no player of its own (halo
+--server: port/linux/src/server_mode.c): the menus say so (from version 39) */
+#define HALO_PORT_ADVERTISED_DEDICATED_FLAG 0x04
 
 /* a message header's 12-bit length allows messages of up to 0xFFF bytes,
 header included; the per-tick update of 128 players is 3,857 */
@@ -104,7 +109,7 @@ header included; the per-tick update of 128 players is 3,857 */
 update of 128 players decodes to 0x1010 bytes */
 #define HALO_PORT_NETWORK_PACKET_SIZE 0x1100
 
-/* the game settings record (HALO_PORT_NETWORK_GAME_SIZE, 13,120 bytes at 128
+/* the game settings record (HALO_PORT_NETWORK_GAME_SIZE, 13,136 bytes at 128
 machines and players) does not fit one message; it is sent in pieces of
 this many bytes (4 pieces), each 3,594 bytes on the wire */
 #define HALO_PORT_NETWORK_GAME_SETTINGS_FRAGMENT_SIZE 0xE00

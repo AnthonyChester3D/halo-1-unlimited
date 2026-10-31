@@ -103,6 +103,7 @@ symbols in this file:
 
 #include "cseries.h"
 #include "damage.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "ai/ai.h"
 #include "cseries/errors.h"
 #include "effects/effects.h"
@@ -138,7 +139,6 @@ symbols in this file:
 #include "units/bipeds.h"
 #include "units/units.h"
 #include "units/vehicles.h"
-#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -150,9 +150,7 @@ void network_damage_player_effect(long player_index, struct damage_data const *d
 void network_damage_aftermath(long object_index, struct damage_data const *damage, unsigned long being_damaged_flags,
 	real shield_damage, real body_damage, real body_damage_multiplier, short body_part, short node_index,
 	short region_index, short material_index, long victim_player_index);
-#if defined(OXBOX_CROSSPLAY)
 boolean network_damage_static_target(long object_index);
-#endif
 
 /* set while a distributed client carries out a kill it does not decide (an
 act of god: the host's word, network_distributed.c, or the world's) */
@@ -164,13 +162,8 @@ overcharge): not a client of the distributed netcode, which has the host's
 damage can break, whose damage every machine deals as the host did and of
 which the host sends no state (network_damage.c's static targets: a
 scenery's shield, broken, came back on no client) */
-#if defined(OXBOX_CROSSPLAY)
-/* (oxbox: OpenCE's rule from its network version 34, 5744d2d1, in the crossplay builds) */
 #define objects_update_shields(object_index) \
 	(!network_game_distributed_client() || network_damage_static_target(object_index))
-#else
-#define objects_update_shields(object_index) (!network_game_distributed_client())
-#endif
 
 /* ---------- constants */
 

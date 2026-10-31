@@ -2,8 +2,8 @@
 APP.JS
 
 The launcher page (index.html): it checks that the browser can run the game,
-copies the game data in from the player's disc image (xiso-worker.js), and
-starts the game (halo.js and halo.wasm: tools/web_build.py), whose canvas
+copies the game data in from the player's disc image (xiso-worker.js) and
+the player's mods (mods-worker.js), and starts the game (halo.js and halo.wasm: tools/web_build.py), whose canvas
 then fills the page.
 
 - The game's threads need SharedArrayBuffer, so a cross-origin isolated
@@ -22,7 +22,7 @@ then fills the page.
   the next time), ?play starts the game at once when it can.
 - ?join=<invite> (a halo://join/ link's code, which native builds and the
   game here make: port/linux/src/p2p.c) joins that internet game once the
-  game starts.
+  game starts; the Servers panel (servers.js) sets it with Play here.
 */
 
 'use strict';
@@ -301,6 +301,93 @@ $('folder-input').addEventListener('change', (event) => {
   if (files.length) importData({ type: 'folder', files });
 });
 
+// ---------- mods (mods-worker.js): /data/mods, all of them played unless
+// the game's main menu's Mods turns them off (port/linux/src/port_mods.c)
+
+// the name a mod's mod.toml gives it, else its folder's
+async function modName(directory, folder) {
+  try {
+    const text = await (await (await directory.getFileHandle('mod.toml')).getFile()).text();
+    const match = /^\s*name\s*=\s*"([^"\n]*)"/m.exec(text);
+    if (match && match[1].trim()) return match[1].trim();
+  } catch {
+    // (none: not a mod the game plays)
+  }
+  return folder;
+}
+
+async function refreshMods() {
+  const list = $('mods-list');
+  const found = [];
+  try {
+    const root = await navigator.storage.getDirectory();
+    const mods = await root.getDirectoryHandle('mods');
+    for await (const [folder, handle] of mods.entries()) {
+      if (handle.kind === 'directory') found.push({ folder, name: await modName(handle, folder) });
+    }
+  } catch {
+    // no mods folder yet
+  }
+  // (as the game orders them by default: their folders' names, whatever the
+  // case of their A to Z, port_mods.c's names_compare)
+  const key = (folder) => folder.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  found.sort((first, second) => (key(first.folder) < key(second.folder) ? -1 : 1));
+  list.replaceChildren(...found.map(({ folder, name }) => {
+    const item = document.createElement('li');
+    const label = document.createElement('span');
+    const detail = document.createElement('span');
+    const remove = document.createElement('button');
+    label.textContent = name;
+    detail.className = 'detail';
+    detail.textContent = ` ${folder}`;
+    label.append(detail);
+    remove.textContent = 'Remove';
+    remove.className = 'danger';
+    remove.addEventListener('click', () => {
+      if (confirm(`Remove the mod ${name} from this browser?`)) modTask({ type: 'remove', name: folder });
+    });
+    item.append(label, remove);
+    return item;
+  }));
+  $('mods-status').textContent = found.length ? `${found.length} mod${found.length === 1 ? '' : 's'} in this browser.` :
+    'No mods yet.';
+  summarize('summary-mods', null, found.length ? `${found.length} mod${found.length === 1 ? '' : 's'}` : 'None yet');
+  await refreshStorage();
+}
+
+function modTask(message) {
+  const worker = new Worker('mods-worker.js');
+  $('mod-label').classList.add('disabled');
+  $('mod-input').disabled = true;
+  worker.onmessage = async (event) => {
+    const data = event.data;
+    if (data.type === 'progress') {
+      $('mods-status').textContent = `Copying ${data.file}: ${formatBytes(data.done)} of ${formatBytes(data.total)}`;
+      return;
+    }
+    worker.terminate();
+    $('mod-label').classList.remove('disabled');
+    $('mod-input').disabled = false;
+    await refreshMods();
+    if (data.type === 'error') $('mods-status').textContent = data.message;
+    else if (message.type === 'add') logLine(`mods: ${data.name}, ${data.files} files, ${data.bytes} bytes`);
+  };
+  worker.onerror = async (event) => {
+    worker.terminate();
+    $('mod-label').classList.remove('disabled');
+    $('mod-input').disabled = false;
+    await refreshMods();
+    $('mods-status').textContent = 'The copy failed: ' + event.message;
+  };
+  worker.postMessage(message);
+}
+
+$('mod-input').addEventListener('change', (event) => {
+  const files = [...event.target.files];
+  event.target.value = '';
+  if (files.length) modTask({ type: 'add', files });
+});
+
 $('delete-data').addEventListener('click', async () => {
   if (!confirm('Delete the maps copied into this browser? Saved games stay.')) return;
   const root = await navigator.storage.getDirectory();
@@ -427,10 +514,19 @@ function canPlay() {
   return checksPassed && dataReady && !gameStarted;
 }
 
+// the Ready to play screen's rows: a row good or bad, and its value
+function summarize(id, good, text) {
+  $(id).classList.toggle('good', good === true);
+  $(id).classList.toggle('bad', good === false);
+  $(id + '-value').textContent = text;
+}
+
 function updatePlay() {
   $('play').disabled = !canPlay();
-  $('play-note').textContent = !checksPassed ? 'This browser cannot run the game (above).' :
+  $('play-note').textContent = !checksPassed ? 'This browser cannot run the game: see This browser, below.' :
     !dataReady ? 'The game data is needed first.' : '';
+  summarize('summary-browser', checksPassed, checksPassed ? 'Runs the game' : 'Cannot run the game');
+  summarize('summary-data', dataReady, dataReady ? $('data-status').textContent : 'Needed first');
 }
 
 // init.txt in the data folder: the console commands the game runs as it
@@ -549,6 +645,28 @@ function showInvite(text) {
   $('invite').hidden = false;
 }
 
+// a master server's page that links a Discord account (player_link.c): a
+// page opens a tab only when it is clicked, so the dialog's button opens it
+function showLinkPage(url) {
+  if (!/^https?:\/\/[^\s]+\/link\?/.test(url)) return;
+  $('ask-title').textContent = 'Link Discord';
+  $('ask-text').textContent = 'The master server\'s page links your Discord account to this game. '
+    + 'Check that it shows the code Settings > Network Setup > Discord Account shows.';
+  const open = document.createElement('button');
+  open.textContent = 'Open the page';
+  open.className = 'primary';
+  open.addEventListener('click', () => {
+    $('ask').hidden = true;
+    window.open(url, '_blank', 'noopener');
+  });
+  const close = document.createElement('button');
+  close.textContent = 'Close';
+  close.addEventListener('click', () => { $('ask').hidden = true; });
+  $('ask-buttons').replaceChildren(open, close);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $('ask').hidden = false;
+}
+
 $('invite-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText($('invite-link').value);
@@ -558,6 +676,21 @@ $('invite-copy').addEventListener('click', async () => {
   }
 });
 $('invite-close').addEventListener('click', () => { $('invite').hidden = true; });
+
+// Play here on the Servers panel (servers.js): the server's invite as ?join=,
+// and the game starts at once when it can
+function joinServer(code) {
+  if (!/^[0-9a-f]{64}$/.test(code) || gameStarted) return;
+  params.set('join', code);
+  history.replaceState(null, '', `?${params}`);
+  if (canPlay()) {
+    play();
+    return;
+  }
+  location.hash = '#play-panel';
+  updatePlay();
+  $('play-note').textContent += ' Play then joins the server you chose.';
+}
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -602,6 +735,29 @@ async function play() {
         logLine(text);
         if (kind === 2) showInvite(text);
         if (kind === 3) showFatal(text);
+        // (the game quits, as the player asked: the page starts again)
+        if (kind === 4) location.reload();
+        if (kind === 5) showLinkPage(text);
+      },
+      // a question the game waits on (sdl_platform.c's platform_ask: the
+      // mods that cannot be played together), answered with a button's index
+      haloAsk: (title, text, labels, answer) => {
+        logLine(`${title}: ${text}`);
+        $('ask-title').textContent = title;
+        $('ask-text').textContent = text;
+        $('ask-buttons').replaceChildren(...labels.map((label, index) => {
+          const button = document.createElement('button');
+          button.textContent = label;
+          if (index === 0) button.className = 'primary';
+          button.addEventListener('click', () => {
+            $('ask').hidden = true;
+            answer(index);
+          });
+          return button;
+        }));
+        // (the dialog is the page's: out of the game's full screen)
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        $('ask').hidden = false;
       },
       onAbort: (what) => showFatal('The game stopped: ' + what),
       onExit: (status) => {
@@ -713,9 +869,18 @@ document.addEventListener('visibilitychange', async () => {
     $('checks-note').textContent = 'Desktop Chrome, Edge and Firefox run the game; Safari 17 or later may.';
     $('checks-note').hidden = false;
   }
-  if (results.opfs === 'good') await refreshData();
-  else updatePlay();
+  if (results.opfs === 'good') {
+    await refreshData();
+    await refreshMods();
+  } else {
+    updatePlay();
+  }
   checkForUpdate();
+  window.HaloServers.start({
+    networkVersion: () => stamp.network_version,
+    visible: () => !gameStarted,
+    onPlay: joinServer,
+  });
   if (/^[0-9a-f]{32}$/.test(params.get('room') || '')) await joinRoom(params.get('room'));
   if (params.has('play')) play();
 })();

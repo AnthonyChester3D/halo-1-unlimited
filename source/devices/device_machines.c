@@ -187,13 +187,9 @@ boolean machine_update(
 	boolean activate;
 	struct machine_definition *definition;
 	long *object_index;
-	real_point3d *node_position;
-	long *elevator_object_index;
 	short object_count;
 	real_vector3d elevator_offset;
-	real_point3d new_position;
 	long object_indices[16];
-	long elevator_object_indices[2048];
 	struct machine_datum *machine = machine_get(machine_index);
 
 	definition = machine_definition_get(machine->definition_index);
@@ -302,59 +298,12 @@ boolean machine_update(
 		}
 	}
 
-#if !defined(OXBOX_CROSSPLAY)
-	if (TEST_FLAG(definition->machine.flags, _machine_is_elevator_bit) &&
-		definition->machine.elevator_node_index != NONE)
-	{
-		real_matrix4x3 *node_matrix = object_get_node_matrix(
-			machine_index,
-			(unsigned short)definition->machine.elevator_node_index);
-
-		elevator_offset.i = node_matrix->position.x - machine->machine.elevator_position.x;
-		node_position = &node_matrix->position;
-		elevator_offset.j = node_position->y - machine->machine.elevator_position.y;
-		elevator_offset.k = node_position->z - machine->machine.elevator_position.z;
-		if (elevator_offset.i != 0.0f || elevator_offset.j != 0.0f || elevator_offset.k != 0.0f)
-		{
-			object_count = objects_in_sphere(
-				_object_mask_biped,
-				_object_mask_biped,
-				&machine->object.location,
-				&machine->object.bounding_sphere_center,
-				machine->object.bounding_sphere_radius,
-				elevator_object_indices,
-				NUMBEROF(elevator_object_indices));
-			if (object_count > 0)
-			{
-				long remaining_object_count;
-
-				elevator_object_index = elevator_object_indices;
-				remaining_object_count = (unsigned short)object_count;
-				do
-				{
-					long biped_index = *elevator_object_index;
-					struct biped_datum *biped = biped_get(biped_index);
-
-					if (biped->biped.elevator_object_index == machine_index)
-					{
-						add_vectors3d(&elevator_offset, (real_vector3d const *)&biped->object.position, (real_vector3d *)&new_position);
-						object_translate(biped_index, &new_position, NULL);
-					}
-
-					elevator_object_index++;
-				}
-				while (--remaining_object_count);
-			}
-		}
-		machine->machine.elevator_position = *node_position;
-	}
-#else
-	/* oxbox: the crossplay builds play OpenCE's rule from its network version 30 (OpenCE 1b038802 and 607da502,
-	AGPL): the riders are carried after this tick's node matrices are computed (machine_move_elevator_riders, which
-	object_update calls), not here by the last tick's movement, one tick late and the wrong way as an elevator
-	reverses. The other builds keep the original's, which the Xboxes of other builds play by. */
-#endif
-
+	/* port: the original carried the elevator's riders here, by the elevator
+	node's movement since the last tick, before this tick's node matrices
+	were computed: one tick late, and the wrong way as an elevator reverses.
+	machine_move_elevator_riders (below), which object_update calls after
+	computing them, carries them by this tick's movement instead, in single
+	player too. */
 	if (TEST_FLAG(machine->device.flags, _device_position_changed_bit))
 	{
 		object_translate(machine_index, &machine->object.position, NULL);
@@ -364,7 +313,6 @@ boolean machine_update(
 	return TRUE;
 }
 
-#if defined(OXBOX_CROSSPLAY)
 /* port: sample the floor around its node recomputation, rather than carrying
 riders by the previous tick's movement (wrong when an elevator reverses). */
 boolean machine_get_elevator_position(
@@ -447,6 +395,6 @@ void machine_move_elevator_riders(
 		machine->machine.elevator_position = *node_position;
 	}
 }
-#endif
+
 
 /* ---------- private code */
