@@ -295,50 +295,8 @@ static void settings_save(void)
 	CloseHandle(file);
 }
 
-/* once, the first time OpenCE runs on this Xbox: a copy of every profile's and gametype's files (not the campaign
-checkpoints) in T:\opence_backup\<save folder>\, before OpenCE writes any of them */
-static void saves_backup(void)
-{
-	static boolean done;
-	WIN32_FIND_DATAA found;
-	HANDLE find, marker;
-	char from[96], to[96];
-	static char const *const files[3] = { "SaveMeta.xbx", "blam.sav", "blam.lst" };
-	long count = 0, k;
-	unsigned long put;
-	if (done) return;
-	done = TRUE;
-	marker = CreateFileA("T:\\opence_backup\\backup.txt", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-	if (marker != INVALID_HANDLE_VALUE) { CloseHandle(marker); return; }
-	CreateDirectoryA("T:\\opence_backup", NULL);
-	find = FindFirstFileA("u:\\*", &found);
-	if (find != INVALID_HANDLE_VALUE)
-	{
-		do
-		{
-			if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.' || strlen(found.cFileName) > 40) continue;
-			sprintf(to, "T:\\opence_backup\\%s", found.cFileName);
-			CreateDirectoryA(to, NULL);
-			for (k = 0; k < 3; k++)
-			{
-				sprintf(from, "u:\\%s\\%s", found.cFileName, files[k]);
-				sprintf(to, "T:\\opence_backup\\%s\\%s", found.cFileName, files[k]);
-				if (CopyFileA(from, to, FALSE) && k > 0) count++;
-			}
-		}
-		while (FindNextFileA(find, &found));
-		CloseHandle(find);
-	}
-	marker = CreateFileA("T:\\opence_backup\\backup.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (marker != INVALID_HANDLE_VALUE)
-	{
-		static char const text[] = "OpenCE copied its profiles and gametypes here the first time it ran (one folder per save, "
-			"as in E:\\UDATA\\4c4a4855). Halo and OpenCE never read this folder.\r\n";
-		WriteFile(marker, text, sizeof(text) - 1, &put, NULL);
-		CloseHandle(marker);
-	}
-	hmp_log("saves: %ld profile and gametype files backed up in T:\\opence_backup", count);
-}
+/* (the backup of Halo's profiles and gametypes in T:\opence_backup, made the first time while the game shared Halo's
+saves, is gone: the game has its own save folder now, and nothing of the player's is copied onto their drive) */
 
 /* the screen shape: -1 as the dashboard says, 0 4:3, 1 widescreen (xbox/oxbox_sdk.c's oxbox_widescreen) */
 int hmp_settings_aspect(void)
@@ -694,7 +652,6 @@ void hmp_game_after_dispatch(struct widget_instance *root)
 void hmp_game_tick(void)
 {
 	short k;
-	saves_backup();
 	for (k = 0; k < 4; k++) { is_dialog(k, NULL); is_options(k, NULL); main_menu_check(k); }
 #if defined(OXBOX_NET_P2P)
 	for (k = 0; k < 4; k++) if (!game_engine) hmp_online_tick(k);   /* (ONLINE PLAY in the Multiplayer menu) */

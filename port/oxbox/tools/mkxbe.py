@@ -234,10 +234,9 @@ if mark > 0:
 cert = struct.unpack_from('<I', d, 0x118)[0] - base
 # The title ID: Halo 1 Unlimited's own, 0x4C4A4855 ('LJ' 'HU': Llama Juice, Halo Unlimited; v1.54 on), so its own save
 # folder (E:\UDATA\4c4a4855) and storage (T:, E:\TDATA\4c4a4855): its profiles and gametypes (OpenCE's gametype
-# options among them) are its own, and retail Halo's saves are never written. The installer copies Halo's saves into its
-# folder the first time (Halo's stay as they are) and moves the game's own files over from Halo's storage
-# (installer/main.c own_title_folders). The keys stay the retail XBE's: the saves are signed as Halo signs them, so a
-# copied profile reads. 'LJ' is no retail publisher's code (GameDB-XBOX's 1,343 releases), and no use of the ID is known.
+# options among them) are its own, starting empty, and retail Halo's saves are never read or written. Nothing of the
+# player's saves is copied (their E: drive's room is precious); the installer only moves the game's own files (map stats,
+# map lists, settings) over from Halo's storage (installer/main.c own_title_folders). The keys stay the retail XBE's. 'LJ' is no retail publisher's code (GameDB-XBOX's 1,343 releases), and no use of the ID is known.
 # (Test builds 01-18 had 'OC' 0001, which is Open Crossing's; test build 19 to v1.52 and release 1 had Halo's,
 # 0x4D530004; v1.53 had 'OC' 0002.)
 TITLE_ID = struct.unpack_from('<I', d, cert + 0x8)[0]

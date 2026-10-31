@@ -37,7 +37,7 @@ the installer itself. */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 8
+#define INSTALLER_VERSION 10
 #endif
 __attribute__((used)) static struct
 {
@@ -60,8 +60,8 @@ start the game again, with no buttons pressed */
 static int auto_mode;
 #define HALO_TITLE_ID 0x4D530004ul
 /* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
-and storage (E:\TDATA\4c4a4855): its profiles and gametypes are its own, and retail Halo's are never written. (v1.53
-alone had 'OC' 0002, 4f430002) */
+and storage (E:\TDATA\4c4a4855): its profiles and gametypes are its own, starting empty, and retail Halo's are never
+read or written. (v1.53 alone had 'OC' 0002, 4f430002) */
 #define OWN_TITLE_FOLDER "4c4a4855"
 #define V153_TITLE_FOLDER "4f430002"
 #define HALO_TITLE_FOLDER "4d530004"
@@ -875,31 +875,140 @@ static int set_aside(struct halo *h, char const *main)
 	return 1;
 }
 
-/* the stock maps' showcase files the package carries, as maps\showcase\<name>.txt: only when OpenCE is first made in
-this folder (not an update), and never over a file that's there (the player may have changed or deleted them: an
-update leaves them be). Not being able to write one doesn't stop anything */
+/* the stock maps' showcase files the package carries, as maps\showcase\<name>.txt, the player's choices kept. The
+installer remembers what it wrote (<Halo>\opence_showcase.txt: each file's name and the SHA-256 of what it wrote):
+- a file it wrote that's still exactly as written: replaced by the package's when that differs (an update);
+- a file it wrote that the player changed: never touched again;
+- a file it wrote that the player deleted: never written again;
+- a file it never wrote: written if it isn't there; one that's there (the player's own, or written before the
+  installer remembered) is left be, unless it's already the package's, which it then remembers.
+Not being able to write one doesn't stop anything */
+#define SHOWCASE_RECORD_MAX 64
+struct showcase_record
+{
+	char name[32];
+	unsigned char sha[32];
+};
+
+static int hex_value(int c)
+{
+	return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+static int showcase_records_read(struct halo *h, struct showcase_record *records)
+{
+	char path[220], line[160];
+	FILE *file;
+	int count = 0;
+	text_print(path, sizeof(path), "%s\\opence_showcase.txt", h->path);
+	file = fopen(path, "r");
+	if (!file)
+		return 0;
+	while (count < SHOWCASE_RECORD_MAX && fgets(line, sizeof(line), file))
+	{
+		char *space = strchr(line, ' ');
+		int k, ok = 1;
+		if (!space || space - line >= 32 || strlen(space + 1) < 64)
+			continue;
+		*space = 0;
+		for (k = 0; k < 32 && ok; k++)
+		{
+			int high = hex_value(space[1 + 2 * k]), low = hex_value(space[2 + 2 * k]);
+			ok = high >= 0 && low >= 0;
+			records[count].sha[k] = (unsigned char)(high << 4 | low);
+		}
+		if (!ok)
+			continue;
+		text_print(records[count].name, sizeof(records[count].name), "%s", line);
+		count++;
+	}
+	fclose(file);
+	return count;
+}
+
+static void showcase_records_write(struct halo *h, struct showcase_record const *records, int count)
+{
+	char path[220];
+	FILE *file;
+	int i, k;
+	text_print(path, sizeof(path), "%s\\opence_showcase.txt", h->path);
+	file = fopen(path, "w");
+	if (!file)
+	{
+		say_in(COLOUR_YELLOW, "  couldn't write opence_showcase.txt: the showcase files won't be updated");
+		return;
+	}
+	for (i = 0; i < count; i++)
+	{
+		fprintf(file, "%s ", records[i].name);
+		for (k = 0; k < 32; k++)
+			fprintf(file, "%02x", records[i].sha[k]);
+		fprintf(file, "\n");
+	}
+	fclose(file);
+}
+
 static void install_showcase(struct halo *h)
 {
+	static struct showcase_record records[SHOWCASE_RECORD_MAX];
 	char path[220], name[32];
 	unsigned char const *data;
-	unsigned long n, size, wrote = 0;
+	unsigned char want[32], got[32];
+	unsigned long n, size, got_size, wrote = 0, updated = 0;
+	int count, i, changed = 0;
 	if (!package.showcase_count)
 		return;
+	count = showcase_records_read(h, records);
 	text_print(path, sizeof(path), "%s\\maps\\showcase", h->path);
 	CreateDirectoryA(path, NULL);
 	for (n = 0; n < package.showcase_count; n++)
 	{
+		struct showcase_record *record = NULL;
+		int there, same_as_package;
 		package_showcase_file(&package, n, name, &data, &size);
+		sha256(data, size, want);
+		for (i = 0; i < count; i++)
+			if (!_stricmp(records[i].name, name))
+				record = &records[i];
 		text_print(path, sizeof(path), "%s\\maps\\showcase\\%s", h->path, name);
-		if (exists(path))
+		there = exists(path) && !file_sha256(path, NULL, NULL, 0, got, &got_size);
+		same_as_package = there && got_size == size && !memcmp(got, want, 32);
+		if (record)
+		{
+			/* (deleted, changed by the player, or already this package's: left be) */
+			if (!there || memcmp(got, record->sha, 32) || same_as_package)
+				continue;
+			if (write_checked(path, data, size))
+				say_in(COLOUR_YELLOW, "  couldn't update maps\\showcase\\%s", name);
+			else
+			{
+				memcpy(record->sha, want, 32);
+				updated++;
+				changed = 1;
+			}
 			continue;
-		if (write_checked(path, data, size))
+		}
+		if (count == SHOWCASE_RECORD_MAX)
+			continue;
+		if (there && !same_as_package)
+			continue;                  /* (the player's own) */
+		if (!there && write_checked(path, data, size))
+		{
 			say_in(COLOUR_YELLOW, "  couldn't write maps\\showcase\\%s", name);
-		else
+			continue;
+		}
+		if (!there)
 			wrote++;
+		text_print(records[count].name, sizeof(records[count].name), "%s", name);
+		memcpy(records[count].sha, want, 32);
+		count++;
+		changed = 1;
 	}
-	if (wrote)
-		say("Added %lu stock maps' showcase files (maps\\showcase)", wrote);
+	if (changed)
+		showcase_records_write(h, records, count);
+	if (wrote || updated)
+		say("Stock maps' showcase files (maps\\showcase): %lu added, %lu updated (ones you changed or deleted are kept as "
+			"you left them)", wrote, updated);
 }
 
 /* what the game reads of what's installed (<Halo>\opence_release.txt: the package's release and network version, for
@@ -941,145 +1050,46 @@ static void install_updater(struct halo *h)
 	free(data);
 }
 
-/* a file copied (small: a save's), 0 when it was */
-static int copy_file(char const *from, char const *to)
-{
-	unsigned long size;
-	unsigned char *data = read_whole(from, &size);
-	HANDLE file;
-	DWORD put = 0;
-	int ok;
-	if (!data)
-		return 1;
-	file = create(to);
-	ok = file != INVALID_HANDLE_VALUE && WriteFile(file, data, size, &put, NULL) && put == size;
-	if (file != INVALID_HANDLE_VALUE)
-		ok = finish(file) && ok;
-	free(data);
-	if (!ok)
-		DeleteFileA(to);
-	return !ok;
-}
-
 /* the game's own files and folders in a title's storage (E:\TDATA\<title>) */
 static char const *const own_files[] = {"hmp_stats.txt", "hmp_good_maps.txt", "hmp_bad_maps.txt", "mapshare.txt",
-	"map_check.txt", "opence.ini", "opence_settings.txt", "maps", "opence_backup", "perf"};
+	"map_check.txt", "opence.ini", "opence_settings.txt", "maps", "perf"};
 
-/* the saves of E:\UDATA\<from> that aren't in the game's own folder yet: copied (move 0: Halo's, which stay as they
-are) or moved (move 1: the game's own, from v1.53's folder); and the game's own files of E:\TDATA\<from> moved. Counts
-added to *saves, *moved, *failed */
-static void own_title_from(char const *from_title, int move, int *saves, int *moved, int *failed)
-{
-	char from[200], to[200], pattern[200];
-	WIN32_FIND_DATAA found;
-	HANDLE find;
-	unsigned i;
-
-	text_print(pattern, sizeof(pattern), "E:\\UDATA\\%s\\*", from_title);
-	find = FindFirstFileA(pattern, &found);
-	if (find != INVALID_HANDLE_VALUE)
-	{
-		do
-		{
-			WIN32_FIND_DATAA file;
-			HANDLE files;
-			if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.')
-				continue;
-			text_print(from, sizeof(from), "E:\\UDATA\\%s\\%s", from_title, found.cFileName);
-			text_print(to, sizeof(to), "E:\\UDATA\\" OWN_TITLE_FOLDER "\\%s", found.cFileName);
-			if (exists(to))
-				continue;
-			if (move)
-			{
-				if (MoveFileA(from, to))
-					(*saves)++;
-				else
-					(*failed)++;
-				continue;
-			}
-			CreateDirectoryA(to, NULL);
-			text_print(pattern, sizeof(pattern), "E:\\UDATA\\%s\\%s\\*", from_title, found.cFileName);
-			files = FindFirstFileA(pattern, &file);
-			if (files == INVALID_HANDLE_VALUE)
-				continue;
-			do
-			{
-				if (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-					continue;
-				text_print(from, sizeof(from), "E:\\UDATA\\%s\\%s\\%s", from_title, found.cFileName, file.cFileName);
-				text_print(to, sizeof(to), "E:\\UDATA\\" OWN_TITLE_FOLDER "\\%s\\%s", found.cFileName, file.cFileName);
-				if (copy_file(from, to))
-					(*failed)++;
-			} while (FindNextFileA(files, &file));
-			FindClose(files);
-			(*saves)++;
-		} while (FindNextFileA(find, &found));
-		FindClose(find);
-	}
-	for (i = 0; i < sizeof(own_files) / sizeof(own_files[0]); i++)
-	{
-		text_print(from, sizeof(from), "E:\\TDATA\\%s\\%s", from_title, own_files[i]);
-		text_print(to, sizeof(to), "E:\\TDATA\\" OWN_TITLE_FOLDER "\\%s", own_files[i]);
-		if (!exists(from) || exists(to))
-			continue;
-		if (MoveFileA(from, to))
-			(*moved)++;
-		else
-			(*failed)++;
-	}
-}
-
-/* the game's own save folder and storage (E:\UDATA\4c4a4855, E:\TDATA\4c4a4855), from what it used before:
-- v1.53's ('OC' 0002, 4f430002): its saves and files moved (no one else's title ID that we know of; only what's ours
-  by name is taken, and the folders removed only if that left them empty);
-- Halo's (4d530004, release 1 and the test builds before v1.53): each save copied, never moved (Halo's stay as they
-  are), and the game's own files in Halo's storage moved (retail Halo never used them).
-Nothing that's already in the game's folders is copied or moved over it. ('OC' 0001, which the first test builds used,
-is Open Crossing's: never touched here.) */
+/* the game's own storage (E:\TDATA\4c4a4855): its own files (map stats and favourites, map lists, T:\maps, its
+settings) moved there from where earlier builds kept them, Halo's storage (4d530004: release 1 and the test builds
+before v1.53) and v1.53's (4f430002), when they aren't there yet. Moved, never copied: a rename on the same drive,
+which takes no room. Nothing of the player's saves is copied or touched: the game's save folder starts empty, its own.
+('OC' 0001, which the first test builds used, is Open Crossing's: never touched here.) */
 static void own_title_folders(void)
 {
-	int saves = 0, moved = 0, failed = 0, old_saves = 0;
+	static char const *const earlier[] = {V153_TITLE_FOLDER, HALO_TITLE_FOLDER};
+	char from[200], to[200];
+	int moved = 0, failed = 0;
+	unsigned i, k;
 
-	CreateDirectoryA("E:\\UDATA", NULL);
-	CreateDirectoryA("E:\\UDATA\\" OWN_TITLE_FOLDER, NULL);
-	CreateDirectoryA("E:\\TDATA", NULL);
-	CreateDirectoryA("E:\\TDATA\\" OWN_TITLE_FOLDER, NULL);
-	/* (the name the dashboards show for the save folder: UTF-16, as XAPI writes it) */
-	if (!exists("E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleMeta.xbx"))
+	for (k = 0; k < 2; k++)
 	{
-		static char const name[] = "TitleName=Halo 1 Unlimited\r\n";
-		unsigned short text[64];
-		HANDLE file;
-		DWORD put;
-		unsigned n = 0, k;
-		text[n++] = 0xFEFF;
-		for (k = 0; name[k] && n < 64; k++)
-			text[n++] = (unsigned char)name[k];
-		file = create("E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleMeta.xbx");
-		if (file != INVALID_HANDLE_VALUE)
+		for (i = 0; i < sizeof(own_files) / sizeof(own_files[0]); i++)
 		{
-			WriteFile(file, text, n * 2, &put, NULL);
-			finish(file);
+			text_print(from, sizeof(from), "E:\\TDATA\\%s\\%s", earlier[k], own_files[i]);
+			text_print(to, sizeof(to), "E:\\TDATA\\" OWN_TITLE_FOLDER "\\%s", own_files[i]);
+			if (!exists(from) || exists(to))
+				continue;
+			CreateDirectoryA("E:\\TDATA", NULL);
+			CreateDirectoryA("E:\\TDATA\\" OWN_TITLE_FOLDER, NULL);
+			if (MoveFileA(from, to))
+				moved++;
+			else
+				failed++;
 		}
 	}
-	if (!exists("E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleImage.xbx"))
-		copy_file("E:\\UDATA\\" HALO_TITLE_FOLDER "\\TitleImage.xbx", "E:\\UDATA\\" OWN_TITLE_FOLDER "\\TitleImage.xbx");
-	own_title_from(V153_TITLE_FOLDER, 1, &old_saves, &moved, &failed);
-	own_title_from(HALO_TITLE_FOLDER, 0, &saves, &moved, &failed);
-	/* (v1.53's folders, if that emptied them: its TitleMeta.xbx and TitleImage.xbx first) */
-	DeleteFileA("E:\\UDATA\\" V153_TITLE_FOLDER "\\TitleMeta.xbx");
-	DeleteFileA("E:\\UDATA\\" V153_TITLE_FOLDER "\\TitleImage.xbx");
-	RemoveDirectoryA("E:\\UDATA\\" V153_TITLE_FOLDER);
+	/* (v1.53's storage, if that emptied it) */
 	RemoveDirectoryA("E:\\TDATA\\" V153_TITLE_FOLDER);
-	if (saves || old_saves || moved || failed)
+	if (moved || failed)
 	{
-		say("Its own save folder (E:\\UDATA\\" OWN_TITLE_FOLDER "): %d of Halo's saves copied (Halo's are untouched)%s",
-			saves, old_saves ? "," : ";");
-		if (old_saves)
-			say("  %d moved from v1.53's folder (" V153_TITLE_FOLDER ");", old_saves);
-		say("  %d of its files moved to its own storage (E:\\TDATA\\" OWN_TITLE_FOLDER ")", moved);
+		say("Moved %d of its own files (map stats, map lists, settings) to its own storage, E:\\TDATA\\" OWN_TITLE_FOLDER,
+			moved);
 		if (failed)
-			say_in(COLOUR_YELLOW, "  (%d couldn't be copied or moved)", failed);
+			say_in(COLOUR_YELLOW, "  (%d couldn't be moved)", failed);
 		flush_drive("E:\\");
 	}
 }
@@ -1182,8 +1192,7 @@ static int install(struct halo *h)
 		say("(The retail XBE is safe in default_retail.xbe.)");
 		return 1;
 	}
-	if (h->state != INSTALLED)
-		install_showcase(h);
+	install_showcase(h);
 	install_updater(h);
 	own_title_folders();
 	say_in(COLOUR_GREEN, "Done: OpenCE is this folder's default.xbe.");

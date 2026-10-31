@@ -220,6 +220,8 @@ How the pieces fit:
 - `installer/` is the installer XBE, and `tools/mkpackage.py` makes its packages. The installer downloads the
   latest signed release's package from GitHub (Y) and updates itself from a signed package that carries a newer
   installer (`installer/README.md`).
+- `showcase/` holds the stock maps' showcase files, which release packages carry (`mkpackage.py ... --showcase
+  port/oxbox/showcase`) and the installer writes to `maps\showcase\` (`showcase/README.md`).
 
 ## Credits
 
