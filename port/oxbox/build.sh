@@ -11,6 +11,8 @@ cd "$ROOT"
 LIBGCC=${LIBGCC:-$(ls /usr/lib/gcc/x86_64-linux-gnu/*/32/libgcc.a 2>/dev/null | tail -1)}
 [ -f "$LIBGCC" ] || { echo "no 32-bit libgcc.a found: install gcc-multilib, or set LIBGCC"; exit 1; }
 mkdir -p build-xbox
+# (port/oxbox/opence.ini lists every setting the game reads: the build stops when one's missing)
+python3 -I port/oxbox/tools/check_opence_ini.py
 # OpenCE's own pictures (the menu's OPTIONS and PROFILES, the gametype pictures, ONLINE PLAY's header), made from your
 # own ui.map if UI_MAP names it (port/oxbox/installer/mkpictures.c: needs a C compiler and zlib's headers for the PC)
 if [ -n "$UI_MAP" ]; then

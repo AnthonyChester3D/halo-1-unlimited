@@ -2738,7 +2738,7 @@ static void calibrate_hooks(
 static void read_settings(
 	char const *path)
 {
-	char text[1024], *p, *e;
+	char text[8192], *p, *e;   /* (as oxbox_entry.c: the whole reference opence.ini; 1 KB missed its perf_ lines) */
 	unsigned long got = 0;
 	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 

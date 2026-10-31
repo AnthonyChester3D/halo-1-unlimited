@@ -455,33 +455,9 @@ static void report_system(void)
 
 /* ---------- opence.ini (test build 24): settings a player can change without another XBE, read at start-up from the
 XBE's folder (D:\opence.ini), then from the game's own save space (T:\opence.ini), whose settings win. Lines
-"name = number"; anything else is ignored.
-	audio_effects = 0    no DirectSound effects image (the audio chip's reverb program): for a console whose BIOS
-	                     doesn't take it (a Stellar BIOS's player had to take it out to play)
-	fps_counter = 1      the frame rate in the screen's bottom right corner, for testing (test build 27): Halo's own
-	                     counter (display_framerate), frames a second over the last half second, green at 30 and
-	                     up, red under
-	bot_log = 1          the bots' developer log (test build 28, bots.c): a line every 10 seconds in this log, and
-	                     opence_bot_log.txt beside it, the spots where bots gave up on where they were going
-	perf_log = 1         the developers' performance and memory log (test build 31, oxbox_perf.c): a CSV file a map
-	                     in perf\ beside the XBE; its own settings (perf_slow_frame_ms, perf_gpu_sample_ms) are
-	                     read by it
-	showcase = 0         (the builds with the showcase screensaver, port/linux/game/showcase.c) the attract movies
-	                     instead
-	showcase_seconds = N (the same) how long the main menu waits for a press before it starts (5 and up; 75)
-	showcase_bots = N    (the same) its matches' bots, 0 to 15 (else the map's suggested players, 4 to 10, less 1)
-	showcase_min_fps = N (the same) its bots drop out one at a time while it runs under N frames a second (15; 0: never)
-	showcase_map_seconds = N (the same) each map plays at most N seconds (90; 0: no limit, a minute and its shots)
-	showcase_preview = 1 (the same) White on a map in the map list plays that map's showcase once, then the main menu
-	showcase_train = 1   the bot trainer: the showcase plays each map of showcase_playlist.ini for showcase_train_minutes
-	                     (10), every shot in order and again, the hidden maps too, so the host's bots learn the maps
-	                     (bots_learned.txt, T:\bots_<map>.txt); showcase_seconds = 5 starts it soon after boot
-	ftp = 1              a small FTP server on the game's folder while the menus are up (stopped while a map is
-	                     loaded); ftp_password = text (xbox, as the dashboards' FTP); ftp_port = N (21). Folder maps are copied into
-	                     the map cache afresh after a change through it (developers' map work)
-	map_check = 1        every folder map not yet known to load is read and unpacked whole once the menus are up, on a
-	                     thread of its own, and oxbox_log.txt lists each result and the maps that failed (testing)
-	net_test_screen = 1  (the online test builds) the network test's lines on the main menu too, not only in this log */
+"name = value"; anything else is ignored (so a line starting with # is a comment).
+Every setting, its default and what it does: port/oxbox/opence.ini. A new setting goes in there too:
+tools/check_opence_ini.py (build.sh runs it) stops the build while one read here or in oxbox_perf.c isn't. */
 int oxbox_setting_audio_effects = 1;
 int oxbox_setting_bot_log = 0;
 static int oxbox_setting_perf_log = 0;
