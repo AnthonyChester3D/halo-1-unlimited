@@ -18,8 +18,14 @@ a finishing place in 7 bits.
 
 /* ---------- session limits */
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the Xbox's 16 (its games' own layout: a PC game's 128 are made 16 when it joins one) */
 #define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 16
 #define HALO_PORT_MAXIMUM_NETWORK_MACHINES 16
+#else
+#define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 128
+#define HALO_PORT_MAXIMUM_NETWORK_MACHINES 128
+#endif
 
 /* a host polls its listening socket and one socket per machine; the Xbox's
 Winsock headers default to 64 (the prefix headers define FD_SETSIZE from
