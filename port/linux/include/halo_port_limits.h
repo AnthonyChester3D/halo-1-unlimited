@@ -103,6 +103,12 @@ port/linux/game/game_modes.h's game_modes_kind), for the server browser */
 #define HALO_PORT_ADVERTISED_VERSION_OFFSET 0
 #define HALO_PORT_ADVERTISED_FLAGS_OFFSET 2
 #define HALO_PORT_ADVERTISED_KIND_OFFSET 3
+/* ... and a dedicated server's linked game (port/linux/game/linked_maps.c): the Xbox map's version (a little-endian
+long) and its key ("+folder", up to 18 characters, not terminated when it fills them), which Halo 1 Unlimited's
+Xboxes list the game by in place of the Custom Edition map they haven't got (the PC builds look at none of it) */
+#define HALO_PORT_ADVERTISED_LINKED_VERSION_OFFSET 4
+#define HALO_PORT_ADVERTISED_LINKED_KEY_OFFSET 8
+#define HALO_PORT_ADVERTISED_LINKED_KEY_SIZE 18
 /* ... the host plays the distributed netcode (always, since the lockstep
 netcode was removed; hosts of version 4 built before then may not) */
 #define HALO_PORT_ADVERTISED_DISTRIBUTED_FLAG 0x01

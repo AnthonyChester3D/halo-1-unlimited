@@ -1981,6 +1981,26 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 				if (oxbox_server_xbox_joinable())
 					advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= OXBOX_ADVERTISED_XBOX_FLAG;
 			}
+			/* oxbox: a linked game: the Xbox map's key and version, which the Xboxes list it by (linked_maps.c) */
+			{
+				extern char const *linked_map_key(void);
+				extern unsigned long linked_map_version(void);
+				char const *key = linked_map_key();
+
+				if (key && key[0] == '+')
+				{
+					unsigned long version = linked_map_version();
+					long index;
+
+					for (index = 0; index < 4; index++)
+					{
+						advertisement.reserved[HALO_PORT_ADVERTISED_LINKED_VERSION_OFFSET + index] =
+							(byte)(version >> (index * 8));
+					}
+					for (index = 0; index < HALO_PORT_ADVERTISED_LINKED_KEY_SIZE && key[index]; index++)
+						advertisement.reserved[HALO_PORT_ADVERTISED_LINKED_KEY_OFFSET + index] = (byte)key[index];
+				}
+			}
 #endif
 			/* (an OpenCE gametype's kind, the server browser's name for it) */
 			advertisement.reserved[HALO_PORT_ADVERTISED_KIND_OFFSET] = game_modes_kind(&game->variant,
