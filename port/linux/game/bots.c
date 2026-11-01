@@ -6264,8 +6264,16 @@ void bots_render(
 		return;
 	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
 	{
-		if (network_player_is_bot(&game->players[index]))
+		struct network_player *player = &game->players[index];
+
+		/* (a dedicated server's bot is the one player of a machine index no machine has, which only the host knows
+		for a bot: here, a player whose machine the game has no record of) */
+		if (network_player_is_bot(player) || (!host && network_player_is_valid(player) &&
+			player->machine_index >= 0 && player->machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES &&
+			game->machines[player->machine_index].machine_index != player->machine_index))
+		{
 			bots++;
+		}
 	}
 	if ((font = tag_loaded('font', "ui\\large_ui")) == NONE)
 		return;
