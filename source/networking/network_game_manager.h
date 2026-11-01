@@ -61,6 +61,10 @@ enum
 	/* the host is a dedicated server: its loading zones ask for most of the
 	players, not the host's (network_coop_host_dedicated) */
 	_network_game_cooperative_dedicated_bit = 2,
+	/* oxbox: the host alone runs the scripts, in a multiplayer game too (a
+	dedicated server's server.host_scripts): network_scripts_host_only. The
+	byte's last bit, clear of the co-op bits OpenCE may add */
+	_network_game_host_scripts_bit = 7,
 };
 
 struct network_game

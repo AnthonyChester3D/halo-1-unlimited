@@ -976,6 +976,11 @@ static const struct config_setting config_settings[] =
 	{ "server.bots_difficulty", _config_string, "\"normal\"", "HALO_SERVER_BOTS_DIFFICULTY", _environment_value,
 		_platform_server,
 		"The bots' skill: \"easy\", \"normal\", \"hard\" or \"legendary\"." },
+	{ "server.host_scripts", _config_boolean, "false", "HALO_SERVER_HOST_SCRIPTS", _environment_value, _platform_server,
+		"Only the server runs the map's scripts in multiplayer, as in co-op, and\n"
+		"sends the players what they change (doors, elevators, objects, sounds,\n"
+		"effects): every machine sees the same. Halo 1 Unlimited's players follow\n"
+		"it; other builds run the scripts themselves as before." },
 	{ "server.auto_pickup_second_weapon", _config_boolean, "false", "HALO_SERVER_AUTO_PICKUP_SECOND_WEAPON",
 		_environment_value, _platform_server,
 		"In multiplayer, a player holding one weapon picks up and readies a second\n"

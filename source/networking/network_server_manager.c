@@ -5332,6 +5332,21 @@ void network_game_server_port_set_cooperative_dedicated(
 	SET_FLAG(server->game.cooperative_flags, _network_game_cooperative_dedicated_bit, dedicated);
 }
 
+/* oxbox: whether the host alone runs the scripts in a multiplayer game too (network_scripts_host_only: a dedicated
+server's server.host_scripts), told the clients with the game's settings */
+void network_game_server_port_set_host_scripts(
+	boolean host_scripts)
+{
+	struct network_game_server *server = global_network_game_server_get();
+
+	if (!server || TEST_FLAG(server->game.cooperative_flags, _network_game_host_scripts_bit) == (host_scripts != 0))
+		return;
+	SET_FLAG(server->game.cooperative_flags, _network_game_host_scripts_bit, host_scripts);
+	/* (the lobby's machines told; a game under way keeps what it started with) */
+	if (network_game_server_lobby_is_open(server) && !network_game_server_send_game_data_pregame(server))
+		network_event("network_game_server_port_set_host_scripts() failed to send updated game settings to clients");
+}
+
 void network_game_server_port_set_cooperative_ally_friendly_fire(
 	boolean ally_friendly_fire)
 {

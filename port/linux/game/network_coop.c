@@ -628,6 +628,20 @@ static boolean coop_client(
 	return game_connection() == _game_connection_network_client && coop_game();
 }
 
+/* oxbox: the scripts' host and client: co-op's, or a multiplayer game's whose host alone runs the scripts
+(network_scripts_host_only) */
+static boolean scripts_host(
+	void)
+{
+	return game_connection() == _game_connection_network_server && network_scripts_host_only();
+}
+
+static boolean scripts_client(
+	void)
+{
+	return game_connection() == _game_connection_network_client && network_scripts_host_only();
+}
+
 /* host: sends count entries of entry_size in message to every client */
 static void send_to_clients(
 	void *message,
@@ -739,7 +753,7 @@ static struct distributed_coop_event *event_new(
 {
 	struct distributed_coop_event *event;
 
-	if (!coop_host())
+	if (!scripts_host())
 		return NULL;
 	if (coop_events.count == MAXIMUM_QUEUED_EVENTS)
 	{
@@ -2283,6 +2297,26 @@ boolean network_coop_active(
 		global_scenario && global_scenario->type == _scenario_type_solo && !game_engine_running();
 }
 
+/* oxbox: whether the network game's scripts run on its host alone, which sends the others what they change: co-op, or
+a multiplayer game whose host says so (its settings' _network_game_host_scripts_bit: a dedicated server's
+server.host_scripts). Its clients run none of the scripts (game.c), take the devices as the host moves them, and the
+host's named objects, sounds, effects and the rest as co-op's do */
+boolean network_scripts_host_only(
+	void)
+{
+	short connection = game_connection();
+	struct network_game *game;
+
+	if (network_coop_active())
+		return TRUE;
+	if ((connection != _game_connection_network_server && connection != _game_connection_network_client) ||
+		!game_engine_running() || !(game = network_game_get_game()))
+	{
+		return FALSE;
+	}
+	return TEST_FLAG(game->cooperative_flags, _network_game_host_scripts_bit);
+}
+
 boolean network_coop_player_collisions(
 	void)
 {
@@ -2481,7 +2515,7 @@ void network_coop_note_bsp_switch(
 boolean network_coop_devices_remote(
 	void)
 {
-	return coop_client();
+	return scripts_client();
 }
 
 /* units.c: a vehicle left the vehicle carrying it. When a Pelican drops a
@@ -2570,7 +2604,7 @@ boolean network_coop_set_players_vitality(
 void network_coop_note_device_snap(
 	short group_index)
 {
-	if (coop_host() && group_index >= 0 && group_index < MAXIMUM_DEVICE_GROUPS
+	if (scripts_host() && group_index >= 0 && group_index < MAXIMUM_DEVICE_GROUPS
 #if defined(OXBOX_STRIP)
 		&& host_devices_block
 #endif
@@ -2732,7 +2766,7 @@ void network_coop_note_nav_point(
 {
 	short index;
 
-	if (!coop_host())
+	if (!scripts_host())
 		return;
 	send_nav_point(kind, nav_index, target, marker, vertical_offset);
 	for (index = 0; index < host_hud_state.nav_point_count; index++)
@@ -2826,7 +2860,7 @@ void network_coop_note_unit_animation_frame(
 {
 	short index;
 
-	if (!coop_host())
+	if (!scripts_host())
 		return;
 	for (index = coop_events.count - 1; index >= 0; index--)
 	{
@@ -2931,7 +2965,7 @@ void network_coop_note_attach(
 	short parent_marker_index, child_marker_index;
 	short index;
 
-	if (!coop_host() || !object_try_and_get(parent_index) || !object_try_and_get(child_index))
+	if (!scripts_host() || !object_try_and_get(parent_index) || !object_try_and_get(child_index))
 		return;
 	parent_marker_index = object_marker_index(parent_index, parent_marker_name);
 	child_marker_index = object_marker_index(child_index, child_marker_name);
@@ -2956,7 +2990,7 @@ void network_coop_note_detach(
 {
 	short index;
 
-	if (!coop_host())
+	if (!scripts_host())
 		return;
 	send_attach(_coop_detach, parent_index, NONE, child_index, NONE);
 	index = host_attachment_find(child_index);
@@ -3119,7 +3153,26 @@ void network_coop_host_tick(
 	struct distributed_coop_presentation_message message;
 
 	if (!coop_game())
+	{
+		/* oxbox: a multiplayer game whose host alone runs the scripts: what they change, as co-op sends it (not
+		co-op's presentation, its HUD, screen effects or skip vote: a multiplayer game's camera, input and HUD
+		are each machine's own) */
+		if (scripts_host())
+		{
+			host_resend_update();
+			host_send_device_groups();
+			if (host_resend.joined || game_time_get() % OBJECT_NAMES_INTERVAL_TICKS == 0)
+				host_send_object_names();
+			host_send_object_transforms();
+			host_send_device_states();
+			host_send_object_looks();
+			host_send_attachments();
+			host_send_looping_sounds();
+			host_send_broken_surfaces();
+			host_send_events();
+		}
 		return;
+	}
 	host_resend_update();
 	players_vitality_keep();
 	host_friendly_fire_update();
@@ -3228,7 +3281,7 @@ void network_coop_handle_device_states(
 	struct distributed_coop_device_state const *states = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -3262,7 +3315,7 @@ void network_coop_handle_object_transforms(
 	struct distributed_coop_object_transform const *transforms = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -3293,7 +3346,7 @@ void network_coop_handle_object_looks(
 	struct distributed_coop_object_look const *looks = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -3358,7 +3411,7 @@ void network_coop_handle_device_groups(
 	struct distributed_coop_device_group const *groups = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -3394,7 +3447,7 @@ void network_coop_handle_object_names(
 	struct distributed_coop_object_names const *names = entries;
 	short name_index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	if (names->structure_bsp_index != global_structure_bsp_index_get() ||
 		names->name_count != MIN(global_scenario_get()->object_names.count, MAXIMUM_OBJECT_NAMES_PER_SCENARIO))
@@ -3437,7 +3490,7 @@ void network_coop_handle_events(
 	struct distributed_coop_event const *events = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{

@@ -518,6 +518,12 @@ static void server_apply_game_settings(
 	/* (a co-op game's clients told the host has no player: its loading zones
 	ask for most of them, network_coop_host_dedicated) */
 	network_game_server_port_set_cooperative_dedicated(TRUE);
+	/* (oxbox: the scripts the host's alone, in multiplayer too: network_coop.c's network_scripts_host_only) */
+	{
+		void network_game_server_port_set_host_scripts(boolean host_scripts);
+
+		network_game_server_port_set_host_scripts(config_boolean("server.host_scripts") != 0);
+	}
 }
 
 /* the listing: internet play (network.online), public or by invite, and
