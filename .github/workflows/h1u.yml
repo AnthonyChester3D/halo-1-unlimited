@@ -1,0 +1,76 @@
+name: Halo 1 Unlimited
+
+# Halo 1 Unlimited's own checks, on every push to its branches (OpenCE's "Build" and "Server image" workflows build
+# OpenCE's PC, Android and web versions, which these branches aren't: they're turned off in the repository's Actions
+# settings).
+#
+# - Online (the Xbox builds): the game and the Xbox layer compiled for the Xbox, as port/oxbox/build.sh compiles
+#   them for the online test builds. Not linked: the link needs a retail Halo XBE, which isn't (and mustn't be) here.
+# - Server (the dedicated server): the Linux build the server kit makes (configure.py --portable, ninja linux), and
+#   its --version.
+on:
+  push:
+    branches: [Online, Server]
+    paths-ignore:
+      - "**.md"
+      - "**.txt"
+  workflow_dispatch:
+
+concurrency:
+  group: h1u-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  xbox:
+    if: github.ref_name == 'Online'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld ninja-build python3
+
+      - uses: actions/checkout@v4
+
+      - name: The settings reference (port/oxbox/opence.ini)
+        run: python3 -I port/oxbox/tools/check_opence_ini.py
+
+      - name: Compile for the Xbox (the online test builds' options)
+        env:
+          OXBOX_EXTRA: -DOXBOX_NET_TEST -DOXBOX_NET_LWIP -DOXBOX_NET_P2P -DOXBOX_CROSSPLAY -DOXBOX_SHOWCASE -DOXBOX_OFFLINE_SYSTEM_LINK -DOXBOX_BOT_TUNING
+        run: |
+          mkdir -p build-xbox
+          python3 -I port/oxbox/tools/gen_xbox.py > build-xbox/build.ninja
+          ninja -f build-xbox/build.ninja
+
+  server:
+    if: github.ref_name == 'Server'
+    # (Arch Linux, as OpenCE's own Linux build: a current clang and lld, and what the portable build's SDL needs)
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    timeout-minutes: 40
+    steps:
+      - name: Install the toolchain
+        run: |
+          printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+          pacman -Syu --noconfirm --needed git python ninja clang lld gcc lib32-glibc lib32-gcc-libs cmake pkgconf wayland
+
+      - uses: actions/checkout@v4
+
+      # the system root and SDL's source, which the portable build downloads
+      - uses: actions/cache@v4
+        with:
+          path: build/linux/third_party
+          key: h1u-linux-third-party-${{ hashFiles('tools/linux_sysroot.py') }}
+
+      - name: Build the dedicated server (configure.py --portable, ninja linux)
+        run: |
+          python configure.py --portable
+          ninja linux
+
+      - name: Its version
+        run: build/linux/halo --version || echo "(its --version did not run here; the build itself passed)"
