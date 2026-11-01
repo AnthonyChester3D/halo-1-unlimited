@@ -6003,6 +6003,20 @@ boolean bots_server_on(
 	return FALSE;
 }
 
+/* whether a dedicated server with bots turns PCs away (server.bots_pc lets them in: a test of how a PC build takes
+the bots) */
+boolean bots_server_refuses_pcs(
+	void)
+{
+#if !defined(HALO_XBOX_TARGET)
+	int config_boolean(char const *name);
+
+	return bots_server_on() && !config_boolean("server.bots_pc");
+#else
+	return FALSE;
+#endif
+}
+
 /* the host, every frame */
 void bots_update(
 	void)

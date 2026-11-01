@@ -2487,9 +2487,9 @@ address, real address or hardware id) */
 		/* (oxbox: nor, on a dedicated server with Halo 1 Unlimited's bots, a PC, whose build doesn't know a bot
 		(network_player_is_valid): an Xbox's hardware id starts with the Xbox's mark, port/linux/src/p2p.h) */
 		{
-			boolean bots_server_on(void);
+			boolean bots_server_refuses_pcs(void);
 
-			if (!network_game_server_client_machine_is_local(server, machine) && bots_server_on() &&
+			if (!network_game_server_client_machine_is_local(server, machine) && bots_server_refuses_pcs() &&
 				hardware_id[0] && strncmp(hardware_id, "0b0c0b0c", 8))
 			{
 				network_event("refusing a machine @ %s: a PC, and this server plays with bots (Xboxes alone)",
