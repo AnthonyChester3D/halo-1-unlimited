@@ -474,15 +474,23 @@ boolean network_player_is_valid(
 	return FALSE;
 }
 
-/* oxbox: a bot (network_game_manager.h) */
+/* oxbox: the host's bots' machines (network_game_manager.h) */
+unsigned long network_game_bot_machines = 0;
+
+/* oxbox: a bot (network_game_manager.h): at a controller no gamepad has, or (the
+host knows) the one player of a machine of its own */
 boolean network_player_is_bot(
 	struct network_player const *player)
 {
-	return player &&
-		player->machine_index >= 0 &&
-		(long)player->machine_index < MAXIMUM_NETWORK_MACHINE_COUNT &&
-		player->controller_index >= NETWORK_BOT_CONTROLLER_FIRST &&
-		player->controller_index < NETWORK_BOT_CONTROLLER_FIRST + NETWORK_BOT_MAXIMUM_COUNT;
+	if (!player || player->machine_index < 0 || (long)player->machine_index >= MAXIMUM_NETWORK_MACHINE_COUNT)
+		return FALSE;
+	if (player->controller_index >= NETWORK_BOT_CONTROLLER_FIRST &&
+		player->controller_index < NETWORK_BOT_CONTROLLER_FIRST + NETWORK_BOT_MAXIMUM_COUNT)
+	{
+		return TRUE;
+	}
+	return player->controller_index == 0 && player->machine_index < NETWORK_BOT_MACHINE_LIMIT &&
+		(network_game_bot_machines & (1UL << player->machine_index)) != 0;
 }
 
 /* oxbox: a player in the game, a person's or a bot */

@@ -105,8 +105,15 @@ boolean network_player_is_valid(
 machine at a controller index no gamepad has, NETWORK_BOT_CONTROLLER_FIRST
 on: network_player_is_valid() says no to it, so the code that walks a
 machine's local players (the menus, the gamepads) passes it by, and the
-code that holds every player in the game asks network_player_is_present() */
+code that holds every player in the game asks network_player_is_present().
+A host's bot may instead be the one player of a machine index no machine has,
+at controller 0 (network_game_server_add_bot): a player as any other to the
+other machines, PCs too, which know only controllers 0 to 3. Only the host
+knows it for a bot: its machine's bit in network_game_bot_machines */
 #define NETWORK_BOT_CONTROLLER_FIRST 16
+/* the host's bots' machine indices, a bit each (0 on every other machine) */
+extern unsigned long network_game_bot_machines;
+#define NETWORK_BOT_MACHINE_LIMIT 16
 /* the host's bot mode + 1 in a field the Xbox game left unused (0: off, or
 a host without bots), for the lobby's label on every machine */
 #define NETWORK_GAME_BOT_MODE(game) ((game)->__unknown426)

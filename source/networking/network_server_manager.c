@@ -1008,7 +1008,8 @@ short network_game_server_matching_player_names(
 	{
 		struct network_player const *player = &server->game.players[index];
 
-		if (!network_player_is_valid(player) || !VALID_INDEX(player->machine_index, MAXIMUM_NETWORK_MACHINE_COUNT) ||
+		if (!network_player_is_valid(player) || network_player_is_bot(player) ||
+			!VALID_INDEX(player->machine_index, MAXIMUM_NETWORK_MACHINE_COUNT) ||
 			network_game_server_client_machine_is_local(server, &server->client_machines[player->machine_index]))
 		{
 			continue;
@@ -1372,6 +1373,8 @@ struct network_game_server *network_game_server_create(
 			server->state = _network_game_server_state_pregame;
 			server->flags = FLAG(_network_game_server_game_valid_bit);
 			csmemset(&server->game, 0, sizeof(server->game));
+			/* oxbox: no bots yet */
+			network_game_bot_machines = 0;
 
 			network_connection_set_connection_rejection_procedure(
 				server->connection,
@@ -1430,6 +1433,8 @@ void network_game_server_dispose(
 
 	/* port: a won co-op round's next level belongs to this server alone */
 	network_game_server_cooperative_next_map[0] = 0;
+	/* oxbox: its bots' machines are its own (the machine may join another's game next) */
+	network_game_bot_machines = 0;
 
 	switch (server->state)
 	{
@@ -2484,20 +2489,6 @@ address, real address or hardware id) */
 			network_game_server_refusal_code = _rejection_code_blacklisted_machine;
 			return FALSE;
 		}
-		/* (oxbox: nor, on a dedicated server with Halo 1 Unlimited's bots, a PC, whose build doesn't know a bot
-		(network_player_is_valid): an Xbox's hardware id starts with the Xbox's mark, port/linux/src/p2p.h) */
-		{
-			boolean bots_server_refuses_pcs(void);
-
-			if (!network_game_server_client_machine_is_local(server, machine) && bots_server_refuses_pcs() &&
-				hardware_id[0] && strncmp(hardware_id, "0b0c0b0c", 8))
-			{
-				network_event("refusing a machine @ %s: a PC, and this server plays with bots (Xboxes alone)",
-					transport_address_to_string(&address));
-				network_game_server_refusal_code = _rejection_code_game_is_closed;
-				return FALSE;
-			}
-		}
 		/* (nor, on a dedicated server, one from a VPN's address without a
 		Discord account that lets it in: network_link.c) */
 		{
@@ -3016,14 +3007,120 @@ static void network_game_server_bot_name(
 	}
 }
 
+/* oxbox: when each bot machine index last had a bot leave (system_milliseconds; the machines hold a bot that quits a
+while, NETWORK_GAME_PLAYER_QUIT_DELAY, at its machine index) */
+static unsigned long network_game_server_bot_machine_left_at[NETWORK_BOT_MACHINE_LIMIT];
+
+/* whether a machine index is a bot's: a bot is its player, or one left it a moment ago */
+static boolean network_game_server_machine_index_is_bots(
+	struct network_game_server *server,
+	long machine_index)
+{
+	long index;
+
+	if (!VALID_INDEX(machine_index, NETWORK_BOT_MACHINE_LIMIT) || !(network_game_bot_machines & (1UL << machine_index)))
+		return FALSE;
+	if (network_game_server_bot_machine_left_at[machine_index] &&
+		system_milliseconds() - network_game_server_bot_machine_left_at[machine_index] < 10 * MILLISECONDS_PER_SECOND)
+	{
+		return TRUE;
+	}
+	for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
+	{
+		if (network_player_is_bot(&server->game.players[index]) &&
+			server->game.players[index].machine_index == machine_index)
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/* a machine index for a new bot, under the Xbox's 16 (crossplay: an Xbox in a PC host's game holds no more): the
+highest no machine has, no player has and no bot left a moment ago; NONE if there's none */
+static long network_game_server_bot_machine_index(
+	struct network_game_server *server)
+{
+	long limit = MIN(NETWORK_BOT_MACHINE_LIMIT, MAXIMUM_NETWORK_MACHINE_COUNT);
+	long machine_index;
+
+	for (machine_index = limit - 1; machine_index >= 0; machine_index--)
+	{
+		long index;
+
+		if (server->client_machines[machine_index].machine_index != NONE ||
+			network_machine_is_valid(&server->game.machines[machine_index]) ||
+			network_game_server_machine_index_is_bots(server, machine_index))
+		{
+			continue;
+		}
+		for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
+		{
+			if (network_player_is_present(&server->game.players[index]) &&
+				server->game.players[index].machine_index == machine_index)
+			{
+				break;
+			}
+		}
+		if (index == MAXIMUM_NETWORK_PLAYER_COUNT)
+			return machine_index;
+	}
+	return NONE;
+}
+
+/* a machine connecting: NONE if a machine index under the Xbox's 16 is free for it, or a bot's machine index under
+it, the bot made to leave (bots_pick_leaver's, if it has one there), so the machine takes that */
+static long network_game_server_bot_machine_to_give_up(
+	struct network_game_server *server)
+{
+	long limit = MIN(NETWORK_BOT_MACHINE_LIMIT, MAXIMUM_NETWORK_MACHINE_COUNT);
+	long machine_index;
+	long slot;
+
+	for (machine_index = 0; machine_index < limit; machine_index++)
+	{
+		if (server->client_machines[machine_index].machine_index == NONE &&
+			!network_game_server_machine_index_is_bots(server, machine_index))
+		{
+			return NONE;
+		}
+	}
+	slot = bots_pick_leaver(server->game.players, MAXIMUM_NETWORK_PLAYER_COUNT);
+	if (!VALID_INDEX(slot, MAXIMUM_NETWORK_PLAYER_COUNT) || server->game.players[slot].controller_index != 0 ||
+		server->game.players[slot].machine_index >= limit)
+	{
+		/* (any bot of a machine of its own) */
+		for (slot = 0; slot < MAXIMUM_NETWORK_PLAYER_COUNT; slot++)
+		{
+			if (network_player_is_bot(&server->game.players[slot]) && server->game.players[slot].controller_index == 0 &&
+				server->game.players[slot].machine_index < limit)
+			{
+				break;
+			}
+		}
+		if (slot == MAXIMUM_NETWORK_PLAYER_COUNT)
+			return NONE;
+	}
+	machine_index = server->game.players[slot].machine_index;
+	if (!network_game_server_remove_bot(slot))
+		return NONE;
+	network_event("bot machine #%ld given up to a machine connecting", machine_index);
+	return machine_index;
+}
+
+/* oxbox: a bot joins, the one player of a machine index no machine has, at controller 0 (network_game_manager.h): to
+the other machines a player as any other, which PCs see too. Without a machine index free, of the host's machine at
+a controller no gamepad has, as Halo 1 Unlimited's bots were before (only Xboxes see those) */
 boolean network_game_server_add_bot(
 	void)
 {
 	struct network_game_server *server = global_network_game_server_get();
 	struct network_game_client *client = global_network_game_client_get();
+	struct network_game_server_client_machine bot_machine;
 	boolean used[NETWORK_BOT_MAXIMUM_COUNT];
 	struct network_player player;
 	long host_machine_index;
+	long machine_index;
 	long index;
 	short bot_index;
 
@@ -3035,34 +3132,61 @@ boolean network_game_server_add_bot(
 	host_machine_index = network_game_client_get_machine_index(client);
 	if (!VALID_INDEX(host_machine_index, MAXIMUM_NETWORK_MACHINE_COUNT))
 		return FALSE;
+	/* (the bots there are, at most NETWORK_BOT_MAXIMUM_COUNT) */
 	csmemset(used, 0, sizeof(used));
+	bot_index = 0;
 	for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
 	{
 		struct network_player *other = &server->game.players[index];
 
 		if (network_player_is_bot(other))
-			used[other->controller_index - NETWORK_BOT_CONTROLLER_FIRST] = TRUE;
+		{
+			bot_index++;
+			if (other->controller_index >= NETWORK_BOT_CONTROLLER_FIRST)
+				used[other->controller_index - NETWORK_BOT_CONTROLLER_FIRST] = TRUE;
+		}
 	}
-	for (bot_index = 0; bot_index < NETWORK_BOT_MAXIMUM_COUNT && used[bot_index]; bot_index++)
-		;
-	if (bot_index == NETWORK_BOT_MAXIMUM_COUNT)
+	if (bot_index >= NETWORK_BOT_MAXIMUM_COUNT)
 		return FALSE;
 
 	csmemset(&player, 0, sizeof(player));
 	network_game_server_bot_name(server, player.name);
 	player.primary_color_index = NONE;
 	player.icon_index = 0;
-	player.machine_index = (char)host_machine_index;
-	player.controller_index = (char)(NETWORK_BOT_CONTROLLER_FIRST + bot_index);
 	player.team_index = NONE;
 	player.player_list_index = NONE;
-	if (!network_game_server_add_player_to_game(server, &server->client_machines[host_machine_index], &player))
+	csmemset(&bot_machine, 0, sizeof(bot_machine));
+	machine_index = network_game_server_bot_machine_index(server);
+	if (machine_index != NONE)
+	{
+		player.machine_index = (char)machine_index;
+		player.controller_index = 0;
+		bot_machine.machine_index = (short)machine_index;
+		network_game_bot_machines |= 1UL << machine_index;
+		network_game_server_bot_machine_left_at[machine_index] = 0;
+	}
+	else
+	{
+		for (bot_index = 0; bot_index < NETWORK_BOT_MAXIMUM_COUNT && used[bot_index]; bot_index++)
+			;
+		if (bot_index == NETWORK_BOT_MAXIMUM_COUNT)
+			return FALSE;
+		player.machine_index = (char)host_machine_index;
+		player.controller_index = (char)(NETWORK_BOT_CONTROLLER_FIRST + bot_index);
+		bot_machine.machine_index = (short)host_machine_index;
+	}
+	if (!network_game_server_add_player_to_game(server, &bot_machine, &player))
+	{
+		if (machine_index != NONE)
+			network_game_bot_machines &= ~(1UL << machine_index);
 		return FALSE;
+	}
 	if (server->state == _network_game_server_state_ingame)
 		network_game_server_send_player_joined_info_ingame(server, &player);
 	else
 		network_game_server_send_game_data_pregame(server);
-	network_event("bot %d added at slot %d", (int)bot_index, (int)player.player_list_index);
+	network_event("bot added at slot %d (machine #%d, controller %d)", (int)player.player_list_index,
+		(int)player.machine_index, (int)player.controller_index);
 	return TRUE;
 }
 
@@ -3082,6 +3206,9 @@ boolean network_game_server_remove_bot(
 	player = server->game.players[slot];
 	if (!network_player_is_bot(&player) || !network_game_remove_player(&server->game, &player))
 		return FALSE;
+	/* (a bot of a machine of its own: its machine index stays the bots' a while, network_game_server_machine_index_is_bots) */
+	if (player.controller_index == 0 && VALID_INDEX(player.machine_index, NETWORK_BOT_MACHINE_LIMIT))
+		network_game_server_bot_machine_left_at[player.machine_index] = system_milliseconds() | 1;
 	if (server->state == _network_game_server_state_ingame)
 	{
 		struct message_server_remove_player_ingame remove_player;
@@ -4003,7 +4130,7 @@ static boolean server_players_on_one_machine(
 
 	for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
 	{
-		if (network_player_is_valid(&server->game.players[index]))
+		if (network_player_is_valid(&server->game.players[index]) && !network_player_is_bot(&server->game.players[index]))
 			people++;
 	}
 	return people == 1;
@@ -4017,7 +4144,8 @@ static boolean server_players_on_one_machine(
 	{
 		struct network_player *player = &server->game.players[player_index];
 
-		if (!network_player_is_valid(player))
+		/* (oxbox: a bot of a machine of its own is the host's) */
+		if (!network_player_is_valid(player) || network_player_is_bot(player))
 			continue;
 
 		if (first_machine_index == NONE)
@@ -5349,9 +5477,15 @@ static boolean network_game_server_add_new_client(
 	load the game is told so, network_game_server_handle_message_client_join_game_request) */
 	if (TEST_FLAG(server->flags, _network_game_server_game_open_bit))
 	{
+		/* oxbox: not a bot's machine index (network_game_server_add_bot); but rather than go past the Xbox's 16
+		(which an Xbox in a PC host's game can't hold: network_client_message_handler.c), a bot leaves and gives its
+		machine index up */
+		long bot_held = network_game_server_bot_machine_to_give_up(server);
+
 		for (i = 0; i < MAXIMUM_NETWORK_MACHINE_COUNT; i++)
 		{
-			if (server->client_machines[i].machine_index == NONE)
+			if (server->client_machines[i].machine_index == NONE &&
+				(i == bot_held || !network_game_server_machine_index_is_bots(server, i)))
 			{
 				struct transport_address client_address = { 0 };
 
@@ -5397,6 +5531,9 @@ static boolean network_game_server_add_new_client(
 					else
 					{
 						server->client_machines[i].connection = new_connection;
+						/* oxbox: a machine's now, no bot's */
+						if (i < NETWORK_BOT_MACHINE_LIMIT)
+							network_game_bot_machines &= ~(1UL << i);
 						network_game_invalidate_machine(&server->game, i);
 						server->client_machines[i].machine_index = (short)i;
 						server->client_machines[i].flags =

@@ -261,7 +261,7 @@ static void bots_test_update(
 	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
 	{
 		struct player_datum *player = bots_player_at(index);
-		long unit_index = player && player->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST ?
+		long unit_index = player && network_player_is_bot(&player->network_player_data) ?
 			player->unit_index : NONE;
 
 		if (unit_index != last_units[index] && unit_index != NONE)
@@ -280,7 +280,7 @@ static void bots_test_update(
 			long slot = (kill_turn + index) % HALO_PORT_MAXIMUM_NETWORK_PLAYERS;
 			struct player_datum *player = bots_player_at(slot);
 
-			if (player && player->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST &&
+			if (player && network_player_is_bot(&player->network_player_data) &&
 				player->unit_index != NONE)
 			{
 				error(_error_silent, "bots test: the host's player kills the bot at slot %ld", slot);
@@ -1922,8 +1922,8 @@ static boolean bots_pick_destination(
 			object_get_origin(other->unit_index, &other_position);
 			if (bots_distance3d(position, &other_position) < 8.f)
 				continue;
-			if (!mate || (other->network_player_data.controller_index < NETWORK_BOT_CONTROLLER_FIRST &&
-				mate->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST))
+			if (!mate || (!network_player_is_bot(&other->network_player_data) &&
+				network_player_is_bot(&mate->network_player_data)))
 			{
 				mate = other;
 			}
@@ -4240,7 +4240,7 @@ static short bots_team_rank(
 		struct player_datum *other = bots_player_at(index);
 
 		if (other && other->team_index == player->team_index &&
-			other->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST)
+			network_player_is_bot(&other->network_player_data))
 		{
 			rank++;
 		}
@@ -4260,7 +4260,7 @@ static short bots_team_bots(
 		struct player_datum *other = bots_player_at(index);
 
 		if (other && other->team_index == player->team_index &&
-			other->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST)
+			network_player_is_bot(&other->network_player_data))
 		{
 			count++;
 		}
@@ -6003,20 +6003,6 @@ boolean bots_server_on(
 	return FALSE;
 }
 
-/* whether a dedicated server with bots turns PCs away (server.bots_pc lets them in: a test of how a PC build takes
-the bots) */
-boolean bots_server_refuses_pcs(
-	void)
-{
-#if !defined(HALO_XBOX_TARGET)
-	int config_boolean(char const *name);
-
-	return bots_server_on() && !config_boolean("server.bots_pc");
-#else
-	return FALSE;
-#endif
-}
-
 /* the host, every frame */
 void bots_update(
 	void)
@@ -6077,7 +6063,7 @@ void bots_update(
 			{
 				struct player_datum *player = bots_player_at(index);
 
-				if (player && player->network_player_data.controller_index >= NETWORK_BOT_CONTROLLER_FIRST &&
+				if (player && network_player_is_bot(&player->network_player_data) &&
 					player->unit_index == NONE)
 				{
 					break;
@@ -6175,7 +6161,7 @@ boolean bots_player_action(
 	struct player_datum *player = bots_player_at(absolute_player_index);
 	struct unit_datum *unit;
 
-	if (!player || player->network_player_data.controller_index < NETWORK_BOT_CONTROLLER_FIRST)
+	if (!player || !network_player_is_bot(&player->network_player_data))
 		return FALSE;
 	csmemset(action, 0, sizeof(*action));
 	action->desired_weapon_index = NONE;

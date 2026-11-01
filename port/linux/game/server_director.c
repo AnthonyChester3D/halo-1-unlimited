@@ -253,9 +253,10 @@ static long server_player_count(
 	long count = 0;
 	long index;
 
+	/* (people: oxbox's bots aside, each the player of a machine of its own) */
 	for (index = 0; game && index < MAXIMUM_SLOTS; index++)
 	{
-		if (network_player_is_valid(&game->players[index]))
+		if (network_player_is_valid(&game->players[index]) && !network_player_is_bot(&game->players[index]))
 			count++;
 	}
 	return count;
