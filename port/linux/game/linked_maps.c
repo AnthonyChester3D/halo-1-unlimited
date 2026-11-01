@@ -37,6 +37,9 @@ An Xbox is a machine whose hardware id carries the Xbox's mark (p2p.h's P2P_XBOX
 #include "networking/network_game_manager.h"
 #include "networking/network_server_manager.h"
 
+#include "../src/server_log.h" /* port: port/linux/src/server_log.c */
+
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +82,22 @@ static struct
 /* ---------- prototypes */
 
 void platform_log(char const *format, ...);
+int halo_server_mode(void);
+
+/* a line: a dedicated server's in its log (the web console shows it), else on the standard error */
+static void linked_log(char const *format, ...)
+{
+	char line[400];
+	va_list arguments;
+
+	va_start(arguments, format);
+	vsnprintf(line, sizeof(line), format, arguments);
+	va_end(arguments);
+	if (halo_server_mode())
+		server_log(_server_log_info, "maps", "%s", line);
+	else
+		platform_log("%s", line);
+}
 void p2p_blake2b_256(const void *data, unsigned long size, unsigned char *digest);
 boolean custom_edition_level_name(char const *level_name);
 long hmp_maps_find(char const *level_name);
@@ -362,7 +381,7 @@ static void link_search_folder(void *context, char const *key)
 		/* (the folder's .map must be the Xbox map the link names) */
 		if (!file_hash_text(map_path, &size, hash) || ieq(hash, xbox_hash))
 		{
-			platform_log("linked maps: %s names %s, but %s isn't the Xbox map it names (another build?)", link_path,
+			linked_log("linked maps: %s names %s, but %s isn't the Xbox map it names (another build?)", link_path,
 				search->level, map_path);
 			continue;
 		}
@@ -373,7 +392,7 @@ static void link_search_folder(void *context, char const *key)
 		linked_maps.xbox_version = hmp_share_map_version(key);
 		linked_maps.active = TRUE;
 		search->found = TRUE;
-		platform_log("linked maps: %s (version %08lx) is linked to the Xbox map %s (version %08lx, %ld tags in both): %s",
+		linked_log("linked maps: %s (version %08lx) is linked to the Xbox map %s (version %08lx, %ld tags in both): %s",
 			search->level, search->version, key, linked_maps.xbox_version, linked_maps.tag_count, link_path);
 		break;
 	}
@@ -451,7 +470,7 @@ void linked_maps_update(void)
 	search.found = FALSE;
 	folder_maps_each(link_search_folder, &search);
 	if (!search.found)
-		platform_log("linked maps: no link for %s (version %08lx): Xboxes can't join its games", game->map.name,
+		linked_log("linked maps: no link for %s (version %08lx): Xboxes can't join its games", game->map.name,
 			(unsigned long)game->map.version);
 	/* (a linked game's scripts run on the host alone, the two maps' copies of them perhaps not the same:
 	network_coop.c's network_scripts_host_only; else as server.host_scripts says) */

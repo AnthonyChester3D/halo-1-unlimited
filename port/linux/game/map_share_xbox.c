@@ -44,6 +44,8 @@ Lines go to the log ("hmp: ..."). Custom Edition maps go to PCs by OpenCE's own 
 #include "networking/network_client_manager.h"
 #include "networking/network_server_manager.h"
 
+#include "../src/server_log.h" /* port: port/linux/src/server_log.c */
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,6 +187,7 @@ static struct
 /* ---------- helpers */
 
 void platform_log(char const *format, ...);
+int halo_server_mode(void);
 unsigned long system_milliseconds(void);
 char const *network_game_current_map_name(void);
 /* linked_maps.c */
@@ -201,7 +204,11 @@ static void share_log(
 	va_start(arguments, format);
 	vsnprintf(line, sizeof(line), format, arguments);
 	va_end(arguments);
-	platform_log("hmp: %s", line);
+	/* (a dedicated server's: in its log, with the web console's lines, not on the standard error alone) */
+	if (halo_server_mode())
+		server_log(_server_log_info, "maps", "%s", line);
+	else
+		platform_log("hmp: %s", line);
 }
 
 static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }

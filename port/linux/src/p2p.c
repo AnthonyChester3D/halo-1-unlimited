@@ -69,6 +69,8 @@ only look up and create stand-ins.
 #ifdef HALO_PROFILE
 #include "profile_trace.h"
 #endif
+#include "server_mode.h"
+#include "server_log.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -550,6 +552,43 @@ static int elapsed(unsigned long since, unsigned long time)
 	half of it, which had nothing lapse from a time of 0 from 24.8 days of
 	uptime on) */
 	return (unsigned int)(p2p_now() - since) >= (unsigned int)time;
+}
+
+/* a dedicated server's players reaching it and failing to: counted, not a
+line each (a listed server is reached all day by players looking at its
+listing, most of them through NATs it can't get past), and a line every
+10 minutes saying how many (quiet_reach_summary) */
+#define QUIET_REACH_SUMMARY_MS (10UL * 60UL * 1000UL)
+static struct
+{
+	unsigned long since;
+	unsigned long reaching, failed, connected;
+} quiet_reach;
+
+static int quiet_reach_count(unsigned long *counter)
+{
+	if (!halo_server_mode())
+		return 0;
+	(*counter)++;
+	return 1;
+}
+
+static void quiet_reach_summary(void)
+{
+	if (!halo_server_mode())
+		return;
+	if (!quiet_reach.since)
+		quiet_reach.since = p2p_now() | 1;
+	if (!elapsed(quiet_reach.since, QUIET_REACH_SUMMARY_MS))
+		return;
+	if (quiet_reach.reaching || quiet_reach.failed)
+	{
+		server_log(_server_log_info, "net", "Internet play, the last 10 minutes: %lu players reached for the "
+			"server, %lu connected, %lu could not (their NAT and the server's: forwarding network.tunnel_port "
+			"to the server lets everyone in)", quiet_reach.reaching, quiet_reach.connected, quiet_reach.failed);
+	}
+	quiet_reach.since = p2p_now() | 1;
+	quiet_reach.reaching = quiet_reach.failed = quiet_reach.connected = 0;
 }
 
 unsigned long p2p_resolve(const char *host)
@@ -1078,7 +1117,7 @@ static void drop_peer(struct peer *peer, const char *reason)
 {
 	int ask_again = p2p.joining && peer->is_host && !memcmp(peer->identifier, p2p.join_host, P2P_IDENTIFIER_SIZE);
 
-	if (!peer->probe)
+	if (!peer->probe && !(!peer->connected && quiet_reach_count(&quiet_reach.failed)))
 	{
 		platform_log("Internet play: %s %s: %s", peer->is_host && !peer->is_player ? "host" : "player", peer->name,
 			reason);
@@ -1243,7 +1282,7 @@ int p2p_peer_offered(const unsigned char *peer_identifier, const unsigned char *
 		{
 			p2p.join_answered = 1;
 		}
-		if (!peer->probe)
+		if (!peer->probe && !quiet_reach_count(&quiet_reach.reaching))
 		{
 			platform_log("Internet play: reaching %s %s%s", offered == _p2p_offered_host ? "host" : "player",
 				peer->name, webrtc->kind == _p2p_webrtc_browser ? " (a browser)" : "");
@@ -1340,6 +1379,8 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short 
 		peer->endpoint_heard_time = now;
 		if (peer->probe)
 			return;
+		/* (counted for the summary, and still a line: someone got in) */
+		quiet_reach_count(&quiet_reach.connected);
 		platform_log("Internet play: connected to %s %s at %s", peer->is_host && !peer->is_player ? "host" : "player",
 			peer->name, log_address_ipv4(address, port, text, sizeof(text)));
 		if (peer->is_host && !peer->is_player)
@@ -4213,6 +4254,7 @@ static void *p2p_thread(void *unused)
 		update_joining();
 		update_answering();
 		update_reaching();
+		quiet_reach_summary();
 		update_upnp();
 		p2p_discord_update();
 #ifdef HALO_ANDROID
