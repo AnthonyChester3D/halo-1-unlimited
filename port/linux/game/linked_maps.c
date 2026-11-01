@@ -161,7 +161,8 @@ static boolean file_hash_text(char const *path, unsigned long *size, char *text)
 			grown = realloc(hashes, 12 + 4 + (size_t)capacity * 32);
 			if (!grown)
 			{
-				free(hashes);
+				if (hashes)
+					free(hashes);
 				free(piece);
 				fclose(file);
 				return FALSE;
@@ -312,7 +313,8 @@ static boolean link_read_tags(char const *path)
 			grown = realloc(tags, (size_t)capacity * sizeof(*tags));
 			if (!grown)
 			{
-				free(tags);
+				if (tags)
+					free(tags);
 				fclose(file);
 				return FALSE;
 			}
@@ -323,8 +325,11 @@ static boolean link_read_tags(char const *path)
 		count++;
 	}
 	fclose(file);
-	free(linked_maps.to_xbox);
-	free(linked_maps.to_ce);
+	/* (the game's free halts on a null pointer: cseries.h's match_free) */
+	if (linked_maps.to_xbox)
+		free(linked_maps.to_xbox);
+	if (linked_maps.to_ce)
+		free(linked_maps.to_ce);
 	linked_maps.to_xbox = tags;
 	linked_maps.to_ce = count ? malloc((size_t)count * sizeof(*tags)) : NULL;
 	linked_maps.tag_count = count;
