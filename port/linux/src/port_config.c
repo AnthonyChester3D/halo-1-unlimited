@@ -963,6 +963,16 @@ static const struct config_setting config_settings[] =
 		_platform_server,
 		"Also list the server among the games players host (through the\n"
 		"signalling brokers), for server browsers with no master server." },
+	/* oxbox: Halo 1 Unlimited's bots on a dedicated server (port/linux/game/bots.c) */
+	{ "server.bots", _config_string, "\"off\"", "HALO_SERVER_BOTS", _environment_value, _platform_server,
+		"Halo 1 Unlimited's bots in the games: \"off\", \"suggested\" (made up to\n"
+		"the map's suggested players), \"max\" (up to server.max_players), or a\n"
+		"number of bots (1 to 15). They join once a person is in, give a person\n"
+		"who joins their place, and leave when nobody is left. Xboxes play with\n"
+		"them; a PC build doesn't know bots, so no PC is let in while it's on." },
+	{ "server.bots_difficulty", _config_string, "\"normal\"", "HALO_SERVER_BOTS_DIFFICULTY", _environment_value,
+		_platform_server,
+		"The bots' skill: \"easy\", \"normal\", \"hard\" or \"legendary\"." },
 	{ "server.master_publish", _config_boolean, "true", "HALO_SERVER_MASTER_PUBLISH", _environment_value,
 		_platform_server,
 		"Publish a public server to the official master servers, signed with\n"

@@ -2484,6 +2484,20 @@ address, real address or hardware id) */
 			network_game_server_refusal_code = _rejection_code_blacklisted_machine;
 			return FALSE;
 		}
+		/* (oxbox: nor, on a dedicated server with Halo 1 Unlimited's bots, a PC, whose build doesn't know a bot
+		(network_player_is_valid): an Xbox's hardware id starts with the Xbox's mark, port/linux/src/p2p.h) */
+		{
+			boolean bots_server_on(void);
+
+			if (!network_game_server_client_machine_is_local(server, machine) && bots_server_on() &&
+				hardware_id[0] && strncmp(hardware_id, "0b0c0b0c", 8))
+			{
+				network_event("refusing a machine @ %s: a PC, and this server plays with bots (Xboxes alone)",
+					transport_address_to_string(&address));
+				network_game_server_refusal_code = _rejection_code_game_is_closed;
+				return FALSE;
+			}
+		}
 		/* (nor, on a dedicated server, one from a VPN's address without a
 		Discord account that lets it in: network_link.c) */
 		{

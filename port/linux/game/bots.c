@@ -5932,6 +5932,77 @@ static void bots_act(
 
 /* ---------- public code */
 
+#if !defined(HALO_XBOX_TARGET)
+int halo_server_mode(void);
+char const *config_string(char const *name);
+
+/* a setting's word, whatever its letters' case */
+static boolean bots_setting_is(
+	char const *value,
+	char const *word)
+{
+	while (*value && *word && (*value | 0x20) == (*word | 0x20))
+		value++, word++;
+	return !*value && !*word;
+}
+
+/* a dedicated server's bots (server.bots, server.bots_difficulty: port_config.c), read every 2 seconds, so a change
+(sv_set) takes at once */
+static void bots_server_settings(
+	void)
+{
+	static unsigned long read_time = 0;
+	unsigned long now = system_milliseconds();
+	char const *mode;
+	char const *difficulty;
+
+	if (read_time && now - read_time < 2000)
+		return;
+	read_time = now;
+	mode = config_string("server.bots");
+	difficulty = config_string("server.bots_difficulty");
+	if (!mode || bots_setting_is(mode, "off") || !mode[0])
+		bots_globals.mode = _bots_mode_off;
+	else if (bots_setting_is(mode, "suggested"))
+		bots_globals.mode = _bots_mode_suggested;
+	else if (bots_setting_is(mode, "max"))
+		bots_globals.mode = _bots_mode_max;
+	else
+	{
+		long count = 0;
+		char const *digit;
+
+		for (digit = mode; *digit >= '0' && *digit <= '9' && count < 1000; digit++)
+			count = count * 10 + (*digit - '0');
+
+		bots_globals.mode = count > 0 ? _bots_mode_custom : _bots_mode_off;
+		bots_globals.custom_count = (short)(count > NETWORK_BOT_MAXIMUM_COUNT ? NETWORK_BOT_MAXIMUM_COUNT : count);
+	}
+	if (difficulty && bots_setting_is(difficulty, "easy"))
+		bots_globals.difficulty = _bots_difficulty_easy;
+	else if (difficulty && bots_setting_is(difficulty, "hard"))
+		bots_globals.difficulty = _bots_difficulty_hard;
+	else if (difficulty && bots_setting_is(difficulty, "legendary"))
+		bots_globals.difficulty = _bots_difficulty_legendary;
+	else
+		bots_globals.difficulty = _bots_difficulty_normal;
+}
+#endif
+
+/* whether a dedicated server plays with bots (server.bots): it lets in no PC then (network_server_manager.c) */
+boolean bots_server_on(
+	void)
+{
+#if !defined(HALO_XBOX_TARGET)
+	if (halo_server_mode())
+	{
+		bots_server_settings();
+		return bots_globals.mode != _bots_mode_off;
+	}
+#endif
+	return FALSE;
+}
+
 /* the host, every frame */
 void bots_update(
 	void)
@@ -5943,6 +6014,10 @@ void bots_update(
 
 	if (!global_network_game_server_get())
 		return;
+#if !defined(HALO_XBOX_TARGET)
+	if (halo_server_mode())
+		bots_server_settings();
+#endif
 #if defined(OXBOX_TEST_BOT_KILLS)
 	bots_test_update();
 #endif
@@ -5962,7 +6037,14 @@ void bots_update(
 	bots = network_game_server_bot_count(&people);
 	/* (the host's own player first: a lobby being set up has none yet) */
 	if (!people)
+	{
+#if !defined(HALO_XBOX_TARGET)
+		/* (a dedicated server's bots leave with the last person: no game of bots alone) */
+		if (halo_server_mode() && bots > 0 && network_game_server_remove_bot(NONE))
+			bots_globals.last_change = now;
+#endif
 		return;
+	}
 	wanted = bots_wanted(people);
 	if (bots < wanted)
 	{
