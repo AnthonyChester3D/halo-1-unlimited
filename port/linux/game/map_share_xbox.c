@@ -501,6 +501,142 @@ char const *folder_map_key(long map_index)
 	return map_index >= 0 && map_index < folder_maps.count ? folder_maps.maps[map_index].key : NULL;
 }
 
+/* "4-16 players" / "Players: 4-16" / "8 players" (hmp_browse.c's): its most, 0 for none */
+static short players_in(char const *s)
+{
+	long a = 0, b = 0, k;
+
+	while (*s == ' ')
+		s++;
+	for (k = 0; s[k] >= '0' && s[k] <= '9' && k < 3; k++)
+		a = a * 10 + s[k] - '0';
+	if (!k)
+		return 0;
+	s += k;
+	while (*s == ' ')
+		s++;
+	if (*s == '-' || *s == 'x' || (s[0] == 't' && s[1] == 'o'))
+	{
+		s += *s == 't' ? 2 : 1;
+		while (*s == ' ')
+			s++;
+		for (k = 0; s[k] >= '0' && s[k] <= '9' && k < 3; k++)
+			b = b * 10 + s[k] - '0';
+		if (!k)
+			return 0;
+	}
+	else
+		b = a;
+	return a >= 1 && b >= a && b <= 16 ? (short)b : 0;
+}
+
+/* the most players a map suggests, as the Xbox's map browser has it (hmp_browse.c's hmp_browse_suggested_players):
+a stock level's own, a folder map's info .txt "Players:" line or "4-16 players" in its description; 0 for none (the
+bots' "suggested" count: bots.c) */
+short folder_map_suggested_players(char const *level_name)
+{
+	static struct
+	{
+		char const *name;
+		short players;
+	} const stock[] =
+	{
+		{ "beavercreek", 8 }, { "sidewinder", 16 }, { "damnation", 8 }, { "ratrace", 6 }, { "prisoner", 8 },
+		{ "hangemhigh", 16 }, { "chillout", 8 }, { "carousel", 8 }, { "boardingaction", 16 }, { "bloodgulch", 16 },
+		{ "wizard", 8 }, { "putput", 6 }, { "longest", 8 },
+	};
+	char path[300];
+	char text[4096];
+	unsigned long got = 0;
+	char const *leaf;
+	long index;
+	long map_index;
+	short from_text = 0;
+	HANDLE file;
+	char *line;
+
+	if (!level_name || !level_name[0])
+		return 0;
+	if (level_name[0] != '+')
+	{
+		leaf = strrchr(level_name, '\\') ? strrchr(level_name, '\\') + 1 : level_name;
+		for (index = 0; index < (long)NUMBEROF(stock); index++)
+		{
+			if (!ieq(leaf, stock[index].name) && strncmp(level_name, "custom_maps", 11))
+				return stock[index].players;
+		}
+		return 0;
+	}
+	map_index = hmp_maps_find(level_name);
+	if (map_index == NONE || !folder_maps.maps[map_index].info_file[0])
+		return 0;
+	key_path(path, sizeof(path), folder_maps.maps[map_index].key, folder_maps.maps[map_index].info_file);
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return 0;
+	if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+		got = 0;
+	CloseHandle(file);
+	/* (UTF-16: its ASCII, the rest '?') */
+	if (got >= 2 && (byte)text[0] == 0xFF && (byte)text[1] == 0xFE)
+	{
+		unsigned long from, to = 0;
+
+		for (from = 2; from + 1 < got; from += 2)
+			text[to++] = text[from + 1] ? '?' : text[from];
+		got = to;
+	}
+	text[got] = 0;
+	for (line = text; line && *line; )
+	{
+		char *end = line + strcspn(line, "\r\n");
+		char saved = *end;
+		char *colon;
+
+		*end = 0;
+		colon = strchr(line, ':');
+		if (colon)
+		{
+			char *name = line;
+
+			while (*name == ' ')
+				name++;
+			if (!strncmp(name, "Players", 7) || !strncmp(name, "players", 7))
+			{
+				short players = players_in(colon + 1);
+
+				if (players)
+					return players;
+			}
+		}
+		if (!from_text)
+		{
+			char *word;
+
+			for (word = line; *word; word++)
+			{
+				if (word > line && (!strncmp(word, "player", 6) || !strncmp(word, "Player", 6)))
+				{
+					char *number = word;
+
+					while (number > line && number[-1] == ' ')
+						number--;
+					while (number > line && ((number[-1] >= '0' && number[-1] <= '9') || number[-1] == '-' ||
+						number[-1] == ' '))
+					{
+						number--;
+					}
+					if ((from_text = players_in(number)) != 0)
+						break;
+				}
+			}
+		}
+		*end = saved;
+		line = saved ? end + 1 : NULL;
+	}
+	return from_text;
+}
+
 /* every folder map's key, each told (looked at afresh); how many */
 int folder_maps_each(void (*each)(void *context, char const *key), void *context)
 {

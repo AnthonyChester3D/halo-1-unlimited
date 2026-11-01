@@ -189,7 +189,12 @@ static short bots_suggested_players(
 #if defined(HALO_XBOX_TARGET)
 		bots_globals.suggested_players = hmp_browse_suggested_players(map);
 #else
-		bots_globals.suggested_players = 0;
+		/* (a dedicated server: the map's card's, as the Xbox's browser has it: map_share_xbox.c) */
+		{
+			short folder_map_suggested_players(char const *level_name);
+
+			bots_globals.suggested_players = folder_map_suggested_players(map);
+		}
 #endif
 		if (bots_globals.suggested_players <= 0 || bots_globals.suggested_players > HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 			bots_globals.suggested_players = BOTS_SUGGESTED_DEFAULT;
@@ -1185,6 +1190,102 @@ static boolean bots_learned_path(
 	halo_linux_snprintf(path, size, learned ? "T:\\bots_%s.txt" : "d:\\maps\\bots\\%s.txt", leaf);
 	return TRUE;
 }
+#else
+boolean hmp_map_file_path(char const *level_name, char *path, long size);
+
+/* the native builds (a dedicated server): the files read and written whole */
+static long oxbox_read_data_file(
+	const char *path,
+	void *data,
+	unsigned long size)
+{
+	FILE *file = fopen(path, "rb");
+	size_t got;
+
+	if (!file)
+		return -1;
+	got = fread(data, 1, size, file);
+	fclose(file);
+	return (long)got;
+}
+
+static int oxbox_write_data_file(
+	const char *path,
+	const void *data,
+	unsigned long size)
+{
+	char part[300];
+	FILE *file;
+	boolean written;
+
+	/* (a whole file or none: written beside it, then put in its place) */
+	halo_linux_snprintf(part, sizeof(part), "%s.part", path);
+	file = fopen(part, "wb");
+	if (!file)
+		return FALSE;
+	written = fwrite(data, 1, size, file) == size;
+	written = fclose(file) == 0 && written;
+	if (!written)
+	{
+		remove(part);
+		return FALSE;
+	}
+	remove(path);
+	return rename(part, path) == 0;
+}
+
+/* the file for the current map: learned (TRUE) or baked (FALSE); FALSE when there's none. A dedicated server reads
+what a map comes with where an Xbox does (a folder map's bots.txt beside its .map, maps\bots\<map>.txt for any
+other), but writes what its bots learned in its own storage, not the maps folder (which servers share, and never
+write): T:\bots_<map>.txt, a folder map's named for its folder ("+CEX/Abyss": bots_CEX_Abyss.txt) */
+static boolean bots_learned_path(
+	boolean learned,
+	char *path,
+	long size)
+{
+	char const *leaf = bots_route.map;
+	long index, slash = NONE;
+
+	if (!bots_route.map[0])
+		return FALSE;
+	if (bots_route.map[0] == '+')
+	{
+		if (learned)
+		{
+			char name[64];
+
+			for (index = 0; bots_route.map[index + 1] && index < (long)sizeof(name) - 1; index++)
+			{
+				char c = bots_route.map[index + 1];
+
+				name[index] = (c == '/' || c == '\\' || c == ':' || c == ' ') ? '_' : c;
+			}
+			name[index] = 0;
+			halo_linux_snprintf(path, size, "T:\\bots_%s.txt", name);
+			return TRUE;
+		}
+		if (!hmp_map_file_path(bots_route.map, path, size))
+			return FALSE;
+		for (index = 0; path[index]; index++)
+		{
+			if (path[index] == '\\')
+				slash = index;
+		}
+		if (slash == NONE || slash + 20 >= size)
+			return FALSE;
+		csstrcpy(path + slash + 1, "bots.txt");
+		return TRUE;
+	}
+	for (index = 0; bots_route.map[index]; index++)
+	{
+		if (bots_route.map[index] == '\\')
+			leaf = &bots_route.map[index + 1];
+	}
+	halo_linux_snprintf(path, size, learned ? "T:\\bots_%s.txt" : "d:\\maps\\bots\\%s.txt", leaf);
+	return TRUE;
+}
+
+#endif
 
 static short bots_learned_nearest(
 	real_point3d const *point)
@@ -1320,12 +1421,10 @@ static long bots_learned_read(
 	}
 	return lines;
 }
-#endif
 
 static void bots_learned_load(
 	void)
 {
-#if defined(HALO_XBOX_TARGET)
 	char path[260];
 	char *text = (char *)malloc(BOTS_LEARNED_FILE_MAXIMUM);
 	long baked = 0, learned = 0;
@@ -1341,7 +1440,6 @@ static void bots_learned_load(
 	if ((baked || learned) && bots_log_enabled())
 		bots_log("bots: %s: %ld links known from the map's bots.txt, %ld learned in earlier games", bots_route.map, baked,
 			learned);
-#endif
 }
 
 /* the waypoints the files add to the map's own (node lines), before the waypoints are linked: a stock map gets a ported
@@ -1349,7 +1447,6 @@ version's bot nodes (Halo Map Porter's netgame equipment that never spawns) with
 static void bots_learned_load_nodes(
 	void)
 {
-#if defined(HALO_XBOX_TARGET)
 	char path[260];
 	char *text = (char *)malloc(BOTS_LEARNED_FILE_MAXIMUM);
 	short before = bots_route.waypoint_count;
@@ -1365,13 +1462,11 @@ static void bots_learned_load_nodes(
 	if ((baked || learned) && bots_log_enabled())
 		bots_log("bots: %s: %d waypoints added from the files' nodes (%ld from bots.txt, %ld learned)", bots_route.map,
 			(int)(bots_route.waypoint_count - before), baked, learned);
-#endif
 }
 
 static void bots_learned_save(
 	void)
 {
-#if defined(HALO_XBOX_TARGET)
 	char path[260];
 	char *text;
 	long length, lines = 0;
@@ -1426,7 +1521,6 @@ static void bots_learned_save(
 	else if (bots_log_enabled())
 		bots_log("bots: %ld links of what the bots learned on %s kept in %s", lines, bots_route.map, path);
 	free(text);
-#endif
 }
 
 static void bots_brain_reset(
