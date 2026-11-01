@@ -485,7 +485,8 @@ void game_tick(
 	/* port: in network co-op only the host runs the scripts. A client running
 	them would place the map's actors and objects a second time and make
 	decisions that belong to the host. */
-	if (!(network_game_distributed_client() && network_coop_active()))
+	/* (oxbox: and in a multiplayer game whose host says so: network_scripts_host_only) */
+	if (!(network_game_distributed_client() && network_scripts_host_only()))
 		profile_scope(game_tick_hs_section, hs_update();)
 	profile_scope(game_tick_recorded_animations_section, recorded_animations_update();)
 	profile_scope(game_tick_objects_section, objects_update();)

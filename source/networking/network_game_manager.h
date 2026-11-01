@@ -55,6 +55,10 @@ enum
 	/* the players pass through each other (Server Setup's PLAYER COLLISIONS:
 	OFF, co-op's): network_coop_player_collisions */
 	_network_game_cooperative_no_player_collisions_bit = 0,
+	/* oxbox: the host alone runs the scripts, in a multiplayer game too (a
+	dedicated server's server.host_scripts): network_scripts_host_only. The
+	byte's last bit, clear of the co-op bits OpenCE uses */
+	_network_game_host_scripts_bit = 7,
 };
 
 struct network_game

@@ -595,6 +595,14 @@ static boolean coop_client(
 	return game_connection() == _game_connection_network_client && coop_game();
 }
 
+/* oxbox: the scripts' client: co-op's, or a multiplayer game's whose host alone runs the scripts (a dedicated
+server's server.host_scripts: network_scripts_host_only) */
+static boolean scripts_client(
+	void)
+{
+	return game_connection() == _game_connection_network_client && network_scripts_host_only();
+}
+
 /* host: sends count entries of entry_size in message to every client */
 static void send_to_clients(
 	void *message,
@@ -2067,6 +2075,26 @@ boolean network_coop_active(
 		global_scenario && global_scenario->type == _scenario_type_solo && !game_engine_running();
 }
 
+/* oxbox: whether the network game's scripts run on its host alone, which sends the others what they change: co-op, or
+a multiplayer game whose host says so (its settings' _network_game_host_scripts_bit: a dedicated server's
+server.host_scripts). Its clients run none of the scripts (game.c), take the devices as the host moves them, and the
+host's named objects, sounds, effects and the rest as co-op's do */
+boolean network_scripts_host_only(
+	void)
+{
+	short connection = game_connection();
+	struct network_game *game;
+
+	if (network_coop_active())
+		return TRUE;
+	if ((connection != _game_connection_network_server && connection != _game_connection_network_client) ||
+		!game_engine_running() || !(game = network_game_get_game()))
+	{
+		return FALSE;
+	}
+	return TEST_FLAG(game->cooperative_flags, _network_game_host_scripts_bit);
+}
+
 boolean network_coop_player_collisions(
 	void)
 {
@@ -2080,7 +2108,7 @@ boolean network_coop_player_collisions(
 boolean network_coop_devices_remote(
 	void)
 {
-	return coop_client();
+	return scripts_client();
 }
 
 /* units.c: a vehicle left the vehicle carrying it. When a Pelican drops a
@@ -2824,7 +2852,7 @@ void network_coop_handle_device_states(
 	struct distributed_coop_device_state const *states = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -2858,7 +2886,7 @@ void network_coop_handle_object_transforms(
 	struct distributed_coop_object_transform const *transforms = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -2889,7 +2917,7 @@ void network_coop_handle_object_looks(
 	struct distributed_coop_object_look const *looks = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -2954,7 +2982,7 @@ void network_coop_handle_device_groups(
 	struct distributed_coop_device_group const *groups = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
@@ -2990,7 +3018,7 @@ void network_coop_handle_object_names(
 	struct distributed_coop_object_names const *names = entries;
 	short name_index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	if (names->structure_bsp_index != global_structure_bsp_index_get() ||
 		names->name_count != MIN(global_scenario_get()->object_names.count, MAXIMUM_OBJECT_NAMES_PER_SCENARIO))
@@ -3033,7 +3061,7 @@ void network_coop_handle_events(
 	struct distributed_coop_event const *events = entries;
 	short index;
 
-	if (!coop_client())
+	if (!scripts_client())
 		return;
 	for (index = 0; index < count; index++)
 	{
