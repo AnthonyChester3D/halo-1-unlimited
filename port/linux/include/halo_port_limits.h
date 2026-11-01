@@ -89,6 +89,13 @@ with other Xboxes; the games list shows an Xbox beside it) */
 then flags */
 #define HALO_PORT_ADVERTISED_VERSION_OFFSET 0
 #define HALO_PORT_ADVERTISED_FLAGS_OFFSET 2
+/* ... and a dedicated server's linked game (the PC builds' port/linux/game/linked_maps.c): the Xbox map's version (a
+little-endian long) and its key ("+folder", up to 18 characters, not terminated when it fills them), which this Xbox
+lists the game by in place of the Custom Edition map it hasn't got (network_client_message_handler.c). The bytes
+between (from the kind on) are the PC builds' */
+#define HALO_PORT_ADVERTISED_LINKED_VERSION_OFFSET 4
+#define HALO_PORT_ADVERTISED_LINKED_KEY_OFFSET 8
+#define HALO_PORT_ADVERTISED_LINKED_KEY_SIZE 18
 /* ... the host plays the distributed netcode (always, since the lockstep
 netcode was removed; hosts of version 4 built before then may not) */
 #define HALO_PORT_ADVERTISED_DISTRIBUTED_FLAG 0x01
