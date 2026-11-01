@@ -3273,6 +3273,53 @@ word network_coop_device_state_entry_size(
 	return sizeof(struct distributed_coop_device_state);
 }
 
+#if !defined(HALO_XBOX_TARGET)
+/* oxbox: a linked map's tag IDs in the host's co-op messages (the scripts' events and objects), the Custom Edition
+map's as the Xbox map's or back (network_distributed.c's distributed_translate_linked_tags, linked_maps.c) */
+void network_coop_translate_tags(
+	byte type,
+	void *entries,
+	short count,
+	boolean to_xbox)
+{
+	long linked_map_tag_to_xbox(long tag);
+	long linked_map_tag_to_ce(long tag);
+	long (*translate)(long tag) = to_xbox ? linked_map_tag_to_xbox : linked_map_tag_to_ce;
+	short index;
+
+	for (index = 0; index < count; index++)
+	{
+		switch (type)
+		{
+		case _distributed_message_coop_events:
+		{
+			struct distributed_coop_event *event = (struct distributed_coop_event *)entries + index;
+
+			event->tag_index = translate(event->tag_index);
+			event->definition_index = translate(event->definition_index);
+			break;
+		}
+		case _distributed_message_coop_device_groups:
+			((struct distributed_coop_device_group *)entries)[index].definition_index =
+				translate(((struct distributed_coop_device_group *)entries)[index].definition_index);
+			break;
+		case _distributed_message_coop_object_transforms:
+			((struct distributed_coop_object_transform *)entries)[index].definition_index =
+				translate(((struct distributed_coop_object_transform *)entries)[index].definition_index);
+			break;
+		case _distributed_message_coop_object_looks:
+			((struct distributed_coop_object_look *)entries)[index].definition_index =
+				translate(((struct distributed_coop_object_look *)entries)[index].definition_index);
+			break;
+		case _distributed_message_coop_device_states:
+			((struct distributed_coop_device_state *)entries)[index].definition_index =
+				translate(((struct distributed_coop_device_state *)entries)[index].definition_index);
+			break;
+		}
+	}
+}
+#endif
+
 /* client: its devices where the host's are (DEVICE_POSITION_TOLERANCE) */
 void network_coop_handle_device_states(
 	void const *entries,

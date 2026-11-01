@@ -554,6 +554,38 @@ static long damage_replaying_killer_score;
 
 /* ---------- common */
 
+#if !defined(HALO_XBOX_TARGET)
+/* oxbox: a linked map's tag IDs in the damage messages (the damage effect's), the Custom Edition map's as the Xbox
+map's or back (network_distributed.c's distributed_translate_linked_tags, linked_maps.c) */
+void network_damage_translate_tags(
+	byte type,
+	void *entries,
+	short count,
+	boolean to_xbox)
+{
+	long linked_map_tag_to_xbox(long tag);
+	long linked_map_tag_to_ce(long tag);
+	long (*translate)(long tag) = to_xbox ? linked_map_tag_to_xbox : linked_map_tag_to_ce;
+	short index;
+
+	for (index = 0; index < count; index++)
+	{
+		if (type == _distributed_message_damage_events)
+		{
+			struct distributed_damage_event *event = (struct distributed_damage_event *)entries + index;
+
+			event->damage.definition_index = translate(event->damage.definition_index);
+		}
+		else if (type == _distributed_message_hit_reports)
+		{
+			struct distributed_hit_report *report = (struct distributed_hit_report *)entries + index;
+
+			report->damage.definition_index = translate(report->damage.definition_index);
+		}
+	}
+}
+#endif
+
 word network_damage_entry_size(
 	byte type)
 {

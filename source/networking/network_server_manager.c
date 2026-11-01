@@ -1677,7 +1677,10 @@ boolean oxbox_server_xbox_joinable(
 	{
 		struct network_game const *game = &server->game;
 
-		joinable = game->map.name[0] && !custom_edition_level_name(game->map.name) &&
+		extern boolean linked_map_active(void);
+
+		/* (a Custom Edition map linked to an Xbox map is played on that: port/linux/game/linked_maps.c) */
+		joinable = game->map.name[0] && (!custom_edition_level_name(game->map.name) || linked_map_active()) &&
 			game->maximum_players <= 16 &&
 			(game_modes_kind(&game->variant, &game->variant_options) & 0x7F) < 4;
 	}
@@ -4313,6 +4316,13 @@ void network_game_generate_join_game_token(
 #endif
 
 	return;
+}
+
+/* oxbox: a client machine's slot, which is its machine index once it has joined (NONE for none) */
+long network_game_server_client_machine_slot(
+	struct network_game_server_client_machine const *client_machine)
+{
+	return client_machine ? client_machine->machine_index : NONE;
 }
 
 struct network_machine *network_game_server_get_client_machine(

@@ -187,6 +187,9 @@ static struct
 void platform_log(char const *format, ...);
 unsigned long system_milliseconds(void);
 char const *network_game_current_map_name(void);
+/* linked_maps.c */
+void linked_maps_update(void);
+char const *linked_map_key(void);
 
 static void share_log(
 	char const *format,
@@ -812,8 +815,12 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 	map_index = hmp_maps_find(request->key);
 	if (request->magic != REQ_MAGIC || request->version != SHARE_VERSION)
 		why = "different map sharing version";
-	else if (request->key[0] != '+' || !host_map || ieq(request->key, host_map))
+	else if (request->key[0] != '+' || !host_map ||
+		(ieq(request->key, host_map) && !(linked_map_key() && !ieq(request->key, linked_map_key()))))
+	{
+		/* (the map hosted, or a linked game's Xbox map: linked_maps.c) */
 		reply.streams = WHY_NOT_HOSTED;
+	}
 	else if (map_index == NONE || !hmp_map_file_path(request->key, path, sizeof(path)) ||
 		!map_identity(path, &size, &checksum))
 	{
@@ -1161,7 +1168,9 @@ void map_share_xbox_update(void)
 	unsigned long now = now_ms();
 
 	crc_initialize();
-	if (server && map && map[0] == '+')
+	/* (a Custom Edition map's link to an Xbox map: linked_maps.c) */
+	linked_maps_update();
+	if (server && map && (map[0] == '+' || linked_map_key()))
 		host_update(now);
 	else if (share.listener != INVALID_SOCKET)
 		host_stop();

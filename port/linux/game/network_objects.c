@@ -708,6 +708,31 @@ boolean network_objects_client_has(
 		objects_client_has[absolute_index] == object_index && object_try_and_get(object_index);
 }
 
+#if !defined(HALO_XBOX_TARGET)
+/* oxbox: a linked map's tag IDs in the host's object messages (what each object is), the Custom Edition map's as the
+Xbox map's or back (network_distributed.c's distributed_translate_linked_tags, linked_maps.c) */
+void network_objects_translate_tags(
+	byte type,
+	void *entries,
+	short count,
+	boolean to_xbox)
+{
+	long linked_map_tag_to_xbox(long tag);
+	long linked_map_tag_to_ce(long tag);
+	long (*translate)(long tag) = to_xbox ? linked_map_tag_to_xbox : linked_map_tag_to_ce;
+	short index;
+
+	if (type != _distributed_message_object_changes)
+		return;
+	for (index = 0; index < count; index++)
+	{
+		struct distributed_object_change *change = (struct distributed_object_change *)entries + index;
+
+		change->definition_index = translate(change->definition_index);
+	}
+}
+#endif
+
 word network_objects_entry_size(
 	byte type)
 {

@@ -849,6 +849,24 @@ static void const *crossplay_settings_to_send(void const *game, long *game_size)
 }
 #endif
 
+#if !defined(HALO_XBOX_TARGET)
+/* oxbox: a linked game's Xbox (port/linux/game/linked_maps.c): a message's tag IDs as its map has them, and its copy
+of the game's settings */
+boolean linked_map_active(void);
+boolean linked_map_machine_is_xbox(long machine_index);
+void const *linked_map_game_for_machine(void const *game, long game_size, long machine_index);
+void distributed_translate_linked_tags(void *message, word size, boolean to_xbox);
+
+static void linked_map_translate_for_machine(
+	void *buffer,
+	word size,
+	long machine_index)
+{
+	if (linked_map_active() && linked_map_machine_is_xbox(machine_index))
+		distributed_translate_linked_tags(buffer, size, TRUE);
+}
+#endif
+
 boolean network_game_server_send_game_settings_to_client_machine(
 	struct network_game_server *server,
 	struct network_game_server_client_machine *machine,
@@ -860,6 +878,14 @@ boolean network_game_server_send_game_settings_to_client_machine(
 
 #if defined(OXBOX_CROSSPLAY)
 	game = crossplay_settings_to_send(game, &game_size);
+#endif
+#if !defined(HALO_XBOX_TARGET)
+	/* (oxbox: a linked game's Xbox: its copy names the Xbox map: port/linux/game/linked_maps.c) */
+	{
+		long network_game_server_client_machine_slot(struct network_game_server_client_machine const *client_machine);
+
+		game = linked_map_game_for_machine(game, game_size, network_game_server_client_machine_slot(machine));
+	}
 #endif
 
 	for (offset = 0; offset < game_size; offset += sizeof(message.data))
@@ -993,6 +1019,9 @@ boolean network_distributed_server_send_to_machine_reliably(
 	if (!connection || !network_connection_active(connection))
 		return FALSE;
 	csmemcpy(buffer, message, size);
+#if !defined(HALO_XBOX_TARGET)
+	linked_map_translate_for_machine(buffer, size, machine_index);
+#endif
 	return network_game_server_write(connection, buffer, size, NULL, 1);
 }
 
@@ -1022,6 +1051,9 @@ boolean network_distributed_server_send_to_all_reliably(
 			if (connection && network_connection_active(connection) && size <= sizeof(buffer))
 			{
 				csmemcpy(buffer, message, size);
+#if !defined(HALO_XBOX_TARGET)
+				linked_map_translate_for_machine(buffer, size, machine_index);
+#endif
 				result &= network_game_server_write(connection, buffer, size, NULL, 1);
 			}
 		}
@@ -1151,6 +1183,36 @@ boolean network_game_server_send_game_settings_to_all_machines(
 		server);
 #if defined(OXBOX_CROSSPLAY)
 	game = crossplay_settings_to_send(game, &game_size);
+#endif
+#if !defined(HALO_XBOX_TARGET)
+	/* oxbox: a linked game: each machine its own copy (an Xbox's names the Xbox map: port/linux/game/linked_maps.c) */
+	if (linked_map_active())
+	{
+		long machine_index;
+
+		for (machine_index = 0; machine_index < MAXIMUM_NETWORK_MACHINE_COUNT; machine_index++)
+		{
+			struct network_game_server_client_machine *machine =
+				network_game_server_get_client_machine_at_index(server, machine_index);
+			struct network_connection *connection;
+
+			if (!network_game_server_client_machine_is_joined_to_game(server, machine) ||
+				network_game_server_machine_is_loading_late(server, machine))
+			{
+				continue;
+			}
+			connection = network_game_server_get_client_connection(machine);
+			if (connection && network_connection_active(connection) &&
+				!network_game_server_send_game_settings_to_client_machine(server, machine, game, game_size))
+			{
+				network_event("failed to send a linked game's settings to machine #%ld", machine_index);
+				result = FALSE;
+			}
+		}
+		network_game_settings_update_pending = !result;
+		network_game_settings_update_time = system_milliseconds();
+		return result;
+	}
 #endif
 
 	/* every piece goes out even if one fails for a machine: the others
