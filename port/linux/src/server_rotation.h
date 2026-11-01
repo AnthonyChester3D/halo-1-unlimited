@@ -91,13 +91,15 @@ enum
 	_server_map_name,
 	_server_map_custom,
 	_server_map_path,
+	/* a folder map: "+folder", "+pack/folder" (port/linux/game/map_share_xbox.c) */
+	_server_map_folder,
 };
 
 struct server_entry
 {
 	/* as written, spaces trimmed */
 	char text[SERVER_ENTRY_TEXT_SIZE];
-	/* as given: "bloodgulch", "custom_maps\hugeass", a path */
+	/* as given: "bloodgulch", "custom_maps\hugeass", a path, "+Precipice" */
 	char map[SERVER_MAP_SIZE];
 	int map_kind;
 	/* the level the game plays (levels\test\bloodgulch\bloodgulch,
@@ -138,7 +140,7 @@ void server_rotation_text(struct server_rotation const *rotation, char *text, in
 its level and map name set, or it rejected (map_missing) */
 void server_rotation_resolve(struct server_entry *entry);
 
-/* each multiplayer map there is: the maps folder's (kind "xbox") and
+/* each multiplayer map there is: the maps folder's (kind "xbox"), its folder maps (kind "folder", by their key: map_share_xbox.c) and
 custom_maps' (kind "custom"), by its name, with its level's path; how many */
 int server_maps_each(void (*each)(void *context, const char *name, const char *level, const char *kind),
 	void *context);

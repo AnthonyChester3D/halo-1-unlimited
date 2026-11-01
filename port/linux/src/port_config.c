@@ -834,6 +834,9 @@ static const struct config_setting config_settings[] =
 	{ "server.name", _config_string, "\"OpenCE Server\"", "HALO_SERVER_NAME", _environment_value, _platform_server,
 		"The game's name in the lobby and the server browser: 15 characters of\n"
 		"printable ASCII." },
+	{ "server.machine_name", _config_string, "\"\"", "HALO_SERVER_MACHINE_NAME", _environment_value, _platform_server,
+		"The server's own machine's name, which the lobby shows for the machine\n"
+		"players joined (empty: server.name)." },
 	{ "server.max_players", _config_integer, "16", "HALO_SERVER_MAX_PLAYERS", _environment_value, _platform_server,
 		"The most players (2 to 127)." },
 	{ "server.min_players", _config_integer, "1", "HALO_SERVER_MIN_PLAYERS", _environment_value, _platform_server,

@@ -1910,6 +1910,16 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 			(port/linux/game/server_director.c) */
 			if (halo_server_mode())
 				advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= HALO_PORT_ADVERTISED_DEDICATED_FLAG;
+#if !defined(HALO_XBOX_TARGET)
+			/* oxbox: a dedicated server's game Halo 1 Unlimited's Xboxes join is told for an Xbox's: the Xboxes list it,
+			with the Xbox beside it (network_server_manager.c's oxbox_server_xbox_joinable) */
+			{
+				extern boolean oxbox_server_xbox_joinable(void);
+
+				if (oxbox_server_xbox_joinable())
+					advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= OXBOX_ADVERTISED_XBOX_FLAG;
+			}
+#endif
 			/* (an OpenCE gametype's kind, the server browser's name for it) */
 			advertisement.reserved[HALO_PORT_ADVERTISED_KIND_OFFSET] = game_modes_kind(&game->variant,
 				&game->variant_options);

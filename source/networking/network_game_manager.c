@@ -267,6 +267,22 @@ void network_game_generate_local_machine_name(
 	joined multiplayer on it) is named after that player's profile, not the
 	system's random nickname: the system link list shows a host's game by it */
 #if !defined(HALO_XBOX_TARGET) /* oxbox: the Xbox game names the machine by the console's nickname (retail) */
+	/* oxbox: a dedicated server's machine, which the lobby shows as the machine joined, is named by its settings
+	(server.machine_name, else server.name), not a random name each start */
+	if (halo_server_mode())
+	{
+		const char *config_string(const char *name);
+		char const *name = config_string("server.machine_name");
+		long index;
+
+		if (!name || !name[0])
+			name = config_string("server.name");
+		for (index = 0; name && name[index] && index < 31; index++)
+			machine_name[index] = (wchar_t)(unsigned char)name[index];
+		machine_name[index] = 0;
+		if (index > 0)
+			return;
+	}
 	{
 		short local_player_index;
 		short joined_player_index = NONE;

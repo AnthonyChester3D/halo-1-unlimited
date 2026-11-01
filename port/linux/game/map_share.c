@@ -3050,13 +3050,18 @@ static boolean host_machine_downloading(
 		(!machine->offered || !elapsed(machine->advanced_at, now, DOWNLOADING_STALL_TIMEOUT));
 }
 
+/* (oxbox: an Xbox downloading the host's folder map: map_share_xbox.c) */
+boolean map_share_xbox_machine_needs_map(long machine_index);
+boolean map_share_xbox_machine_downloading(long machine_index);
+void map_share_xbox_update(void);
+
 boolean map_share_machine_downloading(
 	long machine_index)
 {
 	struct host_machine const *machine = host_machine_valid(machine_index) ?
 		&map_share_globals.machines[machine_index] : NULL;
 
-	return machine && host_machine_downloading(machine);
+	return (machine && host_machine_downloading(machine)) || map_share_xbox_machine_downloading(machine_index);
 }
 
 boolean map_share_machine_needs_map(
@@ -3065,7 +3070,8 @@ boolean map_share_machine_needs_map(
 	struct host_machine const *machine = host_machine_valid(machine_index) ?
 		&map_share_globals.machines[machine_index] : NULL;
 
-	return machine && !machine->downloaded && host_machine_downloading(machine);
+	return (machine && !machine->downloaded && host_machine_downloading(machine)) ||
+		map_share_xbox_machine_needs_map(machine_index);
 }
 
 static boolean host_in_game(
@@ -3499,6 +3505,8 @@ void map_share_update(
 	unsigned long host_address = map_share_host_address();
 	short index;
 
+	/* (oxbox: a host's folder map to the Xboxes that haven't it: map_share_xbox.c) */
+	map_share_xbox_update();
 	map_share_files_update();
 	/* (internet play: a player that shares answers the others, who reach it
 	by its key hash) */

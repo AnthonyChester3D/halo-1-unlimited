@@ -900,7 +900,7 @@ function startPage(root) {
     const gametypes = page.gametypes;
     const builtin = builtinNames(gametypes.builtin);
     $('add-map').replaceChildren(...page.maps.slice().sort((a, b) => titleOf(a).localeCompare(titleOf(b)))
-      .map((map) => option(mapToken(map), `${titleOf(map)} (${map.kind === 'custom' ? 'custom' : map.name})`)));
+      .map((map) => option(mapToken(map), `${titleOf(map)} (${map.kind === 'custom' ? 'custom' : map.kind === 'folder' ? 'folder map' : map.name})`)));
     $('add-gametype').replaceChildren(
       h('optgroup', { attrs: { label: 'Built-in' } }, builtin.map((name) => option(name, name))),
       h('optgroup', { attrs: { label: 'Files' } }, (gametypes.files || []).map((file) => option(file.name, `${file.name} (${file.base})`))));

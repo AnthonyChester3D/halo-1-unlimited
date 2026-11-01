@@ -1657,6 +1657,35 @@ boolean oxbox_crossplay_lobby_has_pc(
 }
 #endif
 
+#if !defined(HALO_XBOX_TARGET)
+/* oxbox: whether this dedicated server's game is one Halo 1 Unlimited's Xboxes join, as last worked out, for the
+server browser's listing (p2p_lobby.c, on its own thread: its "OX" stamp) */
+int oxbox_server_xbox_hosted = 0;
+
+/* oxbox: whether this dedicated server's game is one Halo 1 Unlimited's Xboxes join: a dedicated server (which plays
+their bots, folder maps and map sharing: a full featured server) on a stock map or a folder map (not a Custom Edition
+map, which no Xbox loads), for at most 16 players, playing a gametype the Xbox has. Its game is then told for an
+Xbox's (OXBOX_ADVERTISED_XBOX_FLAG, the listing's "OX"): the Xboxes list it, with the Xbox beside it */
+boolean oxbox_server_xbox_joinable(
+	void)
+{
+	extern boolean custom_edition_level_name(char const *level_name);
+	struct network_game_server *server = global_network_game_server_get();
+	boolean joinable = FALSE;
+
+	if (halo_server_mode() && server)
+	{
+		struct network_game const *game = &server->game;
+
+		joinable = game->map.name[0] && !custom_edition_level_name(game->map.name) &&
+			game->maximum_players <= 16 &&
+			(game_modes_kind(&game->variant, &game->variant_options) & 0x7F) < 4;
+	}
+	oxbox_server_xbox_hosted = joinable;
+	return joinable;
+}
+#endif
+
 /* port: wide text as the listing has it: ASCII, a Latin letter with a mark
 its plain letter ('?' for the rest: player_name_character_ascii, as the
 server browser validates the name as a player's) */
@@ -1719,6 +1748,10 @@ static void network_game_server_list(
 #endif
 	/* (the scenario's name, not its path: the listing has 32 characters) */
 	/* port: (and its OpenCE gametype's kind: port/linux/game/game_modes.c) */
+#if !defined(HALO_XBOX_TARGET)
+	/* (oxbox: whether it's told for an Xbox's: the listing's stamp) */
+	oxbox_server_xbox_joinable();
+#endif
 	p2p_set_game_listing(name, tag_name_strip_path(game->map.name), gametype, game->variant.game_engine_index,
 		game_modes_kind(&game->variant, &game->variant_options), open, in_progress,
 		game->variant.universal_variant.teams);

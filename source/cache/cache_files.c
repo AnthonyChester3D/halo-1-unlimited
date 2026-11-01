@@ -147,12 +147,11 @@ void xgpu_static_range_add(const void *start, unsigned long size, int indices);
 void xgpu_static_range_remove(const void *start, int indices);
 #endif
 
-#ifdef HALO_XBOX_TARGET
-/* (Halo Universal's folder maps and map sharing: port/linux/game/hmp_maps.c, hmp_share.c) */
+/* (Halo Universal's folder maps and map sharing: port/linux/game/hmp_maps.c, hmp_share.c; in the native builds
+map_share_xbox.c, for a dedicated server's folder maps) */
 boolean hmp_map_file_path(char const *level_name, char *path, long size);
 long hmp_maps_find(char const *level_name);
 unsigned long hmp_share_map_version(char const *level_name);
-#endif
 
 /* ---------- constants */
 
@@ -1028,14 +1027,12 @@ boolean cache_files_map_plays_multiplayer(
 	header's build is Halo PC's, not one to check */
 	if (custom_edition_level_name(map_name))
 		return TRUE;
-#ifdef HALO_XBOX_TARGET
 	/* oxbox: a folder map plays whatever its header's build string (Halo Universal's "any build string": a ported
 	map's is often not a retail build's); host and clients play the same file, matched by its size and checksum */
 	if (map_name[0] == '+')
 		return TRUE;
-	/* oxbox: a folder map's file is in its folder (port/linux/game/hmp_maps.c) */
+	/* oxbox: a folder map's file is in its folder (port/linux/game/hmp_maps.c, map_share_xbox.c) */
 	if (!hmp_map_file_path(map_name, path, sizeof(path)))
-#endif
 	snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), tag_name_strip_path(map_name));
 #ifdef HALO_XBOX_TARGET
 	/* oxbox: shared (see cache_files_map_present) */
@@ -1104,11 +1101,10 @@ game's own maps, whose builds of other regions play together. */
 unsigned long cache_files_map_version(
 	char const *map_name)
 {
-#ifdef HALO_XBOX_TARGET
-	/* oxbox: a folder map's build (its size and Halo Map Porter's checksum: port/linux/game/hmp_share.c) */
+	/* oxbox: a folder map's build (its size and Halo Map Porter's checksum: port/linux/game/hmp_share.c,
+	map_share_xbox.c) */
 	if (map_name && map_name[0] == '+')
 		return hmp_share_map_version(map_name);
-#endif
 	return custom_edition_level_name(map_name) ? custom_edition_map_version(map_name) : 0;
 }
 
@@ -1158,22 +1154,26 @@ boolean cache_files_map_present(
 		char path[256];
 		HANDLE file;
 
-#ifdef HALO_XBOX_TARGET
 		/* oxbox: a folder map of the host's build (cache_files_map_version), else asked of the host (map sharing:
-		port/linux/game/hmp_share.c) */
+		port/linux/game/hmp_share.c; the native builds play one they have of that build) */
 		if (map_name[0] == '+')
 		{
 			if (hmp_maps_find(map_name) != NONE && (!version || hmp_share_map_version(map_name) == version))
 				return TRUE;
+#ifdef HALO_XBOX_TARGET
 			if (map_share_download_begin(map_name, version, NULL))
 				return TRUE;
-		}
+#else
+			snprintf(message, sizeof(message), hmp_maps_find(map_name) != NONE ?
+				"Your copy of the host's map %.64s is another build of it." :
+				"You don't have the host's map %.64s, a folder map (Halo 1 Unlimited's Xboxes download it).",
+				map_name + 1);
+			goto missing;
 #endif
+		}
 		if (cache_files_precache_map_loaded(map_name))
 			return TRUE;
-#ifdef HALO_XBOX_TARGET
 		if (!hmp_map_file_path(map_name, path, sizeof(path)))
-#endif
 		snprintf(path, sizeof(path), "%s%s.map", cache_files_map_directory(), name);
 #ifdef HALO_XBOX_TARGET
 		/* oxbox: by its attributes, as the map may be open already (precaching opens it exclusively, and the
@@ -1202,6 +1202,9 @@ boolean cache_files_map_present(
 				name);
 		}
 	}
+#ifndef HALO_XBOX_TARGET
+missing:
+#endif
 	platform_log("map missing: %s", message);
 	for (index = 0; message[index] && index < NUMBEROF(error_text) - 1; index++)
 		error_text[index] = (wchar_t)(unsigned char)message[index];

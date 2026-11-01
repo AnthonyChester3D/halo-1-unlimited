@@ -256,6 +256,26 @@ static int plain_name(const char *text)
 	return index > 0 && text[0] != '.';
 }
 
+/* a folder's name in a folder map's key: printable, no separator, not only
+dots, not starting with a dot or a space (map_share_xbox.c's folders) */
+static int folder_name(const char *text, size_t length)
+{
+	size_t index;
+
+	if (!length || text[0] == '.' || text[0] == ' ')
+		return 0;
+	for (index = 0; index < length; index++)
+	{
+		unsigned char character = (unsigned char)text[index];
+
+		if (character < 0x20 || character >= 0x7F || strchr("\\/:*?\"<>|+", character))
+			return 0;
+		if (character == '.' && index + 1 < length && text[index + 1] == '.')
+			return 0;
+	}
+	return 1;
+}
+
 /* a level's path: letters, digits, "_", "-", "." and backslashes, no part
 of it only dots (nothing leaves the maps folder) */
 static int level_path(const char *text)
@@ -342,11 +362,11 @@ int server_rotation_parse_entry(const char *text, int length, struct server_entr
 		map_length = strlen(map);
 		while (map_length && is_space(map[map_length - 1]))
 			map[--map_length] = 0;
-		/* (forward slashes as the game's backslashes) */
+		/* (forward slashes as the game's backslashes; a folder map's key keeps its pack's slash) */
 		for (index = 0; map[index]; index++)
 		{
-			if (map[index] == '/')
-				map[index] = '\\';
+			if (map[0] == '+' ? map[index] == '\\' : map[index] == '/')
+				map[index] = map[0] == '+' ? '/' : '\\';
 		}
 		if (map_length >= sizeof(entry->map))
 		{
@@ -357,7 +377,23 @@ int server_rotation_parse_entry(const char *text, int length, struct server_entr
 		/* (custom_maps\ in any case) */
 		if (map_length >= 12 && map[11] == '\\')
 			snprintf(prefix, sizeof(prefix), "%.11s", map);
-		if (text_equal_case(prefix, "custom_maps"))
+		if (map[0] == '+')
+		{
+			/* a folder map, by its key (the maps folder's "folder" or "pack/folder": map_share_xbox.c) */
+			const char *part = map + 1;
+			const char *slash = strchr(part, '/');
+
+			entry->map_kind = _server_map_folder;
+			if (!folder_name(part, slash ? (size_t)(slash - part) : strlen(part)) ||
+				(slash && (!folder_name(slash + 1, strlen(slash + 1)) || strchr(slash + 1, '/'))) || strlen(part) > 30)
+			{
+				snprintf(entry->rejected, sizeof(entry->rejected), "\"%s\" is not a folder map's name", map);
+				return 1;
+			}
+			snprintf(entry->map_name, sizeof(entry->map_name), "%s", map);
+			snprintf(entry->level, sizeof(entry->level), "%s", map);
+		}
+		else if (text_equal_case(prefix, "custom_maps"))
 		{
 			entry->map_kind = _server_map_custom;
 			memcpy(entry->map, "custom_maps", 11);
@@ -640,6 +676,28 @@ void server_rotation_resolve(struct server_entry *entry)
 	if (entry->rejected[0])
 		return;
 	custom_maps_folder(folder, sizeof(folder));
+	/* a folder map: its folder's .map, an Xbox one (its key as the maps folder spells it) */
+	if (entry->map_kind == _server_map_folder)
+	{
+		extern long hmp_maps_find(char const *level_name);
+		extern unsigned char hmp_map_file_path(char const *level_name, char *path, long size);
+		extern char const *folder_map_key(long map_index);
+		char xbox_path[300];
+		long map_index = hmp_maps_find(entry->level);
+
+		if (map_index < 0 || !hmp_map_file_path(entry->level, xbox_path, sizeof(xbox_path)))
+		{
+			snprintf(entry->rejected, sizeof(entry->rejected), "there is no folder map %s (maps/%s/ with a .map)",
+				entry->level, entry->level + 1);
+			entry->map_missing = 1;
+			return;
+		}
+		snprintf(entry->level, sizeof(entry->level), "%s", folder_map_key(map_index));
+		platform_translate_path(xbox_path, path, sizeof(path));
+		server_map_header(path, &version, &type);
+		server_rotation_check_kind(entry, type, version);
+		return;
+	}
 	/* a name: the Xbox's map of it, else Custom Edition's */
 	if (entry->map_kind == _server_map_name)
 	{
@@ -734,14 +792,47 @@ static int maps_in_folder(const char *folder, int custom,
 	return count;
 }
 
+/* the folder maps (port/linux/game/map_share_xbox.c), each told: multiplayer
+Xbox maps, by their key */
+struct folder_maps_listing
+{
+	void (*each)(void *context, const char *name, const char *level, const char *kind);
+	void *context;
+	int count;
+};
+
+static void folder_map_listed(void *context, const char *key)
+{
+	extern unsigned char hmp_map_file_path(char const *level_name, char *path, long size);
+	struct folder_maps_listing *listing = context;
+	char xbox_path[300];
+	char path[1024];
+	long version, type;
+
+	if (!hmp_map_file_path(key, xbox_path, sizeof(xbox_path)))
+		return;
+	platform_translate_path(xbox_path, path, sizeof(path));
+	if (!server_map_header(path, &version, &type) || type != 1 || version != 5)
+		return;
+	listing->each(listing->context, key, key, "folder");
+	listing->count++;
+}
+
 int server_maps_each(void (*each)(void *context, const char *name, const char *level, const char *kind),
 	void *context)
 {
+	extern int folder_maps_each(void (*each)(void *context, char const *key), void *context);
+	struct folder_maps_listing listing;
 	char folder[1024];
 	int count;
 
 	platform_translate_path("d:\\maps", folder, sizeof(folder));
 	count = maps_in_folder(folder, 0, each, context);
+	listing.each = each;
+	listing.context = context;
+	listing.count = 0;
+	folder_maps_each(folder_map_listed, &listing);
+	count += listing.count;
 	custom_maps_folder(folder, sizeof(folder));
 	count += maps_in_folder(folder, 1, each, context);
 	return count;

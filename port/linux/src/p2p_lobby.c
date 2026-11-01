@@ -92,11 +92,10 @@ enum
 	/* a dedicated server's (halo --server: server_mode.c) */
 	_listing_dedicated = 32,
 	STAMP_SIZE = 8,
-#if defined(OXBOX_CROSSPLAY)
 	/* oxbox: the stamp's last two bytes in an Xbox's listing, "OX" (the PC builds read only its first, the game's
-	kind): an Xbox's crossplay game, which is listed as the PC builds' version, is still told for an Xbox's */
+	kind): an Xbox's crossplay game, which is listed as the PC builds' version, is still told for an Xbox's; so is a
+	dedicated server's game Halo 1 Unlimited's Xboxes join (network_server_manager.c's oxbox_server_xbox_joinable) */
 	STAMP_XBOX_OFFSET = STAMP_SIZE - 2,
-#endif
 	/* the signed part's end: everything but the signature */
 	MAXIMUM_LISTING_SIZE = 2 + 1 + 2 + 1 + 4 + 4 + P2P_KEY_SIZE + P2P_SEALED_TOKEN_SIZE + 3 +
 		(1 + P2P_LISTING_NAME_SIZE) + (1 + P2P_LISTING_MAP_SIZE) + (1 + P2P_LISTING_GAMETYPE_SIZE) + STAMP_SIZE +
@@ -414,6 +413,16 @@ static int listing_make_token(unsigned char *bytes, int flags, const unsigned ch
 #if defined(OXBOX_CROSSPLAY)
 	bytes[size + STAMP_XBOX_OFFSET] = 'O';
 	bytes[size + STAMP_XBOX_OFFSET + 1] = 'X';
+#else
+	{
+		extern int oxbox_server_xbox_hosted;
+
+		if (oxbox_server_xbox_hosted)
+		{
+			bytes[size + STAMP_XBOX_OFFSET] = 'O';
+			bytes[size + STAMP_XBOX_OFFSET + 1] = 'X';
+		}
+	}
 #endif
 	bytes[size] = (unsigned char)lobby.kind;
 	size += STAMP_SIZE;

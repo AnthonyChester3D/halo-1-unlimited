@@ -472,6 +472,7 @@ static void server_status_map(
 {
 	struct server_json *json = context;
 	char const *title = name;
+	char folder_title[64];
 	long index;
 
 	/* (a Custom Edition map of a stock map's name is its own) */
@@ -479,6 +480,14 @@ static void server_status_map(
 	{
 		if (!strcmp(name, server_map_titles[index].name))
 			title = server_map_titles[index].title;
+	}
+	/* (a folder map: its info .txt's first line, map_share_xbox.c) */
+	if (!strcmp(kind, "folder"))
+	{
+		extern boolean folder_map_title(char const *key, char *title, int size);
+
+		if (folder_map_title(name, folder_title, sizeof(folder_title)))
+			title = folder_title;
 	}
 	server_json_object_begin(json, NULL);
 	server_json_string(json, "name", name);

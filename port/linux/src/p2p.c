@@ -2259,11 +2259,9 @@ void p2p_socket_port(int socket, int stream, int listening, unsigned short port)
 	/* the game listens for connections while it hosts (on any port but map
 	sharing's, which every player of a game listens on) */
 	if (stream && listening && port != network_short(P2P_MAP_SHARE_PORT)
-#if defined(HALO_XBOX_TARGET)
-		/* oxbox: nor Halo Universal's, which the Xbox's host shares maps on
-		(port/linux/game/hmp_share.c) */
+		/* oxbox: nor Halo Universal's, which a host shares folder maps with
+		Xboxes on (port/linux/game/hmp_share.c, map_share_xbox.c) */
 		&& port != network_short(5152)
-#endif
 		)
 		p2p.hosting_socket = socket;
 	/* (and no stand-in that closed has the port now) */

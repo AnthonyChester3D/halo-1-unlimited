@@ -650,9 +650,7 @@ boolean cache_files_precache_map_begin(
 			/* oxbox: a folder map's file names itself whatever its maker called it; the cache slot gets its key
 			(cache_files_precache_map_end) */
 			if (_stricmp(header.name, cache_map_name) != 0
-#if defined(HALO_XBOX_TARGET)
 				&& cache_map_name[0] != '+'
-#endif
 				)
 			{
 				error(_error_silent, "map '%s' names itself '%s' in its header: refused", cache_map_name, header.name);
@@ -755,7 +753,6 @@ void cache_files_precache_map_end(
 	texture_cache_return_memory();
 	cached_map_file_set_modification_date(cache_file_globals.copying_to_map_file_index);
 	cached_map_file_read_header(cache_file_globals.copying_to_map_file_index);
-#if defined(HALO_XBOX_TARGET)
 	/* oxbox: a folder map's slot is found by its key ("+Precipice"), whatever name the map has inside (Halo
 	Universal's cache identity) */
 	if (cache_file_globals.copying_to_map_file_name[0] == '+')
@@ -768,7 +765,6 @@ void cache_files_precache_map_end(
 			map_file->header.name[sizeof(map_file->header.name) - 1] = 0;
 		}
 	}
-#endif
 	cache_file_globals.copy_in_progress = FALSE;
 	cache_file_globals.copying_to_map_file_index = NONE;
 
@@ -1315,15 +1311,13 @@ static void cache_file_get_map_path(
 	};
 	int length;
 
-#if defined(HALO_XBOX_TARGET)
-	/* oxbox: a folder map ("+key") is read from its folder (port/linux/game/hmp_maps.c) */
+	/* oxbox: a folder map ("+key") is read from its folder (port/linux/game/hmp_maps.c, map_share_xbox.c) */
 	{
 		extern boolean hmp_map_file_path(char const *level_name, char *path, long size);
 
 		if (hmp_map_file_path(map_name, path, MAXIMUM_MAP_PATH_LENGTH))
 			return;
 	}
-#endif
 	length = snprintf(path, MAXIMUM_MAP_PATH_LENGTH, "%s%s.map", cache_files_map_directory(), map_name);
 
 	if (length < 0 || length >= MAXIMUM_MAP_PATH_LENGTH)

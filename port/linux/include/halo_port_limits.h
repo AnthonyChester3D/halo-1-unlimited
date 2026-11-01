@@ -87,9 +87,15 @@ PC builds' version it joins (40: the join request's size) */
 /* ... and the advertisement's flag an Xbox host sets (HALO_PORT_ADVERTISED_FLAGS_OFFSET; the PC builds use the low
 three, and look at no other): an Xbox's game of the PC builds' version is still an Xbox's (its folder maps are shared
 with other Xboxes; the games list shows an Xbox beside it) */
+#define OXBOX_ADVERTISED_XBOX_FLAG_DEFINED
 #define OXBOX_ADVERTISED_XBOX_FLAG 0x80
 /* ... and the PC builds' flag of a dedicated server's game (network version 39 on) */
 #define OXBOX_ADVERTISED_DEDICATED_FLAG 0x04
+#endif
+#if !defined(OXBOX_ADVERTISED_XBOX_FLAG_DEFINED)
+/* (the PC builds' dedicated server sets it too, on a game Halo 1 Unlimited's Xboxes join: network_server_manager.c's
+oxbox_server_xbox_joinable) */
+#define OXBOX_ADVERTISED_XBOX_FLAG 0x80
 #endif
 /* ... the advertisement's reserved bytes: the version (a little-endian word),
 then flags, then the game's kind (an OpenCE gametype's mode, and Hardcore:
