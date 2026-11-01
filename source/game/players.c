@@ -3816,6 +3816,27 @@ void players_reconnect_to_structure_bsp(
 	return;
 }
 
+#if !defined(HALO_XBOX_TARGET)
+/* oxbox: whether a dedicated server picks up a second weapon on its own in multiplayer as the PC builds do
+(server.auto_pickup_second_weapon), read every few seconds */
+static boolean players_server_auto_pickup_second_weapon(
+	void)
+{
+	int config_boolean(char const *name);
+	unsigned long system_milliseconds(void);
+	static boolean setting = FALSE;
+	static unsigned long read_at = 0;
+	unsigned long now = system_milliseconds();
+
+	if (!read_at || now - read_at > 2000)
+	{
+		setting = config_boolean("server.auto_pickup_second_weapon") != 0;
+		read_at = now | 1;
+	}
+	return setting;
+}
+#endif
+
 boolean unit_should_autopick_weapon(
 	long unit_index,
 	long weapon_index)
@@ -3839,8 +3860,12 @@ boolean unit_should_autopick_weapon(
 			weapon_count < 2) ||
 #else
 		/* port: and in multiplayer (campaign's only), a second weapon into
-		the empty slot, readied (unit_add_weapon_to_inventory) */
-		(unit_approve_weapon_pickup(unit_index, weapon_index) &&
+		the empty slot, readied (unit_add_weapon_to_inventory). oxbox: not on
+		a dedicated server (whose host decides every player's pickups), which
+		plays it as the Xbox game does, a second weapon picked up on its own in
+		campaign only, unless server.auto_pickup_second_weapon says otherwise */
+		((!game_engine_running() || !halo_server_mode() || players_server_auto_pickup_second_weapon()) &&
+			unit_approve_weapon_pickup(unit_index, weapon_index) &&
 			weapon_count < 2) ||
 #endif
 		game_engine_force_autopickup(unit_index, weapon_index))

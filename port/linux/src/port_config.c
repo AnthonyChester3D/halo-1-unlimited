@@ -976,6 +976,11 @@ static const struct config_setting config_settings[] =
 	{ "server.bots_difficulty", _config_string, "\"normal\"", "HALO_SERVER_BOTS_DIFFICULTY", _environment_value,
 		_platform_server,
 		"The bots' skill: \"easy\", \"normal\", \"hard\" or \"legendary\"." },
+	{ "server.auto_pickup_second_weapon", _config_boolean, "false", "HALO_SERVER_AUTO_PICKUP_SECOND_WEAPON",
+		_environment_value, _platform_server,
+		"In multiplayer, a player holding one weapon picks up and readies a second\n"
+		"by walking over it, as the PC builds do. Off: as the Xbox game, the second\n"
+		"is picked up only with the action button." },
 	{ "server.master_publish", _config_boolean, "true", "HALO_SERVER_MASTER_PUBLISH", _environment_value,
 		_platform_server,
 		"Publish a public server to the official master servers, signed with\n"
