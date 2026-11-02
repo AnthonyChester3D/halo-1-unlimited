@@ -541,6 +541,10 @@ struct bots_brain
 	short burst_ticks;                      /* the trigger held for this many more ticks */
 	short pause_ticks;                      /* then released for this many */
 	short trigger_ticks;                    /* how long it has been held */
+	short fire_trigger;                     /* the burst's trigger: 0 the weapon's first (primary), 1 its second (a
+	                                           Banshee's fuel rod, a Scorpion's other gun: the secondary trigger) */
+	boolean aimed_loosely;                  /* within a few times the aim it fires at: a vehicle's gun opens up */
+	long charge_next;                       /* the next charged shot (a plasma pistol's), not before */
 	long grenade_time;                      /* none before this tick */
 	long melee_time;
 	long weapon_time;                       /* the next weapon choice */
@@ -596,6 +600,9 @@ struct bots_brain
 	boolean exiting;                        /* getting out (counted once) */
 	boolean drive_hold;                     /* this tick: the driver waits for its crew */
 	long crew_wait_since;                   /* the driver's been waiting for its crew since (0: not) */
+	long crew_unit;                         /* a Warthog driver's crew (its gunner, else a passenger) last tick, and */
+	long crew_left_unit;                    /* the one who got out last (to go for the flag), and when: the driver */
+	long crew_left_time;                    /* stays with them (bots_goal_driver) */
 
 	/* build 40 */
 	long scout_until;                       /* a sniper looking out over the map until this tick */
@@ -658,6 +665,7 @@ struct bots_seats
 {
 	short driver, gunner;                   /* seat indices, NONE for none */
 	long driver_unit, gunner_unit;          /* who's in them, NONE */
+	long passenger_unit;                    /* the first passenger, NONE */
 	short passengers, passengers_free;
 };
 static void bots_vehicle_seats(long vehicle_index, struct bots_seats *seats);
@@ -1732,6 +1740,7 @@ static void bots_brain_reset(
 	brain->strafe_sign = 1.f;
 	brain->goal_object = NONE;
 	brain->goal_hunt_unit = NONE;
+	brain->crew_unit = brain->crew_left_unit = NONE;
 	brain->goal_waypoint = NONE;
 	brain->item_object = NONE;
 	brain->vehicle_object = NONE;
@@ -3560,6 +3569,93 @@ static boolean bots_can_see(
 	return !blocked;
 }
 
+/* a burst (bots_fight: the trigger held for burst_ticks, then let go for pause_ticks), by the weapon:
+- a trigger that charges (a plasma pistol's): tapped as fast as a person taps it, 6 to 7 shots a second; now and then,
+  at a target within 20 with its shields up or in a vehicle, held until it's charged, and let go at the target
+- an automatic one (not latched, its fastest rate of fire 4 a second or more): held, and a vehicle's gun much
+  longer, with short pauses (a Ghost's, a Banshee's, a Warthog's chain gun)
+- the rest (latched: a press a shot) tapped at their rate of fire
+A vehicle's weapon with a second trigger (a Banshee's fuel rod, a Scorpion's other gun): the heavier of the two (the
+slower) at a vehicle or a target further than 12, the lighter at someone on foot closer */
+static void bots_fire_burst(
+	struct bots_brain *brain,
+	long weapon_index,
+	struct object_datum const *target,
+	real distance,
+	long now)
+{
+	struct weapon_definition *definition = weapon_definition_get(weapon_get(weapon_index)->definition_index);
+	struct weapon_trigger_definition const *trigger;
+	boolean target_in_vehicle = target && target->object.parent_object_index != NONE;
+	short trigger_index = 0;
+	real rate;
+
+	brain->fire_trigger = 0;
+	if (!definition->weapon.triggers.count)
+	{
+		brain->burst_ticks = 2;
+		brain->pause_ticks = BOTS_TICKS_PER_SECOND;
+		return;
+	}
+	if (brain->seat_kind != _bots_seat_none && definition->weapon.triggers.count > 1)
+	{
+		struct weapon_trigger_definition const *first =
+			TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, 0, struct weapon_trigger_definition);
+		struct weapon_trigger_definition const *second =
+			TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, 1, struct weapon_trigger_definition);
+
+		if (first->projectile.index != NONE && second->projectile.index != NONE)
+		{
+			real first_rate = first->initial_rate_of_fire > first->final_rate_of_fire ? first->initial_rate_of_fire :
+				first->final_rate_of_fire;
+			real second_rate = second->initial_rate_of_fire > second->final_rate_of_fire ? second->initial_rate_of_fire :
+				second->final_rate_of_fire;
+			short heavy = second_rate < first_rate ? 1 : 0;
+
+			trigger_index = target_in_vehicle || distance > 12.f ? heavy : (short)(1 - heavy);
+		}
+	}
+	trigger = TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, trigger_index, struct weapon_trigger_definition);
+	brain->fire_trigger = trigger_index;
+	rate = trigger->initial_rate_of_fire > trigger->final_rate_of_fire ? trigger->initial_rate_of_fire :
+		trigger->final_rate_of_fire;
+	if (trigger->charging_time > 0.f && definition->weapon.triggers.count == 1)
+	{
+		if (now >= brain->charge_next && target && distance < 20.f &&
+			(target_in_vehicle || target->object.shield_vitality > 0.3f) && !(bots_random() % 4))
+		{
+			/* (held through the charge, a few ticks more, then let go: the charged shot) */
+			brain->burst_ticks = (short)(trigger->charging_time * BOTS_TICKS_PER_SECOND) + 4;
+			brain->pause_ticks = 8;
+			brain->charge_next = now + 4 * BOTS_TICKS_PER_SECOND + (long)(bots_random() % (3 * BOTS_TICKS_PER_SECOND));
+		}
+		else
+		{
+			brain->burst_ticks = 2;
+			brain->pause_ticks = (short)(2 + bots_random() % 2);
+		}
+		return;
+	}
+	if (rate >= 4.f && !TEST_FLAG(trigger->flags, _weapon_trigger_latched_bit))
+	{
+		if (brain->seat_kind != _bots_seat_none)
+		{
+			brain->burst_ticks = (short)(30 + bots_random() % 31);
+			brain->pause_ticks = (short)(3 + bots_random() % 6);
+		}
+		else
+		{
+			brain->burst_ticks = (short)(12 + bots_random() % 13);
+			brain->pause_ticks = (short)(6 + bots_random() % 9);
+		}
+		return;
+	}
+	brain->burst_ticks = 2;
+	brain->pause_ticks = (short)(rate > 0.5f ? BOTS_TICKS_PER_SECOND / rate - 2.f : BOTS_TICKS_PER_SECOND);
+	if (brain->pause_ticks < 2)
+		brain->pause_ticks = 2;
+}
+
 /* a weapon's worth at a distance: its damage a second, less past its range, much less inside its minimum
 range; 0 when it can't fire */
 static real bots_weapon_score(
@@ -4308,6 +4404,8 @@ static void bots_fight(
 			tolerance = 0.03f;
 		brain->aimed = (real)fabs(bots_angle_difference(aim_yaw, brain->yaw)) < tolerance &&
 			(real)fabs(aim_pitch - brain->pitch) < tolerance;
+		brain->aimed_loosely = (real)fabs(bots_angle_difference(aim_yaw, brain->yaw)) < 3.f * tolerance &&
+			(real)fabs(aim_pitch - brain->pitch) < 3.f * tolerance;
 
 		/* (no melee or grenades from a seat: the vehicle's gun alone. No grenades with a flag or a ball in hand, which
 		the throw drops: checked on the unit itself, as goal_urgent can lag a pickup by the goal's next look) */
@@ -4342,7 +4440,8 @@ static void bots_fight(
 			{
 				brain->burst_ticks--;
 				brain->trigger_ticks++;
-				action->control_flags |= FLAG(_unit_control_weapon_primary_trigger_bit);
+				action->control_flags |= FLAG(brain->fire_trigger ? _unit_control_weapon_secondary_trigger_bit :
+					_unit_control_weapon_primary_trigger_bit);
 				action->primary_trigger = brain->trigger_ticks < 255 ? (real)brain->trigger_ticks / 255.f : 1.f;
 				bots_route.firing_ticks++;
 			}
@@ -4351,31 +4450,11 @@ static void bots_fight(
 				brain->pause_ticks--;
 				brain->trigger_ticks = 0;
 			}
-			else if (brain->aimed)
+			else if (brain->aimed || (brain->seat_kind != _bots_seat_none && brain->aimed_loosely))
 			{
-				struct weapon_definition *definition = weapon_definition_get(weapon_get(weapon_index)->definition_index);
-				real rate_of_fire = definition->weapon.triggers.count ?
-					TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, 0, struct weapon_trigger_definition)->final_rate_of_fire : 1.f;
-
-				if (brain->seat_kind != _bots_seat_none && rate_of_fire >= 5.f)
-				{
-					/* (a vehicle's gun: shorter bursts and longer pauses, as a person fires one. Each shot is an object
-					with its own light and collision, and every vehicle in a game holding its trigger is a lot of them) */
-					brain->burst_ticks = (short)(6 + bots_random() % 7);
-					brain->pause_ticks = (short)(20 + bots_random() % 21);
-				}
-				else if (rate_of_fire >= 5.f)
-				{
-					brain->burst_ticks = (short)(12 + bots_random() % 13);
-					brain->pause_ticks = (short)(6 + bots_random() % 9);
-				}
-				else
-				{
-					brain->burst_ticks = 2;
-					brain->pause_ticks = (short)(rate_of_fire > 0.5f ? BOTS_TICKS_PER_SECOND / rate_of_fire : 30.f);
-					if (brain->pause_ticks < 4)
-						brain->pause_ticks = 4;
-				}
+				/* (a vehicle's gun opens up before it's quite on, as a person's does, and keeps on while the target's
+				in sight: bursts back to back) */
+				bots_fire_burst(brain, weapon_index, target_object, distance, now);
 			}
 		}
 
@@ -5142,6 +5221,7 @@ static void bots_vehicle_seats(
 	}
 	seats->driver = seats->gunner = NONE;
 	seats->driver_unit = seats->gunner_unit = NONE;
+	seats->passenger_unit = NONE;
 	seats->passengers = seats->passengers_free = 0;
 	for (seat = 0; seat < definition->unit.seats.count && seat < NUMBEROF(riders); seat++)
 	{
@@ -5162,6 +5242,8 @@ static void bots_vehicle_seats(
 			seats->passengers++;
 			if (riders[seat] == NONE)
 				seats->passengers_free++;
+			else if (seats->passenger_unit == NONE)
+				seats->passenger_unit = riders[seat];
 		}
 	}
 }
@@ -5366,6 +5448,36 @@ static long bots_find_vehicle(
 	return best;
 }
 
+#define BOTS_CREW_LEFT_TICKS (40 * BOTS_TICKS_PER_SECOND)
+#define BOTS_CREW_LEFT_RANGE 40.f
+#define BOTS_HOME_RANGE 15.f
+/* whether a Warthog driver's crew who got out last is still with it: on foot, alive, within 40, for 40 seconds since
+(bots_goal_driver) */
+static boolean bots_crew_left_near(
+	struct bots_brain const *brain,
+	real_point3d const *position,
+	long now)
+{
+	struct unit_datum *crew;
+	real_point3d crew_position;
+
+	if (brain->crew_left_unit == NONE || now - brain->crew_left_time > BOTS_CREW_LEFT_TICKS ||
+		!object_try_and_get(brain->crew_left_unit))
+	{
+		return FALSE;
+	}
+	crew = (struct unit_datum *)object_get(brain->crew_left_unit);
+	if (!TEST_FLAG(_object_mask_unit, crew->object.type) || crew->object.parent_object_index != NONE ||
+		crew->object.body_vitality <= 0.f)
+	{
+		return FALSE;
+	}
+	object_get_origin(brain->crew_left_unit, &crew_position);
+	return bots_distance3d(position, &crew_position) < BOTS_CREW_LEFT_RANGE;
+}
+
+boolean game_engine_ctf_bot_flag(long team_index, real_point3d *spot, long *weapon_index, boolean *at_home);
+
 /* the bot's vehicle, this tick: in one (what to do there), or going for one (a goal) */
 static void bots_vehicle_update(
 	struct bots_brain *brain,
@@ -5439,6 +5551,34 @@ static void bots_vehicle_update(
 				bots_vehicle_seats(vehicle_index, &seats);
 				need_gunner = teams && seats.gunner != NONE && seats.gunner_unit == NONE;
 				coming = bots_seat_takers(brain, vehicle_index, NONE) > 0;
+				/* (the crew: who got out last, which the driver stays with in capture the flag: bots_goal_driver) */
+				{
+					long crew = seats.gunner_unit != NONE ? seats.gunner_unit : seats.passenger_unit;
+
+					if (crew == NONE && brain->crew_unit != NONE)
+					{
+						brain->crew_left_unit = brain->crew_unit;
+						brain->crew_left_time = now;
+					}
+					brain->crew_unit = crew;
+				}
+				/* (capture the flag, no gunner: no wait while the crew who got out is near, nor away from home, where
+				the driver heads to pick one up; at home, the wait as before) */
+				if (need_gunner && !coming && game_engine_get_variant() &&
+					game_engine_get_variant()->game_engine_index == game_engine_ctf)
+				{
+					real_point3d home;
+					long home_flag;
+					boolean home_flag_at_home;
+
+					if (bots_crew_left_near(brain, &vehicle->object.position, now) ||
+						(game_engine_ctf_bot_flag(player->team_index, &home, &home_flag, &home_flag_at_home) &&
+							bots_distance3d(&home, &vehicle->object.position) > BOTS_HOME_RANGE))
+					{
+						need_gunner = FALSE;
+						brain->crew_wait_since = 0;
+					}
+				}
 				if (need_gunner || coming)
 				{
 					if (!brain->crew_wait_since)
@@ -5610,6 +5750,66 @@ static void bots_vehicle_update(
 }
 
 /* the bot's goal for the game type (every BOTS_GOAL_TICKS; a goal that follows an object follows it every tick) */
+/* a Warthog's driver in capture the flag (a vehicle with a gun of its own for someone else): with a crew, the enemy
+flag (or home, when the crew carries it); without one, with the crew who just got out (40 seconds, while within 40
+and on foot: a gunner who hopped out for the flag isn't left behind); else home, to pick up a crew there
+(bots_vehicle_update waits for one at home) */
+static void bots_goal_driver(
+	struct bots_brain *brain,
+	struct player_datum const *player,
+	struct unit_datum const *unit,
+	real_point3d const *position,
+	long now)
+{
+	struct bots_seats seats;
+	real_point3d spots[2], flag_point;
+	long flags[2];
+	boolean at_home[2], valid[2];
+	short team = (short)player->team_index;
+	long crew;
+
+	if (!brain->driving || brain->driver_aims || team < 0 || team > 1 || unit->object.parent_object_index == NONE ||
+		!object_try_and_get(unit->object.parent_object_index))
+	{
+		return;
+	}
+	valid[0] = game_engine_ctf_bot_flag(0, &spots[0], &flags[0], &at_home[0]);
+	valid[1] = game_engine_ctf_bot_flag(1, &spots[1], &flags[1], &at_home[1]);
+	if (!valid[team])
+		return;
+	bots_vehicle_seats(unit->object.parent_object_index, &seats);
+	crew = seats.gunner_unit != NONE ? seats.gunner_unit : seats.passenger_unit;
+	if (crew != NONE)
+	{
+		struct unit_datum *crew_unit = (struct unit_datum *)object_try_and_get(crew);
+
+		/* (the crew has the flag: home with it; else the enemy flag) */
+		if (crew_unit && bots_carries_objective(crew_unit))
+		{
+			bots_set_goal(brain, _bots_goal_touch, _bots_reason_carry, &spots[team], 0.f, NONE);
+			brain->goal_urgent = TRUE;
+		}
+		else if (flags[1 - team] != NONE)
+		{
+			item_get_position_even_if_in_inventory(flags[1 - team], &flag_point);
+			bots_set_goal(brain, _bots_goal_touch, _bots_reason_take, &flag_point, 0.f, flags[1 - team]);
+		}
+		else if (valid[1 - team])
+		{
+			bots_set_goal(brain, _bots_goal_touch, _bots_reason_take, &spots[1 - team], 0.f, NONE);
+		}
+		return;
+	}
+	if (bots_crew_left_near(brain, position, now))
+	{
+		/* (the crew who got out: alongside them, flag or not) */
+		object_get_origin(brain->crew_left_unit, &flag_point);
+		bots_set_goal(brain, _bots_goal_hold, _bots_reason_escort, &flag_point, 6.f, brain->crew_left_unit);
+		return;
+	}
+	bots_set_goal(brain, _bots_goal_hold, _bots_reason_defend, &spots[team], 8.f, NONE);
+}
+
 static void bots_objective(
 	struct bots_brain *brain,
 	long absolute_player_index,
@@ -5683,6 +5883,9 @@ static void bots_objective(
 	{
 		bots_goal_item(brain, unit, &position, now);
 	}
+	/* (a Warthog's driver: where its crew, or the lack of one, says) */
+	if (engine == game_engine_ctf)
+		bots_goal_driver(brain, player, unit, &position, now);
 	if (brain->vehicle_object != NONE)
 		brain->goal_reason = _bots_reason_vehicle;
 	if (brain->goal_kind == _bots_goal_none)
