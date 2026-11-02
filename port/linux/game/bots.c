@@ -527,6 +527,8 @@ struct bots_brain
 	                                           Banshee's fuel rod, a Scorpion's other gun: the secondary trigger) */
 	boolean aimed_loosely;                  /* within a few times the aim it fires at: a vehicle's gun opens up */
 	long charge_next;                       /* the next charged shot (a plasma pistol's), not before */
+	boolean sprayer;                        /* this life: the weapon it likes, whatever the target (a third of lives:
+	                                           an assault rifle sprayed across the map is part of the fun) */
 	long grenade_time;                      /* none before this tick */
 	long melee_time;
 	long weapon_time;                       /* the next weapon choice */
@@ -1564,6 +1566,7 @@ static void bots_brain_reset(
 	brain->goal_object = NONE;
 	brain->goal_hunt_unit = NONE;
 	brain->crew_unit = brain->crew_left_unit = NONE;
+	brain->sprayer = (bots_random() % 3) == 0;
 	brain->goal_waypoint = NONE;
 	brain->item_object = NONE;
 	brain->vehicle_object = NONE;
@@ -3383,10 +3386,51 @@ static real bots_weapon_score(
 	return score;
 }
 
+/* a weapon's worth against the target in sight: its score (bots_weapon_score), and what it's for. A precise weapon
+(a zoom, and a press a shot or a slow rate of fire: a pistol, a sniper rifle) is better at someone on foot past 10; an
+automatic one (an assault rifle, a plasma rifle) is better at a vehicle within 25, and worse at someone on foot far
+off. A sprayer (a third of the bots' lives) goes by the score alone */
+static real bots_weapon_choice_score(
+	struct bots_brain const *brain,
+	long weapon_index,
+	real distance,
+	boolean target_in_vehicle)
+{
+	real score = bots_weapon_score(weapon_index, distance);
+	struct weapon_definition *definition;
+	struct weapon_trigger_definition const *trigger;
+	real rate;
+	boolean precise, automatic;
+
+	if (score <= 0.f || brain->sprayer || brain->target == NONE)
+		return score;
+	definition = weapon_definition_get(weapon_get(weapon_index)->definition_index);
+	trigger = TAG_BLOCK_GET_ELEMENT(&definition->weapon.triggers, 0, struct weapon_trigger_definition);
+	rate = trigger->initial_rate_of_fire > trigger->final_rate_of_fire ? trigger->initial_rate_of_fire :
+		trigger->final_rate_of_fire;
+	automatic = rate >= 4.f && !TEST_FLAG(trigger->flags, _weapon_trigger_latched_bit) && trigger->charging_time <= 0.f;
+	precise = !automatic && definition->weapon.zoom_magnification_maximum > 1.f;
+	if (target_in_vehicle)
+	{
+		if (automatic && distance < 25.f)
+			score *= 1.6f;
+	}
+	else if (distance > 10.f)
+	{
+		if (precise)
+			score *= 1.8f;
+		else if (automatic)
+			score *= 0.6f;
+	}
+	return score;
+}
+
 /* the slot of the unit's best weapon for a distance (NONE: none can fire) */
 static short bots_best_weapon(
+	struct bots_brain const *brain,
 	struct unit_datum const *unit,
 	real distance,
+	boolean target_in_vehicle,
 	real *best_score)
 {
 	short best = NONE;
@@ -3395,7 +3439,7 @@ static short bots_best_weapon(
 	*best_score = 0.f;
 	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
 	{
-		real score = bots_weapon_score(unit->unit.weapon_object_indices[slot], distance);
+		real score = bots_weapon_choice_score(brain, unit->unit.weapon_object_indices[slot], distance, target_in_vehicle);
 
 		if (score > *best_score)
 		{
@@ -3963,9 +4007,14 @@ static void bots_fight(
 	if (now >= brain->weapon_time)
 	{
 		real best_score;
-		short best = bots_best_weapon(unit, distance, &best_score);
-		real current_score = bots_weapon_score(unit->unit.weapon_object_indices[unit->unit.current_weapon_index >= 0 &&
-			unit->unit.current_weapon_index < MAXIMUM_WEAPONS_PER_UNIT ? unit->unit.current_weapon_index : 0], distance);
+		struct object_datum *target_unit = brain->target != NONE && brain->target_unit != NONE ?
+			(struct object_datum *)object_try_and_get(brain->target_unit) : NULL;
+		boolean target_in_vehicle = target_unit && target_unit->object.parent_object_index != NONE;
+		short best = bots_best_weapon(brain, unit, distance, target_in_vehicle, &best_score);
+		real current_score = bots_weapon_choice_score(brain,
+			unit->unit.weapon_object_indices[unit->unit.current_weapon_index >= 0 &&
+			unit->unit.current_weapon_index < MAXIMUM_WEAPONS_PER_UNIT ? unit->unit.current_weapon_index : 0], distance,
+			target_in_vehicle);
 
 		brain->weapon_time = now + BOTS_WEAPON_TICKS;
 		brain->wanted_weapon = best != NONE && best != unit->unit.current_weapon_index && best_score > current_score * 1.1f ?
