@@ -975,7 +975,7 @@ static const struct config_setting config_settings[] =
 		"of a machine of its own, so PCs see them as well as Xboxes." },
 	{ "server.bots_difficulty", _config_string, "\"normal\"", "HALO_SERVER_BOTS_DIFFICULTY", _environment_value,
 		_platform_server,
-		"The bots' skill: \"easy\", \"normal\", \"hard\" or \"legendary\"." },
+		"The bots' skill: \"easy\", \"normal\", \"heroic\" or \"legendary\" (Halo's own names; \"hard\" still means heroic)." },
 	{ "server.host_scripts", _config_boolean, "false", "HALO_SERVER_HOST_SCRIPTS", _environment_value, _platform_server,
 		"Only the server runs the map's scripts in multiplayer, as in co-op, and\n"
 		"sends the players what they change (doors, elevators, objects, sounds,\n"
