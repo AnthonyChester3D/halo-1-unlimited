@@ -433,11 +433,20 @@ static void build_list(void)
 
 /* ---------- private code: the scan */
 
+/* a .txt's claim to be a folder map's info .txt: info.txt first, then any other, but never the showcase's
+(showcase.txt) or the bots' (bots.txt) files, nor a pack's order.txt; 0 for none */
+static short info_rank(char const *f)
+{
+	if (!ends_with(f, ".txt") || !ieq(f, "showcase.txt") || !ieq(f, "bots.txt") || !ieq(f, "order.txt")) return 0;
+	return !ieq(f, "info.txt") ? 2 : 1;
+}
+
 /* what's in a map's folder (in maps folder map->root): its .map, .txt, preview.bin and the .map's time. TRUE = a .map */
 static boolean list_folder(struct hmp_map *map)
 {
 	struct _WIN32_FIND_DATAA *find = &hmp_maps_globals.find[1];
 	char map_file[48] = "", info_file[48] = "";
+	short info_best = 0;
 	HANDLE handle;
 	map->picture = 0;
 	map->map_time_low = map->map_time_high = 0;
@@ -455,7 +464,11 @@ static boolean list_folder(struct hmp_map *map)
 			map->map_time_low = find->ftLastWriteTime.dwLowDateTime;
 			map->map_time_high = find->ftLastWriteTime.dwHighDateTime;
 		}
-		else if (!info_file[0] && ends_with(f, ".txt")) scpy(info_file, f);
+		else if (ends_with(f, ".txt"))
+		{
+			short rank = info_rank(f);
+			if (rank > info_best) { scpy(info_file, f); info_best = rank; }
+		}
 		else if (!ieq(f, "preview.bin") && !find->nFileSizeHigh && find->nFileSizeLow == PREVIEW_SIZE) map->picture = 1;
 	}
 	while (FindNextFileA(handle, find));

@@ -1166,10 +1166,11 @@ static void put_resume(const char *path, const struct resume *rs) {
     if (h != INVALID_HANDLE) { WriteFile(h, rs, sizeof *rs, &put, 0); FlushFileBuffers(h); CloseHandle(h); }
 }
 
-/* a folder's info .txt: its first .txt file (name into `path`, which holds the folder). 1 = found */
+/* a folder's info .txt: info.txt, else another .txt, never the showcase's (showcase.txt), the bots' (bots.txt) or a
+pack's order.txt (name into `path`, which holds the folder). 1 = found */
 static int txt_in(char *path) {
     char *e = path + slen(path);
-    int found = 0;
+    int best = 0;
     HANDLE h;
     scpy(e, "\\*.*");
     h = FindFirstFileA(path, g_fd);
@@ -1177,10 +1178,14 @@ static int txt_in(char *path) {
     if (h == INVALID_HANDLE) return 0;
     do {
         char *nm = g_fd + 0x2c;
-        if (!(*(u32 *)g_fd & 0x10) && ends_with(nm, ".txt") && slen(nm) < 40) { *e = '\\'; scpy(e + 1, nm); found = 1; }
-    } while (!found && FindNextFileA(h, g_fd));
+        int rank;
+        if ((*(u32 *)g_fd & 0x10) || !ends_with(nm, ".txt") || slen(nm) >= 40) continue;
+        rank = !ieq(nm, "showcase.txt") || !ieq(nm, "bots.txt") || !ieq(nm, "order.txt") ? 0 : !ieq(nm, "info.txt") ? 2 : 1;
+        if (rank > best) { *e = '\\'; scpy(e + 1, nm); best = rank; }
+    } while (best < 2 && FindNextFileA(h, g_fd));
     CloseHandle(h);
-    return found;
+    if (!best) *e = 0;
+    return best != 0;
 }
 /* a "Genres:" line in b (n bytes): where it starts and how long it is (with its line end). 1 = there is one */
 static int genres_line(const u8 *b, u32 n, u32 *at, u32 *len) {
