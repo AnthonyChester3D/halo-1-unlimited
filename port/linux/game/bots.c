@@ -105,7 +105,7 @@ enum bots_difficulty
 {
 	_bots_difficulty_easy,
 	_bots_difficulty_normal,
-	_bots_difficulty_hard,
+	_bots_difficulty_heroic,
 	_bots_difficulty_legendary,
 	NUMBER_OF_BOTS_DIFFICULTIES
 };
@@ -127,7 +127,7 @@ static struct bots_skill const bots_skills[NUMBER_OF_BOTS_DIFFICULTIES] =
 {
 	{ "Easy", 16, 0.22f, 0.95f, 0.18f, 35.f, 0.70f, 14 * 30, 1.5f },
 	{ "Normal", 8, 0.12f, 0.92f, 0.30f, 45.f, 0.87f, 8 * 30, 1.0f },
-	{ "Hard", 5, 0.07f, 0.88f, 0.40f, 50.f, 1.00f, 6 * 30, 0.85f },
+	{ "Heroic", 5, 0.07f, 0.88f, 0.40f, 50.f, 1.00f, 6 * 30, 0.85f },
 	{ "Legendary", 3, 0.04f, 0.84f, 0.50f, 55.f, 1.10f, 5 * 30, 0.75f },
 };
 
