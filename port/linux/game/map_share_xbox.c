@@ -265,6 +265,7 @@ static boolean folder_map_add(char const *top, char const *sub)
 	WIN32_FIND_DATAA find;
 	char path[300];
 	HANDLE handle;
+	int info_rank = 0;
 
 	if (folder_maps.count >= MAXIMUM_FOLDER_MAPS)
 		return FALSE;
@@ -283,8 +284,19 @@ static boolean folder_map_add(char const *top, char const *sub)
 			continue;
 		if (!map->map_file[0] && ends_with(name, ".map"))
 			snprintf(map->map_file, sizeof(map->map_file), "%s", name);
-		else if (!map->info_file[0] && ends_with(name, ".txt") && ieq(name, "showcase.txt"))
-			snprintf(map->info_file, sizeof(map->info_file), "%s", name);
+		else if (ends_with(name, ".txt"))
+		{
+			/* (the info .txt: info.txt first, then any other, but never the showcase's, the bots' file or a pack's
+			order.txt) */
+			int rank = !ieq(name, "showcase.txt") || !ieq(name, "bots.txt") || !ieq(name, "order.txt") ? 0 :
+				!ieq(name, "info.txt") ? 2 : 1;
+
+			if (rank > info_rank)
+			{
+				snprintf(map->info_file, sizeof(map->info_file), "%s", name);
+				info_rank = rank;
+			}
+		}
 		else if (!ieq(name, "preview.bin") && !find.nFileSizeHigh && find.nFileSizeLow == PREVIEW_SIZE)
 			map->picture = 1;
 	}
