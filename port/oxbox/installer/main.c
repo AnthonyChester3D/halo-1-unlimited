@@ -37,7 +37,7 @@ the installer itself. */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 10
+#define INSTALLER_VERSION 11
 #endif
 __attribute__((used)) static struct
 {
@@ -501,6 +501,16 @@ static void to_device(char const *path, char *device, size_t size)
 static int from_device(char const *device, char *path, size_t size)
 {
 	int i;
+	/* (C:, the dashboard's partition, which isn't mounted: an installer started from there, as a dashboard, is read
+	through D:, its own folder, so it still copies itself into the game as its updater. Not a drive Halo folders are
+	looked for on) */
+	static char const system_prefix[] = "\\Device\\Harddisk0\\Partition2\\";
+	if (!_strnicmp(device, system_prefix, sizeof(system_prefix) - 1))
+	{
+		char const *name = strrchr(device, '\\');
+		text_print(path, size, "D:\\%s", name + 1);
+		return 1;
+	}
 	for (i = 0; i < 3; i++)
 	{
 		char prefix[64];
