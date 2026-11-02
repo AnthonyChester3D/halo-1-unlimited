@@ -34,6 +34,8 @@ void net_status_render(void);
 #if defined(OXBOX_NET_P2P)
 /* hmp_online.c: ONLINE PLAY chosen (the games list is the internet's), else SYSTEM LINK PLAY */
 boolean hmp_online_chosen(void);
+/* whether internet play can work now: no network (the cable out, no address yet, no router) lists no online game */
+boolean net_status_online_usable(void);
 #endif
 
 #endif
