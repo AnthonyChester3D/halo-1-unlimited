@@ -5436,8 +5436,7 @@ static long bots_find_vehicle(
 		struct bots_seats seats;
 		real distance, score;
 
-		if (vehicle->object.parent_object_index != NONE || vehicle->object.up.k < 0.6f ||
-			TEST_FLAG(vehicle->object.damage_flags, _object_dead_bit) ||
+		if (vehicle->object.parent_object_index != NONE || TEST_FLAG(vehicle->object.damage_flags, _object_dead_bit) ||
 			(real)fabs(vehicle->object.position.z - position->z) > 2.f)
 		{
 			continue;
@@ -5446,6 +5445,21 @@ static long bots_find_vehicle(
 		if (distance > BOTS_SEAT_RANGE)
 			continue;
 		bots_vehicle_seats(iterator.index, &seats);
+		if (vehicle->object.up.k < 0.6f)
+		{
+			/* (on its side or its roof: an empty one to drive, flipped back first, as a player does with the action
+			button: bots_vehicle_update) */
+			score = 2.f - distance / 30.f;
+			if (!turret && seats.driver != NONE && seats.driver_unit == NONE && seats.gunner_unit == NONE && long_trip &&
+				still && distance < BOTS_VEHICLE_RANGE && !bots_seat_takers(brain, iterator.index, _bots_seat_driver) &&
+				score > best_score)
+			{
+				best = iterator.index;
+				best_score = score;
+				*seat_wanted = _bots_seat_driver;
+			}
+			continue;
+		}
 		mate_drives = teams && seats.driver_unit != NONE && bots_unit_team(seats.driver_unit) == player->team_index;
 		if (turret)
 		{
@@ -5738,7 +5752,8 @@ static void bots_vehicle_update(
 		struct object_datum *target = object_try_and_get(brain->vehicle_object);
 
 		if (!target || !TEST_FLAG(_object_mask_vehicle, target->object.type) || now > brain->vehicle_until ||
-			target->object.up.k < 0.6f || bots_distance2d(&position, &target->object.position) > BOTS_SEAT_RANGE + 5.f)
+			(target->object.up.k < 0.6f && brain->vehicle_seat != _bots_seat_driver) ||
+			bots_distance2d(&position, &target->object.position) > BOTS_SEAT_RANGE + 5.f)
 		{
 			if (now > brain->vehicle_until)
 			{
@@ -5754,6 +5769,12 @@ static void bots_vehicle_update(
 					bots_seat_kind(brain->vehicle_object, player->action_seat_index) == _bots_seat_gunner)))
 		{
 			/* (the game offers the seat: in) */
+			brain->press_action = TRUE;
+		}
+		else if (player->action_result == _player_action_result_flip_vehicle &&
+			player->action_object_index == brain->vehicle_object)
+		{
+			/* (flipped, and the game offers to flip it back: the action button, as a player does; its seat next) */
 			brain->press_action = TRUE;
 		}
 	}
@@ -5781,8 +5802,23 @@ static void bots_vehicle_update(
 		struct object_datum *target = object_get(brain->vehicle_object);
 		real_point3d side = target->object.position;
 		real left_i = -target->object.forward.j, left_j = target->object.forward.i;
+		boolean flipped = target->object.up.k < 0.6f;
 
-		if (brain->vehicle_seat == _bots_seat_gunner)
+		if (flipped)
+		{
+			/* (flipped: up to its side nearest the bot, where the game offers to flip it) */
+			real radius = object_definition_get(target->definition_index)->object.bounding_radius;
+			real di = position.x - side.x, dj = position.y - side.y;
+			real length = (real)sqrt(di * di + dj * dj);
+			real reach = radius * 0.6f + 0.4f;
+
+			if (length > 0.01f)
+			{
+				side.x += di / length * reach;
+				side.y += dj / length * reach;
+			}
+		}
+		else if (brain->vehicle_seat == _bots_seat_gunner)
 		{
 			side.x -= target->object.forward.i * 1.2f;
 			side.y -= target->object.forward.j * 1.2f;
@@ -5803,7 +5839,7 @@ static void bots_vehicle_update(
 		}
 		/* (round the vehicle, not through it: when the line to the seat's side passes over the vehicle, first to a
 		point beside it, on the bot's side; the line's clear from there) */
-		if (vehicle_bot_type(brain->vehicle_object) != BOTS_VEHICLE_TYPE_TURRET)
+		if (!flipped && vehicle_bot_type(brain->vehicle_object) != BOTS_VEHICLE_TYPE_TURRET)
 		{
 			real_point3d const *center = &target->object.position;
 			real radius = object_definition_get(target->definition_index)->object.bounding_radius;
