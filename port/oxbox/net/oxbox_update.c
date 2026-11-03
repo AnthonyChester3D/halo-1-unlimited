@@ -40,7 +40,7 @@ void NTAPI Sleep(DWORD milliseconds);
 HANDLE NTAPI CreateThread(PVOID security, SIZE_T stack, PVOID start, PVOID parameter, DWORD flags, DWORD *id);
 int NTAPI CloseHandle(HANDLE handle);
 /* (oxbox_sdk.c: the answer) */
-extern volatile long oxbox_update_found_release, oxbox_update_found_network;
+extern volatile long oxbox_update_found_release, oxbox_update_found_network, oxbox_update_found_build;
 
 /* ---------- constants */
 
@@ -501,8 +501,9 @@ static DWORD NTAPI update_thread(PVOID parameter)
 	{
 		oxbox_update_found_network = (long)update_u32(update.body + 120);
 		oxbox_update_found_release = (long)update_u32(update.body + 116);
-		platform_log("update: the latest package is release %ld (network version %ld) (%lu ms)",
-			oxbox_update_found_release, oxbox_update_found_network, GetTickCount() - start);
+		oxbox_update_found_build = (long)update_u32(update.body + 124);
+		platform_log("update: the latest package is release %ld build %ld (network version %ld) (%lu ms)",
+			oxbox_update_found_release, oxbox_update_found_build, oxbox_update_found_network, GetTickCount() - start);
 	}
 	update.running = 0;
 	return 0;

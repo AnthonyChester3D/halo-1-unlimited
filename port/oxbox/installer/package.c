@@ -127,6 +127,7 @@ int package_load(char const *path, struct package *package, char *error)
 		manifest_size = u32(header + 112);
 		package->release = u32(header + 116);
 		package->network = u32(header + 120);
+		package->build = u32(header + 124);
 	}
 	if (packed_size > 64 * 1024 * 1024 || package->body_size > 64 * 1024 * 1024 || package->body_size < 4 ||
 		manifest_size > PACKAGE_MAX_MANIFEST)

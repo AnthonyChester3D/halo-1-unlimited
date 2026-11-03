@@ -41,8 +41,15 @@ dashboard's settings give (or an automatic address when there are none). It show
 notes) and asks before it uses it: **A** puts it in place of `opence.oxpk` (the old one is kept as
 `opence_old.oxpk`), and the list then shows the folders it can update. With no `opence.oxpk` at all, Y gets the
 first one. It only ever uses a package signed by a key it trusts (`keys.txt`), and never one older (a lower release
-number) than a signed one it has; anything else is deleted again and nothing changes. `installer_url.txt` in its
-folder, its first line an `https://` or `http://` address, fetches from there instead (a mirror, or a test).
+number) than a signed one it has; anything else is deleted again and nothing changes.
+
+**A test update location.** `update_url.txt` (its first `http://` or `https://` line: a PC's or a NAS's web server,
+such as `http://192.168.1.20:8000/opence.oxpk`) fetches from there instead of GitHub: beside the installer for Y,
+and in the Halo folder for the game's own update offer and its updater. The game asks it even on a test build, and
+offers a package there when its release is higher, or its build (`mkpackage.py --build N`, the main menu's v1.NN) is
+at the same release. Test packages aren't signed, so they're refused unless they're signed (`sign.cmd`) or the file
+has a line `allow_unsigned`, which uses them as signed ones are: only for a test Xbox, since then anything that can
+answer at that address is installed. (`installer_url.txt`, its earlier name, still works beside the installer.)
 
 The installer can update itself. A package signed by a key it trusts may carry an installer (`mkpackage.py
 --installer`); when that installer's version is higher than the running one's (the top line says *version N*), it
@@ -70,7 +77,7 @@ What it changes in the Halo folder:
 
 And in its own folder: `installer_log.txt` (what it did), `installer_last.txt` (the last install's folder),
 `opence_old.oxpk` (the package a download replaced), `installer_old.xbe` (the installer an update replaced),
-`THIRD_PARTY.txt` (rewritten when it differs from the installer's own), and `installer_url.txt` if you add one.
+`THIRD_PARTY.txt` (rewritten when it differs from the installer's own), and `update_url.txt` if you add one.
 
 It checks the retail XBE's SHA-256 before it starts, writes OpenCE beside the old XBE (`default.xbe.new`), reads it
 back and checks its SHA-256 (the pictures aside) before it swaps it in, and has the drive write everything out

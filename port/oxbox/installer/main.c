@@ -11,7 +11,10 @@ The list shows every Halo it finds: the ones it can install to first, in green; 
 	B      back to the dashboard
 	LT/RT  a page up or down
 A package signed by a key it trusts that carries a newer installer (tools/mkpackage.py --installer) offers to update
-the installer itself. */
+the installer itself.
+
+A test update location (update_url.txt: download.h) points Y, and the game's updater, at another address, a PC's or a
+NAS's; with an allow_unsigned line in it, the test packages there (not signed) are used as signed ones are. */
 #include <hal/video.h>
 #include <hal/xbox.h>
 #include <nxdk/mount.h>
@@ -37,7 +40,7 @@ the installer itself. */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 11
+#define INSTALLER_VERSION 12
 #endif
 __attribute__((used)) static struct
 {
@@ -47,7 +50,8 @@ __attribute__((used)) static struct
 #define PACKAGE_PATH "D:\\opence.oxpk"
 #define OLD_PACKAGE_PATH "D:\\opence_old.oxpk" /* (the package a download replaced) */
 #define DOWNLOAD_PATH "D:\\opence_download.oxpk"
-#define URL_PATH "D:\\installer_url.txt" /* (another address for updates, its first line: download.h) */
+#define URL_PATH "D:\\update_url.txt" /* (a test update location: download.h) */
+#define OLD_URL_PATH "D:\\installer_url.txt" /* (its earlier name) */
 #define OLD_INSTALLER_PATH "D:\\installer_old.xbe" /* (the installer an update replaced) */
 #define NOTICES_PATH "D:\\THIRD_PARTY.txt"
 #define LOG_PATH "D:\\installer_log.txt"
@@ -68,6 +72,14 @@ read or written. (v1.53 alone had 'OC' 0002, 4f430002) */
 #define MAX_XBE (16 * 1024 * 1024)
 static struct package package;
 static int package_ok, package_missing, signature;
+static int test_unsigned;          /* (update_url.txt's allow_unsigned: a test location's unsigned packages are used) */
+static char updater_halo[260];     /* (the game's updater: the Halo folder it's in, whose update_url.txt counts too) */
+
+/* a package it uses: signed by a key it trusts, or, with a test location that allows it, not signed at all */
+static int trusted(int sig)
+{
+	return sig == PACKAGE_SIGNED || (sig == PACKAGE_UNSIGNED && test_unsigned);
+}
 static char const *signer;
 static char package_error[256];
 
@@ -1379,7 +1391,7 @@ static void offer_installer_update(void)
 	int b;
 	if (!package_ok || package.installer_version <= INSTALLER_VERSION)
 		return;
-	if (signature != PACKAGE_SIGNED)
+	if (!trusted(signature))
 	{
 		log_file("(the package's installer isn't used: the package isn't signed by a key this installer trusts)");
 		return;
@@ -1429,23 +1441,51 @@ static void update_progress(void *context, unsigned long done, unsigned long tot
 	screen_show();
 }
 
-/* where updates come from: installer_url.txt's first line, if there's one, else the project's latest release */
+/* one place's update_url.txt: 1 with its address in url (its first http:// or https:// line), allow_unsigned noted */
+static int url_file(char const *path, char *url, int size)
+{
+	FILE *file = fopen(path, "r");
+	char line[512];
+	int found = 0;
+	if (!file)
+		return 0;
+	while (fgets(line, sizeof(line), file))
+	{
+		char *at = line;
+		size_t n = strlen(line);
+		while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' ' || line[n - 1] == '\t'))
+			line[--n] = 0;
+		while (*at == ' ' || *at == '\t')
+			at++;
+		if (!found && (!_strnicmp(at, "https://", 8) || !_strnicmp(at, "http://", 7)))
+		{
+			text_print(url, size, "%s", at);
+			found = 1;
+		}
+		else if (!_stricmp(at, "allow_unsigned"))
+			test_unsigned = 1;
+	}
+	fclose(file);
+	return found;
+}
+
+/* where updates come from: update_url.txt beside the installer (or installer_url.txt, its earlier name), or, for the
+game's updater, the Halo folder's; else the project's latest release */
 static void update_url(char *url, int size)
 {
-	FILE *file = fopen(URL_PATH, "r");
-	size_t n;
-	url[0] = 0;
-	if (file)
+	char path[300];
+	test_unsigned = 0;
+	if (url_file(URL_PATH, url, size) || url_file(OLD_URL_PATH, url, size))
+		return;
+	test_unsigned = 0;
+	if (updater_halo[0])
 	{
-		if (!fgets(url, size, file))
-			url[0] = 0;
-		fclose(file);
+		text_print(path, sizeof(path), "%s\\update_url.txt", updater_halo);
+		if (url_file(path, url, size))
+			return;
 	}
-	n = strlen(url);
-	while (n && (url[n - 1] == '\n' || url[n - 1] == '\r' || url[n - 1] == ' '))
-		url[--n] = 0;
-	if (_strnicmp(url, "https://", 8) && _strnicmp(url, "http://", 7))
-		text_print(url, size, "%s", DOWNLOAD_DEFAULT_URL);
+	test_unsigned = 0;
+	text_print(url, size, "%s", DOWNLOAD_DEFAULT_URL);
 }
 
 /* looks for a newer package online; 1 when opence.oxpk was replaced */
@@ -1496,6 +1536,8 @@ static int check_updates(void)
 		goto back;
 	}
 	say("Found: %s (release %lu)", fresh.name, fresh.release);
+	if (fresh.build)
+		say("  build v1.%02lu", fresh.build);
 	package_manifest_value(&fresh, "date", value, sizeof(value));
 	if (value[0])
 		say("  made %s", value);
@@ -1503,20 +1545,25 @@ static int check_updates(void)
 	if (value[0])
 		say("  %s", value);
 	/* only a package signed by a key it trusts, and not older than the one it has */
-	if (package_verify(&fresh, trusted_keys, trusted_key_count, &fresh_signer) != PACKAGE_SIGNED)
+	b = package_verify(&fresh, trusted_keys, trusted_key_count, &fresh_signer);
+	if (!trusted(b))
 	{
 		say_in(COLOUR_RED, "It isn't signed by a key this installer trusts, so it isn't used.");
 		goto discard;
 	}
-	say_in(COLOUR_GREEN, "  signed (%s)", fresh_signer);
+	if (b == PACKAGE_SIGNED)
+		say_in(COLOUR_GREEN, "  signed (%s)", fresh_signer);
+	else
+		say_in(COLOUR_YELLOW, "  not signed: used because update_url.txt says allow_unsigned (a test location)");
 	if (package_ok && package_same(&fresh, &package))
 	{
 		say_in(COLOUR_GREEN, "That's the package you have: it's up to date.");
 		goto discard;
 	}
-	if (package_ok && signature == PACKAGE_SIGNED && fresh.release < package.release)
+	if (package_ok && trusted(signature) && (fresh.release < package.release ||
+		(fresh.release == package.release && fresh.build < package.build)))
 	{
-		say_in(COLOUR_YELLOW, "That's older than yours (release %lu), so yours is kept.", package.release);
+		say_in(COLOUR_YELLOW, "That's older than yours (%s), so yours is kept.", package.name);
 		goto discard;
 	}
 	if (fresh.installer_version > INSTALLER_VERSION)
@@ -1675,6 +1722,7 @@ static void auto_update(void)
 			halo_count = 0;
 			add_halo(folder);
 			h = halo_count ? &halos[0] : NULL;
+			text_print(updater_halo, sizeof(updater_halo), "%s", folder);
 		}
 	}
 	if (!h)
@@ -1686,7 +1734,7 @@ static void auto_update(void)
 	/* (a newer package; and the installer it carries, which starts again and goes on from here) */
 	if (check_updates())
 		offer_installer_update();
-	if (!package_ok || signature != PACKAGE_SIGNED)
+	if (!package_ok || !trusted(signature))
 	{
 		heading("Updating Halo 1 Unlimited");
 		say_in(COLOUR_RED, "There's no package signed by a key this updater trusts: nothing changed.");
@@ -1744,6 +1792,10 @@ int main(void)
 	package_read();
 	if (exists(AUTO_PATH))
 		auto_update();
+	{
+		char url[512];
+		update_url(url, sizeof(url)); /* (update_url.txt's allow_unsigned, for the installer the package carries) */
+	}
 	offer_installer_update();
 	last_install_read();
 	if (last_install[0])

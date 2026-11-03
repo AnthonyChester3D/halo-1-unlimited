@@ -532,24 +532,71 @@ from GitHub by the XBE section OXUPD (net/oxbox_update.c, Mbed TLS: about 180 KB
 unloaded as soon as the answer is in, or when a map starts loading. The installed release is the installer's word in
 D:\opence_release.txt. A newer one is offered on the main menu (interface.c draws it, ui_widget.c gives it the
 buttons): A launches the updater, the installer's copy in D:\updater (it writes it there when it installs), with a
-note, auto_update.txt, that has it update this folder and start the game again; B asks again next boot. */
+note, auto_update.txt, that has it update this folder and start the game again; B asks again next boot.
+
+A test update location: D:\update_url.txt (the Halo folder's; installer/download.h), its first http:// or https:// line,
+is asked instead of GitHub, even on a test build (release 0), and the updater fetches from it too. A package there is
+newer when its release is, or, at the same release, its build (mkpackage.py --build) is above this one's. */
 
 int oxbox_setting_update_check = 1;
 volatile long oxbox_update_found_release = -1, oxbox_update_found_network = -1;   /* (OXUPD's answer) */
+volatile long oxbox_update_found_build = 0;
+
+#ifndef OXBOX_BUILD_NUMBER
+#define OXBOX_BUILD_NUMBER 0
+#endif
 
 #define OXBOX_UPDATE_URL "https://github.com/AnthonyChester3D/halo-1-unlimited/releases/latest/download/opence.oxpk"
 #define OXBOX_RELEASE_PATH "D:\\opence_release.txt"
 #define OXBOX_UPDATER_PATH "D:\\updater\\default.xbe"
 #define OXBOX_UPDATER_NOTE "D:\\updater\\auto_update.txt"
+#define OXBOX_TEST_URL_PATH "D:\\update_url.txt"
 
 static struct
 {
 	int state;                         /* 0 not yet, 1 checking, 2 done (or not to be done) */
 	long installed_release, installed_network;
 	int offer, dismissed, updater_missing;
+	char url[512];                     /* (GitHub's, or update_url.txt's) */
 	unsigned long started, drawn, closed;
 	void *section;
 } oxbox_update;
+
+/* update_url.txt's address (its first http:// or https:// line) in oxbox_update.url: 1, else GitHub's: 0 */
+static int oxbox_update_read_url(void)
+{
+	HANDLE file = CreateFileA(OXBOX_TEST_URL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	char text[1024];
+	DWORD got = 0;
+	char *line, *end;
+
+	strcpy(oxbox_update.url, OXBOX_UPDATE_URL);
+	if (file == INVALID_HANDLE_VALUE)
+		return 0;
+	if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+		got = 0;
+	CloseHandle(file);
+	text[got] = 0;
+	for (line = text; *line; line = end)
+	{
+		size_t length;
+
+		end = line + strcspn(line, "\r\n");
+		length = (size_t)(end - line);
+		end += strspn(end, "\r\n");
+		while (length && (line[length - 1] == ' ' || line[length - 1] == '\t'))
+			length--;
+		while (length && (*line == ' ' || *line == '\t'))
+			line++, length--;
+		if (length < sizeof(oxbox_update.url) && (!strncmp(line, "https://", 8) || !strncmp(line, "http://", 7)))
+		{
+			memcpy(oxbox_update.url, line, length);
+			oxbox_update.url[length] = 0;
+			return 1;
+		}
+	}
+	return 0;
+}
 
 /* the installer's word on what's installed (D:\opence_release.txt: "release N", "network N"): 0 if it isn't there */
 static void oxbox_update_read_installed(void)
@@ -600,12 +647,14 @@ void oxbox_update_frame(int menus)
 		int oxbox_lwip_address(unsigned long *address, int *dhcp);
 		oxbox_section_proc load_section;
 		unsigned long address;
-		int dhcp;
+		int dhcp, test_location;
 
 		if (!menus || now < 8000)          /* (the boot's own work first) */
 			return;
 		oxbox_update_read_installed();
-		if (!oxbox_setting_update_check || (oxbox_update.installed_release == 0 && oxbox_setting_update_check != 2))
+		test_location = oxbox_update_read_url();
+		if (!oxbox_setting_update_check ||
+			(oxbox_update.installed_release == 0 && oxbox_setting_update_check != 2 && !test_location))
 		{
 			platform_log("update: no check (%s)", oxbox_setting_update_check ? "a test build: release 0" :
 				"update_check = 0 in opence.ini");
@@ -631,13 +680,14 @@ void oxbox_update_frame(int menus)
 		{
 			if (!menus)
 				goto unload;
-			if (!oxbox_update_check_start(OXBOX_UPDATE_URL))
+			if (!oxbox_update_check_start(oxbox_update.url))
 			{
 				platform_log("update: the check couldn't start");
 				goto unload;
 			}
 			oxbox_update.started = now;
-			platform_log("update: looking for a newer release (this is release %ld)", oxbox_update.installed_release);
+			platform_log("update: looking for a newer release at %s (this is release %ld build %d)", oxbox_update.url,
+				oxbox_update.installed_release, OXBOX_BUILD_NUMBER);
 			return;
 		}
 		if (!menus)
@@ -654,7 +704,8 @@ unload:
 				unload_section(oxbox_update.section);
 		}
 		oxbox_update.state = 2;
-		if (oxbox_update_found_release > oxbox_update.installed_release)
+		if (oxbox_update_found_release > oxbox_update.installed_release ||
+			(oxbox_update_found_release == oxbox_update.installed_release && oxbox_update_found_build > OXBOX_BUILD_NUMBER))
 		{
 			oxbox_update.offer = 1;
 			oxbox_update.updater_missing = GetFileAttributesA(OXBOX_UPDATER_PATH) == 0xFFFFFFFF;
@@ -676,8 +727,12 @@ int oxbox_update_prompt_lines(wchar_t lines[5][100])
 
 	if (!oxbox_update.offer || oxbox_update.dismissed)
 		return 0;
-	halo_linux_snprintf(text[count++], 100, "Halo 1 Unlimited release %ld is available (you have release %ld).",
-		oxbox_update_found_release, oxbox_update.installed_release);
+	if (oxbox_update_found_release == oxbox_update.installed_release)
+		halo_linux_snprintf(text[count++], 100, "Halo 1 Unlimited v1.%02ld is available (you have v1.%02d).",
+			oxbox_update_found_build, OXBOX_BUILD_NUMBER);
+	else
+		halo_linux_snprintf(text[count++], 100, "Halo 1 Unlimited release %ld is available (you have release %ld).",
+			oxbox_update_found_release, oxbox_update.installed_release);
 	if (oxbox_update_found_network > oxbox_update.installed_network && oxbox_update.installed_network)
 		halo_linux_snprintf(text[count++], 100, "Online games need it: yours can't join them until it's updated.");
 	text[count++][0] = 0;

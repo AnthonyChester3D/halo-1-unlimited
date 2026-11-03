@@ -22,7 +22,7 @@ struct package
 {
 	char name[65];
 	int format;
-	unsigned long release, network; /* (format 2) */
+	unsigned long release, network, build; /* (format 2; build: 0 in older packages) */
 	char manifest[PACKAGE_MAX_MANIFEST + 1];
 	unsigned char *body;
 	unsigned long body_size;
