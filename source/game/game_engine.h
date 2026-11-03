@@ -281,8 +281,43 @@ struct game_variant_options
 	/* port: players on different teams (anyone, in free for all) ride in the same vehicle: its free seats are
 	anyone's (units.c's unit_can_enter_seat; never a seat someone's in) */
 	boolean shared_vehicles;
-	byte reserved[4];
+	/* port: how many of each vehicle category a team gets (_vehicle_category_*, 3 bits each from bit 0, low byte
+	first: _vehicle_category_count_*, 0 all, as the map places them): its spots of that category nearest the team's
+	spawn points, with that category's variants shuffled, the same for both teams (game_engine.c's
+	game_engine_vehicle_categories_plan) */
+	byte vehicle_categories[2];
+	/* port: that shuffle's seed: the host's, new each game (network_game_server_start_network_game) */
+	byte vehicle_shuffle[2];
 };
+
+/* port: the vehicle categories (game_variant_options' vehicle_categories): a vehicle's is its line in its map's
+info.txt [Vehicles] section, else its tag's vehicle type's */
+enum
+{
+	_vehicle_category_light = 0,
+	_vehicle_category_medium,
+	_vehicle_category_heavy,
+	_vehicle_category_flying,
+	_vehicle_category_turret,
+	NUMBER_OF_VEHICLE_CATEGORIES
+};
+
+/* ... and each one's count: all, none, 1, 2, 3, 4, 6, 8 */
+enum
+{
+	_vehicle_category_count_all = 0,
+	_vehicle_category_count_none,
+	_vehicle_category_count_1,
+	_vehicle_category_count_2,
+	_vehicle_category_count_3,
+	_vehicle_category_count_4,
+	_vehicle_category_count_6,
+	_vehicle_category_count_8,
+	NUMBER_OF_VEHICLE_CATEGORY_COUNTS
+};
+
+#define VEHICLE_CATEGORY_COUNT(options, category) \
+	((((options)->vehicle_categories[0] | ((options)->vehicle_categories[1] << 8)) >> (3 * (category))) & 7)
 
 typedef char verify_game_variant_options_size[sizeof(struct game_variant_options) == 0x2C ? 1 : -1];
 /* (builds before OpenCE's gametypes saved and sent only the first 0x1C bytes) */
@@ -398,6 +433,11 @@ struct scenario_object_datum;
 struct tag_block;
 void game_engine_vehicle_placement_begin(
 	void);
+/* port: the palette entry the vehicle categories put at the scenario's vehicle placement (the placement's own when
+they don't change it) */
+short game_engine_vehicle_placement_entry(
+	short placement_index,
+	short palette_entry_index);
 boolean game_engine_vehicle_placement_allowed(
 	struct scenario_object_datum const *placement,
 	struct tag_block *palette);

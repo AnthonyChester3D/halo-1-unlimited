@@ -226,7 +226,7 @@ void game_modes_options_default(
 	options->infection_zombie_shields = TRUE;
 	options->gun_game_order = _gun_game_order_strongest_first;
 	options->gun_game_melee_demotes = TRUE;
-	csmemset(options->reserved, 0, sizeof(options->reserved));
+	csmemset(options->vehicle_categories, 0, sizeof(options->vehicle_categories));   /* (all of each) */
 }
 
 /* a byte option within its range, else its default */
@@ -260,7 +260,7 @@ void game_modes_options_sanitize(
 		options->gun_game_order = _gun_game_order_strongest_first;
 	options->gun_game_melee_demotes = options->gun_game_melee_demotes != FALSE;
 	options->force_team_spawns = options->force_team_spawns != FALSE;
-	csmemset(options->reserved, 0, sizeof(options->reserved));
+	options->vehicle_categories[1] &= 0x7F;    /* (5 categories of 3 bits) */
 }
 
 short game_modes_variant_mode(
