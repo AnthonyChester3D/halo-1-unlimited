@@ -1233,6 +1233,21 @@ void object_types_place_all(
 					{
 						continue;
 					}
+					/* port: and the gametype's vehicle categories: this spot left empty, or another vehicle of
+					its category in it (game_engine_vehicle_placement_entry) */
+					if (object_type == _object_type_vehicle)
+					{
+						short own_entry = scenario_object->palette_entry_index;
+						short entry = game_engine_vehicle_placement_entry(scenario_datum_index, own_entry);
+
+						if (entry == NONE)
+							continue;
+						scenario_object->palette_entry_index = entry;
+						object_new_from_scenario(scenario_object, scenario_palette);
+						scenario_object->palette_entry_index = own_entry;
+						objects_garbage_collection();
+						continue;
+					}
 					object_new_from_scenario(scenario_object, scenario_palette);
 					objects_garbage_collection();
 				}

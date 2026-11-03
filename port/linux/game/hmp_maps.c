@@ -742,6 +742,7 @@ static void info_load(long i, struct hmp_info *info, struct hmp_menu_memory *men
 			else
 			{
 				description[nd] = 0;
+				if (description[ls] == '[') { nd = ls; break; }   /* (a section: [Vehicles], game_engine.c's) */
 				if (browser_line(description + ls)) nd = ls;   /* (takes no room from the description) */
 				else if (nd && nd < 318) description[nd++] = '\r';
 				ls = nd;
@@ -754,7 +755,7 @@ static void info_load(long i, struct hmp_info *info, struct hmp_menu_memory *men
 	}
 	while (nn && info->name[nn - 1] == ' ') nn--;
 	description[nd] = 0;
-	if (browser_line(description + ls)) description[nd = ls] = 0;
+	if (description[ls] == '[' || browser_line(description + ls)) description[nd = ls] = 0;
 	nd = drop_browser_lines(description);
 	while (nd && (description[nd - 1] == ' ' || description[nd - 1] == '\r')) nd--;
 	info->name[nn] = 0;

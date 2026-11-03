@@ -613,6 +613,13 @@ struct game_variant_options const *game_variant_options_get(
 	return &game_variant_options_global;
 }
 
+/* port: the map the game loaded (its options') */
+char const *game_loaded_map_name(
+	void)
+{
+	return game_globals ? game_globals->options.map_name : "";
+}
+
 void game_set_game_engine_index(
 	short index)
 {

@@ -598,6 +598,13 @@ struct network_game *network_game_server_get_game(struct network_game_server *se
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
 #include "latency_meter.h" /* port: port/linux/game/latency_meter.c */
 #include "touch_postgame.h" /* port: port/linux/game/touch_postgame.c */
+#include "units/vehicle_definitions.h"
+
+/* port: a folder map's .map (port/linux/game/hmp_maps.c, map_share_xbox.c) */
+boolean hmp_map_file_path(char const *level_name, char *path, long size);
+#ifndef FILE_SHARE_READ
+#define FILE_SHARE_READ 0x00000001
+#endif
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -8098,7 +8105,10 @@ static boolean game_engine_vehicle_spawn_allowed(
 }
 #endif
 
-void game_engine_vehicle_placement_begin(
+static void game_engine_vehicle_categories_plan(void);
+
+/* (the sets' counts from none, and what ALL places said) */
+static void game_engine_vehicle_sets_begin(
 	void)
 {
 	csmemset(game_engine_vehicles_placed, 0, sizeof(game_engine_vehicles_placed));
@@ -8151,6 +8161,13 @@ void game_engine_vehicle_placement_begin(
 		}
 	}
 #endif
+}
+
+void game_engine_vehicle_placement_begin(
+	void)
+{
+	game_engine_vehicle_sets_begin();
+	game_engine_vehicle_categories_plan();
 }
 
 /* a vehicle definition's type: the globals' multiplayer vehicles (warthog,
@@ -8224,9 +8241,408 @@ static short game_engine_nearest_team(
 	return team;
 }
 
+/* ---------- port: the vehicle categories (game_variant_options' vehicle_categories)
+
+A count of a category (light, medium, heavy, flying, turret) keeps that many of the category's spots on each side,
+those nearest the side's spawn points (free for all: one side), and puts in them that many of the category's
+variants, every vehicle the category's spots have between them, shuffled anew each game: the same variants in the
+same order on both sides. A vehicle's category is its line in the map's info.txt [Vehicles] section ("tag\path =
+medium": Halo Map Porter writes one for each), else its tag's vehicle type's. Every machine plans the same: the
+shuffle's seed is the host's, in the options (network_game_server_start_network_game). The vehicles the other
+options place are the ones it chooses from; with a custom or PC vehicle set it isn't used. A vehicle respawns as the
+one it was (game_engine_update_vehicle_respawn: its home's definition). */
+
+#define MAXIMUM_CATEGORY_PLACEMENTS 512
+#define MAXIMUM_CATEGORY_VARIANTS 32
+#define MAXIMUM_CATEGORY_LINES 48
+#define CATEGORY_NAME_SIZE 80
+#define VEHICLE_PLAN_DEFAULT (-2)          /* (as the other options leave it) */
+#define VEHICLE_PLACEMENT_SIZE 0x78        /* (a scenario's vehicle placement: object_types.c's vehicle_data_definition) */
+#define VEHICLE_TYPE_OFFSET 0x2F4          /* (the vehicle tag's type: network_objects.c's) */
+
+static char const *const game_engine_vehicle_category_names[NUMBER_OF_VEHICLE_CATEGORIES] =
+	{ "light", "medium", "heavy", "flying", "turret" };
+static short const game_engine_vehicle_category_counts[NUMBER_OF_VEHICLE_CATEGORY_COUNTS] =
+	{ -1, 0, 1, 2, 3, 4, 6, 8 };
+
+static boolean game_engine_vehicle_plan_active;
+static short game_engine_vehicle_plan[MAXIMUM_CATEGORY_PLACEMENTS];   /* palette entry; NONE: not placed */
+static struct
+{
+	byte category[MAXIMUM_CATEGORY_PLACEMENTS];                       /* (NONE: not one the options place) */
+	byte side[MAXIMUM_CATEGORY_PLACEMENTS];
+	real distance[MAXIMUM_CATEGORY_PLACEMENTS];
+	short order[MAXIMUM_CATEGORY_PLACEMENTS];
+	short line_count;
+	char names[MAXIMUM_CATEGORY_LINES][CATEGORY_NAME_SIZE];
+	byte line_categories[MAXIMUM_CATEGORY_LINES];
+} game_engine_vehicle_categories;
+
+/* a tag's name as info.txt's lines are compared: lower case, backslashes, no extension */
+static void game_engine_vehicle_category_name(
+	char *out,
+	char const *in,
+	long length)
+{
+	long n = 0;
+
+	while (length-- > 0 && *in && n < CATEGORY_NAME_SIZE - 1)
+	{
+		char c = *in++;
+
+		out[n++] = c == '/' ? '\\' : (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+	}
+	out[n] = 0;
+	if (n > 8 && !strcmp(out + n - 8, ".vehicle"))
+		out[n - 8] = 0;
+}
+
+/* one line of info.txt: a section's heading, or in [Vehicles] "name = category" */
+static void game_engine_vehicle_category_line(
+	char *line,
+	boolean *in_section)
+{
+	char *equals, *end;
+	short category;
+
+	while (*line == ' ' || *line == '\t')
+		line++;
+	end = line + strlen(line);
+	while (end > line && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r'))
+		*--end = 0;
+	if (*line == '[')
+	{
+		char heading[16];
+
+		game_engine_vehicle_category_name(heading, line, 15);
+		*in_section = !strcmp(heading, "[vehicles]");
+		return;
+	}
+	if (!*in_section || (equals = strchr(line, '=')) == NULL ||
+		game_engine_vehicle_categories.line_count >= MAXIMUM_CATEGORY_LINES)
+	{
+		return;
+	}
+	for (end = equals; end > line && (end[-1] == ' ' || end[-1] == '\t'); end--)
+		;
+	for (equals++; *equals == ' ' || *equals == '\t'; equals++)
+		;
+	for (category = 0; category < NUMBER_OF_VEHICLE_CATEGORIES; category++)
+	{
+		char value[16];
+
+		game_engine_vehicle_category_name(value, equals, 15);
+		if (!strcmp(value, game_engine_vehicle_category_names[category]))
+		{
+			short k = game_engine_vehicle_categories.line_count++;
+
+			game_engine_vehicle_category_name(game_engine_vehicle_categories.names[k], line, (long)(end - line));
+			game_engine_vehicle_categories.line_categories[k] = (byte)category;
+			return;
+		}
+	}
+}
+
+/* the map's info.txt [Vehicles] section (a folder map's: beside its .map), read a block at a time (UTF-8 or
+UTF-16, whose tag names are ASCII) */
+static void game_engine_vehicle_category_lines_read(
+	void)
+{
+	char const *map_name = game_loaded_map_name();
+	char path[300], line[160], block[512], *slash;
+	unsigned long got;
+	long n = 0, k, start = 0;
+	boolean in_section = FALSE, utf16 = FALSE, first = TRUE;
+	HANDLE file;
+
+	game_engine_vehicle_categories.line_count = 0;
+	if (!map_name || map_name[0] != '+' || !hmp_map_file_path(map_name, path, sizeof(path)))
+		return;
+	slash = strrchr(path, '\\');
+	if (!slash || (long)(slash - path) + 10 >= (long)sizeof(path))
+		return;
+	strcpy(slash + 1, "info.txt");
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return;
+	while (ReadFile(file, block, sizeof(block), &got, NULL) && got)
+	{
+		start = 0;
+		if (first)
+		{
+			first = FALSE;
+			if (got >= 2 && (byte)block[0] == 0xFF && (byte)block[1] == 0xFE)
+				utf16 = TRUE, start = 2;
+			else if (got >= 3 && (byte)block[0] == 0xEF && (byte)block[1] == 0xBB && (byte)block[2] == 0xBF)
+				start = 3;
+		}
+		for (k = start; k < (long)got; k += utf16 ? 2 : 1)
+		{
+			char c = block[k];
+
+			if (c == '\n')
+			{
+				line[n] = 0;
+				game_engine_vehicle_category_line(line, &in_section);
+				n = 0;
+			}
+			else if (n < (long)sizeof(line) - 1)
+				line[n++] = c;
+		}
+	}
+	CloseHandle(file);
+	line[n] = 0;
+	game_engine_vehicle_category_line(line, &in_section);
+}
+
+/* a vehicle's category: its info.txt line's, else its tag's vehicle type's (and a name that says so) */
+static short game_engine_vehicle_category(
+	long definition_index,
+	char const **why)
+{
+	char name[CATEGORY_NAME_SIZE];
+	char const *tag_name = tag_get_name(definition_index);
+	void const *definition = tag_get(VEHICLE_DEFINITION_TAG, definition_index);
+	short index, type;
+
+	game_engine_vehicle_category_name(name, tag_name ? tag_name : "", CATEGORY_NAME_SIZE);
+	for (index = 0; index < game_engine_vehicle_categories.line_count; index++)
+	{
+		if (!strcmp(name, game_engine_vehicle_categories.names[index]))
+		{
+			*why = "info.txt";
+			return game_engine_vehicle_categories.line_categories[index];
+		}
+	}
+	*why = "its type";
+	if (strstr(name, "turret") || strstr(name, "shade"))
+		return _vehicle_category_turret;
+	if (strstr(name, "scorpion") || strstr(name, "wraith"))
+		return _vehicle_category_heavy;
+	type = definition ? *(short const *)((char const *)definition + VEHICLE_TYPE_OFFSET) : NONE;
+	switch (type)
+	{
+	case 0: return _vehicle_category_heavy;                           /* (human tank) */
+	case 3: case 5: return _vehicle_category_flying;                  /* (human plane, alien fighter) */
+	case 4: return _vehicle_category_light;                           /* (alien scout) */
+	case 6: return _vehicle_category_turret;
+	}
+	return _vehicle_category_medium;                                   /* (human jeep, human boat) */
+}
+
+/* how near the point is to the side's spawn points (its nearest one's squared distance; any team's in free for all) */
+static real game_engine_vehicle_side_distance(
+	real_point3d const *point,
+	short side)
+{
+	struct scenario *scenario = global_scenario_get();
+	real best = -1.0f;
+	long index;
+
+	for (index = 0; index < scenario->players.count; index++)
+	{
+		struct player_starting_location *location =
+			TAG_BLOCK_GET_ELEMENT(&scenario->players, index, struct player_starting_location);
+		real dx = location->position.x - point->x;
+		real dy = location->position.y - point->y;
+		real dz = location->position.z - point->z;
+		real distance = dx * dx + dy * dy + dz * dz;
+
+		if ((!global_variant.universal_variant.teams || location->team_index == side) &&
+			(best < 0.0f || distance < best))
+		{
+			best = distance;
+		}
+	}
+	return best < 0.0f ? 0.0f : best;
+}
+
+static unsigned long game_engine_vehicle_shuffle_next(
+	unsigned long *state)
+{
+	unsigned long x = *state;
+
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	return *state = x & 0xFFFFFFFFul;
+}
+
+static boolean game_engine_vehicle_placement_check(struct scenario_object_datum const *placement,
+	struct tag_block *palette, boolean counting);
+
+static void game_engine_vehicle_categories_plan(
+	void)
+{
+	void platform_log(char const *format, ...);
+	struct scenario *scenario = global_scenario_get();
+	struct game_variant_options const *options = game_variant_options_get();
+	struct tag_block *palette;
+	short count, index, category, side, sides;
+	unsigned long seed;
+	boolean any = FALSE;
+
+	game_engine_vehicle_plan_active = FALSE;
+	if (!game_engine || !scenario)
+		return;
+	for (category = 0; category < NUMBER_OF_VEHICLE_CATEGORIES; category++)
+		any |= VEHICLE_CATEGORY_COUNT(options, category) != _vehicle_category_count_all;
+	if (!any)
+		return;
+	if (options->vehicle_set[0] >= VARIANT_VEHICLE_SET_PC || options->vehicle_set[1] >= VARIANT_VEHICLE_SET_PC)
+	{
+		platform_log("vehicles: categories: not used with a custom or PC vehicle set");
+		return;
+	}
+	palette = &scenario->vehicle_palette;
+	count = (short)MIN(scenario->vehicles.count, MAXIMUM_CATEGORY_PLACEMENTS);
+	sides = global_variant.universal_variant.teams ? 2 : 1;
+	game_engine_vehicle_category_lines_read();
+
+	/* (each placement the other options place: its category, its side, how near the side's spawns it is) */
+	for (index = 0; index < count; index++)
+	{
+		struct scenario_object_datum const *placement = (struct scenario_object_datum const *)
+			tag_block_get_element_with_size(&scenario->vehicles, index, VEHICLE_PLACEMENT_SIZE);
+		long definition_index = VALID_INDEX(placement->palette_entry_index, palette->count) ?
+			TAG_BLOCK_GET_ELEMENT(palette, placement->palette_entry_index,
+				struct scenario_object_palette_entry)->reference.index : NONE;
+		char const *why;
+
+		game_engine_vehicle_plan[index] = VEHICLE_PLAN_DEFAULT;
+		game_engine_vehicle_categories.category[index] = (byte)NONE;
+		if (definition_index == NONE ||
+			TEST_FLAG(placement->placement_flags, _scenario_object_placement_not_automatic_bit) ||
+			!custom_edition_vehicle_placement_allowed(placement) ||
+			!game_engine_vehicle_placement_check(placement, palette, FALSE))
+		{
+			continue;
+		}
+		game_engine_vehicle_categories.category[index] = (byte)game_engine_vehicle_category(definition_index, &why);
+		side = sides == 2 ? game_engine_nearest_team(&placement->position) : 0;
+		game_engine_vehicle_categories.side[index] = (byte)side;
+		game_engine_vehicle_categories.distance[index] = game_engine_vehicle_side_distance(&placement->position, side);
+		platform_log("vehicles: spot %d: %s, %s (%s), %s's", index, tag_get_name(definition_index),
+			game_engine_vehicle_category_names[game_engine_vehicle_categories.category[index]], why,
+			sides == 2 ? (side ? "blue" : "red") : "anyone");
+	}
+
+	/* (the shuffle: the host's seed, or this game's own when it's no network game) */
+	seed = options->vehicle_shuffle[0] | ((unsigned long)options->vehicle_shuffle[1] << 8);
+	if (game_connection() == _game_connection_local)
+		seed = system_milliseconds();
+	for (category = 0; category < NUMBER_OF_VEHICLE_CATEGORIES; category++)
+	{
+		short keep = game_engine_vehicle_category_counts[VEHICLE_CATEGORY_COUNT(options, category)];
+		short variants[MAXIMUM_CATEGORY_VARIANTS];
+		long variant_definitions[MAXIMUM_CATEGORY_VARIANTS];
+		short variant_count = 0, k, j;
+		unsigned long state = (seed + 1) * 2654435761ul ^ (category + 1) * 0x9E3779B9ul;
+		short spots[2] = { 0, 0 };
+
+		if (keep < 0)
+			continue;
+		/* (the category's variants: its spots' vehicles, each once) */
+		for (index = 0; index < count; index++)
+		{
+			struct scenario_object_datum const *placement;
+			long definition_index;
+
+			if (game_engine_vehicle_categories.category[index] != category)
+				continue;
+			placement = (struct scenario_object_datum const *)
+				tag_block_get_element_with_size(&scenario->vehicles, index, VEHICLE_PLACEMENT_SIZE);
+			definition_index = TAG_BLOCK_GET_ELEMENT(palette, placement->palette_entry_index,
+				struct scenario_object_palette_entry)->reference.index;
+			for (k = 0; k < variant_count && variant_definitions[k] != definition_index; k++)
+				;
+			if (k == variant_count && variant_count < MAXIMUM_CATEGORY_VARIANTS)
+			{
+				variants[variant_count] = placement->palette_entry_index;
+				variant_definitions[variant_count++] = definition_index;
+			}
+		}
+		if (!variant_count)
+			continue;
+		if (!(state &= 0xFFFFFFFFul))
+			state = 1;
+		for (k = variant_count - 1; k > 0; k--)
+		{
+			short swap_with = (short)(game_engine_vehicle_shuffle_next(&state) % (unsigned long)(k + 1));
+			short entry = variants[k];
+			long definition_index = variant_definitions[k];
+
+			variants[k] = variants[swap_with];
+			variant_definitions[k] = variant_definitions[swap_with];
+			variants[swap_with] = entry;
+			variant_definitions[swap_with] = definition_index;
+		}
+		/* (each side's spots of the category, nearest its spawns first: the first ones get the variants in order) */
+		for (side = 0; side < sides; side++)
+		{
+			for (index = 0; index < count; index++)
+			{
+				real distance = game_engine_vehicle_categories.distance[index];
+
+				if (game_engine_vehicle_categories.category[index] != category ||
+					game_engine_vehicle_categories.side[index] != side)
+				{
+					continue;
+				}
+				for (j = spots[side]++; j > 0 && game_engine_vehicle_categories.distance[
+					game_engine_vehicle_categories.order[j - 1]] > distance; j--)
+				{
+					game_engine_vehicle_categories.order[j] = game_engine_vehicle_categories.order[j - 1];
+				}
+				game_engine_vehicle_categories.order[j] = index;
+			}
+			for (j = 0; j < spots[side]; j++)
+			{
+				game_engine_vehicle_plan[game_engine_vehicle_categories.order[j]] =
+					j < keep ? variants[j % variant_count] : NONE;
+			}
+		}
+		if (sides == 2)
+		{
+			platform_log("vehicles: %s: red %d of %d spots, blue %d of %d, from %d variants:",
+				game_engine_vehicle_category_names[category], MIN(keep, spots[0]), spots[0], MIN(keep, spots[1]),
+				spots[1], variant_count);
+		}
+		else
+		{
+			platform_log("vehicles: %s: %d of %d spots, from %d variants:", game_engine_vehicle_category_names[category],
+				MIN(keep, spots[0]), spots[0], variant_count);
+		}
+		for (k = 0; k < MIN(keep, variant_count); k++)
+			platform_log("vehicles:   %s", tag_get_name(variant_definitions[k]));
+	}
+	game_engine_vehicle_plan_active = TRUE;
+}
+
+short game_engine_vehicle_placement_entry(
+	short placement_index,
+	short palette_entry_index)
+{
+	short planned;
+
+	if (!game_engine_vehicle_plan_active || !VALID_INDEX(placement_index, MAXIMUM_CATEGORY_PLACEMENTS))
+		return palette_entry_index;
+	planned = game_engine_vehicle_plan[placement_index];
+	return planned == VEHICLE_PLAN_DEFAULT ? palette_entry_index : planned;
+}
+
 boolean game_engine_vehicle_placement_allowed(
 	struct scenario_object_datum const *placement,
 	struct tag_block *palette)
+{
+	return game_engine_vehicle_placement_check(placement, palette, TRUE);
+}
+
+/* whether the options' vehicle sets place it (counting: a custom set's count of its type goes up when it does) */
+static boolean game_engine_vehicle_placement_check(
+	struct scenario_object_datum const *placement,
+	struct tag_block *palette,
+	boolean counting)
 {
 	struct game_variant_options const *options = game_variant_options_get();
 	short side, type;
@@ -8257,7 +8673,8 @@ boolean game_engine_vehicle_placement_allowed(
 	{
 		if (game_engine_vehicles_placed[side][type] >= options->vehicle_counts[side][type])
 			return FALSE;
-		game_engine_vehicles_placed[side][type]++;
+		if (counting)
+			game_engine_vehicles_placed[side][type]++;
 		return TRUE;
 	}
 	/* (the sets: none, then each type alone, in the options' order) */

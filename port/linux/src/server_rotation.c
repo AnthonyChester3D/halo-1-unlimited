@@ -41,6 +41,8 @@ static const char *const loadout_weapon_words[] =
 	"plasma_rifle", "needler", NULL,
 };
 static const char *const team_vehicles_words[] = { "gametype", "pc", "custom", NULL };
+/* (game_engine.h's _vehicle_category_count_*) */
+static const char *const vehicle_category_words[] = { "all", "none", "1", "2", "3", "4", "6", "8", NULL };
 
 #define ALL _server_engine_all
 #define RULE_INTEGER(key, alias, table, engines, minimum, maximum, description) \
@@ -100,6 +102,16 @@ const struct server_rule_definition server_rule_definitions[] =
 		"Hardcore: no motion sensor, no aim assist, a kill restores the killer's health and shields"),
 	RULE_BOOLEAN("shared_vehicles", "shared", "options", ALL,
 		"Players on different teams (anyone, in free for all) can ride in the same vehicle"),
+	RULE_CHOICE("light_vehicles", NULL, "options", ALL, vehicle_category_words,
+		"Light vehicles (ghosts...) of each team: all, as the map places them, none, or that many, its variants shuffled"),
+	RULE_CHOICE("medium_vehicles", NULL, "options", ALL, vehicle_category_words,
+		"Medium vehicles (warthogs...) of each team: all, none, or that many, the map's variants shuffled each game"),
+	RULE_CHOICE("heavy_vehicles", NULL, "options", ALL, vehicle_category_words,
+		"Heavy vehicles (scorpions...) of each team: all, none, or that many"),
+	RULE_CHOICE("flying_vehicles", NULL, "options", ALL, vehicle_category_words,
+		"Flying vehicles (banshees...) of each team: all, none, or that many"),
+	RULE_CHOICE("turrets", NULL, "options", ALL, vehicle_category_words,
+		"Turrets of each team: all, none, or that many (a vehicle's category: its map's info.txt [Vehicles], else its type)"),
 
 	RULE_BOOLEAN("assault", NULL, "ctf", _server_engine_ctf, "One team defends the flag, the other attacks"),
 	RULE_BOOLEAN("reset_on_capture", NULL, "ctf", _server_engine_ctf, "Both flags go home at a capture"),

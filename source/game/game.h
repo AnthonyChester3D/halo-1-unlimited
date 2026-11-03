@@ -155,6 +155,7 @@ defaults once it is set, then the network game's */
 struct game_variant_options;
 void game_set_game_variant_options(struct game_variant_options const *options);
 struct game_variant_options const *game_variant_options_get(void);
+char const *game_loaded_map_name(void);
 void game_set_game_engine_index(short index);
 boolean game_all_quiet(
 	void);

@@ -197,6 +197,17 @@ static void server_gametype_rule(
 	else if (!strcmp(key, "no_map_weapons")) options->no_map_weapons = (boolean)(value != 0);
 	else if (!strcmp(key, "hardcore")) options->hardcore = (boolean)(value != 0);
 	else if (!strcmp(key, "shared_vehicles")) options->shared_vehicles = (boolean)(value != 0);
+	else if (!strcmp(key, "light_vehicles") || !strcmp(key, "medium_vehicles") || !strcmp(key, "heavy_vehicles") ||
+		!strcmp(key, "flying_vehicles") || !strcmp(key, "turrets"))
+	{
+		long category = key[0] == 'l' ? _vehicle_category_light : key[0] == 'm' ? _vehicle_category_medium :
+			key[0] == 'h' ? _vehicle_category_heavy : key[0] == 'f' ? _vehicle_category_flying : _vehicle_category_turret;
+		long bits = options->vehicle_categories[0] | (options->vehicle_categories[1] << 8);
+
+		bits = (bits & ~(7L << (3 * category))) | ((value & 7) << (3 * category));
+		options->vehicle_categories[0] = (byte)bits;
+		options->vehicle_categories[1] = (byte)(bits >> 8);
+	}
 	else if (!strcmp(key, "team_vehicles"))
 	{
 		byte set = value == 1 ? VARIANT_VEHICLE_SET_PC : value == 2 ? VARIANT_VEHICLE_SET_CUSTOM :

@@ -2153,6 +2153,14 @@ boolean network_game_server_start_network_game(
 		A machine still downloading the map is left out of this start, and so
 		are its players: they spawn when it joins, not while it is downloading. */
 		network_game_server_hold_map_fetcher_players(server);
+		/* port: the vehicle categories' shuffle, new each game, in the settings every machine plans by
+		(game_engine.c's game_engine_vehicle_categories_plan) */
+		{
+			unsigned long shuffle = system_milliseconds() * 2654435761ul;
+
+			server->game.variant_options.vehicle_shuffle[0] = (byte)(shuffle >> 16);
+			server->game.variant_options.vehicle_shuffle[1] = (byte)(shuffle >> 24);
+		}
 		if (network_game_server_send_game_settings_to_all_machines(server, &server->game, sizeof(server->game)) &&
 			((message = create_network_game_message(
 				_message_server_begin_game,
