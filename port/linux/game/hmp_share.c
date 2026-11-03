@@ -2200,6 +2200,13 @@ void map_share_render(void) {
 
 boolean hmp_worker_running(void) { return g_worker != 0; }
 
+/* whether map sharing is fetching this map now (asking the host, or downloading it): a game on it that starts meanwhile
+isn't loaded (network_client_manager.c) */
+boolean hmp_share_fetching(char const *key) {
+    return key && g_cl.state && g_cl.state != CL_OK && g_cl.state != CL_LEFT && g_cl.state != CL_NOROOM &&
+        !ieq(g_cl.key, key);
+}
+
 /* oxbox: whether the lobby's countdown bar shows a download's status (bots.c draws its label there otherwise) */
 boolean map_share_status_showing(void) { return g_status_on && g_label[0]; }
 
