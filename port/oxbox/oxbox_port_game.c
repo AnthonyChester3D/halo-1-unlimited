@@ -68,20 +68,14 @@ float render_interpolation_game_time_sec(long ticks) { return (float)ticks * (1.
 
 /* ---------- the PC version's menus (menu_functions.c, menu_tags.c: ~90 KB): the Xbox build uses the Xbox's own
 (display.menus "xbox"), for which those units load nothing and answer that no widget is theirs. Left out, these
-answer the same. */
+answer the same. The Xbox's own screens, built from ui.map's widgets, are oxbox_menus.c's (menu_tags_loaded,
+pc_menu_tag, pc_menu_event_function_invoke). */
 
 short players_port_local_player_count(void);
 
-void menu_tags_loaded(char const *map_name) { }
-void menu_tags_unloaded(void) { }
-boolean pc_menu_tag(long tag_index) { return 0; }
 boolean pc_menu_frame_placement(void const *bitmap, short *x, short *y, short *width, short *height) { return 0; }
 char const *pc_menus_screen(char const *name) { return name; }
 char const *pc_menus_root_name(void) { return "ui\\shell\\main_menu\\main_menu"; }
-boolean pc_menu_event_function_invoke(void *widget, void *event, long function_index, boolean *widget_deleted)
-{
-	return 0;
-}
 void pc_menu_game_data_function_invoke(void *widget, long function) { }
 void menu_functions_text_box_drawn(void *widget, void const *bounds) { }
 /* (two or more players on this console: each controller keeps to its own player's menus; the PC lobby's own

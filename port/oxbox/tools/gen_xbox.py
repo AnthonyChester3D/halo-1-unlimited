@@ -123,8 +123,9 @@ if P2P:
                Path('port/third_party/monocypher/monocypher-ed25519.c')] + sorted(Path(X, 'net/p2p').glob('*.c'))):
         add(s, 'p2p', 'p2p')
 for s in sorted(Path(X).glob('*.c')):
-    # (the perf log reads the game's structures: a game unit; link.ld puts it in its own section, OXPERF)
-    add(s, 'game' if s.name == 'oxbox_perf.c' else 'plat', 'xbox')
+    # (the perf log reads the game's structures: a game unit; link.ld puts it in its own section, OXPERF. So do
+    # the Xbox's own menu screens, built as ui.map loads)
+    add(s, 'game' if s.name in ('oxbox_perf.c', 'oxbox_menus.c') else 'plat', 'xbox')
     if s.stem in VARIANT_UNITS and VARIANT:
         print('  game_cflags = $game_cflags ' + ' '.join(VARIANT))
     if s.name in ('oxbox_libc.c', 'oxbox_stdio.c', 'oxbox_math.c'):
