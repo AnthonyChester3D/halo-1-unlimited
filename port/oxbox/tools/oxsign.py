@@ -16,6 +16,9 @@ Signing in one go, on Windows (once: setup, with the key you sign with):
                                                packages dropped on it. The passphrase is asked the first time, and
                                                can be remembered on this PC (Windows keeps it encrypted to your login)
     py oxsign.py open FILE...                  what a double-click runs
+    py oxsign.py publish FOLDER                after signing, copy the package there as opence.oxpk (a test update
+                                               location's web folder, such as \\\\juicebox\\web\\h1u: update_url.txt,
+                                               port/oxbox/installer/download.h); "publish off" stops it
     py oxsign.py forget                        forget the remembered passphrase (it's asked again next time)
     py oxsign.py unsetup                       undo setup (and forget)
 
@@ -344,15 +347,61 @@ def _settings_path():
     return os.path.join(_settings_folder(), 'oxsign.txt')
 
 
-def _setting_key():
-    """the key file setup chose, or None"""
+def _setting(name):
+    """a setting setup or publish chose ("name value" lines), or None"""
     try:
         for text in open(_settings_path(), encoding='utf-8'):
-            if text.startswith('key '):
-                return text[4:].strip()
+            if text.startswith(name + ' '):
+                return text[len(name) + 1:].strip()
     except OSError:
         pass
     return None
+
+
+def _set_setting(name, value):
+    """one setting changed (None: removed), the others kept"""
+    lines = []
+    try:
+        lines = [t for t in open(_settings_path(), encoding='utf-8') if not t.startswith(name + ' ')]
+    except OSError:
+        pass
+    if not lines:
+        lines = ['# oxsign.py: the key a double-click on a package (oxsign.py open) signs with, and where it\'s copied\n']
+    if value is not None:
+        lines.append('%s %s\n' % (name, value))
+    os.makedirs(_settings_folder(), exist_ok=True)
+    with open(_settings_path(), 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+
+
+def _setting_key():
+    """the key file setup chose, or None"""
+    return _setting('key')
+
+
+def _publish(package_path):
+    """the signed package copied to the publish folder as opence.oxpk (written beside, then swapped in, so an Xbox
+    downloading it then never gets half of one)"""
+    folder = _setting('publish')
+    if not folder:
+        return
+    target = os.path.join(folder, 'opence.oxpk')
+    part = target + '.part'
+    try:
+        with open(package_path, 'rb') as source, open(part, 'wb') as out:
+            while True:
+                block = source.read(1 << 20)
+                if not block:
+                    break
+                out.write(block)
+        os.replace(part, target)
+        print('Copied to %s' % target)
+    except OSError as e:
+        print('Couldn\'t copy it to %s: %s' % (target, e))
+        try:
+            os.remove(part)
+        except OSError:
+            pass
 
 
 def _remembered_path(key):
@@ -477,6 +526,10 @@ def open_packages(paths):
                     package.signatures = [g for g in package.signatures if g[0] != kid] + [(kid, signature)]
                     package.save()
                     print('%s: %s' % (os.path.basename(package.path), _signatures_line(Package(package.path), trusted)))
+                if len(packages) == 1:
+                    _publish(packages[0].path)
+                elif _setting('publish'):
+                    print('(More than one package: none copied to %s.)' % _setting('publish'))
             else:
                 print('Not signed.')
     except SystemExit as e:
@@ -535,10 +588,7 @@ def _unregister_windows():
 def setup(key_path):
     key_path = os.path.abspath(key_path)
     key = KeyFile(key_path)
-    os.makedirs(_settings_folder(), exist_ok=True)
-    with open(_settings_path(), 'w', encoding='utf-8') as f:
-        f.write('# oxsign.py setup: the key a double-click on a package (oxsign.py open) signs with\n')
-        f.write('key %s\n' % key_path)
+    _set_setting('key', key_path)
     print('Signing with %s (%s), from %s' % (key.name, key_id(key.public).hex(), key_path))
     if sys.platform == 'win32':
         try:
@@ -550,6 +600,17 @@ def setup(key_path):
         print('"oxsign.py open FILE..." checks packages and signs them with it.')
     if sys.platform == 'win32':
         print('(A double-click runs this copy of oxsign.py: if you move the repository, run setup again.)')
+
+
+def publish(folder):
+    if folder.lower() == 'off':
+        _set_setting('publish', None)
+        print('Signed packages aren\'t copied anywhere now.')
+        return
+    if not os.path.isdir(folder):
+        sys.exit('%s isn\'t a folder this PC can reach (is the NAS on, and the share open in Explorer?)' % folder)
+    _set_setting('publish', folder)
+    print('After signing, a package is copied to %s.' % os.path.join(folder, 'opence.oxpk'))
 
 
 def forget():
@@ -566,10 +627,7 @@ def forget():
 
 def unsetup():
     forget()
-    try:
-        os.remove(_settings_path())
-    except OSError:
-        pass
+    _set_setting('key', None)
     if sys.platform == 'win32':
         _unregister_windows()
     print('Setup undone: a double-click on a package doesn\'t sign any more.')
@@ -594,6 +652,8 @@ def main():
         setup(args[1])
     elif len(args) >= 2 and args[0] == 'open':
         open_packages(args[1:])
+    elif len(args) == 2 and args[0] == 'publish':
+        publish(args[1])
     elif args == ['forget']:
         forget()
     elif args == ['unsetup']:
