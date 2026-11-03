@@ -1560,8 +1560,15 @@ oxbox_picture_read). TRUE when this bitmap is one of them, read */
 static boolean menu_word_read(struct bitmap_data *bitmap, unsigned char *buffer, long size)
 {
 	extern int oxbox_picture_read(long index, void *buffer, unsigned long size);
+	extern int oxbox_xbe_vehicle_header_read(void *buffer, unsigned long size);
 	char const *name;
 	long word, frame;
+	/* (the gametype editor's VEHICLE OPTIONS header: port/oxbox/oxbox_menus.c's bitmap, from the XBE's file) */
+	if (bitmap->width == 512 && bitmap->height == 64 && bitmap->format == 15 && size == 32768 &&
+		bitmap->tag_index != NONE && !csstrcasecmp(tag_get_name(bitmap->tag_index), "h1u\\vehicle_options_header"))
+	{
+		return oxbox_xbe_vehicle_header_read(buffer, (unsigned long)size) != 0;
+	}
 	if (bitmap->width != 256 || bitmap->height != 64 || bitmap->format != 15 /* DXT3 */ || size != 16384 ||
 		bitmap->tag_index == NONE) return FALSE;
 	name = tag_get_name(bitmap->tag_index);

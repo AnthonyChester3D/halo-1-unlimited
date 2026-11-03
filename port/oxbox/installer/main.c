@@ -40,7 +40,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 12
+#define INSTALLER_VERSION 13
 #endif
 __attribute__((used)) static struct
 {
@@ -837,7 +837,7 @@ static void flush_drive(char const *path)
 	}
 }
 
-static unsigned char pictures[PICTURES_SIZE], header[HEADER_SIZE];
+static unsigned char pictures[PICTURES_SIZE], header[HEADER_COUNT * HEADER_SIZE];
 
 static int free_space(char const *path, unsigned long long need)
 {

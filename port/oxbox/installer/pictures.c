@@ -162,7 +162,7 @@ enum
 {
 	SET, SET_H, CAMP, CAMP_H, DEMO, DEMO_H, MP, MP_H,
 	RULES_0, RULES_1, RULES_2, RULES_3, RULES_4,
-	FOUND, PROFILE,
+	FOUND, PROFILE, ITEMS, LEVEL, CHOOSE,
 	WANTED
 };
 
@@ -177,6 +177,9 @@ static struct wanted wanted[WANTED] = {
 	WANT(RULES, 4, 256, 256),
 	WANT(MAIN_MENU "multiplayer_type_select\\connected\\server_list\\header_found_games", 0, 512, 64),
 	WANT(MAIN_MENU "multiplayer_type_select\\connected\\4way_profile_select\\header_select_profile", 0, 512, 64),
+	WANT(MAIN_MENU "settings_select\\multiplayer_setup\\item_options_edit\\header_item_options", 0, 512, 64),
+	WANT(MAIN_MENU "solo_level_select\\header_load_level", 0, 512, 64),
+	WANT(MAIN_MENU "difficulty_select\\header_choose_difficulty", 0, 512, 64),
 };
 
 /* the tags' data (a copy of the map's tag data), and where each bitmap wanted is */
@@ -901,6 +904,62 @@ static void header_compose(unsigned char const *found, unsigned char const *prof
 	}
 }
 
+/* ---- the VEHICLE OPTIONS header: letters of LOAD LEVEL, SELECT PROFILE, CHOOSE DIFFICULTY and ITEM OPTIONS
+(512 x 64), as ONLINE GAMES is made ---- */
+
+static int const items_cores[][2] = {{31, 35}, {38, 56}, {58, 75}, {79, 103}, {119, 139}, {143, 160}, {163, 180},
+	{184, 187}, {191, 212}, {216, 234}, {238, 257}};
+static int const level_cores[][2] = {{31, 44}, {47, 67}, {69, 90}, {93, 112}, {127, 141}, {143, 160}, {162, 182},
+	{185, 201}, {205, 219}};
+static int const choose_cores[][2] = {{30, 47}, {51, 67}, {71, 91}, {95, 115}, {118, 137}, {141, 157}, {174, 192},
+	{197, 200}, {206, 222}, {226, 242}, {247, 250}, {255, 271}, {276, 293}, {299, 350}};
+enum { V_LEVEL, V_PROFILE, V_CHOOSE, V_ITEMS };
+static struct header_piece const vehicle_pieces[] = {
+	{V_LEVEL, 162, 182, 0},    /* V */
+	{V_PROFILE, 53, 69, 2},    /* E */
+	{V_CHOOSE, 51, 67, 3},     /* H */
+	{V_ITEMS, 31, 35, 3},      /* I */
+	{V_PROFILE, 110, 127, 3},  /* C */
+	{V_PROFILE, 74, 87, 3},    /* L */
+	{V_PROFILE, 90, 106, 2},   /* E */
+	{V_ITEMS, 119, 257, 15},   /* OPTIONS */
+};
+
+static void vehicle_compose(unsigned char const *const *images, unsigned char *out)
+{
+	static int const (*const cores[4])[2] = {level_cores, profile_cores, choose_cores, items_cores};
+	static int const counts[4] = {
+		(int)(sizeof(level_cores) / sizeof(*level_cores)), (int)(sizeof(profile_cores) / sizeof(*profile_cores)),
+		(int)(sizeof(choose_cores) / sizeof(*choose_cores)), (int)(sizeof(items_cores) / sizeof(*items_cores))};
+	int x = HEADER_LEFT, p;
+	memset(out, 0, 512 * 64 * 4);
+	for (p = 0; p < (int)(sizeof(vehicle_pieces) / sizeof(*vehicle_pieces)); p++)
+	{
+		struct header_piece const *piece = &vehicle_pieces[p];
+		int const (*c)[2] = cores[piece->profile];
+		int count = counts[piece->profile], left = piece->x0 - 8, right = piece->x1 + 8, i, cx;
+		/* (its glow: to halfway to the neighbours' cores, 8 at the ends) */
+		for (i = 0; i < count; i++)
+		{
+			if (c[i][1] < piece->x0)
+				left = (c[i][1] + piece->x0) / 2 + 1;
+		}
+		for (i = count - 1; i >= 0; i--)
+		{
+			if (c[i][0] > piece->x1)
+				right = (piece->x1 + c[i][0]) / 2;
+		}
+		x += piece->space;
+		for (cx = left; cx <= right; cx++)
+		{
+			int to = x - (piece->x0 - left) + (cx - left);
+			if (to >= 0 && to < 512 && cx >= 0 && cx < 512)
+				letter_column(out, 512, to, images[piece->profile], 512, cx);
+		}
+		x += piece->x1 - piece->x0 + 1;
+	}
+}
+
 /* ---- all of it ---- */
 
 int pictures_make(char const *ui_map_path, unsigned char *pictures, unsigned char *header, char *error)
@@ -1008,6 +1067,14 @@ int pictures_make(char const *ui_map_path, unsigned char *pictures, unsigned cha
 	progress("making the ONLINE GAMES header");
 	header_compose(rgba[FOUND], rgba[PROFILE], picture);
 	dxt3_encode(picture, 512, 64, header);
+	progress("making the VEHICLE OPTIONS header");
+	{
+		unsigned char const *images[4];
+		images[V_LEVEL] = rgba[LEVEL], images[V_PROFILE] = rgba[PROFILE];
+		images[V_CHOOSE] = rgba[CHOOSE], images[V_ITEMS] = rgba[ITEMS];
+		vehicle_compose(images, picture);
+		dxt3_encode(picture, 512, 64, header + HEADER_SIZE);
+	}
 	result = 0;
 done:
 	for (w = 0; w < WANTED; w++)

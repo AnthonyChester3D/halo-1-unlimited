@@ -922,6 +922,32 @@ int oxbox_xbe_online_header_read(void *buffer, unsigned long size)
 }
 #endif
 
+/* the gametype editor's VEHICLE OPTIONS header (32 KB, DXT3 512 x 64: installer/pictures.c), the same way, after the
+others (oxbox_menus.c, hmp_maps.c's menu_word_read). TRUE when read; present: TRUE when the file has one (not blank) */
+static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_vehicle_marker = { "OXVEHIC1", 0, 0 };
+
+int oxbox_xbe_vehicle_header_read(void *buffer, unsigned long size)
+{
+	if (!oxbox_vehicle_marker.offset || size != oxbox_vehicle_marker.size)
+		return 0;
+	return own_xbe_read(oxbox_vehicle_marker.offset, buffer, size);
+}
+
+int oxbox_xbe_vehicle_header_present(void)
+{
+	unsigned char first[16];
+	int index;
+
+	/* (the block at the V's middle: the header's top left is clear even when it's there) */
+	if (!oxbox_vehicle_marker.offset || oxbox_vehicle_marker.size < (8 * 128 + 11) * 16 ||
+		!own_xbe_read(oxbox_vehicle_marker.offset + (8 * 128 + 10) * 16, first, sizeof(first)))
+		return 0;
+	for (index = 0; index < (int)sizeof(first); index++)
+		if (first[index])
+			return 1;
+	return 0;
+}
+
 int oxbox_picture_read(long index, void *buffer, unsigned long size)
 {
 	int ok;

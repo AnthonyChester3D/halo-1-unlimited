@@ -246,6 +246,21 @@ if mark > 0:
     while len(d) % 16: d.append(0)
     struct.pack_into('<II', d, mark + 8, len(d), len(header))
     d += header
+# the gametype editor's VEHICLE OPTIONS header (DXT3 512 x 64, installer/pictures.c; oxbox_menus.c), after it, the same
+# way (OXVEHIC1: oxbox_entry.c). The installer fills the headers in their order in the file (installer/package.c)
+mark = d.find(b'OXVEHIC1')
+if mark > 0:
+    _header = os.path.join(ROOT, 'port', 'oxbox', 'vehicle_options.dxt3')
+    if os.path.exists(_header):
+        header = open(_header, 'rb').read()
+    else:
+        print('note: port/oxbox/vehicle_options.dxt3 not found: VEHICLE OPTIONS will have a plain text header')
+        header = bytes(32768)
+    assert len(header) == 32768 and d.find(b'OXVEHIC1', mark + 1) < 0
+    assert d.find(b'OXONLIN1') < mark or d.find(b'OXONLIN1') < 0
+    while len(d) % 16: d.append(0)
+    struct.pack_into('<II', d, mark + 8, len(d), len(header))
+    d += header
 cert = struct.unpack_from('<I', d, 0x118)[0] - base
 # The title ID: Halo 1 Unlimited's own, 0x4C4A4855 ('LJ' 'HU': Llama Juice, Halo Unlimited; v1.54 on), so its own save
 # folder (E:\UDATA\4c4a4855) and storage (T:, E:\TDATA\4c4a4855): its profiles and gametypes (OpenCE's gametype

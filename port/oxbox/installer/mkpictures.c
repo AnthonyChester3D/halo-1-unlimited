@@ -1,5 +1,5 @@
 /* mkpictures ui.map [folder]: OpenCE's own menu pictures (pictures.h) for a build, made from the ui.map given (the
-game's own, from your disc or hard disk): writes pictures.bin and online_games.dxt3 into the folder (port/oxbox by
+game's own, from your disc or hard disk): writes pictures.bin, online_games.dxt3 and vehicle_options.dxt3 into the folder (port/oxbox by
 default, where tools/mkxbe.py looks). The installer makes the same on the Xbox. Built by port/oxbox/build.sh:
 	cc -O2 -ffp-contract=off -o build-xbox/mkpictures port/oxbox/installer/mkpictures.c \
 		port/oxbox/installer/pictures.c -lz -lm */
@@ -10,7 +10,7 @@ default, where tools/mkxbe.py looks). The installer makes the same on the Xbox. 
 #include <stdlib.h>
 #include <string.h>
 
-static unsigned char pictures[PICTURES_SIZE], header[HEADER_SIZE];
+static unsigned char pictures[PICTURES_SIZE], header[HEADER_COUNT * HEADER_SIZE];
 
 static int save(char const *folder, char const *name, unsigned char const *data, size_t size)
 {
@@ -42,5 +42,6 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	return save(folder, "pictures.bin", pictures, sizeof(pictures)) ||
-		save(folder, "online_games.dxt3", header, sizeof(header));
+		save(folder, "online_games.dxt3", header, HEADER_SIZE) ||
+		save(folder, "vehicle_options.dxt3", header + HEADER_SIZE, HEADER_SIZE);
 }

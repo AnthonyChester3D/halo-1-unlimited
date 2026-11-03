@@ -19,7 +19,7 @@ static int write_file(void *context, unsigned char const *data, unsigned long si
 	return fwrite(data, 1, size, (FILE *)context) != size;
 }
 
-static unsigned char pictures[PICTURES_SIZE], header[HEADER_SIZE];
+static unsigned char pictures[PICTURES_SIZE], header[HEADER_COUNT * HEADER_SIZE];
 
 int main(int argc, char **argv)
 {

@@ -21,6 +21,7 @@ Bungie's.
 */
 
 #include "cseries.h"
+#include "bitmaps/bitmap_group.h"
 #include "game/game_engine.h"
 #include "interface/player_ui.h"
 #include "tag_files/tag_groups.h"
@@ -33,6 +34,7 @@ void platform_log(char const *format, ...);
 void *cache_files_tag_instances(long *count);
 void cache_files_set_tag_instances(void *instances, long count);
 char *tag_get_name(long tag_index);
+int oxbox_xbe_vehicle_header_present(void);     /* (oxbox_entry.c: the installer's VEHICLE OPTIONS picture) */
 
 /* ---------- constants */
 
@@ -50,6 +52,8 @@ char *tag_get_name(long tag_index);
 #define EDIT_DESCRIPTION_TEXT SETUP "playlist_edit\\playlist_edit_ext_desc_text"
 #define ITEMS_SCREEN SETUP "item_options_edit\\item_options_screen"
 #define ITEMS_LIST SETUP "item_options_edit\\item_options_menu"
+#define ITEMS_HELP SETUP "item_options_edit\\item_options_help"
+#define ITEMS_HEADER_BITMAP SETUP "item_options_edit\\header_item_options"
 #define ITEMS_HEADER SETUP "item_options_edit\\header_item_options"
 #define ITEMS_YES_NO_ROW SETUP "item_options_edit\\op_infinite_grenades"
 #define ITEMS_WIDE_ROW SETUP "item_options_edit\\op_vehicle_set"
@@ -77,8 +81,12 @@ enum
 	EDIT_ROW_STEP = 33,
 	/* the tags it adds: 4 string lists; the editor's row, the screen, its header, its list, and each row's
 	container, label and spinner */
-	ADDED_TAGS = 4 + 4 + 3 * VEHICLE_OPTION_ROWS,
-	MAXIMUM_BLOCKS = 128,
+	/* (and the help's string list and text box, and the header's picture) */
+	ADDED_TAGS = 4 + 4 + 3 * VEHICLE_OPTION_ROWS + 3,
+	/* the help: a line for each row's each choice, in order (the game picks it: game_options_menu_update_text_desc) */
+	HELP_STRINGS = 2 + NUMBER_OF_VEHICLE_CATEGORIES * NUMBER_OF_VEHICLE_CATEGORY_COUNTS,
+	HELP_SIZE = 128,
+	MAXIMUM_BLOCKS = 320,
 };
 
 /* ---------- structures (ui_widget.c's, as menu_tags.c has them) */
@@ -193,6 +201,14 @@ static char const *const vehicle_option_labels[VEHICLE_OPTION_ROWS] =
 static char const *const vehicle_option_counts[NUMBER_OF_VEHICLE_CATEGORY_COUNTS] =
 	{ "ALL", "NONE", "1", "2", "3", "4", "6", "8" };
 static char const vehicle_options_title[] = "VEHICLE OPTIONS";
+/* each category, for the help: a vehicle, vehicles, and its kind */
+static char const *const vehicle_help_names[NUMBER_OF_VEHICLE_CATEGORIES][3] = {
+	{ "light vehicle", "light vehicles", "Ghosts" },
+	{ "medium vehicle", "medium vehicles", "Warthogs" },
+	{ "heavy vehicle", "heavy vehicles", "Scorpions" },
+	{ "flying vehicle", "flying vehicles", "Banshees" },
+	{ "turret", "turrets", "gun turrets" },
+};
 static char const vehicle_options_description[] =
 	"Choose how many vehicles of\r\neach kind appear, and whether\r\nenemies can ride together.\r\n\r\nThis gametype:";
 
@@ -204,6 +220,9 @@ static void *allocate(long size)
 
 	if (oxbox_menus.failed || oxbox_menus.block_count >= MAXIMUM_BLOCKS || !(block = malloc(size > 0 ? size : 1)))
 	{
+		if (!oxbox_menus.failed)
+			platform_log("menus: out of memory (or blocks: %ld): Halo 1 Unlimited's screens aren't added",
+				oxbox_menus.block_count);
 		oxbox_menus.failed = TRUE;
 		return NULL;
 	}
@@ -315,6 +334,54 @@ static struct string_list *strings_build(char const *const *strings, long count,
 	return list;
 }
 
+/* text joined: up to 8 pieces (NULL ends them early), into out (HELP_SIZE) */
+static char *joined(char *out, char const *a, char const *b, char const *c, char const *d, char const *e, char const *f,
+	char const *g, char const *h)
+{
+	char const *pieces[8];
+	long n = 0, k;
+
+	pieces[0] = a, pieces[1] = b, pieces[2] = c, pieces[3] = d, pieces[4] = e, pieces[5] = f, pieces[6] = g;
+	pieces[7] = h;
+	for (k = 0; k < 8 && pieces[k]; k++)
+	{
+		char const *s = pieces[k];
+
+		while (*s && n < HELP_SIZE - 1)
+			out[n++] = *s++;
+	}
+	out[n] = 0;
+	return out;
+}
+
+/* the help's lines (HELP_STRINGS of them, each HELP_SIZE), in the order the game picks them */
+static void help_text(char (*help)[HELP_SIZE])
+{
+	long category, count, at = 0;
+
+	joined(help[at++], "Players on different teams can ride in the same\r\n",
+		"vehicle (in free for all, anyone with anyone).", NULL, NULL, NULL, NULL, NULL, NULL);
+	joined(help[at++], "Only teammates can ride in the same vehicle.", NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+	for (category = 0; category < NUMBER_OF_VEHICLE_CATEGORIES; category++)
+	{
+		char const *const *names = vehicle_help_names[category];
+
+		for (count = 0; count < NUMBER_OF_VEHICLE_CATEGORY_COUNTS; count++)
+		{
+			/* (lines of 48 characters at most: the help box's width) */
+			if (count == _vehicle_category_count_all)
+				joined(help[at++], "All of the map's ", names[1], " appear\r\n(", names[2],
+					" and the like), as the map places them.", NULL, NULL, NULL);
+			else if (count == _vehicle_category_count_none)
+				joined(help[at++], "No ", names[1], " (", names[2], " and the like)\r\nappear on this map.", NULL, NULL, NULL);
+			else
+				joined(help[at++], "Each team gets ", vehicle_option_counts[count], " ",
+					names[count == _vehicle_category_count_1 ? 0 : 1], " (", names[2],
+					" and\r\nthe like), shuffled each game; both teams match.", NULL);
+		}
+	}
+}
+
 /* a copy of one of the map's widgets, its blocks its own (children: child_count of them, from the model's, the
 rest zeroed) */
 static struct ui_widget_definition *widget_copy(long model_index, long child_count)
@@ -421,6 +488,9 @@ static void vehicle_options_build(void)
 	short yes_no_x, yes_no_y, wide_x, wide_y;
 	long labels_tag, counts_tag, title_tag, description_tag, editor_row_tag, screen_tag, header_tag, list_tag;
 	long row_tags[VEHICLE_OPTION_ROWS], label_tags[VEHICLE_OPTION_ROWS], spinner_tags[VEHICLE_OPTION_ROWS];
+	long help_strings_tag, help_tag, picture_tag, items_help = found(WIDGET_TAG, ITEMS_HELP);
+	long header_bitmap = found('bitm', ITEMS_HEADER_BITMAP);
+	boolean picture = oxbox_xbe_vehicle_header_present() != 0;
 	struct ui_widget_definition *editor_list, *definition, *screen, *list;
 	struct ui_widget_definition const *model;
 	struct ui_widget_child_reference *edit_children;
@@ -472,6 +542,9 @@ static void vehicle_options_build(void)
 		label_tags[index] = next_tag();
 		spinner_tags[index] = next_tag();
 	}
+	help_strings_tag = next_tag();
+	help_tag = next_tag();
+	picture_tag = next_tag();
 
 	/* (the string lists) */
 	description_strings[0] = vehicle_options_description;
@@ -483,6 +556,19 @@ static void vehicle_options_build(void)
 		char const *title = vehicle_options_title;
 
 		instance_set(grown, STRINGS_TAG, title_tag, "vehicle_options_title", strings_build(&title, 1, NONE, 0));
+	}
+	{
+		char (*help)[HELP_SIZE] = allocate(HELP_STRINGS * HELP_SIZE);
+		char const *lines[HELP_STRINGS];
+
+		if (help)
+		{
+			help_text(help);
+			for (index = 0; index < HELP_STRINGS; index++)
+				lines[index] = help[index];
+		}
+		instance_set(grown, STRINGS_TAG, help_strings_tag, "vehicle_options_help",
+			help ? strings_build(lines, HELP_STRINGS, NONE, 0) : NULL);
 	}
 	instance_set(grown, STRINGS_TAG, description_tag, "playlist_edit_descriptions",
 		strings_build(description_strings, 1,
@@ -506,9 +592,42 @@ static void vehicle_options_build(void)
 	}
 	instance_set(grown, WIDGET_TAG, screen_tag, "vehicle_options_screen", screen);
 
-	/* (its header: a label's look, the title's text, where ITEM OPTIONS' picture is) */
-	definition = widget_copy(yes_no_label, 0);
-	if (definition)
+	/* (its header: ITEM OPTIONS' with VEHICLE OPTIONS' picture, the installer's (made of Halo's letters, as ONLINE
+	GAMES is), a copy of ITEM OPTIONS' bitmap that reads it (hmp_maps.c's menu_word_read); with none in the XBE, a
+	label's look and the title's text) */
+	if (picture)
+	{
+		struct bitmap_group *group = allocate(sizeof(struct bitmap_group));
+		struct bitmap_data *bitmap = allocate(sizeof(struct bitmap_data));
+		struct bitmap_group const *model_group = (struct bitmap_group const *)tag_get('bitm', header_bitmap);
+
+		if (group && bitmap && model_group->bitmaps.count >= 1)
+		{
+			memcpy(group, model_group, sizeof(*group));
+			memcpy(bitmap, model_group->bitmaps.address, sizeof(*bitmap));
+			bitmap->tag_index = picture_tag;
+			bitmap->cache_block_index = NONE;
+			bitmap->hardware_format = NULL;
+			bitmap->base_address = NULL;
+			group->bitmaps.count = 1;
+			group->bitmaps.address = bitmap;
+		}
+		instance_set(grown, 'bitm', picture_tag, "vehicle_options_header", group);
+		definition = widget_copy(items_header, 0);
+		if (definition)
+		{
+			strncpy(definition->name, "vehicle_options_title", sizeof(definition->name) - 1);
+			reference_set(&definition->background_bitmap, 'bitm', picture_tag);
+			definition->bounds.x1 += 100;      /* (VEHICLE OPTIONS is longer than ITEM OPTIONS) */
+		}
+	}
+	else
+	{
+		/* (a placeholder in the table: a bitmap group of no bitmaps) */
+		instance_set(grown, 'bitm', picture_tag, "vehicle_options_header", allocate(sizeof(struct bitmap_group)));
+		definition = widget_copy(yes_no_label, 0);
+	}
+	if (definition && !picture)
 	{
 		rectangle2d header_bounds = widget_get(items_header)->bounds;
 
@@ -539,9 +658,9 @@ static void vehicle_options_build(void)
 		functions[0] = MENU_FUNCTION_BASE + _menu_function_vehicle_options_load;
 		functions[1] = functions[2] = MENU_FUNCTION_BASE + _menu_function_vehicle_options_save;
 		strncpy(list->name, "vehicle_options_list", sizeof(list->name) - 1);
-		list->game_data_inputs.count = 0;
-		list->game_data_inputs.address = NULL;
-		reference_set(&list->extended_description_widget, WIDGET_TAG, NONE);
+		/* (its help: ITEM OPTIONS' text box, our lines; the list's game data input picks the line, as ITEM OPTIONS'
+		does) */
+		reference_set(&list->extended_description_widget, WIDGET_TAG, help_tag);
 		handlers_set(list, 3, events, flags, functions, widgets);
 		for (index = 0; index < VEHICLE_OPTION_ROWS; index++)
 		{
@@ -553,6 +672,15 @@ static void vehicle_options_build(void)
 		}
 	}
 	instance_set(grown, WIDGET_TAG, list_tag, "vehicle_options_list", list);
+
+	definition = widget_copy(items_help, 0);
+	if (definition)
+	{
+		strncpy(definition->name, "vehicle_options_help", sizeof(definition->name) - 1);
+		reference_set(&definition->text_label_string_list, STRINGS_TAG, help_strings_tag);
+		definition->string_list_index = 0;
+	}
+	instance_set(grown, WIDGET_TAG, help_tag, "vehicle_options_help", definition);
 
 	/* (each row: a copy of ITEM OPTIONS' INFINITE GRENADES row (YES / NO) or VEHICLE SET row (a wider spinner)) */
 	for (index = 0; index < VEHICLE_OPTION_ROWS; index++)
