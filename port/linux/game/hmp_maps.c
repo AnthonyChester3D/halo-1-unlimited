@@ -1689,6 +1689,17 @@ static short missing_name_index(char const *key)
 	return (short)(HMP_MISSING_NAME_BASE + i);
 }
 
+/* a map this console is downloading: its own name (its info .txt's first line, which comes first), shown for it from
+then on in place of its folder's (hmp_share.c) */
+void hmp_maps_missing_title(char const *key, wchar_t const *title)
+{
+	short index = missing_name_index(key);
+	long i = index - HMP_MISSING_NAME_BASE, k;
+	if (!title || !title[0] || i < 0 || i >= HMP_MISSING_NAMES) return;
+	for (k = 0; title[k] && k < (long)NUMBEROF(missing_names[i].name) - 1; k++) missing_names[i].name[k] = title[k];
+	missing_names[i].name[k] = 0;
+}
+
 short custom_edition_maps_display_index(char const *level_name)
 {
 	long i;

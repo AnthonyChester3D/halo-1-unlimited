@@ -100,6 +100,9 @@ boolean cache_files_precache_map_loaded(char const *map_name);
 boolean cache_files_precache_is_copying_map(char const *map_name);
 short cache_files_precache_map_status(real *progress);
 static void loading_line(int server, int client, char const *map, u32 now);
+void hmp_maps_missing_title(char const *key, wchar_t const *title);   /* (hmp_maps.c) */
+static void cl_title_start(void);
+static void cl_title(void);
 boolean cache_files_forget_cached_map(char const *map_name);
 void display_error_text_when_main_menu_loaded(wchar_t const *text);
 
@@ -454,6 +457,13 @@ static u32 rcv_window(void) { return g_cfg_auto ? WINDOW_MAX_KB : g_cfg_window; 
    Build 17: the countdown line is one text across the lobby's message bar (maplist.c widens Halo's label
    box while it shows), so it can say who: "Sending map to King: 53%, 1:20 left". */
 static u16 g_status[64];
+/* the downloading map's own name: the worker keeps the start of its info .txt's first block (that file comes before
+the map), the game's thread reads its first line (cl_title) */
+static int g_title_file = -1;                 /* the info .txt's place in the download's files (-1: none) */
+static u8 g_title_raw[128];
+static volatile u32 g_title_len;
+static u16 g_title[32];                       /* "" until known */
+static char g_title_a[40];                    /* ... for the status lines (ASCII; others '?'), with a space after */
 static u16 g_label[64];                     /* the line under the lobby (hmp_share_render) */
 static u16 *g_lo;                           /* where the countdown line is being written */
 static int g_status_on;
@@ -1587,6 +1597,7 @@ static void cl_reply(u32 now) {
     g_cl.xt = now;
     g_job.t_last = now; g_job.pass_max = rcv_window() << 10;
     g_cl.state = CL_RECV;
+    cl_title_start();
     status("Downloading map ", g_cl.total >= 100 ? (int)(g_job.done / (g_cl.total / 100)) : 0, 0);
     L_start("Downloading map: "); L_pct(g_cl.total >= 100 ? (int)(g_job.done / (g_cl.total / 100)) : 0, 0);
     start_worker();
@@ -1622,6 +1633,51 @@ static void cl_extra(u32 now) {
     }
 }
 
+/* the download's info .txt (info.txt first, never the showcase's, the bots' or a pack's order.txt), whose first line
+is the map's name: watched for as the download starts */
+static void cl_title_start(void) {
+    int k, best = 0;
+    g_title_file = -1; g_title_len = 0; g_title[0] = 0; g_title_a[0] = 0;
+    for (k = 1; k < (int)g_cl.r.nfiles; k++) {
+        const char *n = g_cl.r.f[k].name;
+        int rank = !ends_with(n, ".txt") || !ieq(n, "showcase.txt") || !ieq(n, "bots.txt") || !ieq(n, "order.txt") ? 0 :
+            !ieq(n, "info.txt") ? 2 : 1;
+        if (rank > best) { best = rank; g_title_file = k; }
+    }
+}
+/* ... its first line once the worker has it (UTF-16 with a BOM, UTF-8, or ANSI): the lobby and the browser show it
+for the map from then on (hmp_maps_missing_title), and the download's lines say it */
+static void cl_title(void) {
+    const u8 *b = g_title_raw;
+    u32 n, i = 0, k = 0, a = 0;
+    if (g_title[0] || !g_title_len) return;
+    BARRIER();
+    n = g_title_len;
+    if (n >= 2 && b[0] == 0xff && b[1] == 0xfe) {
+        for (i = 2; i + 1 < n && k < 31; i += 2) {
+            u16 c = (u16)(b[i] | (b[i + 1] << 8));
+            if (c == '\r' || c == '\n') break;
+            g_title[k++] = c;
+        }
+    } else {
+        if (n >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf) i = 3;
+        while (i < n && k < 31 && b[i] != '\r' && b[i] != '\n') {
+            u16 c = b[i++];
+            if (c >= 0xc0 && c < 0xe0 && i < n) c = (u16)(((c & 0x1f) << 6) | (b[i++] & 0x3f));
+            else if (c >= 0xe0 && c < 0xf0 && i + 1 < n) { c = (u16)(((c & 0x0f) << 12) | ((b[i] & 0x3f) << 6) | (b[i + 1] & 0x3f)); i += 2; }
+            g_title[k++] = c;
+        }
+    }
+    while (k && g_title[k - 1] == ' ') k--;
+    g_title[k] = 0;
+    if (!k) { g_title_len = 0; g_title_file = -1; return; }   /* (an empty first line: the folder's name stays) */
+    for (i = 0; i < k && a < sizeof g_title_a - 2; i++) g_title_a[a++] = g_title[i] >= 32 && g_title[i] < 127 ? (char)g_title[i] : '?';
+    g_title_a[a++] = ' ';
+    g_title_a[a] = 0;
+    hmp_maps_missing_title(g_cl.key, (wchar_t const *)g_title);
+    lg("client: the map's name: %s", g_title_a);
+}
+
 /* take the download back (the worker has let go) */
 static void cl_take(void) {
     int k;
@@ -1641,7 +1697,15 @@ static int cl_block(struct cst *t) {
     g_job.hpos[f] = off + m;
     t2 = GetTickCount();
     if (t2 - t1 > g_job.wr_max) g_job.wr_max = t2 - t1;
-    if (f) g_job.small[f] |= (u8)(1 << b);
+    if (f) {
+        g_job.small[f] |= (u8)(1 << b);
+        if ((int)f == g_title_file && !b && !g_title_len) {   /* (the info .txt's first block: its first line) */
+            u32 n = m < sizeof g_title_raw ? m : sizeof g_title_raw, i;
+            for (i = 0; i < n; i++) g_title_raw[i] = data[i];
+            BARRIER();
+            g_title_len = n;
+        }
+    }
     else {
         g_have[b >> 3] |= (u8)(1 << (b & 7));
         while (g_job.prefix < g_job.nblk && HAVE(g_job.prefix)) g_job.prefix++;
@@ -1731,8 +1795,11 @@ static void cl_recv(u32 now) {
         {
             int pct = g_cl.total >= 100 ? (int)(done / (g_cl.total / 100)) : 0;
             rate_upd(&g_cl.rate, &g_cl.rate_t, &g_cl.rate_done, done, now);
-            status("Downloading map ", pct, 0);
-            L_start("Downloading map: "); L_pct(pct, g_cl.rate ? (g_cl.total - done) / g_cl.rate + 1 : 0);
+            cl_title();
+            status(g_title[0] ? g_title_a : "Downloading map ", pct, 0);
+            if (g_title[0]) { L_start("Downloading "); L_a(g_title_a); }
+            else L_start("Downloading map: ");
+            L_pct(pct, g_cl.rate ? (g_cl.total - done) / g_cl.rate + 1 : 0);
         }
         return;
     }
