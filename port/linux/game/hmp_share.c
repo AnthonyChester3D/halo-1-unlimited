@@ -96,6 +96,10 @@ int __stdcall FlushFileBuffers(HANDLE file);
 void platform_log(char const *format, ...);
 char const *network_game_current_map_name(void);
 char const *cache_files_loaded_map_name(void);
+boolean cache_files_precache_map_loaded(char const *map_name);
+boolean cache_files_precache_is_copying_map(char const *map_name);
+short cache_files_precache_map_status(real *progress);
+static void loading_line(int server, int client, char const *map, u32 now);
 boolean cache_files_forget_cached_map(char const *map_name);
 void display_error_text_when_main_menu_loaded(wchar_t const *text);
 
@@ -2075,9 +2079,40 @@ void map_share_update(void) {
     }
     if (!server && !g_cl.state) g_status_on = 0;
     if (server && !host_sending()) g_status_on = 0;
+    loading_line(server != 0, client != 0, map, now);
     hmp_stats_tick();
     hmp_browse_tick();
     hmp_game_tick();
+}
+
+/* after a download, or any change of map: while a console loads the map (Halo copies it to the cache first, many
+seconds for a big one), the lobby says so, the host "Waiting for players to load the map" and the console itself
+"Loading the map: 40%", rather than the lobby looking stuck. Shown after half a second of it, so a quick load doesn't
+flash it */
+long oxbox_server_machines_loading_map(void);   /* (network_server_manager.c) */
+static void loading_line(int server, int client, char const *map, u32 now) {
+    static u32 since;
+    int loading = 0, pct = -1;
+    real progress = 0.f;
+    if (map && map[0] && !game_in_progress()) {
+        if (server && !host_sending() && oxbox_server_machines_loading_map() > 0) loading = 1;
+        else if (client && !server && (!g_cl.state || g_cl.state == CL_OK) && !cache_files_precache_map_loaded(map)) {
+            loading = 2;
+            if (cache_files_precache_is_copying_map(map)) {
+                cache_files_precache_map_status(&progress);
+                pct = (int)(progress * 100.f);
+            }
+        }
+    }
+    if (!loading) { since = 0; return; }
+    if (!since) since = now | 1;
+    if (now - since < 500) return;
+    if (loading == 1) { status("Waiting for players to load the map", -1, 0); L_start("Waiting for players to load the map"); }
+    else {
+        status("Loading the map ", pct, 0);
+        L_start("Loading the map");
+        if (pct >= 0) { L_a(": "); L_pct(pct, 0); }
+    }
 }
 
 /* the status line in the lobby (the downloading console's and the host's) */
