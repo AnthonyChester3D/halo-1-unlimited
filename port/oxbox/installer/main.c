@@ -40,7 +40,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 13
+#define INSTALLER_VERSION 14
 #endif
 __attribute__((used)) static struct
 {
@@ -510,6 +510,40 @@ static void to_device(char const *path, char *device, size_t size)
 }
 
 /* "E:\..." from a device path on a partition this has mounted, or 0 */
+/* this XBE's own path, as a device's ("\\Device\\Harddisk0\\Partition6\\games\\Halo\\updater\\default.xbe"). A title
+started with XLaunchNewImage("D:\\updater\\default.xbe") (the game starting its updater) is given its launcher's D: and
+the rest after a ';' ("...\\games\\Halo;\\updater\\default.xbe"): joined here as one path */
+static void own_image(char *own, int size)
+{
+	char *semicolon;
+	text_print(own, size, "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	if ((semicolon = strchr(own, ';')) != NULL)
+	{
+		char rest[260];
+		text_print(rest, sizeof(rest), "%s", semicolon + 1);
+		*semicolon = 0;
+		if (semicolon > own && semicolon[-1] == '\\')
+			semicolon[-1] = 0;
+		text_print(own + strlen(own), size - (int)strlen(own), "%s%s", rest[0] == '\\' ? "" : "\\", rest);
+	}
+}
+
+/* D: made this XBE's own folder. The kernel gives a title its launcher's D: when it was started with a D: path (the
+game starting its updater, D:\\updater\\default.xbe: D: was the Halo folder, so the updater read and wrote the Halo
+folder's files as its own, and put a new installer in place of the game's default.xbe); nxdk's own D: is only
+made when there's none */
+static void own_folder_as_d(void)
+{
+	char own[260], *slash;
+	own_image(own, sizeof(own));
+	if ((slash = strrchr(own, '\\')) == NULL)
+		return;
+	slash[1] = 0;
+	if (nxIsDriveMounted('D'))
+		nxUnmountDrive('D');
+	nxMountDrive('D', own);
+}
+
 static int from_device(char const *device, char *path, size_t size)
 {
 	int i;
@@ -737,7 +771,7 @@ static void last_install_read(void)
 static void flush_own_drive(void)
 {
 	char own[260], *slash, drive[260];
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	if ((slash = strrchr(own, '\\')) != NULL)
 		*slash = 0;
 	if (from_device(own, drive, sizeof(drive)))
@@ -786,7 +820,7 @@ static void find_halos(void)
 	halo_count = 0;
 	heading(NULL);
 	/* the folder the installer is in, if it's in Halo's (E:\Games\Halo\OpenCE installer: E:\Games\Halo) */
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	for (i = 0; i < 2 && (slash = strrchr(own, '\\')); i++)
 		*slash = 0;
 	if (from_device(own, path, sizeof(path)))
@@ -1052,7 +1086,7 @@ static void install_updater(struct halo *h)
 	}
 	else
 		say_in(COLOUR_YELLOW, "  (couldn't write opence_release.txt: the game won't look for updates)");
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER "\\default.xbe", h->path);
 	if (!from_device(own, own_path, sizeof(own_path)))
 	{
@@ -1331,7 +1365,7 @@ static void update_installer(void)
 	unsigned long got_size;
 	struct writer w;
 
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	slash = strrchr(own, '\\');
 	text_print(name, sizeof(name), "%s", slash ? slash + 1 : own);
 	text_print(path, sizeof(path), "D:\\%s", name);
@@ -1711,7 +1745,7 @@ static void auto_update(void)
 
 	auto_mode = 1;
 	log_file("auto update (the game's updater)");
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	if (from_device(own, folder, sizeof(folder)) && (slash = strrchr(folder, '\\')) != NULL)
 	{
 		*slash = 0;
@@ -1777,6 +1811,7 @@ done:
 
 int main(void)
 {
+	own_folder_as_d();
 	nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
 	nxMountDrive('F', "\\Device\\Harddisk0\\Partition6\\");
 	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
