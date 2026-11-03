@@ -694,6 +694,7 @@ symbols in this file:
 #include "vehicles.h"
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
 #include "coop_scripts.h" /* port: port/linux/game/coop_scripts.c */
+#include "game_modes.h" /* port: port/linux/game/game_modes.c (shared vehicles) */
 #include "coop_enemies.h" /* port: port/linux/game/coop_enemies.c */
 #include "infection.h" /* port: port/linux/game/infection.c */
 
@@ -3021,7 +3022,9 @@ boolean unit_can_enter_seat(
 				occupant_index = child_object_index;
 				result = FALSE;
 			}
+			/* port: unless the gametype lets anyone ride with anyone (game_modes.c) */
 			else if (unit->unit.player_index!=NONE &&
+				!game_modes_shared_vehicles() &&
 				game_team_is_enemy(
 					unit->object.owner_team_index,
 					child_object->object.owner_team_index))

@@ -278,7 +278,10 @@ struct game_variant_options
 	/* port: Teamplay Options' FORCE TEAM SPAWNS (OpenCE's; kept for its
 	place: the Xbox doesn't use it yet) */
 	boolean force_team_spawns;
-	byte reserved[5];
+	/* port: players on different teams (anyone, in free for all) ride in the same vehicle: its free seats are
+	anyone's (units.c's unit_can_enter_seat; never a seat someone's in) */
+	boolean shared_vehicles;
+	byte reserved[4];
 };
 
 typedef char verify_game_variant_options_size[sizeof(struct game_variant_options) == 0x2C ? 1 : -1];
