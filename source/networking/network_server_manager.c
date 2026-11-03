@@ -3790,7 +3790,10 @@ static void network_game_server_release_map_fetchers(
 			network_game_server_discard_held_players(machine_index);
 			continue;
 		}
-		if (map_share_machine_needs_map(machine->machine_index))
+		/* (still downloading, or a moment ago: a download's connections come and go, and a machine let in while one
+		was briefly between them was told to load at 50-70%, a map it hadn't yet: map_share_machine_downloading
+		counts 15 seconds after the last of it) */
+		if (map_share_machine_needs_map(machine->machine_index) || map_share_machine_downloading(machine->machine_index))
 			continue;
 		if (server->state != _network_game_server_state_ingame)
 			continue;
