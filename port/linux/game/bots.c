@@ -5789,12 +5789,45 @@ static void bots_vehicle_update(
 		}
 		else if (brain->vehicle_seat == _bots_seat_other)
 		{
-			/* (at the vehicle: the nearest seat's offered) */
+			/* (a passenger's seat: the vehicle's side nearer the bot, where its seat is offered; not its middle, which
+			walked bots into the bonnet) */
+			real lateral = (position.x - side.x) * left_i + (position.y - side.y) * left_j;
+
+			side.x += left_i * (lateral >= 0.f ? 1.0f : -1.0f);
+			side.y += left_j * (lateral >= 0.f ? 1.0f : -1.0f);
 		}
 		else if (vehicle_bot_type(brain->vehicle_object) != BOTS_VEHICLE_TYPE_TURRET)
 		{
 			side.x += left_i * 1.0f;
 			side.y += left_j * 1.0f;
+		}
+		/* (round the vehicle, not through it: when the line to the seat's side passes over the vehicle, first to a
+		point beside it, on the bot's side; the line's clear from there) */
+		if (vehicle_bot_type(brain->vehicle_object) != BOTS_VEHICLE_TYPE_TURRET)
+		{
+			real_point3d const *center = &target->object.position;
+			real radius = object_definition_get(target->definition_index)->object.bounding_radius;
+			real clear = radius * 0.6f > 0.8f ? radius * 0.6f : 0.8f;
+			real di = side.x - position.x, dj = side.y - position.y;
+			real length_squared = di * di + dj * dj;
+			real t = length_squared > 0.01f ?
+				((center->x - position.x) * di + (center->y - position.y) * dj) / length_squared : 0.f;
+
+			if (t > 0.f && t < 1.f && length_squared > 0.8f * 0.8f)
+			{
+				real ci = position.x + di * t - center->x, cj = position.y + dj * t - center->y;
+
+				if (ci * ci + cj * cj < clear * clear)
+				{
+					real lateral = (position.x - center->x) * left_i + (position.y - center->y) * left_j;
+					real along = ((side.x - center->x) * target->object.forward.i +
+						(side.y - center->y) * target->object.forward.j) * 0.5f;
+					real sign = lateral >= 0.f ? 1.f : -1.f;
+
+					side.x = center->x + left_i * sign * (clear + 0.6f) + target->object.forward.i * along;
+					side.y = center->y + left_j * sign * (clear + 0.6f) + target->object.forward.j * along;
+				}
+			}
 		}
 		bots_set_goal(brain, _bots_goal_touch, _bots_reason_vehicle, &side, 0.f, NONE);
 	}
