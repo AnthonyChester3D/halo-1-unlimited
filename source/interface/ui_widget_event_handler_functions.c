@@ -5902,6 +5902,15 @@ static boolean multiplayer_profile_set_for_game(
 			fclose(file);
 		}
 		player_ui_set_game_variant(&profile);
+		/* port: and its PC options (game_engine.h), as the other gametype choice does: without them Infection, Gun
+		Game and Hardcore chosen here played as the Slayer gametypes they're made from */
+		if (profile_index != NONE)
+		{
+			struct game_variant_options options;
+
+			playlist_profile_get_options(profile_index, &options);
+			player_ui_set_game_variant_options(&options);
+		}
 		if (server)
 			network_game_server_change_game_variant(server, &profile);
 		return TRUE;
