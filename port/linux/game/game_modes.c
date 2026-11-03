@@ -353,6 +353,12 @@ boolean game_modes_hardcore(
 	return game_engine_running() && game_variant_options_get()->hardcore;
 }
 
+boolean game_modes_shared_vehicles(
+	void)
+{
+	return game_engine_running() && game_variant_options_get()->shared_vehicles;
+}
+
 struct game_engine *game_modes_engine(
 	struct game_engine *engine)
 {

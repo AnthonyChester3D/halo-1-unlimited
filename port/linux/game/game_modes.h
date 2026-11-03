@@ -64,6 +64,8 @@ boolean game_modes_variant_is_opence(struct game_variant const *variant, struct 
 short game_modes_mode(void);
 /* whether it plays by Hardcore's rules */
 boolean game_modes_hardcore(void);
+/* players on different teams may ride in the same vehicle (game_variant_options' shared_vehicles) */
+boolean game_modes_shared_vehicles(void);
 /* the game engine a mode plays with: Infection's and Gun Game's are
 Slayer's with their own rules; SWAT's variant has no shields
 (game_engine_initialize) */

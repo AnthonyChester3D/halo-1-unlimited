@@ -196,6 +196,7 @@ static void server_gametype_rule(
 	else if (!strcmp(key, "secondary_weapon")) options->secondary_weapon = (byte)value;
 	else if (!strcmp(key, "no_map_weapons")) options->no_map_weapons = (boolean)(value != 0);
 	else if (!strcmp(key, "hardcore")) options->hardcore = (boolean)(value != 0);
+	else if (!strcmp(key, "shared_vehicles")) options->shared_vehicles = (boolean)(value != 0);
 	else if (!strcmp(key, "team_vehicles"))
 	{
 		byte set = value == 1 ? VARIANT_VEHICLE_SET_PC : value == 2 ? VARIANT_VEHICLE_SET_CUSTOM :
