@@ -3261,7 +3261,7 @@ static boolean bots_can_see(
 }
 
 /* a burst (bots_fight: the trigger held for burst_ticks, then let go for pause_ticks), by the weapon:
-- a trigger that charges (a plasma pistol's): tapped as fast as a person taps it, 6 to 7 shots a second; now and then,
+- a first trigger that charges (a plasma pistol's): tapped as fast as a person taps it, 6 to 7 shots a second; now and then,
   at a target within 20 with its shields up or in a vehicle, held until it's charged, and let go at the target
 - an automatic one (not latched, its fastest rate of fire 4 a second or more): held, and a vehicle's gun much
   longer, with short pauses (a Ghost's, a Banshee's, a Warthog's chain gun)
@@ -3310,7 +3310,9 @@ static void bots_fire_burst(
 	brain->fire_trigger = trigger_index;
 	rate = trigger->initial_rate_of_fire > trigger->final_rate_of_fire ? trigger->initial_rate_of_fire :
 		trigger->final_rate_of_fire;
-	if (trigger->charging_time > 0.f && definition->weapon.triggers.count == 1)
+	/* (the plasma pistol's first trigger charges, with no rate of fire of its own: a press charges it and letting go
+	fires; its second trigger is the overcharge's. Tapped, or held through the charge) */
+	if (trigger->charging_time > 0.f && trigger_index == 0)
 	{
 		if (now >= brain->charge_next && target && distance < 20.f &&
 			(target_in_vehicle || target->object.shield_vitality > 0.3f) && !(bots_random() % 4))
