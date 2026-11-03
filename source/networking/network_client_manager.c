@@ -1770,6 +1770,24 @@ boolean network_game_client_game_has_started(
 	client->seconds_to_game_start = NONE;
 	network_connection_keep_alive(client->connection);
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a folder map this Xbox hasn't got (it joined as the game started, before map sharing could fetch it):
+	loading it was a dirty disk error here, and the host waited for this machine forever. Out of the game instead,
+	told why; joining again in the lobby downloads it */
+	{
+		long hmp_maps_find(char const *name);
+		void display_error_text_when_main_menu_loaded(wchar_t const *text);
+
+		if (client->game.map.name[0] == '+' && hmp_maps_find(client->game.map.name) == NONE)
+		{
+			network_event("the game started on %s, which this console hasn't got: leaving it", client->game.map.name);
+			display_error_text_when_main_menu_loaded(
+				L"The game started before this Xbox had its map. Join again while the host is in the lobby, and the map downloads.");
+			network_game_client_all_local_players_have_quit();
+			return FALSE;
+		}
+	}
+#endif
 	if (network_game_create_game_objects(&client->game))
 	{
 		long network_player_index;

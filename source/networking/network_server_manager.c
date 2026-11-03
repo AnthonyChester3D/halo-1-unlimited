@@ -2009,6 +2009,18 @@ boolean network_game_server_start_network_game(
 						machine->machine_index);
 					continue;
 				}
+				/* (oxbox: nor a machine that joined as the countdown ended, its player not added yet: told to load
+				now, it loaded the game with no player of its own, a black screen, its add requests refused once the
+				game had started. It joins once the game is going, as a machine joining it in progress does:
+				network_game_server_release_map_fetchers) */
+				if (!network_game_server_client_machine_is_local(server, machine) &&
+					!network_game_server_machine_has_players(server, machine->machine_index))
+				{
+					network_game_server_map_pending[machine_index] = TRUE;
+					network_event("machine #%d has no player in the game yet: it joins once the game is going",
+						machine->machine_index);
+					continue;
+				}
 				network_game_server_map_pending[machine_index] = FALSE;
 				if (!network_game_server_send_message_to_client_machine(server, machine, message))
 					told = FALSE;
@@ -2503,6 +2515,8 @@ void network_game_server_client_machine_game_loading_complete(
 		/* (the machines in the game: not a connection that has not joined) */
 		if (network_game_server_client_machine_is_joined_to_game(server, client_machine) &&
 			!map_share_machine_needs_map(client_machine->machine_index) &&
+			/* (oxbox: nor one left out of the start, which joins once the game is going) */
+			!network_game_server_map_pending[client_machine_index] &&
 			!TEST_FLAG(client_machine->flags, _network_client_machine_level_loaded_bit))
 		{
 			loading_machine_count++;
@@ -2545,6 +2559,8 @@ static void network_game_server_check_loading_complete(
 
 		if (network_game_server_client_machine_is_joined_to_game(server, client_machine) &&
 			!map_share_machine_needs_map(client_machine->machine_index) &&
+			/* (oxbox: nor one left out of the start, which joins once the game is going) */
+			!network_game_server_map_pending[client_machine_index] &&
 			!TEST_FLAG(client_machine->flags, _network_client_machine_level_loaded_bit))
 		{
 			return;
