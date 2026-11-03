@@ -2,7 +2,8 @@
 OXBOX_MENUS.C
 
 Halo 1 Unlimited's own Xbox menu screens: widget tags built when ui.map has loaded (cache_files.c calls
-menu_tags_loaded) and added to its tag table, then run by the game's widgets as Bungie's are. ui.map itself is
+menu_tags_loaded, oxbox_sdk.c's, which loads this unit's XBE section, OXMENU, for as long as ui.map is loaded: no
+game carries its code) and added to its tag table, then run by the game's widgets as Bungie's are. ui.map itself is
 never changed: what's built is let go when it unloads (menu_tags_unloaded), and the next load builds it again.
 The PC build has its own (port/linux/game/menu_tags.c, from XML); this one is the Xbox's, made from the player's
 own ui.map's widgets: each new widget is a copy of one of Bungie's (its look: font, colour, size), with our text,
@@ -711,26 +712,26 @@ static boolean vehicle_options_function(struct menu_widget_instance *list, boole
 	return TRUE;
 }
 
-/* ---------- public code (cache_files.c's, ui_widget*.c's) */
+/* ---------- public code (oxbox_sdk.c's, while OXMENU is loaded: its menu_tags_loaded and the rest call these) */
 
-void menu_tags_loaded(
-	char const *map_name)
+/* ui.map has loaded: TRUE when screens were added (else nothing is, and the section can go) */
+boolean oxbox_menus_loaded(
+	void)
 {
 	release(FALSE);
-	if (!map_name || strcmp(map_name, "ui"))
-		return;
 	vehicle_options_build();
 	if (!oxbox_menus.original_instances)
 		release(FALSE);
+	return oxbox_menus.original_instances != NULL;
 }
 
-void menu_tags_unloaded(
+void oxbox_menus_unloaded(
 	void)
 {
 	release(TRUE);
 }
 
-boolean pc_menu_tag(
+boolean oxbox_menus_tag(
 	long tag_index)
 {
 	long absolute = tag_index & 0xFFFF;
@@ -739,7 +740,7 @@ boolean pc_menu_tag(
 		absolute < oxbox_menus.first_index + oxbox_menus.count;
 }
 
-boolean pc_menu_event_function_invoke(
+boolean oxbox_menus_function(
 	void *widget,
 	void *event,
 	long function_index,
@@ -759,7 +760,7 @@ boolean pc_menu_event_function_invoke(
 
 /* the extended description's picture for a list's item: the gametype editor's, past the row added, is the one
 the row it moved took (VEHICLE OPTIONS shows ITEM OPTIONS') */
-short oxbox_menus_description_frame(
+short oxbox_menus_frame(
 	long list_tag_index,
 	short index)
 {

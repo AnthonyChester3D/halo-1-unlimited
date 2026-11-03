@@ -162,6 +162,21 @@ if upd_end > upd_start:
     add_section(d, 'OXUPD', 5, upd_start, upd_end - upd_start, upd_raw, len(updb))
     struct.pack_into('<I', d, 0x10c, upd_start + upd_size - base)   # size of image
     nsec += 1
+# Halo 1 Unlimited's Xbox menu screens (port/oxbox/oxbox_menus.c: link.ld's .oxmenu and .oxmenu.bss), likewise its
+# own section, OXMENU, right after OXUPD, loaded while ui.map is and unloaded when a game's map loads (oxbox_sdk.c)
+menu_start, menu_load_end, menu_end = sym['__oxmenu_start'], sym['__oxmenu_load_end'], sym['__oxmenu_end']
+menu_size = 0
+if menu_end > menu_start:
+    subprocess.run(['llvm-objcopy', '-O', 'binary', '--only-section=.oxmenu', elf, os.path.join(os.path.dirname(elf), 'oxbox_menus.bin')], check=True)
+    menub = open(os.path.join(os.path.dirname(elf), 'oxbox_menus.bin'), 'rb').read()
+    assert len(menub) == menu_load_end - menu_start, (hex(len(menub)), hex(menu_load_end - menu_start))
+    assert upd_size and menu_start == upd_start + upd_size and not menu_start & 0xFFF, (hex(menu_start), hex(upd_start + upd_size))
+    menu_raw = len(d)
+    d += menub + bytes((-len(menub)) % 0x1000)
+    menu_size = ((menu_end + 0xFFF) & ~0xFFF) - menu_start
+    add_section(d, 'OXMENU', 5, menu_start, menu_end - menu_start, menu_raw, len(menub))
+    struct.pack_into('<I', d, 0x10c, menu_start + menu_size - base)   # size of image
+    nsec += 1
 
 # mainXapiStartup: call main(0, 0, 0) -> call oxbox_entry(0, 0, 0)
 site = 0x15cb1

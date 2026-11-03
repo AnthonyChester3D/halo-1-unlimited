@@ -412,6 +412,80 @@ link.ld puts the perf log (oxbox_perf.c) in the XBE section OXPERF (mkxbe.py), w
 perf_log off it takes no memory, and the game's hooks (oxbox_perf.h) find oxbox_perf NULL. With perf_log = 1 in
 opence.ini, start-up loads it here, once, and oxbox_perf points at its hooks. */
 
+/* ---------- Halo 1 Unlimited's menu screens (oxbox_menus.c), in their own section, OXMENU: loaded when ui.map has
+loaded (the menus: cache_files.c calls menu_tags_loaded with each map's name), unloaded before the next map loads
+(menu_tags_unloaded), so a game never carries their code. The rest answer "not ours" while it isn't loaded. */
+
+boolean oxbox_menus_loaded(void);
+void oxbox_menus_unloaded(void);
+boolean oxbox_menus_tag(long tag_index);
+boolean oxbox_menus_function(void *widget, void *event, long function_index, boolean *widget_deleted);
+short oxbox_menus_frame(long list_tag_index, short index);
+
+static void *oxbox_menus_section;
+
+static void *oxbox_section_named(char const *name)
+{
+	const unsigned char *header = (const unsigned char *)0x10000;
+	unsigned long count = *(const unsigned long *)(header + 0x11C);
+	unsigned char *sections = *(unsigned char *const *)(header + 0x120);
+	unsigned long index;
+
+	for (index = 0; index < count; index++)
+		if (!strcmp(*(const char *const *)(sections + index * 0x38 + 0x14), name))
+			return sections + index * 0x38;
+	return NULL;
+}
+
+void menu_tags_loaded(char const *map_name)
+{
+	oxbox_section_proc load_section = (oxbox_section_proc)oxbox_kernel_export(327);
+	oxbox_section_proc unload_section = (oxbox_section_proc)oxbox_kernel_export(328);
+	void *section;
+
+	if (oxbox_menus_section || !map_name || strcmp(map_name, "ui"))
+		return;
+	section = oxbox_section_named("OXMENU");
+	if (!section || !load_section || !unload_section || load_section(section) < 0)
+	{
+		platform_log("menus: the OXMENU section couldn't be loaded: Halo 1 Unlimited's screens aren't added");
+		return;
+	}
+	oxbox_menus_section = section;
+	if (!oxbox_menus_loaded())
+	{
+		unload_section(section);
+		oxbox_menus_section = NULL;
+	}
+}
+
+void menu_tags_unloaded(void)
+{
+	oxbox_section_proc unload_section = (oxbox_section_proc)oxbox_kernel_export(328);
+
+	if (!oxbox_menus_section)
+		return;
+	oxbox_menus_unloaded();
+	if (unload_section)
+		unload_section(oxbox_menus_section);
+	oxbox_menus_section = NULL;
+}
+
+boolean pc_menu_tag(long tag_index)
+{
+	return oxbox_menus_section ? oxbox_menus_tag(tag_index) : FALSE;
+}
+
+boolean pc_menu_event_function_invoke(void *widget, void *event, long function_index, boolean *widget_deleted)
+{
+	return oxbox_menus_section ? oxbox_menus_function(widget, event, function_index, widget_deleted) : FALSE;
+}
+
+short oxbox_menus_description_frame(long list_tag_index, short index)
+{
+	return oxbox_menus_section ? oxbox_menus_frame(list_tag_index, index) : index;
+}
+
 #include "oxbox_perf.h"
 
 struct oxbox_perf_hooks *oxbox_perf;
