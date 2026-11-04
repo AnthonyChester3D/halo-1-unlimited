@@ -8096,13 +8096,17 @@ static short game_engine_nearest_team(
 
 /* ---------- port: the vehicle categories (game_variant_options' vehicle_categories)
 
-A count of a category (light, medium, heavy, flying, turret) keeps that many of the category's spots on each side,
-those nearest the side's spawn points (free for all: one side), and puts in them that many of the category's
-variants, every vehicle the category's spots have between them, shuffled anew each game: the same variants in the
-same order on both sides. A vehicle's category is its line in the map's info.txt [Vehicles] section ("tag\path =
-medium": Halo Map Porter writes one for each), else its tag's vehicle type's. Every machine plans the same: the
-shuffle's seed is the host's, in the options (network_game_server_start_network_game). The vehicles the other
-options place are the ones it chooses from; with a custom or PC vehicle set it isn't used. A vehicle respawns as the
+A count of a category (light, medium, heavy, flying, turret) keeps that many of the category's spots at each base,
+those nearest the base's spawn points (in free for all too, each spot the nearest base's, when the map has both
+teams' spawns), and puts in them that many of the category's variants, every vehicle the category's spots have
+between them, shuffled anew each game: the same variants in the same order at both bases. The spots are the ones the
+map maker gave the game type (v1.87): placed in it by default or allowed in it, by their spawn flags
+(game_engine_vehicle_spot_kind), never another game type's; and those its scripts place, which come after the others
+(a count reins them in too: game_engine_vehicle_spot_planned, objects.c's named placements). Two spots within two
+world units of each other are one (maps stack vehicles). A category left at ALL keeps the map's own default spots. A vehicle's category is its line in the map's info.txt [Vehicles] section ("tag\path =
+medium": Halo Map Porter writes one for each), else its tag's name and vehicle type (game_engine_vehicle_category:
+a map without the section works). Every machine plans the same: the shuffle's seed is the host's, in the options
+(network_game_server_start_network_game). With a custom or PC vehicle set it isn't used. A vehicle respawns as the
 one it was (game_engine_update_vehicle_respawn: its home's definition). */
 
 #define MAXIMUM_CATEGORY_PLACEMENTS 512
@@ -8283,6 +8287,8 @@ static short game_engine_vehicle_category(
 	return _vehicle_category_medium;                                   /* (human jeep, human boat) */
 }
 
+static boolean game_engine_vehicle_two_bases(void);
+
 /* how near the point is to the side's spawn points (its nearest one's squared distance; any team's in free for all) */
 static real game_engine_vehicle_side_distance(
 	real_point3d const *point,
@@ -8301,7 +8307,7 @@ static real game_engine_vehicle_side_distance(
 		real dz = location->position.z - point->z;
 		real distance = dx * dx + dy * dy + dz * dz;
 
-		if ((!global_variant.universal_variant.teams || location->team_index == side) &&
+		if ((!game_engine_vehicle_two_bases() || location->team_index == side) &&
 			(best < 0.0f || distance < best))
 		{
 			best = distance;
@@ -8324,6 +8330,54 @@ static unsigned long game_engine_vehicle_shuffle_next(
 static boolean game_engine_vehicle_placement_check(struct scenario_object_datum const *placement,
 	struct tag_block *palette, boolean counting);
 
+/* (v1.87) the categories' spots are those the map maker gave this game type: a placement's spawn flags (Halo PC's: the
+low byte the game types it's placed in by default, slayer, ctf, king and oddball; the high byte those it's allowed in,
+placed when the gametype asks for vehicles, as Halo PC's custom vehicle settings do). A spot of another game type is
+never one. A map without spawn flags (the Xbox's own), or a game type without a flag (race): every spot, by default */
+#define VEHICLE_SPAWN_FLAGS_OFFSET 0x5A
+#define VEHICLE_SPOT_SCRIPT_DISTANCE 1.0e9f   /* (a spot a script places comes after every other: below) */
+#define VEHICLE_SPOT_APART 2.0f               /* (two spots this near are one: maps stack a vehicle on another) */
+enum { _vehicle_spot_not = 0, _vehicle_spot_default, _vehicle_spot_allowed };
+
+static short game_engine_vehicle_spot_kind(
+	struct scenario_object_datum const *placement,
+	boolean flags_present)
+{
+	word flags = *(word const *)((byte const *)placement + VEHICLE_SPAWN_FLAGS_OFFSET);
+	short bit;
+
+	switch (global_variant.game_engine_index)
+	{
+	case game_engine_slayer: bit = 0; break;
+	case game_engine_ctf: bit = 1; break;
+	case game_engine_king: bit = 2; break;
+	case game_engine_oddball: bit = 3; break;
+	default: bit = NONE; break;
+	}
+	if (!flags_present || bit == NONE || TEST_FLAG(flags, bit))
+		return _vehicle_spot_default;
+	return TEST_FLAG(flags, bit + 8) ? _vehicle_spot_allowed : _vehicle_spot_not;
+}
+
+/* whether the map has two bases: team spawn points of red and of blue (a free for all's spots then belong to the base
+nearest them, so a category's count is per base in every game type) */
+static boolean game_engine_vehicle_two_bases(
+	void)
+{
+	struct scenario *scenario = global_scenario_get();
+	boolean red = FALSE, blue = FALSE;
+	long index;
+
+	for (index = 0; scenario && index < scenario->players.count; index++)
+	{
+		short team = TAG_BLOCK_GET_ELEMENT(&scenario->players, index, struct player_starting_location)->team_index;
+
+		red |= team == 0;
+		blue |= team == 1;
+	}
+	return red && blue;
+}
+
 static void game_engine_vehicle_categories_plan(
 	void)
 {
@@ -8333,7 +8387,9 @@ static void game_engine_vehicle_categories_plan(
 	struct tag_block *palette;
 	short count, index, category, side, sides;
 	unsigned long seed;
-	boolean any = FALSE;
+	boolean any = FALSE, flags_present = FALSE;
+	short chosen_count = 0;
+	real_point3d chosen[MAXIMUM_CATEGORY_PLACEMENTS / 4];
 
 	game_engine_vehicle_plan_active = FALSE;
 	if (!game_engine || !scenario)
@@ -8349,10 +8405,15 @@ static void game_engine_vehicle_categories_plan(
 	}
 	palette = &scenario->vehicle_palette;
 	count = (short)MIN(scenario->vehicles.count, MAXIMUM_CATEGORY_PLACEMENTS);
-	sides = global_variant.universal_variant.teams ? 2 : 1;
+	sides = game_engine_vehicle_two_bases() ? 2 : 1;
 	game_engine_vehicle_category_lines_read();
+	for (index = 0; index < count && !flags_present; index++)
+	{
+		flags_present = *(word const *)((byte const *)tag_block_get_element_with_size(&scenario->vehicles, index,
+			VEHICLE_PLACEMENT_SIZE) + VEHICLE_SPAWN_FLAGS_OFFSET) != 0;
+	}
 
-	/* (each placement the other options place: its category, its side, how near the side's spawns it is) */
+	/* (each of this game type's spots: its category, its base, how near the base's spawns it is) */
 	for (index = 0; index < count; index++)
 	{
 		struct scenario_object_datum const *placement = (struct scenario_object_datum const *)
@@ -8361,23 +8422,33 @@ static void game_engine_vehicle_categories_plan(
 			TAG_BLOCK_GET_ELEMENT(palette, placement->palette_entry_index,
 				struct scenario_object_palette_entry)->reference.index : NONE;
 		char const *why;
+		short kind;
+		boolean script = TEST_FLAG(placement->placement_flags, _scenario_object_placement_not_automatic_bit);
 
 		game_engine_vehicle_plan[index] = VEHICLE_PLAN_DEFAULT;
 		game_engine_vehicle_categories.category[index] = (byte)NONE;
-		if (definition_index == NONE ||
-			TEST_FLAG(placement->placement_flags, _scenario_object_placement_not_automatic_bit) ||
-			!custom_edition_vehicle_placement_allowed(placement) ||
-			!game_engine_vehicle_placement_check(placement, palette, FALSE))
+		if (definition_index == NONE)
+			continue;
+		/* (the game type's own spots, by default or allowed: none of another's; with a vehicle set other than ALL, only
+		those the set places too) */
+		kind = game_engine_vehicle_spot_kind(placement, flags_present);
+		if (kind == _vehicle_spot_not ||
+			(options->vehicle_set[global_variant.universal_variant.teams ? game_engine_nearest_team(&placement->position) : 0] !=
+				_game_engine_vehicles_default && !game_engine_vehicle_placement_check(placement, palette, FALSE)))
 		{
+			platform_log("vehicles: spot %d: %s, not this game type's", index, tag_get_name(definition_index));
 			continue;
 		}
 		game_engine_vehicle_categories.category[index] = (byte)game_engine_vehicle_category(definition_index, &why);
 		side = sides == 2 ? game_engine_nearest_team(&placement->position) : 0;
 		game_engine_vehicle_categories.side[index] = (byte)side;
-		game_engine_vehicle_categories.distance[index] = game_engine_vehicle_side_distance(&placement->position, side);
-		platform_log("vehicles: spot %d: %s, %s (%s), %s's", index, tag_get_name(definition_index),
+		/* (a spot a script places, after every other: the counts rein those in too, the map's own spots first) */
+		game_engine_vehicle_categories.distance[index] = game_engine_vehicle_side_distance(&placement->position, side) +
+			(script ? VEHICLE_SPOT_SCRIPT_DISTANCE : 0.0f);
+		platform_log("vehicles: spot %d: %s, %s (%s), %s, %s's", index, tag_get_name(definition_index),
 			game_engine_vehicle_category_names[game_engine_vehicle_categories.category[index]], why,
-			sides == 2 ? (side ? "blue" : "red") : "anyone");
+			script ? "a script's" : kind == _vehicle_spot_allowed ? "allowed" : "by default",
+			sides == 2 ? (side ? "blue base" : "red base") : "anyone");
 	}
 
 	/* (the shuffle: the host's seed, or this game's own when it's no network game) */
@@ -8391,7 +8462,7 @@ static void game_engine_vehicle_categories_plan(
 		long variant_definitions[MAXIMUM_CATEGORY_VARIANTS];
 		short variant_count = 0, k, j;
 		unsigned long state = (seed + 1) * 2654435761ul ^ (category + 1) * 0x9E3779B9ul;
-		short spots[2] = { 0, 0 };
+		short spots[2] = { 0, 0 }, kept[2] = { 0, 0 };
 
 		if (keep < 0)
 			continue;
@@ -8449,22 +8520,44 @@ static void game_engine_vehicle_categories_plan(
 				}
 				game_engine_vehicle_categories.order[j] = index;
 			}
-			for (j = 0; j < spots[side]; j++)
+			for (j = 0, k = 0; j < spots[side]; j++)
 			{
-				game_engine_vehicle_plan[game_engine_vehicle_categories.order[j]] =
-					j < keep ? variants[j % variant_count] : NONE;
+				short spot = game_engine_vehicle_categories.order[j];
+				struct scenario_object_datum const *placement = (struct scenario_object_datum const *)
+					tag_block_get_element_with_size(&scenario->vehicles, spot, VEHICLE_PLACEMENT_SIZE);
+				short near;
+
+				/* (a spot on another one already kept, stacked by the map, stays empty) */
+				for (near = 0; near < chosen_count; near++)
+				{
+					real dx = chosen[near].x - placement->position.x;
+					real dy = chosen[near].y - placement->position.y;
+					real dz = chosen[near].z - placement->position.z;
+
+					if (dx * dx + dy * dy + dz * dz < VEHICLE_SPOT_APART * VEHICLE_SPOT_APART)
+						break;
+				}
+				if (k < keep && near == chosen_count)
+				{
+					game_engine_vehicle_plan[spot] = variants[k % variant_count];
+					k++;
+					if (chosen_count < (short)NUMBEROF(chosen))
+						chosen[chosen_count++] = placement->position;
+				}
+				else
+					game_engine_vehicle_plan[spot] = NONE;
 			}
+			kept[side] = k;
 		}
 		if (sides == 2)
 		{
-			platform_log("vehicles: %s: red %d of %d spots, blue %d of %d, from %d variants:",
-				game_engine_vehicle_category_names[category], MIN(keep, spots[0]), spots[0], MIN(keep, spots[1]),
-				spots[1], variant_count);
+			platform_log("vehicles: %s: red base %d of %d spots, blue base %d of %d, from %d variants:",
+				game_engine_vehicle_category_names[category], kept[0], spots[0], kept[1], spots[1], variant_count);
 		}
 		else
 		{
 			platform_log("vehicles: %s: %d of %d spots, from %d variants:", game_engine_vehicle_category_names[category],
-				MIN(keep, spots[0]), spots[0], variant_count);
+				kept[0], spots[0], variant_count);
 		}
 		for (k = 0; k < MIN(keep, variant_count); k++)
 			platform_log("vehicles:   %s", tag_get_name(variant_definitions[k]));
@@ -8482,6 +8575,19 @@ short game_engine_vehicle_placement_entry(
 		return palette_entry_index;
 	planned = game_engine_vehicle_plan[placement_index];
 	return planned == VEHICLE_PLAN_DEFAULT ? palette_entry_index : planned;
+}
+
+boolean game_engine_vehicle_spot_planned(
+	short placement_index,
+	short *entry)
+{
+	if (!game_engine_vehicle_plan_active || !VALID_INDEX(placement_index, MAXIMUM_CATEGORY_PLACEMENTS) ||
+		game_engine_vehicle_plan[placement_index] == VEHICLE_PLAN_DEFAULT)
+	{
+		return FALSE;
+	}
+	*entry = game_engine_vehicle_plan[placement_index];
+	return TRUE;
 }
 
 boolean game_engine_vehicle_placement_allowed(

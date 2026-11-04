@@ -1227,7 +1227,13 @@ void object_types_place_all(
 					then the gametype's vehicles of each team (game_variant_options:
 					every machine places the same), asked last as it counts those it
 					places */
-					if (object_type == _object_type_vehicle &&
+					/* (v1.87: a spot the gametype's vehicle categories decide, by its count, from the game type's spots
+					the map maker made, by default or allowed: theirs alone: game_engine_vehicle_spot_planned) */
+					short planned_entry = NONE;
+					boolean planned = object_type == _object_type_vehicle &&
+						game_engine_vehicle_spot_planned(scenario_datum_index, &planned_entry);
+
+					if (object_type == _object_type_vehicle && !planned &&
 						(!custom_edition_vehicle_placement_allowed(scenario_object) ||
 						!game_engine_vehicle_placement_allowed(scenario_object, scenario_palette)))
 					{
@@ -1238,7 +1244,7 @@ void object_types_place_all(
 					if (object_type == _object_type_vehicle)
 					{
 						short own_entry = scenario_object->palette_entry_index;
-						short entry = game_engine_vehicle_placement_entry(scenario_datum_index, own_entry);
+						short entry = planned ? planned_entry : own_entry;
 
 						if (entry == NONE)
 							continue;

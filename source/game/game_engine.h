@@ -438,6 +438,12 @@ they don't change it) */
 short game_engine_vehicle_placement_entry(
 	short placement_index,
 	short palette_entry_index);
+/* port (v1.87): whether the vehicle categories decide the placement (a count set for its category, and the spot one of
+this game type's): then *entry is the palette entry they put there, NONE to leave it empty, whatever the other
+options and the map's default spawn flags would do */
+boolean game_engine_vehicle_spot_planned(
+	short placement_index,
+	short *entry);
 boolean game_engine_vehicle_placement_allowed(
 	struct scenario_object_datum const *placement,
 	struct tag_block *palette);
