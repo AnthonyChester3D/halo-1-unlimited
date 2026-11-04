@@ -116,10 +116,10 @@ class Index:
 
 def generated_regions(build):
     """the build's pictures (OXWORDS1), ONLINE GAMES header (OXONLIN1, online builds) and VEHICLE OPTIONS header
-    (OXVEHIC1), from their markers: the headers in that order in the file, as the installer fills them"""
+    (OXVEHIC1) and OPTIONS header (OXOPTNS1), from their markers: the headers in that order in the file, as the installer fills them"""
     regions = []
     for magic, kind, size in ((b'OXWORDS1', PICTURES, PICTURES_SIZE), (b'OXONLIN1', HEADER, HEADER_SIZE),
-                              (b'OXVEHIC1', HEADER, HEADER_SIZE)):
+                              (b'OXVEHIC1', HEADER, HEADER_SIZE), (b'OXOPTNS1', HEADER, HEADER_SIZE)):
         mark = build.find(magic)
         if mark < 0:
             assert kind == HEADER, 'no pictures marker in the build'

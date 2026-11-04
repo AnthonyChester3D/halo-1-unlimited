@@ -922,25 +922,37 @@ int oxbox_xbe_online_header_read(void *buffer, unsigned long size)
 }
 #endif
 
-/* the gametype editor's VEHICLE OPTIONS header (32 KB, DXT3 512 x 64: installer/pictures.c), the same way, after the
-others (oxbox_menus.c, hmp_maps.c's menu_word_read). TRUE when read; present: TRUE when the file has one (not blank) */
+/* the gametype editor's VEHICLE OPTIONS header and the main menu's OPTIONS screen's (32 KB each, DXT3 512 x 64:
+installer/pictures.c), the same way, after the others (oxbox_menus.c, hmp_maps.c's menu_word_read): header 0
+VEHICLE OPTIONS, 1 OPTIONS. TRUE when read; present: TRUE when the file has it (not blank) */
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_vehicle_marker = { "OXVEHIC1", 0, 0 };
+static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_options_marker = { "OXOPTNS1", 0, 0 };
 
-int oxbox_xbe_vehicle_header_read(void *buffer, unsigned long size)
+static void oxbox_menu_header(int which, unsigned long *offset, unsigned long *size)
 {
-	if (!oxbox_vehicle_marker.offset || size != oxbox_vehicle_marker.size)
-		return 0;
-	return own_xbe_read(oxbox_vehicle_marker.offset, buffer, size);
+	*offset = which ? oxbox_options_marker.offset : oxbox_vehicle_marker.offset;
+	*size = which ? oxbox_options_marker.size : oxbox_vehicle_marker.size;
 }
 
-int oxbox_xbe_vehicle_header_present(void)
+int oxbox_xbe_menu_header_read(int which, void *buffer, unsigned long size)
+{
+	unsigned long offset, have;
+
+	oxbox_menu_header(which, &offset, &have);
+	if (!offset || size != have)
+		return 0;
+	return own_xbe_read(offset, buffer, size);
+}
+
+int oxbox_xbe_menu_header_present(int which)
 {
 	unsigned char first[16];
+	unsigned long offset, size;
 	int index;
 
-	/* (the block at the V's middle: the header's top left is clear even when it's there) */
-	if (!oxbox_vehicle_marker.offset || oxbox_vehicle_marker.size < (8 * 128 + 11) * 16 ||
-		!own_xbe_read(oxbox_vehicle_marker.offset + (8 * 128 + 10) * 16, first, sizeof(first)))
+	/* (the block at the first letter's middle: the header's top left is clear even when it's there) */
+	oxbox_menu_header(which, &offset, &size);
+	if (!offset || size < (8 * 128 + 11) * 16 || !own_xbe_read(offset + (8 * 128 + 10) * 16, first, sizeof(first)))
 		return 0;
 	for (index = 0; index < (int)sizeof(first); index++)
 		if (first[index])

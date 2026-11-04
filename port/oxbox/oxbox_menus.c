@@ -16,6 +16,12 @@ its screen is laid out as ITEM OPTIONS' is (a copy of its rows), with
 Its A or START keeps what's chosen in the gametype being edited (player_ui's edit options), which SAVE CHANGES
 writes with the rest.
 
+OPTIONS, the main menu's (hmp_game.c opens it in place of its old dialog, and keeps the settings): SCREEN SHAPE,
+ATTRACT MODE (the showcase, Halo's movies, off), ATTRACT MODE WAIT and CHECK FOR UPDATES.
+
+Both are laid out as ITEM OPTIONS is (copies of its rows, its help box under them: a line for each row's values),
+with a header picture made by the installer from Halo's own header letters (oxbox_entry.c), or a text title.
+
 Anything it can't find (a ui.map unlike the ones it knows) is logged, and nothing is added: the menus stay
 Bungie's.
 */
@@ -34,7 +40,12 @@ void platform_log(char const *format, ...);
 void *cache_files_tag_instances(long *count);
 void cache_files_set_tag_instances(void *instances, long count);
 char *tag_get_name(long tag_index);
-int oxbox_xbe_vehicle_header_present(void);     /* (oxbox_entry.c: the installer's VEHICLE OPTIONS picture) */
+int oxbox_xbe_menu_header_present(int which);   /* (oxbox_entry.c: the installer's pictures: 0 VEHICLE OPTIONS, 1 OPTIONS) */
+int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
+#define text_print halo_linux_snprintf
+/* (hmp_game.c's: the main menu's OPTIONS, OPTIONS_ROWS values) */
+void hmp_options_get(short *values);
+void hmp_options_set(short const *values);
 
 /* ---------- constants */
 
@@ -57,12 +68,22 @@ int oxbox_xbe_vehicle_header_present(void);     /* (oxbox_entry.c: the installer
 #define ITEMS_HEADER SETUP "item_options_edit\\header_item_options"
 #define ITEMS_YES_NO_ROW SETUP "item_options_edit\\op_infinite_grenades"
 #define ITEMS_WIDE_ROW SETUP "item_options_edit\\op_vehicle_set"
+#define ITEMS_WIDEST_ROW SETUP "item_options_edit\\op_weapon_set"
 
 enum
 {
 	/* our functions (MENU_FUNCTION_BASE + these) */
 	_menu_function_vehicle_options_load = 0,
 	_menu_function_vehicle_options_save,
+	_menu_function_options_load,
+	_menu_function_options_save,
+
+	/* the rows our screens copy: ITEM OPTIONS' INFINITE GRENADES (YES / NO), VEHICLE SET and WEAPON SET (wider
+	spinners) */
+	_row_model_yes_no = 0,
+	_row_model_wide,
+	_row_model_widest,
+	NUMBER_OF_ROW_MODELS,
 
 	_event_handler_open_widget_bit = 3,
 	_event_handler_run_function_bit = 7,
@@ -77,16 +98,18 @@ enum
 	_widget_type_spinner_list,
 
 	VEHICLE_OPTION_ROWS = 1 + NUMBER_OF_VEHICLE_CATEGORIES,
+	OPTIONS_ROWS = 4,
+	MAXIMUM_ROWS = 8,
 	ROW_STEP = 30,
 	EDIT_ROW_STEP = 33,
-	/* the tags it adds: 4 string lists; the editor's row, the screen, its header, its list, and each row's
-	container, label and spinner */
-	/* (and the help's string list and text box, and the header's picture) */
-	ADDED_TAGS = 4 + 4 + 3 * VEHICLE_OPTION_ROWS + 3,
-	/* the help: a line for each row's each choice, in order (the game picks it: game_options_menu_update_text_desc) */
-	HELP_STRINGS = 2 + NUMBER_OF_VEHICLE_CATEGORIES * NUMBER_OF_VEHICLE_CATEGORY_COUNTS,
+	/* the tags it adds, at most: each screen's screen, header, picture, list, help, help's, labels' and title's
+	string lists, and each row's container, label, spinner and values; the editor's row and its strings */
+	MAXIMUM_ADDED_TAGS = 2 * 8 + 4 * (VEHICLE_OPTION_ROWS + OPTIONS_ROWS) + 3,
+	/* the help: a line for each row's each value, in order (the game picks it: game_options_menu_update_text_desc) */
+	VEHICLE_HELP_LINES = 2 + NUMBER_OF_VEHICLE_CATEGORIES * NUMBER_OF_VEHICLE_CATEGORY_COUNTS,
+	MAXIMUM_HELP = 64,
 	HELP_SIZE = 128,
-	MAXIMUM_BLOCKS = 320,
+	MAXIMUM_BLOCKS = 640,
 };
 
 /* ---------- structures (ui_widget.c's, as menu_tags.c has them) */
@@ -195,22 +218,6 @@ static struct
 	void *blocks[MAXIMUM_BLOCKS];
 	long block_count;
 } oxbox_menus = { NULL, 0, 0, 0, 0, 0, NONE, NONE };
-
-static char const *const vehicle_option_labels[VEHICLE_OPTION_ROWS] =
-	{ "SHARED VEHICLES:", "LIGHT VEHICLES:", "MEDIUM VEHICLES:", "HEAVY VEHICLES:", "FLYING VEHICLES:", "TURRETS:" };
-static char const *const vehicle_option_counts[NUMBER_OF_VEHICLE_CATEGORY_COUNTS] =
-	{ "ALL", "NONE", "1", "2", "3", "4", "6", "8" };
-static char const vehicle_options_title[] = "VEHICLE OPTIONS";
-/* each category, for the help: a vehicle, vehicles, and its kind */
-static char const *const vehicle_help_names[NUMBER_OF_VEHICLE_CATEGORIES][3] = {
-	{ "light vehicle", "light vehicles", "Ghosts" },
-	{ "medium vehicle", "medium vehicles", "Warthogs" },
-	{ "heavy vehicle", "heavy vehicles", "Scorpions" },
-	{ "flying vehicle", "flying vehicles", "Banshees" },
-	{ "turret", "turrets", "gun turrets" },
-};
-static char const vehicle_options_description[] =
-	"Choose how many vehicles of\r\neach kind appear, and whether\r\nenemies can ride together.\r\n\r\nThis gametype:";
 
 /* ---------- private code */
 
@@ -354,34 +361,6 @@ static char *joined(char *out, char const *a, char const *b, char const *c, char
 	return out;
 }
 
-/* the help's lines (HELP_STRINGS of them, each HELP_SIZE), in the order the game picks them */
-static void help_text(char (*help)[HELP_SIZE])
-{
-	long category, count, at = 0;
-
-	joined(help[at++], "Players on different teams can ride in the same\r\n",
-		"vehicle (in free for all, anyone with anyone).", NULL, NULL, NULL, NULL, NULL, NULL);
-	joined(help[at++], "Only teammates can ride in the same vehicle.", NULL, NULL, NULL, NULL, NULL, NULL, NULL);
-	for (category = 0; category < NUMBER_OF_VEHICLE_CATEGORIES; category++)
-	{
-		char const *const *names = vehicle_help_names[category];
-
-		for (count = 0; count < NUMBER_OF_VEHICLE_CATEGORY_COUNTS; count++)
-		{
-			/* (lines of 48 characters at most: the help box's width) */
-			if (count == _vehicle_category_count_all)
-				joined(help[at++], "All of the map's ", names[1], " appear\r\n(", names[2],
-					" and the like), as the map places them.", NULL, NULL, NULL);
-			else if (count == _vehicle_category_count_none)
-				joined(help[at++], "No ", names[1], " (", names[2], " and the like)\r\nappear on this map.", NULL, NULL, NULL);
-			else
-				joined(help[at++], "Each team gets ", vehicle_option_counts[count], " ",
-					names[count == _vehicle_category_count_1 ? 0 : 1], " (", names[2],
-					" and\r\nthe like), shuffled each game; both teams match.", NULL);
-		}
-	}
-}
-
 /* a copy of one of the map's widgets, its blocks its own (children: child_count of them, from the model's, the
 rest zeroed) */
 static struct ui_widget_definition *widget_copy(long model_index, long child_count)
@@ -474,132 +453,101 @@ static long child_position(struct ui_widget_definition const *list, long widget_
 	return NONE;
 }
 
-static void vehicle_options_build(void)
+/* ITEM OPTIONS' widgets, which our screens are copies of */
+struct menu_models
 {
-	long existing, index;
-	struct cache_file_tag_instance *instances = cache_files_tag_instances(&existing);
-	struct cache_file_tag_instance *grown;
-	long edit_list = found(WIDGET_TAG, EDIT_LIST), edit_row = found(WIDGET_TAG, EDIT_ROW);
-	long description_text = found(WIDGET_TAG, EDIT_DESCRIPTION_TEXT);
-	long items_screen = found(WIDGET_TAG, ITEMS_SCREEN), items_list = found(WIDGET_TAG, ITEMS_LIST);
-	long items_header = found(WIDGET_TAG, ITEMS_HEADER);
-	long yes_no_row = found(WIDGET_TAG, ITEMS_YES_NO_ROW), wide_row = found(WIDGET_TAG, ITEMS_WIDE_ROW);
-	long yes_no_label, yes_no_spinner, wide_label, wide_spinner, row_position, save_position;
-	short yes_no_x, yes_no_y, wide_x, wide_y;
-	long labels_tag, counts_tag, title_tag, description_tag, editor_row_tag, screen_tag, header_tag, list_tag;
-	long row_tags[VEHICLE_OPTION_ROWS], label_tags[VEHICLE_OPTION_ROWS], spinner_tags[VEHICLE_OPTION_ROWS];
-	long help_strings_tag, help_tag, picture_tag, items_help = found(WIDGET_TAG, ITEMS_HELP);
-	long header_bitmap = found('bitm', ITEMS_HEADER_BITMAP);
-	boolean picture = oxbox_xbe_vehicle_header_present() != 0;
-	struct ui_widget_definition *editor_list, *definition, *screen, *list;
+	long screen, list, header, help, header_bitmap;
+	long rows[NUMBER_OF_ROW_MODELS], labels[NUMBER_OF_ROW_MODELS], spinners[NUMBER_OF_ROW_MODELS];
+	short spinner_x[NUMBER_OF_ROW_MODELS], spinner_y[NUMBER_OF_ROW_MODELS];
+};
+
+/* a row of a screen: its label, the model it's a copy of (its spinner's width), its values, and a line of help for
+each value */
+struct menu_row
+{
+	char const *label;
+	short model, value_count;
+	char const *const *values;
+	char const **help;
+};
+
+/* a screen: its name (h1u\<name>_screen), its title, its header picture (oxbox_entry.c's: NONE for none), its rows,
+and our functions that show the values (on its list's creation) and keep them (A or START, then back) */
+struct menu_screen
+{
+	char const *name, *title;
+	int picture;
+	short row_count;
+	struct menu_row const *rows;
+	short load_function, save_function;
+};
+
+static long screen_build(struct cache_file_tag_instance *grown, struct menu_models const *models,
+	struct menu_screen const *spec)
+{
+	char name[64];
+	long screen_tag = next_tag(), header_tag = next_tag(), picture_tag = next_tag(), list_tag = next_tag();
+	long help_tag = next_tag(), help_strings_tag = next_tag(), labels_tag = next_tag(), title_tag = next_tag();
+	long row_tags[MAXIMUM_ROWS], label_tags[MAXIMUM_ROWS], spinner_tags[MAXIMUM_ROWS], values_tags[MAXIMUM_ROWS];
+	char const *labels[MAXIMUM_ROWS], *help[MAXIMUM_HELP];
+	struct ui_widget_definition *definition, *screen, *list;
 	struct ui_widget_definition const *model;
-	struct ui_widget_child_reference *edit_children;
-	char const *description_strings[1];
+	boolean picture = spec->picture != NONE && oxbox_xbe_menu_header_present(spec->picture);
+	long index, value, help_count = 0;
 
-	if (oxbox_menus.failed || !instances || existing <= 0 || existing > 0xFFFF - ADDED_TAGS)
-		return;
-	if (!row_parts(yes_no_row, &yes_no_label, &yes_no_spinner, &yes_no_x, &yes_no_y) ||
-		!row_parts(wide_row, &wide_label, &wide_spinner, &wide_x, &wide_y))
-	{
-		platform_log("menus: ITEM OPTIONS' rows aren't as expected: Halo 1 Unlimited's screens aren't added");
-		return;
-	}
-	model = widget_get(edit_list);
-	row_position = child_position(model, edit_row);
-	if (row_position == NONE || row_position + 1 >= model->child_widgets.count)
-	{
-		platform_log("menus: the gametype editor's list isn't as expected: Halo 1 Unlimited's screens aren't added");
-		return;
-	}
-	save_position = row_position + 1;          /* (SAVE CHANGES, after INDICATOR OPTIONS) */
-
-	/* (the table, grown: every tag keeps its index, ours after them) */
-	grown = allocate((existing + ADDED_TAGS) * sizeof(*grown));
-	if (!grown)
-		return;
-	memcpy(grown, instances, existing * sizeof(*grown));
-	for (index = 0; index < existing; index++)
-	{
-		long salt = (unsigned long)instances[index].tag_index >> 16;
-
-		if (salt > oxbox_menus.first_salt)
-			oxbox_menus.first_salt = salt;
-	}
-	oxbox_menus.first_salt++;
-	oxbox_menus.first_index = existing;
-	oxbox_menus.count = ADDED_TAGS;
-	labels_tag = next_tag();
-	counts_tag = next_tag();
-	title_tag = next_tag();
-	description_tag = next_tag();
-	editor_row_tag = next_tag();
-	screen_tag = next_tag();
-	header_tag = next_tag();
-	list_tag = next_tag();
-	for (index = 0; index < VEHICLE_OPTION_ROWS; index++)
+	for (index = 0; index < spec->row_count && index < MAXIMUM_ROWS; index++)
 	{
 		row_tags[index] = next_tag();
 		label_tags[index] = next_tag();
 		spinner_tags[index] = next_tag();
+		values_tags[index] = next_tag();
+		labels[index] = spec->rows[index].label;
+		for (value = 0; value < spec->rows[index].value_count && help_count < MAXIMUM_HELP; value++)
+			help[help_count++] = spec->rows[index].help[value];
 	}
-	help_strings_tag = next_tag();
-	help_tag = next_tag();
-	picture_tag = next_tag();
 
-	/* (the string lists) */
-	description_strings[0] = vehicle_options_description;
-	instance_set(grown, STRINGS_TAG, labels_tag, "vehicle_options_labels",
-		strings_build(vehicle_option_labels, VEHICLE_OPTION_ROWS, NONE, 0));
-	instance_set(grown, STRINGS_TAG, counts_tag, "vehicle_counts",
-		strings_build(vehicle_option_counts, NUMBER_OF_VEHICLE_CATEGORY_COUNTS, NONE, 0));
+	/* (its string lists: the labels, the title, the help, each row's values) */
+	text_print(name, sizeof(name), "%s_labels", spec->name);
+	instance_set(grown, STRINGS_TAG, labels_tag, name, strings_build(labels, spec->row_count, NONE, 0));
+	text_print(name, sizeof(name), "%s_title", spec->name);
+	instance_set(grown, STRINGS_TAG, title_tag, name, strings_build(&spec->title, 1, NONE, 0));
+	text_print(name, sizeof(name), "%s_help", spec->name);
+	instance_set(grown, STRINGS_TAG, help_strings_tag, name, strings_build(help, help_count, NONE, 0));
+	for (index = 0; index < spec->row_count; index++)
 	{
-		char const *title = vehicle_options_title;
-
-		instance_set(grown, STRINGS_TAG, title_tag, "vehicle_options_title", strings_build(&title, 1, NONE, 0));
+		text_print(name, sizeof(name), "%s_values_%ld", spec->name, index);
+		instance_set(grown, STRINGS_TAG, values_tags[index], name,
+			strings_build(spec->rows[index].values, spec->rows[index].value_count, NONE, 0));
 	}
-	{
-		char (*help)[HELP_SIZE] = allocate(HELP_STRINGS * HELP_SIZE);
-		char const *lines[HELP_STRINGS];
-
-		if (help)
-		{
-			help_text(help);
-			for (index = 0; index < HELP_STRINGS; index++)
-				lines[index] = help[index];
-		}
-		instance_set(grown, STRINGS_TAG, help_strings_tag, "vehicle_options_help",
-			help ? strings_build(lines, HELP_STRINGS, NONE, 0) : NULL);
-	}
-	instance_set(grown, STRINGS_TAG, description_tag, "playlist_edit_descriptions",
-		strings_build(description_strings, 1,
-			widget_get(description_text)->text_label_string_list.index, row_position + 1));
 
 	/* (the screen: ITEM OPTIONS' children, its header and list ours) */
-	model = widget_get(items_screen);
-	screen = widget_copy(items_screen, model->child_widgets.count);
+	model = widget_get(models->screen);
+	screen = widget_copy(models->screen, model->child_widgets.count);
 	if (screen)
 	{
 		struct ui_widget_child_reference *children = (struct ui_widget_child_reference *)screen->child_widgets.address;
 
-		strncpy(screen->name, "vehicle_options_screen", sizeof(screen->name) - 1);
+		text_print(screen->name, sizeof(screen->name), "%s_screen", spec->name);
 		for (index = 0; children && index < screen->child_widgets.count; index++)
 		{
-			if (children[index].widget_tag.index == items_header)
+			if (children[index].widget_tag.index == models->header)
 				reference_set(&children[index].widget_tag, WIDGET_TAG, header_tag);
-			else if (children[index].widget_tag.index == items_list)
+			else if (children[index].widget_tag.index == models->list)
 				reference_set(&children[index].widget_tag, WIDGET_TAG, list_tag);
 		}
 	}
-	instance_set(grown, WIDGET_TAG, screen_tag, "vehicle_options_screen", screen);
+	text_print(name, sizeof(name), "%s_screen", spec->name);
+	instance_set(grown, WIDGET_TAG, screen_tag, name, screen);
 
-	/* (its header: ITEM OPTIONS' with VEHICLE OPTIONS' picture, the installer's (made of Halo's letters, as ONLINE
-	GAMES is), a copy of ITEM OPTIONS' bitmap that reads it (hmp_maps.c's menu_word_read); with none in the XBE, a
-	label's look and the title's text) */
+	/* (its header: ITEM OPTIONS' with our picture, the installer's (made of Halo's letters, as ONLINE GAMES is), a copy
+	of ITEM OPTIONS' bitmap that reads it (hmp_maps.c's menu_word_read: by its name, h1u\<name>_header); with none in
+	the XBE, a label's look and the title's text) */
+	text_print(name, sizeof(name), "%s_header", spec->name);
 	if (picture)
 	{
 		struct bitmap_group *group = allocate(sizeof(struct bitmap_group));
 		struct bitmap_data *bitmap = allocate(sizeof(struct bitmap_data));
-		struct bitmap_group const *model_group = (struct bitmap_group const *)tag_get('bitm', header_bitmap);
+		struct bitmap_group const *model_group = (struct bitmap_group const *)tag_get('bitm', models->header_bitmap);
 
 		if (group && bitmap && model_group->bitmaps.count >= 1)
 		{
@@ -612,101 +560,192 @@ static void vehicle_options_build(void)
 			group->bitmaps.count = 1;
 			group->bitmaps.address = bitmap;
 		}
-		instance_set(grown, 'bitm', picture_tag, "vehicle_options_header", group);
-		definition = widget_copy(items_header, 0);
+		instance_set(grown, 'bitm', picture_tag, name, group);
+		definition = widget_copy(models->header, 0);
 		if (definition)
 		{
-			strncpy(definition->name, "vehicle_options_title", sizeof(definition->name) - 1);
+			text_print(definition->name, sizeof(definition->name), "%s_title", spec->name);
 			reference_set(&definition->background_bitmap, 'bitm', picture_tag);
-			definition->bounds.x1 += 100;      /* (VEHICLE OPTIONS is longer than ITEM OPTIONS) */
+			definition->bounds.x1 += 100;      /* (a title may be longer than ITEM OPTIONS) */
 		}
 	}
 	else
 	{
 		/* (a placeholder in the table: a bitmap group of no bitmaps) */
-		instance_set(grown, 'bitm', picture_tag, "vehicle_options_header", allocate(sizeof(struct bitmap_group)));
-		definition = widget_copy(yes_no_label, 0);
+		instance_set(grown, 'bitm', picture_tag, name, allocate(sizeof(struct bitmap_group)));
+		definition = widget_copy(models->labels[_row_model_yes_no], 0);
+		if (definition)
+		{
+			rectangle2d header_bounds = widget_get(models->header)->bounds;
+
+			text_print(definition->name, sizeof(definition->name), "%s_title", spec->name);
+			definition->bounds.y0 = header_bounds.y0 + 14;
+			definition->bounds.x0 = header_bounds.x0 + 14;
+			definition->bounds.y1 = definition->bounds.y0 + 40;
+			definition->bounds.x1 = header_bounds.x1 + 250;
+			reference_set(&definition->text_label_string_list, STRINGS_TAG, title_tag);
+			definition->string_list_index = 0;
+		}
 	}
-	if (definition && !picture)
-	{
-		rectangle2d header_bounds = widget_get(items_header)->bounds;
+	text_print(name, sizeof(name), "%s_title", spec->name);
+	instance_set(grown, WIDGET_TAG, header_tag, name, definition);
 
-		long large_font = tag_loaded('font', HEADER_FONT);
-
-		strncpy(definition->name, "vehicle_options_header", sizeof(definition->name) - 1);
-		definition->bounds.y0 = header_bounds.y0 + 14;
-		definition->bounds.x0 = header_bounds.x0 + 14;
-		definition->bounds.y1 = definition->bounds.y0 + 40;
-		definition->bounds.x1 = header_bounds.x1 + 250;
-		if (large_font != NONE)
-			reference_set(&definition->text_font, 'font', large_font);
-		reference_set(&definition->text_label_string_list, STRINGS_TAG, title_tag);
-		definition->string_list_index = 0;
-	}
-	instance_set(grown, WIDGET_TAG, header_tag, "vehicle_options_header", definition);
-
-	/* (its list: ITEM OPTIONS', with no help, our rows, and our functions to show and keep the choices) */
-	list = widget_copy(items_list, VEHICLE_OPTION_ROWS);
+	/* (its list: ITEM OPTIONS', our rows, its help ours, and our functions to show and keep the values) */
+	list = widget_copy(models->list, spec->row_count);
 	if (list)
 	{
 		static short const events[3] = { _event_created, _event_a_button, _event_start_button };
+		struct ui_widget_child_reference const *first =
+			(struct ui_widget_child_reference const *)widget_get(models->list)->child_widgets.address;
 		long flags[3], widgets[3] = { NONE, NONE, NONE };
 		short functions[3];
 
 		flags[0] = 1L << _event_handler_run_function_bit;
 		flags[1] = flags[2] = (1L << _event_handler_run_function_bit) | (1L << _event_handler_go_back_bit);
-		functions[0] = MENU_FUNCTION_BASE + _menu_function_vehicle_options_load;
-		functions[1] = functions[2] = MENU_FUNCTION_BASE + _menu_function_vehicle_options_save;
-		strncpy(list->name, "vehicle_options_list", sizeof(list->name) - 1);
+		functions[0] = MENU_FUNCTION_BASE + spec->load_function;
+		functions[1] = functions[2] = MENU_FUNCTION_BASE + spec->save_function;
+		text_print(list->name, sizeof(list->name), "%s_list", spec->name);
 		/* (its help: ITEM OPTIONS' text box, our lines; the list's game data input picks the line, as ITEM OPTIONS'
-		does) */
+		does: the rows' values in order) */
 		reference_set(&list->extended_description_widget, WIDGET_TAG, help_tag);
 		handlers_set(list, 3, events, flags, functions, widgets);
-		for (index = 0; index < VEHICLE_OPTION_ROWS; index++)
-		{
-			struct ui_widget_child_reference const *first =
-				(struct ui_widget_child_reference const *)widget_get(items_list)->child_widgets.address;
-
+		for (index = 0; index < spec->row_count; index++)
 			child_set(list, index, row_tags[index], first->horizontal_offset,
 				(short)(first->vertical_offset + index * ROW_STEP));
-		}
 	}
-	instance_set(grown, WIDGET_TAG, list_tag, "vehicle_options_list", list);
+	text_print(name, sizeof(name), "%s_list", spec->name);
+	instance_set(grown, WIDGET_TAG, list_tag, name, list);
 
-	definition = widget_copy(items_help, 0);
+	definition = widget_copy(models->help, 0);
 	if (definition)
 	{
-		strncpy(definition->name, "vehicle_options_help", sizeof(definition->name) - 1);
+		text_print(definition->name, sizeof(definition->name), "%s_help", spec->name);
 		reference_set(&definition->text_label_string_list, STRINGS_TAG, help_strings_tag);
 		definition->string_list_index = 0;
 	}
-	instance_set(grown, WIDGET_TAG, help_tag, "vehicle_options_help", definition);
+	text_print(name, sizeof(name), "%s_help", spec->name);
+	instance_set(grown, WIDGET_TAG, help_tag, name, definition);
 
-	/* (each row: a copy of ITEM OPTIONS' INFINITE GRENADES row (YES / NO) or VEHICLE SET row (a wider spinner)) */
-	for (index = 0; index < VEHICLE_OPTION_ROWS; index++)
+	/* (each row: a copy of one of ITEM OPTIONS' rows, for its spinner's width) */
+	for (index = 0; index < spec->row_count; index++)
 	{
-		boolean yes_no = index == 0;
-		long row_model = yes_no ? yes_no_row : wide_row;
-		struct ui_widget_definition *row = widget_copy(row_model, 2);
-		struct ui_widget_definition *label = widget_copy(yes_no ? yes_no_label : wide_label, 0);
-		struct ui_widget_definition *spinner = widget_copy(yes_no ? yes_no_spinner : wide_spinner, 0);
+		short kind = spec->rows[index].model;
+		struct ui_widget_definition *row = widget_copy(models->rows[kind], 2);
+		struct ui_widget_definition *label = widget_copy(models->labels[kind], 0);
+		struct ui_widget_definition *spinner = widget_copy(models->spinners[kind], 0);
 
 		if (row)
 		{
 			child_set(row, 0, label_tags[index], 0, 0);
-			child_set(row, 1, spinner_tags[index], yes_no ? yes_no_x : wide_x, yes_no ? yes_no_y : wide_y);
+			child_set(row, 1, spinner_tags[index], models->spinner_x[kind], models->spinner_y[kind]);
 		}
 		if (label)
 		{
 			reference_set(&label->text_label_string_list, STRINGS_TAG, labels_tag);
 			label->string_list_index = (short)index;
 		}
-		if (spinner && !yes_no)
-			reference_set(&spinner->text_label_string_list, STRINGS_TAG, counts_tag);
-		instance_set(grown, WIDGET_TAG, row_tags[index], "vehicle_options_row", row);
-		instance_set(grown, WIDGET_TAG, label_tags[index], "vehicle_options_label", label);
-		instance_set(grown, WIDGET_TAG, spinner_tags[index], "vehicle_options_spinner", spinner);
+		if (spinner)
+			reference_set(&spinner->text_label_string_list, STRINGS_TAG, values_tags[index]);
+		text_print(name, sizeof(name), "%s_row", spec->name);
+		instance_set(grown, WIDGET_TAG, row_tags[index], name, row);
+		text_print(name, sizeof(name), "%s_label", spec->name);
+		instance_set(grown, WIDGET_TAG, label_tags[index], name, label);
+		text_print(name, sizeof(name), "%s_spinner", spec->name);
+		instance_set(grown, WIDGET_TAG, spinner_tags[index], name, spinner);
 	}
+	return screen_tag;
+}
+
+/* ---- the gametype editor's VEHICLE OPTIONS */
+
+static char const *const yes_no_values[2] = { "YES", "NO" };
+static char const *const vehicle_option_labels[VEHICLE_OPTION_ROWS] =
+	{ "SHARED VEHICLES:", "LIGHT VEHICLES:", "MEDIUM VEHICLES:", "HEAVY VEHICLES:", "FLYING VEHICLES:", "TURRETS:" };
+static char const *const vehicle_option_counts[NUMBER_OF_VEHICLE_CATEGORY_COUNTS] =
+	{ "ALL", "NONE", "1", "2", "3", "4", "6", "8" };
+/* each category, for the help: a vehicle, vehicles, and its kind */
+static char const *const vehicle_help_names[NUMBER_OF_VEHICLE_CATEGORIES][3] = {
+	{ "light vehicle", "light vehicles", "Ghosts" },
+	{ "medium vehicle", "medium vehicles", "Warthogs" },
+	{ "heavy vehicle", "heavy vehicles", "Scorpions" },
+	{ "flying vehicle", "flying vehicles", "Banshees" },
+	{ "turret", "turrets", "gun turrets" },
+};
+static char const vehicle_options_description[] =
+	"Choose how many vehicles of\r\neach kind appear, and whether\r\nenemies can ride together.\r\n\r\nThis gametype:";
+
+/* its rows, their help lines made (lines of 48 characters at most: the help box's width) */
+static void vehicle_rows(struct menu_row *rows, char (*lines)[HELP_SIZE], char const **help)
+{
+	long category, count, at = 0;
+
+	rows[0].label = vehicle_option_labels[0];
+	rows[0].model = _row_model_yes_no;
+	rows[0].value_count = 2;
+	rows[0].values = yes_no_values;
+	rows[0].help = help;
+	joined(lines[at], "Players on different teams can ride in the same\r\n",
+		"vehicle (in free for all, anyone with anyone).", NULL, NULL, NULL, NULL, NULL, NULL);
+	help[at] = lines[at], at++;
+	joined(lines[at], "Only teammates can ride in the same vehicle.", NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+	help[at] = lines[at], at++;
+	for (category = 0; category < NUMBER_OF_VEHICLE_CATEGORIES; category++)
+	{
+		char const *const *names = vehicle_help_names[category];
+		struct menu_row *row = &rows[category + 1];
+
+		row->label = vehicle_option_labels[category + 1];
+		row->model = _row_model_wide;
+		row->value_count = NUMBER_OF_VEHICLE_CATEGORY_COUNTS;
+		row->values = vehicle_option_counts;
+		row->help = help + at;
+		for (count = 0; count < NUMBER_OF_VEHICLE_CATEGORY_COUNTS; count++)
+		{
+			if (count == _vehicle_category_count_all)
+				joined(lines[at], "All of the map's ", names[1], " appear\r\n(", names[2],
+					" and the like), as the map places them.", NULL, NULL, NULL);
+			else if (count == _vehicle_category_count_none)
+				joined(lines[at], "No ", names[1], " (", names[2], " and the like)\r\nappear on this map.", NULL, NULL,
+					NULL);
+			else
+				joined(lines[at], "Each team gets ", vehicle_option_counts[count], " ",
+					names[count == _vehicle_category_count_1 ? 0 : 1], " (", names[2],
+					" and\r\nthe like), shuffled each game; both teams match.", NULL);
+			help[at] = lines[at], at++;
+		}
+	}
+}
+
+/* the editor's row, opening the screen, before SAVE CHANGES; the editor's description gets its line, and its line
+under the list moves down with it */
+static void vehicle_editor_patch(struct cache_file_tag_instance *grown, long screen_tag)
+{
+	long edit_list = found(WIDGET_TAG, EDIT_LIST), edit_row = found(WIDGET_TAG, EDIT_ROW);
+	long description_text = found(WIDGET_TAG, EDIT_DESCRIPTION_TEXT);
+	long row_position, save_position, editor_row_tag, description_tag, title_tag, index;
+	struct ui_widget_definition *editor_list, *definition;
+	struct ui_widget_definition const *model;
+	struct ui_widget_child_reference *edit_children;
+	char const *strings[1];
+
+	if (oxbox_menus.failed)
+		return;
+	model = widget_get(edit_list);
+	row_position = child_position(model, edit_row);
+	if (row_position == NONE || row_position + 1 >= model->child_widgets.count)
+	{
+		platform_log("menus: the gametype editor's list isn't as expected: VEHICLE OPTIONS isn't added");
+		return;
+	}
+	save_position = row_position + 1;          /* (SAVE CHANGES, after INDICATOR OPTIONS) */
+	editor_row_tag = next_tag();
+	description_tag = next_tag();
+	title_tag = next_tag();
+	strings[0] = vehicle_options_description;
+	instance_set(grown, STRINGS_TAG, description_tag, "playlist_edit_descriptions",
+		strings_build(strings, 1, widget_get(description_text)->text_label_string_list.index, row_position + 1));
+	strings[0] = "VEHICLE OPTIONS";
+	instance_set(grown, STRINGS_TAG, title_tag, "playlist_edit_vehicles", strings_build(strings, 1, NONE, 0));
 
 	/* (the editor's row: a copy of INDICATOR OPTIONS', a row lower, opening our screen) */
 	definition = widget_copy(edit_row, 0);
@@ -733,18 +772,17 @@ static void vehicle_options_build(void)
 		definition->event_handlers.address = handlers;
 	}
 	instance_set(grown, WIDGET_TAG, editor_row_tag, "playlist_edit_vehicles_item", definition);
-
 	if (oxbox_menus.failed)
 		return;
 
-	/* the map's own, changed in its loaded copy (as loaded again each time): the editor's list gets our row
-	before SAVE CHANGES, which moves a row down, and its description text our string list (theirs, ours put in) */
+	/* the map's own, changed in its loaded copy (as loaded again each time) */
 	editor_list = widget_get(edit_list);
 	edit_children = allocate((editor_list->child_widgets.count + 1) * sizeof(*edit_children));
 	if (!edit_children)
 		return;
 	{
-		struct ui_widget_child_reference const *old = (struct ui_widget_child_reference const *)editor_list->child_widgets.address;
+		struct ui_widget_child_reference const *old =
+			(struct ui_widget_child_reference const *)editor_list->child_widgets.address;
 		long count = editor_list->child_widgets.count;
 
 		memcpy(edit_children, old, save_position * sizeof(*edit_children));
@@ -757,7 +795,6 @@ static void vehicle_options_build(void)
 		editor_list->child_widgets.address = edit_children;
 	}
 	reference_set(&widget_get(description_text)->text_label_string_list, STRINGS_TAG, description_tag);
-	/* (and the editor screen's line under the list moves down with it) */
 	{
 		long edit_screen = tag_loaded(WIDGET_TAG, EDIT_SCREEN);
 		struct ui_widget_definition *screen_definition = edit_screen == NONE ? NULL : widget_get(edit_screen);
@@ -770,11 +807,11 @@ static void vehicle_options_build(void)
 				screen_definition->child_widgets.count * sizeof(*children));
 			for (index = 0; index < screen_definition->child_widgets.count; index++)
 			{
-				char const *name = children[index].widget_tag.index == NONE ? "" :
+				char const *child_name = children[index].widget_tag.index == NONE ? "" :
 					tag_get_name(children[index].widget_tag.index);
-				long length = (long)strlen(name);
+				long length = (long)strlen(child_name);
 
-				if (length >= 8 && !strcmp(name + length - 8, "blueline"))
+				if (length >= 8 && !strcmp(child_name + length - 8, "blueline"))
 					children[index].vertical_offset += EDIT_ROW_STEP;
 			}
 			screen_definition->child_widgets.address = children;
@@ -782,11 +819,114 @@ static void vehicle_options_build(void)
 	}
 	oxbox_menus.edit_list_index = edit_list;
 	oxbox_menus.edit_row_position = save_position;
+}
 
+/* ---- the main menu's OPTIONS (hmp_game.c opens it, and keeps the settings: hmp_options_get, hmp_options_set) */
+
+static char const *const options_labels[OPTIONS_ROWS] =
+	{ "SCREEN SHAPE:", "ATTRACT MODE:", "ATTRACT MODE WAIT:", "CHECK FOR UPDATES:" };
+static char const *const options_shape_values[3] = { "AS THE DASHBOARD", "4:3", "WIDESCREEN" };
+static char const *const options_shape_help[3] = {
+	"The screen shape the Xbox dashboard's settings\r\nsay (the dashboard's Settings, Video).",
+	"A standard 4:3 picture, whatever the dashboard\r\nsays.",
+	"A 16:9 widescreen picture, whatever the dashboard\r\nsays." };
+static char const *const options_attract_values[3] = { "SHOWCASE", "HALO'S MOVIES", "OFF" };
+static char const *const options_attract_help[3] = {
+	"Left on the main menu, the showcase starts: a\r\nmatch between bots on one of your maps.",
+	"Left on the main menu, Halo's own movies play.",
+	"Nothing plays, however long the main menu is\r\nleft alone." };
+static char const *const options_wait_values[4] = { "30 SECONDS", "1 MINUTE", "2 MINUTES", "5 MINUTES" };
+static char const *const options_wait_help[4] = {
+	"The attract mode starts after 30 seconds on the\r\nmain menu with nothing pressed.",
+	"The attract mode starts after a minute on the\r\nmain menu with nothing pressed.",
+	"The attract mode starts after 2 minutes on the\r\nmain menu with nothing pressed.",
+	"The attract mode starts after 5 minutes on the\r\nmain menu with nothing pressed." };
+static char const *const options_updates_help[2] = {
+	"At startup, Halo 1 Unlimited looks online for a\r\nnewer release, and offers it on the main menu.",
+	"Halo 1 Unlimited never looks online for a newer\r\nrelease (the installer's Y still can)." };
+
+static void options_rows(struct menu_row *rows)
+{
+	rows[0].label = options_labels[0], rows[0].model = _row_model_widest, rows[0].value_count = 3;
+	rows[0].values = options_shape_values, rows[0].help = (char const **)options_shape_help;
+	rows[1].label = options_labels[1], rows[1].model = _row_model_widest, rows[1].value_count = 3;
+	rows[1].values = options_attract_values, rows[1].help = (char const **)options_attract_help;
+	rows[2].label = options_labels[2], rows[2].model = _row_model_widest, rows[2].value_count = 4;
+	rows[2].values = options_wait_values, rows[2].help = (char const **)options_wait_help;
+	rows[3].label = options_labels[3], rows[3].model = _row_model_yes_no, rows[3].value_count = 2;
+	rows[3].values = yes_no_values, rows[3].help = (char const **)options_updates_help;
+}
+
+static void menus_build(void)
+{
+	long existing, index;
+	struct cache_file_tag_instance *instances = cache_files_tag_instances(&existing);
+	struct cache_file_tag_instance *grown;
+	struct menu_models models;
+	struct menu_row vehicle[VEHICLE_OPTION_ROWS], options[OPTIONS_ROWS];
+	struct menu_screen spec;
+	char (*lines)[HELP_SIZE];
+	char const **help;
+	long vehicle_screen;
+	static char const *const row_names[NUMBER_OF_ROW_MODELS] = { ITEMS_YES_NO_ROW, ITEMS_WIDE_ROW, ITEMS_WIDEST_ROW };
+
+	if (oxbox_menus.failed || !instances || existing <= 0 || existing > 0xFFFF - MAXIMUM_ADDED_TAGS)
+		return;
+	models.screen = found(WIDGET_TAG, ITEMS_SCREEN);
+	models.list = found(WIDGET_TAG, ITEMS_LIST);
+	models.header = found(WIDGET_TAG, ITEMS_HEADER);
+	models.help = found(WIDGET_TAG, ITEMS_HELP);
+	models.header_bitmap = found('bitm', ITEMS_HEADER_BITMAP);
+	for (index = 0; index < NUMBER_OF_ROW_MODELS; index++)
+	{
+		models.rows[index] = found(WIDGET_TAG, row_names[index]);
+		if (oxbox_menus.failed || !row_parts(models.rows[index], &models.labels[index], &models.spinners[index],
+			&models.spinner_x[index], &models.spinner_y[index]))
+		{
+			platform_log("menus: ITEM OPTIONS' rows aren't as expected: Halo 1 Unlimited's screens aren't added");
+			oxbox_menus.failed = TRUE;
+			return;
+		}
+	}
+
+	/* (the table, grown: every tag keeps its index, ours after them) */
+	grown = allocate((existing + MAXIMUM_ADDED_TAGS) * sizeof(*grown));
+	lines = allocate(VEHICLE_HELP_LINES * HELP_SIZE);
+	help = allocate(VEHICLE_HELP_LINES * sizeof(*help));
+	if (!grown || !lines || !help)
+		return;
+	memcpy(grown, instances, existing * sizeof(*grown));
+	for (index = 0; index < existing; index++)
+	{
+		long salt = (unsigned long)instances[index].tag_index >> 16;
+
+		if (salt > oxbox_menus.first_salt)
+			oxbox_menus.first_salt = salt;
+	}
+	oxbox_menus.first_salt++;
+	oxbox_menus.first_index = existing;
+
+	vehicle_rows(vehicle, lines, help);
+	spec.name = "vehicle_options", spec.title = "VEHICLE OPTIONS", spec.picture = 0;
+	spec.row_count = VEHICLE_OPTION_ROWS, spec.rows = vehicle;
+	spec.load_function = _menu_function_vehicle_options_load, spec.save_function = _menu_function_vehicle_options_save;
+	vehicle_screen = screen_build(grown, &models, &spec);
+	options_rows(options);
+	spec.name = "options", spec.title = "OPTIONS", spec.picture = 1;
+	spec.row_count = OPTIONS_ROWS, spec.rows = options;
+	spec.load_function = _menu_function_options_load, spec.save_function = _menu_function_options_save;
+	screen_build(grown, &models, &spec);
+	if (oxbox_menus.failed || oxbox_menus.next > MAXIMUM_ADDED_TAGS)
+		return;
+	vehicle_editor_patch(grown, vehicle_screen);
+	if (oxbox_menus.failed || oxbox_menus.next > MAXIMUM_ADDED_TAGS)
+		return;
+
+	oxbox_menus.count = oxbox_menus.next;
 	oxbox_menus.original_instances = instances;
 	oxbox_menus.original_count = existing;
-	cache_files_set_tag_instances(grown, existing + ADDED_TAGS);
-	platform_log("menus: VEHICLE OPTIONS added to the gametype editor (%ld tags)", (long)ADDED_TAGS);
+	cache_files_set_tag_instances(grown, existing + oxbox_menus.count);
+	platform_log("menus: VEHICLE OPTIONS and OPTIONS added (%ld tags)", oxbox_menus.count);
 }
 
 /* a list's rows' spinners, in order (count at most) */
@@ -840,6 +980,30 @@ static boolean vehicle_options_function(struct menu_widget_instance *list, boole
 	return TRUE;
 }
 
+static boolean options_function(struct menu_widget_instance *list, boolean save)
+{
+	struct menu_widget_instance *spinners[OPTIONS_ROWS];
+	short values[OPTIONS_ROWS];
+	long index;
+
+	if (spinners_of(list, spinners, OPTIONS_ROWS) != OPTIONS_ROWS)
+	{
+		platform_log("menus: OPTIONS hasn't its rows");
+		return FALSE;
+	}
+	if (!save)
+	{
+		hmp_options_get(values);
+		for (index = 0; index < OPTIONS_ROWS; index++)
+			spinners[index]->selected_index = values[index];
+		return TRUE;
+	}
+	for (index = 0; index < OPTIONS_ROWS; index++)
+		values[index] = spinners[index]->selected_index;
+	hmp_options_set(values);
+	return TRUE;
+}
+
 /* ---------- public code (oxbox_sdk.c's, while OXMENU is loaded: its menu_tags_loaded and the rest call these) */
 
 /* ui.map has loaded: TRUE when screens were added (else nothing is, and the section can go) */
@@ -847,7 +1011,7 @@ boolean oxbox_menus_loaded(
 	void)
 {
 	release(FALSE);
-	vehicle_options_build();
+	menus_build();
 	if (!oxbox_menus.original_instances)
 		release(FALSE);
 	return oxbox_menus.original_instances != NULL;
@@ -882,6 +1046,10 @@ boolean oxbox_menus_function(
 		return vehicle_options_function((struct menu_widget_instance *)widget, FALSE);
 	case _menu_function_vehicle_options_save:
 		return vehicle_options_function((struct menu_widget_instance *)widget, TRUE);
+	case _menu_function_options_load:
+		return options_function((struct menu_widget_instance *)widget, FALSE);
+	case _menu_function_options_save:
+		return options_function((struct menu_widget_instance *)widget, TRUE);
 	}
 	return FALSE;
 }

@@ -58,6 +58,18 @@ boolean attract_mode_should_start(
 		cache_files_precache_map_end();
 	}
 
+#if defined(OXBOX_SHOWCASE) && defined(HALO_XBOX_TARGET)
+	/* oxbox: the main menu's OPTIONS' ATTRACT MODE OFF: nothing starts (the menu's music plays on) */
+	{
+		extern boolean hmp_attract_off(void);
+		if (hmp_attract_off())
+		{
+			if (main_menu_screen_is_active() && !ui_main_menu_music_active() && !bink_playback_active())
+				ui_start_main_menu_music();
+			return FALSE;
+		}
+	}
+#endif
 	if (main_menu_screen_is_active() &&
 		!cache_files_precache_in_progress() &&
 		!network_game_is_active() &&

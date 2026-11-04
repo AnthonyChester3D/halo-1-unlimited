@@ -727,6 +727,10 @@ void oxbox_update_frame(int menus)
 			return;
 		oxbox_update_read_installed();
 		test_location = oxbox_update_read_url();
+		{
+			extern void hmp_settings_ready(void);   /* (the main menu's OPTIONS' CHECK FOR UPDATES: hmp_game.c) */
+			hmp_settings_ready();
+		}
 		if (!oxbox_setting_update_check ||
 			(oxbox_update.installed_release == 0 && oxbox_setting_update_check != 2 && !test_location))
 		{

@@ -246,18 +246,20 @@ if mark > 0:
     while len(d) % 16: d.append(0)
     struct.pack_into('<II', d, mark + 8, len(d), len(header))
     d += header
-# the gametype editor's VEHICLE OPTIONS header (DXT3 512 x 64, installer/pictures.c; oxbox_menus.c), after it, the same
-# way (OXVEHIC1: oxbox_entry.c). The installer fills the headers in their order in the file (installer/package.c)
-mark = d.find(b'OXVEHIC1')
-if mark > 0:
-    _header = os.path.join(ROOT, 'port', 'oxbox', 'vehicle_options.dxt3')
+# the gametype editor's VEHICLE OPTIONS header and the main menu's OPTIONS screen's (DXT3 512 x 64, installer/pictures.c;
+# oxbox_menus.c), after it, the same way (OXVEHIC1, OXOPTNS1: oxbox_entry.c). The installer fills the headers in their
+# order in the file (installer/package.c)
+for _magic, _file, _what in ((b'OXVEHIC1', 'vehicle_options.dxt3', 'VEHICLE OPTIONS'), (b'OXOPTNS1', 'options.dxt3', 'OPTIONS')):
+    mark = d.find(_magic)
+    if mark <= 0:
+        continue
+    _header = os.path.join(ROOT, 'port', 'oxbox', _file)
     if os.path.exists(_header):
         header = open(_header, 'rb').read()
     else:
-        print('note: port/oxbox/vehicle_options.dxt3 not found: VEHICLE OPTIONS will have a plain text header')
+        print('note: port/oxbox/%s not found: %s will have a plain text header' % (_file, _what))
         header = bytes(32768)
-    assert len(header) == 32768 and d.find(b'OXVEHIC1', mark + 1) < 0
-    assert d.find(b'OXONLIN1') < mark or d.find(b'OXONLIN1') < 0
+    assert len(header) == 32768 and d.find(_magic, mark + 1) < 0
     while len(d) % 16: d.append(0)
     struct.pack_into('<II', d, mark + 8, len(d), len(header))
     d += header

@@ -43,5 +43,6 @@ int main(int argc, char **argv)
 	}
 	return save(folder, "pictures.bin", pictures, sizeof(pictures)) ||
 		save(folder, "online_games.dxt3", header, HEADER_SIZE) ||
-		save(folder, "vehicle_options.dxt3", header + HEADER_SIZE, HEADER_SIZE);
+		save(folder, "vehicle_options.dxt3", header + HEADER_SIZE, HEADER_SIZE) ||
+		save(folder, "options.dxt3", header + 2 * HEADER_SIZE, HEADER_SIZE);
 }
