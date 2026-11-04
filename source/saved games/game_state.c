@@ -744,6 +744,33 @@ void game_state_report_pools(
 		}
 		if (length)
 			platform_log("pools: %s", line);
+		/* (and once a session, the reserved room nothing has used yet, the biggest first: the measuring pass's
+		candidates for lending) */
+		{
+			static boolean unused_told;
+			long total = 0;
+
+			if (!unused_told && now > 120000)
+			{
+				unused_told = TRUE;
+				for (index = 0; index < game_state_allocation_count; index++)
+				{
+					struct game_state_allocation const *allocation = &game_state_allocations[index];
+
+					if (allocation->kind == _game_state_allocation_data && !game_state_pool_peaks[index])
+					{
+						struct data_array const *data = (struct data_array const *)allocation->address;
+						long bytes = (long)data->maximum_count * data->size;
+
+						total += bytes;
+						if (bytes >= 4096)
+							platform_log("pools unused: %s, %d x %d B: %ld KB", data->name, data->maximum_count,
+								(int)data->size, bytes / 1024);
+					}
+				}
+				platform_log("pools unused: %ld KB in all (data arrays with nothing in them this session)", total / 1024);
+			}
+		}
 	}
 }
 #endif
