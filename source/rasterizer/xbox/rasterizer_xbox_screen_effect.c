@@ -1437,3 +1437,96 @@ void _rasterizer_screen_flash(
 
 	return;
 }
+
+/* ---------- oxbox: the resolution scaling test (opence.ini res_scale = 50 to 99; 0, the default, off)
+
+A test, for measuring: the 3D view is drawn into res_scale percent of the window (its top left: rasterizer_set_target
+narrows the window's viewport while oxbox_res_scale_drawing), then stretched to the whole window here, after the 3D
+and before the HUD and menus, which are drawn at the full resolution. As the screen effects do, through the target
+over the depth buffer (_rasterizer_target_screen_effect: the 3D view is done with it): the narrow view stretched
+into it, then copied back. One window only (not split screen). The 3D view's screen-space work that places itself by
+the window's pixels (lens flares, the screen's fog, active camouflage's refraction) may sit a little off while it's on:
+it's for comparing frame rates (Snow Space, DeathTrap), not for playing */
+
+int oxbox_setting_res_scale;
+boolean oxbox_res_scale_drawing;
+
+static void rasterizer_xbox_quad(
+	real tx0,
+	real ty0,
+	real tx1,
+	real ty1)
+{
+	/* (the quad over the whole viewport, its texture coordinates in pixels: the screen effect vertex shader's) */
+	IDirect3DDevice8_Begin(global_d3d_device, D3DPT_TRIANGLEFAN);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, 4, tx0, ty1);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, _rasterizer_vertex_register_position, -1.0f, -1.0f);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, 4, tx1, ty1);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, _rasterizer_vertex_register_position, 1.0f, -1.0f);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, 4, tx1, ty0);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, _rasterizer_vertex_register_position, 1.0f, 1.0f);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, 4, tx0, ty0);
+	IDirect3DDevice8_SetVertexData2f(global_d3d_device, _rasterizer_vertex_register_position, -1.0f, 1.0f);
+	IDirect3DDevice8_End(global_d3d_device);
+}
+
+/* the narrow 3D view (oxbox_res_scale_drawing) stretched to the whole window: render.c, after the 3D */
+void rasterizer_xbox_res_scale_finish(
+	void)
+{
+	struct pixel_shader_definition pixel_shader;
+	real constants[8][4];
+	real scale = (real)oxbox_setting_res_scale / 100.0f;
+	short x0 = global_window_parameters.camera.viewport_bounds.x0;
+	short y0 = global_window_parameters.camera.viewport_bounds.y0;
+	short width = global_window_parameters.camera.viewport_bounds.x1 - x0;
+	short height = global_window_parameters.camera.viewport_bounds.y1 - y0;
+	short stage;
+
+	if (!oxbox_res_scale_drawing)
+		return;
+	oxbox_res_scale_drawing = FALSE;
+	rasterizer_set_vertex_shader_permutation(
+		_rasterizer_vertex_shader_screen_effect,
+		_rasterizer_vertex_type_screen,
+		_rasterizer_vertex_shader_permutation_default);
+	csmemset(&pixel_shader, 0, sizeof(pixel_shader));
+	pixel_shader.texture_modes = 0x00000001;   /* (the texture as it is: the video effect's first pass) */
+	pixel_shader.combiner_count = 1;
+	pixel_shader.final_combiner_inputs_abcd = 0x00000008;
+	rasterizer_set_pixel_shader(&pixel_shader);
+	for (stage = 0; stage < 4; stage++)
+	{
+		IDirect3DDevice8_SetTextureStageState(global_d3d_device, stage, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
+		IDirect3DDevice8_SetTextureStageState(global_d3d_device, stage, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
+		IDirect3DDevice8_SetTextureStageState(global_d3d_device, stage, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
+		IDirect3DDevice8_SetTextureStageState(global_d3d_device, stage, D3DTSS_MINFILTER, D3DTEXF_LINEAR);
+		IDirect3DDevice8_SetTextureStageState(global_d3d_device, stage, D3DTSS_MIPFILTER, D3DTEXF_POINT);
+	}
+	IDirect3DDevice8_SetRenderState(global_d3d_device, D3DRS_CULLMODE, D3DCULL_NONE);
+	IDirect3DDevice8_SetRenderState(global_d3d_device, D3DRS_COLORWRITEENABLE,
+		D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+	IDirect3DDevice8_SetRenderState(global_d3d_device, D3DRS_ALPHABLENDENABLE, FALSE);
+	IDirect3DDevice8_SetRenderState(global_d3d_device, D3DRS_ALPHATESTENABLE, FALSE);
+	IDirect3DDevice8_SetRenderState(global_d3d_device, D3DRS_ZENABLE, FALSE);
+	IDirect3DDevice8_SetRenderState(global_d3d_device, D3DRS_ZBIAS, 0);
+	csmemset(constants, 0, sizeof(constants));
+	for (stage = 0; stage < 4; stage++)
+	{
+		constants[2 * stage][0] = 1.0f;
+		constants[2 * stage + 1][1] = 1.0f;
+	}
+	IDirect3DDevice8_SetVertexShaderConstant(global_d3d_device, -81, constants, 8);
+	/* (1: the narrow view, the window's top left scale of it, stretched over the whole target: its texture coordinates,
+	pixels of the window's, from its corner to scale of its size, at the pixels' middles) */
+	rasterizer_set_target_as_texture(0, _rasterizer_target_render_primary, FALSE);
+	rasterizer_set_target(_rasterizer_target_screen_effect, FALSE, FALSE, FALSE, FALSE);
+	rasterizer_xbox_quad(x0 + 0.5f * scale, y0 + 0.5f * scale, x0 + (width + 0.5f) * scale, y0 + (height + 0.5f) * scale);
+	/* (2: back into the window, as it is) */
+	rasterizer_set_target_as_texture(0, _rasterizer_target_screen_effect, FALSE);
+	rasterizer_set_target(_rasterizer_target_render_primary, FALSE, FALSE, FALSE, FALSE);
+	/* (the target is the back buffer's size: the screen's width, 480 lines) */
+	rasterizer_xbox_quad(0.5f, 0.5f, (real)halo_screen_width() + 0.5f, 480.5f);
+	IDirect3DDevice8_SetTexture(global_d3d_device, 0, NULL);
+}
+

@@ -663,6 +663,11 @@ static void read_settings(const char *path)
 			oxbox_setting_audio_effects = value != 0;
 		else if (same_text(name, "fps_counter"))
 			display_framerate = value != 0;
+		else if (same_text(name, "res_scale"))
+		{
+			extern int oxbox_setting_res_scale;   /* (the resolution scaling test: rasterizer_xbox_screen_effect.c) */
+			oxbox_setting_res_scale = value;
+		}
 		else if (same_text(name, "bot_log"))
 			oxbox_setting_bot_log = value != 0;
 		else if (same_text(name, "perf_log"))
