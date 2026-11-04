@@ -40,27 +40,30 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 15
+#define INSTALLER_VERSION 16
 #endif
 __attribute__((used)) static struct
 {
 	char mark[8];
 	unsigned long version;
 } const installer_mark = {{'O', 'X', 'I', 'N', 'S', 'T', 'V', '1'}, INSTALLER_VERSION};
-#define PACKAGE_PATH "D:\\opence.oxpk"
-#define OLD_PACKAGE_PATH "D:\\opence_old.oxpk" /* (the package a download replaced) */
-#define DOWNLOAD_PATH "D:\\opence_download.oxpk"
-#define URL_PATH "D:\\update_url.txt" /* (a test update location: download.h) */
-#define OLD_URL_PATH "D:\\installer_url.txt" /* (its earlier name) */
-#define OLD_INSTALLER_PATH "D:\\installer_old.xbe" /* (the installer an update replaced) */
-#define NOTICES_PATH "D:\\THIRD_PARTY.txt"
-#define LOG_PATH "D:\\installer_log.txt"
-#define LAST_PATH "D:\\installer_last.txt" /* the folder of the last install that worked, first in the list next time */
+/* its own folder's files: D:'s, or H:'s when D: isn't its folder (own_folder: the game's updater) */
+static char own_drive = 'D';
+static char const *own_path(char const *name);
+#define PACKAGE_PATH own_path("opence.oxpk")
+#define OLD_PACKAGE_PATH own_path("opence_old.oxpk") /* (the package a download replaced) */
+#define DOWNLOAD_PATH own_path("opence_download.oxpk")
+#define URL_PATH own_path("update_url.txt") /* (a test update location: download.h) */
+#define OLD_URL_PATH own_path("installer_url.txt") /* (its earlier name) */
+#define OLD_INSTALLER_PATH own_path("installer_old.xbe") /* (the installer an update replaced) */
+#define NOTICES_PATH own_path("THIRD_PARTY.txt")
+#define LOG_PATH own_path("installer_log.txt")
+#define LAST_PATH own_path("installer_last.txt") /* the folder of the last install that worked, first in the list next time */
 /* the updater: this installer's copy in each Halo folder it installs to (<Halo>\updater\default.xbe), and the note the
 game leaves beside it (the game's offer of a newer release: port/oxbox/oxbox_sdk.c) to have it update that folder and
 start the game again, with no buttons pressed */
 #define UPDATER_FOLDER "updater"
-#define AUTO_PATH "D:\\auto_update.txt"
+#define AUTO_PATH own_path("auto_update.txt")
 static int auto_mode;
 #define HALO_TITLE_ID 0x4D530004ul
 /* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
@@ -528,16 +531,17 @@ static void kernel_image(char *own, int size)
 	}
 }
 
-/* where D: points ("\\Device\\Harddisk0\\Partition6\\games\\Halo\\"), or "" */
-static void d_target(char *out, int size)
+/* where a drive letter points ("\\Device\\Harddisk0\\Partition6\\games\\Halo\\"), or "" */
+static void drive_target(char letter, char *out, int size)
 {
 	ANSI_STRING name, target;
 	OBJECT_ATTRIBUTES attributes;
 	HANDLE handle;
-	char buffer[260];
+	char buffer[260], link[8];
 	ULONG length = 0;
 	out[0] = 0;
-	RtlInitAnsiString(&name, "\\??\\D:");
+	text_print(link, sizeof(link), "\\??\\%c:", letter);
+	RtlInitAnsiString(&name, link);
 	InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
 	if (!NT_SUCCESS(NtOpenSymbolicLinkObject(&handle, &attributes)))
 		return;
@@ -549,60 +553,78 @@ static void d_target(char *out, int size)
 	NtClose(handle);
 }
 
-static void d_mount(char const *folder)
+/* a file of its own folder (own_folder): up to 4 of these at once */
+static char const *own_path(char const *name)
+{
+	static char paths[4][64];
+	static int next;
+	char *path = paths[next++ & 3];
+	text_print(path, sizeof(paths[0]), "%c:\\%s", own_drive, name);
+	return path;
+}
+
+static int same_folder(char const *a, char const *b)
+{
+	size_t n = strlen(a), m = strlen(b);
+	if (n && a[n - 1] == '\\') n--;
+	if (m && b[m - 1] == '\\') m--;
+	return n == m && !_strnicmp(a, b, n);
+}
+
+/* its own folder as H: (its files are then H:'s: own_path) */
+static void own_drive_mount(char const *folder)
 {
 	char path[300];
 	text_print(path, sizeof(path), "%s%s", folder, folder[0] && folder[strlen(folder) - 1] == '\\' ? "" : "\\");
-	if (nxIsDriveMounted('D'))
-		nxUnmountDrive('D');
-	nxMountDrive('D', path);
+	if (nxIsDriveMounted('H'))
+		nxUnmountDrive('H');
+	if (nxMountDrive('H', path))
+		own_drive = 'H';
 }
 
 /* how it was started, for the screen when it has no package (and the log) */
 static char started_as[2][200];
 
-/* D: made this XBE's own folder. A title started with a D: path (the game starting its updater with
-XLaunchNewImage("D:\\updater\\default.xbe") up to v1.74) is given its launcher's D:, the Halo folder: the updater then
-read and wrote the Halo folder's files as its own. Its own path, if it's a device's, says its folder; and when D: has
-an updater folder with the game's note in it (and none of its own), D: is the Halo folder: its updater folder is ours */
-static void own_folder_as_d(void)
+/* its own folder. D: is, as nxdk or the kernel made it, when it's started from a dashboard or as one; but the game's
+updater was given the game's D:, the Halo folder (XLaunchNewImage("D:\\updater\\default.xbe"), up to v1.74), and its
+own path, joined at the launch path's ';', can name another folder than D:'s. Then its own folder is mounted as H:
+and its files are read there: D: itself is never changed (a remount of D: hung the installer started from C:). D:
+having an updater folder with the game's note in it, and none of its own, says it's the updater given the Halo
+folder */
+static void own_folder(void)
 {
 	char own[260], d[260], line[400];
 	kernel_image(own, sizeof(own));
-	d_target(d, sizeof(d));
-	text_print(started_as[0], sizeof(started_as[0]), "Started as %.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	drive_target('D', d, sizeof(d));
+	text_print(started_as[0], sizeof(started_as[0]), "Started as %.*s", XeImageFileName->Length,
+		XeImageFileName->Buffer);
 	text_print(started_as[1], sizeof(started_as[1]), "with D: as %s", d[0] ? d : "(none)");
 	if (!_strnicmp(own, "\\Device\\", 8))
 	{
 		char *slash = strrchr(own, '\\');
 		slash[1] = 0;
-		if (_stricmp(own, d))
-			d_mount(own);
+		if (!same_folder(own, d))
+			own_drive_mount(own);
 	}
-	if (!exists(AUTO_PATH) && exists("D:\\" UPDATER_FOLDER "\\auto_update.txt") &&
-		exists("D:\\" UPDATER_FOLDER "\\default.xbe"))
+	if (own_drive == 'D' && d[0] && !exists("D:\\auto_update.txt") &&
+		exists("D:\\" UPDATER_FOLDER "\\auto_update.txt") && exists("D:\\" UPDATER_FOLDER "\\default.xbe"))
 	{
-		char halo[260], updater[300];
-		d_target(halo, sizeof(halo));
-		if (halo[0])
-		{
-			text_print(updater, sizeof(updater), "%s%s" UPDATER_FOLDER "\\", halo,
-				halo[strlen(halo) - 1] == '\\' ? "" : "\\");
-			d_mount(updater);
-		}
+		char updater[300];
+		text_print(updater, sizeof(updater), "%s%s" UPDATER_FOLDER "\\", d, d[strlen(d) - 1] == '\\' ? "" : "\\");
+		own_drive_mount(updater);
 	}
-	d_target(d, sizeof(d));
-	text_print(line, sizeof(line), "(%s, %s; D: is %s)", started_as[0], started_as[1], d);
+	drive_target(own_drive, d, sizeof(d));
+	text_print(line, sizeof(line), "(%s, %s; its folder, %c:, is %s)", started_as[0], started_as[1], own_drive, d);
 	log_file(line);
 }
 
-/* this XBE's own path as a device's: D:'s folder (own_folder_as_d made it its own) and its file's name */
+/* this XBE's own path as a device's: its own folder (own_folder) and its file's name */
 static void own_image(char *own, int size)
 {
 	char image[260], *name;
 	kernel_image(image, sizeof(image));
 	name = strrchr(image, '\\');
-	d_target(own, size);
+	drive_target(own_drive, own, size);
 	if (!own[0])
 	{
 		text_print(own, size, "%s", image);
@@ -622,7 +644,7 @@ static int from_device(char const *device, char *path, size_t size)
 	if (!_strnicmp(device, system_prefix, sizeof(system_prefix) - 1))
 	{
 		char const *name = strrchr(device, '\\');
-		text_print(path, size, "D:\\%s", name + 1);
+		text_print(path, size, "%c:\\%s", own_drive, name + 1);
 		return 1;
 	}
 	for (i = 0; i < 3; i++)
@@ -1436,8 +1458,8 @@ static void update_installer(void)
 	own_image(own, sizeof(own));
 	slash = strrchr(own, '\\');
 	text_print(name, sizeof(name), "%s", slash ? slash + 1 : own);
-	text_print(path, sizeof(path), "D:\\%s", name);
-	text_print(temp, sizeof(temp), "D:\\%s.new", name);
+	text_print(path, sizeof(path), "%c:\\%s", own_drive, name);
+	text_print(temp, sizeof(temp), "%c:\\%s.new", own_drive, name);
 	heading("Updating the installer");
 	log_clear();
 	say("Writing installer version %lu beside this one (%s)...", package.installer_version, name);
@@ -1818,8 +1840,8 @@ static void auto_update(void)
 
 	auto_mode = 1;
 	log_file("auto update (the game's updater)");
-	/* (its folder: D:'s, which own_folder_as_d made it, as a file in it) */
-	d_target(own, sizeof(own));
+	/* (its folder: own_folder's, as a file in it) */
+	drive_target(own_drive, own, sizeof(own));
 	if (own[0] && own[strlen(own) - 1] != '\\')
 		text_print(own + strlen(own), (int)(sizeof(own) - strlen(own)), "\\");
 	text_print(own + strlen(own), (int)(sizeof(own) - strlen(own)), "default.xbe");
@@ -1888,7 +1910,7 @@ done:
 
 int main(void)
 {
-	own_folder_as_d();
+	own_folder();
 	nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
 	nxMountDrive('F', "\\Device\\Harddisk0\\Partition6\\");
 	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
