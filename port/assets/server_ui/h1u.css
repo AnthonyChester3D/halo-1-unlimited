@@ -1,0 +1,14 @@
+/* h1u.css: Halo 1 Unlimited's additions to the dedicated server's page (h1u.js); the page's own look is app.css */
+
+:root { --h1u-linked: #ffd84a; }
+@media (prefers-color-scheme: light) { :root { --h1u-linked: #9a6b00; } }
+
+/* (a folder map and its linked Custom Edition map, one entry: yellow, in the list and when chosen) */
+option.h1u-linked, select.h1u-linked { color: var(--h1u-linked); }
+select.h1u-linked option:not(.h1u-linked) { color: var(--text); }
+option.h1u-unsupported { color: var(--soft); }
+
+.h1u-map-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0 6px; }
+.h1u-map-bar button.h1u-on { border-color: var(--edge-bright); box-shadow: 0 0 10px var(--glow); }
+.h1u-map-bar input[type="search"] { flex: 1 1 180px; min-height: 32px; }
+.rotation li.h1u-editing { outline: 2px solid var(--h1u-linked); outline-offset: -2px; }

@@ -24,6 +24,9 @@ FILES = (
     ("app.js", "text/javascript; charset=utf-8"),
     ("app.css", "text/css; charset=utf-8"),
     ("icon.svg", "image/svg+xml"),
+    # (Halo 1 Unlimited's additions, in their own files: OpenCE's updates to the page merge cleanly)
+    ("h1u.js", "text/javascript; charset=utf-8"),
+    ("h1u.css", "text/css; charset=utf-8"),
 )
 
 sys.path.insert(0, str(ROOT / "tools"))

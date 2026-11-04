@@ -494,6 +494,23 @@ static void server_status_map(
 	server_json_string(json, "level", level);
 	server_json_string(json, "kind", kind);
 	server_json_string(json, "title", title);
+	/* (Halo 1 Unlimited: a folder map's gametypes, its info .txt's "Gametypes:" line, and the Custom Edition map it's
+	linked to, if any: port/assets/server_ui/h1u.js shows a linked pair as one, and suggests its gametypes) */
+	if (!strcmp(kind, "folder"))
+	{
+		extern boolean folder_map_info_value(char const *key, char const *field, char *value, int size);
+		extern boolean linked_maps_custom_edition_of(char const *key, char *name, int size, unsigned long *file_size);
+		char text[160];
+		unsigned long link_size = 0;
+
+		if (folder_map_info_value(name, "Gametypes:", text, sizeof(text)))
+			server_json_string(json, "gametypes", text);
+		if (linked_maps_custom_edition_of(name, text + 12, (int)sizeof(text) - 12, &link_size))
+		{
+			memcpy(text, "custom_maps\\", 12);
+			server_json_string(json, "link", text);
+		}
+	}
 	server_json_object_end(json);
 }
 

@@ -100,6 +100,9 @@ ASSETS = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/icon.svg": ("icon.svg", "image/svg+xml"),
+    # (Halo 1 Unlimited's additions to the page, in their own files)
+    "/h1u.js": ("h1u.js", "text/javascript; charset=utf-8"),
+    "/h1u.css": ("h1u.css", "text/css; charset=utf-8"),
 }
 
 # ---------- the CSP check on the page's files (the build's embedder uses it too)

@@ -454,6 +454,50 @@ unsigned long hmp_share_map_version(char const *level_name)
 }
 
 /* a folder map's title: its info .txt's first line (UTF-8, UTF-16 with a BOM, or ANSI), else its folder */
+/* a folder map's info .txt line "<field> <value>" (field: "Gametypes:", say): its value, FALSE when it has none (or
+the file is UTF-16: Halo Map Porter writes ASCII). The dedicated server's page suggests a map's gametypes by it */
+boolean folder_map_info_value(char const *key, char const *field, char *value, int size)
+{
+	long index = hmp_maps_find(key);
+	char path[300], text[2048], *line, *next;
+	unsigned long got = 0;
+	size_t field_length = strlen(field);
+	HANDLE file;
+
+	if (index == NONE || size < 2 || !folder_maps.maps[index].info_file[0])
+		return FALSE;
+	key_path(path, sizeof(path), key, folder_maps.maps[index].info_file);
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return FALSE;
+	if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+		got = 0;
+	CloseHandle(file);
+	text[got] = 0;
+	if (got >= 2 && (byte)text[0] == 0xFF && (byte)text[1] == 0xFE)
+		return FALSE;
+	for (line = text; line && *line; line = next)
+	{
+		next = strchr(line, '\n');
+		if (next)
+			*next++ = 0;
+		if (!_strnicmp(line, field, field_length))
+		{
+			char *end;
+
+			line += field_length;
+			while (*line == ' ' || *line == '\t')
+				line++;
+			for (end = line + strlen(line); end > line && (end[-1] == '\r' || end[-1] == ' '); end--)
+				;
+			*end = 0;
+			snprintf(value, (size_t)size, "%s", line);
+			return value[0] != 0;
+		}
+	}
+	return FALSE;
+}
+
 boolean folder_map_title(char const *key, char *title, int size)
 {
 	long index = hmp_maps_find(key);

@@ -894,7 +894,11 @@ function startPage(root) {
     $('rotation-note').textContent = page.dirty ? 'Changed: Save writes it to server.rotation.' : rotation.next ? `Next: ${rotation.next.text}` : '';
     $('rotation-save').disabled = !admin || !page.dirty;
     $('rotation-revert').disabled = !page.dirty;
+    if (root.h1uServerUi) root.h1uServerUi.rotation(h1uApi(admin)); // (Halo 1 Unlimited: h1u.js)
   }
+
+  // (Halo 1 Unlimited's additions, h1u.js: what of the page they use)
+  const h1uApi = (admin) => ({ page, admin, h, option, editRotation, makeEntry, mapToken, titleOf, engineOf, toast });
 
   function renderPickers() {
     const gametypes = page.gametypes;
@@ -905,6 +909,7 @@ function startPage(root) {
       h('optgroup', { attrs: { label: 'Built-in' } }, builtin.map((name) => option(name, name))),
       h('optgroup', { attrs: { label: 'Files' } }, (gametypes.files || []).map((file) => option(file.name, `${file.name} (${file.base})`))));
     $('new-base').replaceChildren(...builtin.map((name) => option(name, name)));
+    if (root.h1uServerUi) root.h1uServerUi.pickers(h1uApi(roleAtLeast(page.role, 'admin'))); // (Halo 1 Unlimited: h1u.js)
   }
 
   listen('rotation-add', 'submit', (event) => {
