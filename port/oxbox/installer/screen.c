@@ -159,67 +159,71 @@ void screen_hand_over(void)
 	AvSendTVEncoderOption((PVOID)VIDEO_BASE, VIDEO_ENC_VIDEOENABLE, TRUE, NULL);
 }
 
-/* ---- the spinner: a Halo ring turning in the corner, its stars and its sun, in characters (Llama's design, made
-small), drawn by a thread of its own every 60 ms, so it moves while the installer is busy reading, writing or
-downloading */
+/* ---- the spinner: a Halo ring rising into the sky, turning, in characters (Llama's design), drawn in half-size
+characters (4 x 8 pixels: 24 x 12 of them in the corner's 12 x 6 cells) by a thread of its own every 60 ms, so it
+moves while the installer is busy reading, writing or downloading */
 
-#define SPIN_SPACE 0x5A5A5A
+#define SPIN_WIDE (SPIN_COLUMNS * 2)
+#define SPIN_HIGH (SPIN_ROWS * 2)
 #define SPIN_BLUE 0x2E5FD0
 #define SPIN_CYAN 0x40C8D8
 #define SPIN_GREEN 0x50E060
 #define SPIN_STONE 0xA8A8A8
 #define SPIN_SNOW 0xF4F4F4
-#define SPIN_METAL 0x6A6A6A
+#define SPIN_METAL 0x7A7A7A
+#define SPIN_BAND 0.3f
+
+/* where a half-size character's place is on the ring (phi), and whether it's on it */
+static float spinner_phi(int x, int y)
+{
+	float sy = ((float)SPIN_HIGH / 2.0f - (float)y - 0.5f) / ((float)SPIN_HIGH * 0.6f);
+	float sx = ((float)x - (float)SPIN_WIDE / 2.0f + 0.5f) / ((float)SPIN_WIDE * 0.5f);
+	return sx * (1.0f + sy * 0.4f);
+}
 
 static void spinner_cell(struct cell *cell, int x, int y, float t)
 {
-	float sy = ((float)SPIN_ROWS / 2.0f - (float)y - 0.5f) / ((float)SPIN_ROWS * 0.6f);
-	float sx = ((float)x - (float)SPIN_COLUMNS / 2.0f + 0.5f) / ((float)SPIN_COLUMNS * 0.5f);
-	float band = 0.42f, theta, phi, value, star;
+	float sy = ((float)SPIN_HIGH / 2.0f - (float)y - 0.5f) / ((float)SPIN_HIGH * 0.6f);
+	float phi = spinner_phi(x, y), theta, value;
 	cell->background = COLOUR_BLACK;
 	cell->c = ' ';
-	cell->colour = SPIN_SPACE;
-	/* (the sun, up on the left) */
-	if (y == 1 && x == 1)
-	{
-		cell->c = 'O', cell->colour = SPIN_SNOW;
+	cell->colour = SPIN_METAL;
+	if (fabsf(phi) >= SPIN_BAND)
 		return;
-	}
-	if ((y == 1 && (x == 0 || x == 2)) || (x == 1 && (y == 0 || y == 2)))
+	/* (its rims: the ring's edge characters on each row) */
+	if (x == 0 || x == SPIN_WIDE - 1 || fabsf(spinner_phi(x - 1, y)) >= SPIN_BAND ||
+		fabsf(spinner_phi(x + 1, y)) >= SPIN_BAND)
 	{
-		cell->c = '+', cell->colour = SPIN_SNOW;
+		cell->c = y >= SPIN_HIGH / 2 ? '|' : '^';
 		return;
 	}
 	theta = atan2f(sy, 1.0f) + t;
-	phi = sx * (1.0f + sy * 0.4f);
-	if (fabsf(phi) < band)
+	value = sinf(theta * 6.0f) * cosf(phi * 4.0f) + sinf(theta * 12.0f + phi * 3.0f) * 0.4f + cosf(theta * 3.0f) * 0.7f;
+	if (value > 0.8f) cell->c = '@', cell->colour = SPIN_SNOW;
+	else if (value > 0.3f) cell->c = '#', cell->colour = SPIN_STONE;
+	else if (value > -0.1f) cell->c = '*', cell->colour = SPIN_GREEN;
+	else if (value > -0.6f) cell->c = '.', cell->colour = SPIN_CYAN;
+	else cell->c = '~', cell->colour = SPIN_BLUE;
+}
+
+/* a half-size character at (x, y) of the corner: each pixel any of the 2 x 2 of the font's it stands for */
+static void draw_small_cell(unsigned char *fb, int x, int y, struct cell const *cell)
+{
+	unsigned char const *glyph = font + cell->c * 16;
+	unsigned long *p = (unsigned long *)fb + (TOP + SPIN_TOP * 16 + y * 8) * 640 + left + SPIN_LEFT * cell_width +
+		x * 4;
+	int row, column;
+	for (row = 0; row < 8; row++, p += 640)
 	{
-		if (fabsf(phi) > band * 0.8f)
-		{
-			cell->c = y >= SPIN_ROWS / 2 ? '|' : '^', cell->colour = SPIN_METAL;
-			return;
-		}
-		value = sinf(theta * 6.0f) * cosf(phi * 4.0f) + sinf(theta * 12.0f + phi * 3.0f) * 0.4f +
-			cosf(theta * 3.0f) * 0.7f;
-		if (value > 0.8f) cell->c = '@', cell->colour = SPIN_SNOW;
-		else if (value > 0.3f) cell->c = '#', cell->colour = SPIN_STONE;
-		else if (value > -0.1f) cell->c = '*', cell->colour = SPIN_GREEN;
-		else if (value > -0.6f) cell->c = '.', cell->colour = SPIN_CYAN;
-		else cell->c = '~', cell->colour = SPIN_BLUE;
-		return;
+		unsigned char bits = glyph[row * 2] | glyph[row * 2 + 1];
+		for (column = 0; column < 4; column++)
+			p[column] = bits & (0xC0 >> (column * 2)) ? cell->colour : cell->background;
 	}
-	/* (stars: the same few, scattered by a hash of the place) */
-	star = sinf((float)x * 12.9898f + (float)y * 78.233f) * 43758.5453f;
-	star -= floorf(star);
-	if (star > 0.9f)
-		cell->c = '.';
-	else if (star < 0.04f)
-		cell->c = '+';
 }
 
 static DWORD WINAPI spinner_main(LPVOID parameter)
 {
-	struct cell drawn[SPIN_ROWS][SPIN_COLUMNS];
+	static struct cell drawn[SPIN_HIGH][SPIN_WIDE];
 	float t = 0.0f;
 	(void)parameter;
 	memset(drawn, 0, sizeof(drawn));
@@ -227,21 +231,21 @@ static DWORD WINAPI spinner_main(LPVOID parameter)
 	{
 		unsigned char *fb = XVideoGetFB();
 		int x, y;
-		for (y = 0; y < SPIN_ROWS; y++)
+		for (y = 0; y < SPIN_HIGH; y++)
 		{
-			for (x = 0; x < SPIN_COLUMNS; x++)
+			for (x = 0; x < SPIN_WIDE; x++)
 			{
 				struct cell cell;
 				spinner_cell(&cell, x, y, t);
 				if (cell.c != drawn[y][x].c || cell.colour != drawn[y][x].colour || !drawn[y][x].colour)
 				{
-					draw_cell(fb, SPIN_TOP + y, SPIN_LEFT + x, &cell);
+					draw_small_cell(fb, x, y, &cell);
 					drawn[y][x] = cell;
 				}
 			}
 		}
 		XVideoFlushFB();
-		t -= 0.06f;
+		t -= 0.05f;
 		Sleep(60);
 	}
 	return 0;
