@@ -631,6 +631,19 @@ int server_map_header(const char *path, long *version, long *scenario_type)
 	return 1;
 }
 
+/* a file's size (0 for none) */
+static unsigned long file_size(const char *path)
+{
+	FILE *file = fopen(path, "rb");
+	long size;
+
+	if (!file)
+		return 0;
+	size = fseek(file, 0, SEEK_END) ? 0 : ftell(file);
+	fclose(file);
+	return size > 0 ? (unsigned long)size : 0;
+}
+
 /* the map file of a name in a folder (d:\maps, an absolute folder): the
 first of its spellings found, into path */
 static int map_file(const char *folder, const char *name, char *path, int size)
@@ -707,6 +720,29 @@ void server_rotation_resolve(struct server_entry *entry)
 			return;
 		}
 		snprintf(entry->level, sizeof(entry->level), "%s", folder_map_key(map_index));
+		/* (a folder map linked to a Custom Edition map this server has, of the link's size: that map is hosted,
+		linked to it, PCs seeing its own name rather than the folder map's key: linked_maps.c) */
+		{
+			extern unsigned char linked_maps_custom_edition_of(char const *key, char *name, int size,
+				unsigned long *file_size);
+			char name[SERVER_MAP_SIZE];
+			unsigned long link_size = 0;
+
+			if (linked_maps_custom_edition_of(entry->level, name, sizeof(name), &link_size) &&
+				(map_file(folder, name, path, sizeof(path)) ||
+					(platform_custom_edition_root()[0] &&
+						(snprintf(folder, sizeof(folder), "%s/maps", platform_custom_edition_root()),
+						map_file(folder, name, path, sizeof(path))))) &&
+				file_size(path) == link_size)
+			{
+				entry->map_kind = _server_map_custom;
+				snprintf(entry->map_name, sizeof(entry->map_name), "%s", name);
+				snprintf(entry->level, sizeof(entry->level), "custom_maps\\%s", name);
+				server_rotation_resolve(entry);
+				return;
+			}
+			custom_maps_folder(folder, sizeof(folder));
+		}
 		platform_translate_path(xbox_path, path, sizeof(path));
 		server_map_header(path, &version, &type);
 		server_rotation_check_kind(entry, type, version);

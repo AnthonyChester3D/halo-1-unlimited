@@ -482,6 +482,69 @@ void linked_maps_update(void)
 	network_game_server_port_set_host_scripts(search.found || config_boolean("server.host_scripts"));
 }
 
+/* a folder map's link (a .h1ulink in its folder): the Custom Edition map it names, its name (custom_maps\<name>'s)
+and its file's size. A dedicated server asked for the folder map hosts that map instead, linked to it, so PCs see its
+own name, not the folder map's key (server_rotation.c's server_rotation_resolve); FALSE for none */
+boolean linked_maps_custom_edition_of(char const *key, char *name, int size, unsigned long *file_size)
+{
+	char map_path[300], pattern[300], folder[300], link_path[300], line[LINK_LINE_SIZE];
+	WIN32_FIND_DATAA find;
+	HANDLE handle;
+	boolean found = FALSE;
+	char *slash;
+
+	if (!key || key[0] != '+' || !hmp_map_file_path(key, map_path, sizeof(map_path)))
+		return FALSE;
+	snprintf(folder, sizeof(folder), "%s", map_path);
+	if ((slash = strrchr(folder, '\\')) == NULL)
+		return FALSE;
+	*slash = 0;
+	snprintf(pattern, sizeof(pattern), "%s\\*.h1ulink", folder);
+	handle = FindFirstFileA(pattern, &find);
+	if (handle == INVALID_HANDLE_VALUE)
+		return FALSE;
+	do
+	{
+		FILE *file;
+		boolean first = TRUE;
+
+		if (find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			continue;
+		snprintf(link_path, sizeof(link_path), "%s\\%s", folder, find.cFileName);
+		if ((file = fopen(link_path, "r")) == NULL)
+			continue;
+		while (!found && fgets(line, sizeof(line), file))
+		{
+			char word[160], level[160], size_text[32];
+			char const *rest;
+
+			if (first)
+			{
+				first = FALSE;
+				if (strncmp(line, "h1u-link 1", 10))
+					break;
+				continue;
+			}
+			rest = next_word(line, word, sizeof(word));
+			if (!strcmp(word, "tag"))
+				break;
+			if (strcmp(word, "ce"))
+				continue;
+			rest = next_word(rest, level, sizeof(level));
+			next_word(rest, size_text, sizeof(size_text));
+			if (!custom_edition_level_name(level) || !strchr(level, '\\'))
+				break;
+			snprintf(name, (size_t)size, "%s", strchr(level, '\\') + 1);
+			*file_size = strtoul(size_text, NULL, 10);
+			found = name[0] != 0;
+		}
+		fclose(file);
+	}
+	while (!found && FindNextFileA(handle, &find));
+	CloseHandle(handle);
+	return found;
+}
+
 /* whether the host's game is on a linked map: its Xbox map's key and version */
 boolean linked_map_active(void)
 {

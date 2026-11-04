@@ -1296,7 +1296,11 @@ static void machines_update(unsigned long now)
 	{
 		struct share_slot *slot = &share.slots[index];
 
-		if (slot->state != 2)
+		/* (sending, or everything sent but not yet all received: the Xbox hangs up each connection once it has the
+		map, and only then is it done. Taken for done once the last byte was sent, its held player was let in with
+		seconds of the map still on its way: the Xbox, told to start, left the game with its download unfinished,
+		v1.81) */
+		if (slot->state != 2 && slot->state != 3)
 			continue;
 		/* (one that asked before it had joined: its machine by the address it joined from, once it has) */
 		if (slot->machine == NONE && (machine = machine_by_address(slot->address)) != NONE)
