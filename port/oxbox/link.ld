@@ -4,12 +4,12 @@ INCLUDE ovl.ld   /* OpenCE .bss over the retail game's unused code and globals (
 SECTIONS {
   . = 0x3B9000;
   __oxbox_image_start = .;
-  .text : { *(.text.oxbox_entry) *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .text .text.*) }
-  .rodata : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .rodata .rodata.*) }
-  .data : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .data .data.*) }
+  .text : { *(.text.oxbox_entry) *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .text .text.*) }
+  .rodata : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .rodata .rodata.*) }
+  .data : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .data .data.*) }
   .init_array : { __oxbox_init_start = .; KEEP(*(.init_array*)) __oxbox_init_end = .; }
   __oxbox_image_end = .;
-  .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o) .bss .bss.* COMMON)
+  .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .bss .bss.* COMMON)
                     __oxbox_bss_end = .; }
   /* the developers' perf log (port/oxbox/oxbox_perf.c), code, data and buffers, in its own XBE section (OXPERF, tools/mkxbe.py)
      after the image: not loaded at boot, only when opence.ini says perf_log = 1 (oxbox_sdk.c oxbox_perf_load) */
@@ -35,6 +35,14 @@ SECTIONS {
   __oxupd_load_end = .;
   .oxupd.bss (NOLOAD) : { *oxbox_update.o(.bss .bss.* COMMON) *mbedtls/library/*.o(.bss .bss.* COMMON) }
   __oxupd_end = .;
+  /* Halo 1 Unlimited's Xbox menu screens (port/oxbox/oxbox_menus.c), likewise: OXMENU, loaded while ui.map is (the
+     menus) and unloaded when a game's map loads (oxbox_sdk.c's menu_tags_loaded): no game carries it */
+  . = ALIGN(0x1000);
+  __oxmenu_start = .;
+  .oxmenu : { *oxbox_menus.o(.text .text.* .rodata .rodata.* .data .data.*) }
+  __oxmenu_load_end = .;
+  .oxmenu.bss (NOLOAD) : { *oxbox_menus.o(.bss .bss.* COMMON) }
+  __oxmenu_end = .;
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.gnu*) }
 }
 /* the overlay's .bss parts oxbox_entry zeroes (ovl.ld defines those it has) */

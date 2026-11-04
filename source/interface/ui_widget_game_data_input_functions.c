@@ -819,7 +819,17 @@ static void playlist_settings_menu_update_extended_description(
 
 		description_child = list_widget->parameters.list.extended_description->child;
 		description_child->parameters.text_box.string_list_index = index;
+#if defined(OXBOX_STRIP)
+		/* oxbox: the gametype editor's picture past the row Halo 1 Unlimited adds (port/oxbox/oxbox_menus.c) */
+		{
+			extern short oxbox_menus_description_frame(long list_tag_index, short index);
+
+			description_child->next->animation.current_frame_index =
+				oxbox_menus_description_frame(list_widget->definition_tag_index, index);
+		}
+#else
 		description_child->next->animation.current_frame_index = index;
+#endif
 	}
 	return;
 }

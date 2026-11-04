@@ -347,6 +347,17 @@ static void render_window(
 	structure_visibility_compute();
 	OXBOX_PERF_MARK(_oxbox_perf_draw_visibility)
 	player_effect_get_screen_flash(local_player_index, &parameters.screen_flash);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the resolution scaling test (opence.ini res_scale): the 3D view drawn smaller, stretched after it
+	(rasterizer_xbox_screen_effect.c); one window, the main view, no movie */
+	{
+		extern int oxbox_setting_res_scale;
+		extern boolean oxbox_res_scale_drawing;
+
+		oxbox_res_scale_drawing = oxbox_setting_res_scale >= 50 && oxbox_setting_res_scale < 100 &&
+			rasterizer_target == _render_target_primary && main_get_window_count() == 1 && !bink_playback_in_progress();
+	}
+#endif
 	rasterizer_window_begin(&parameters);
 
 	if (!bink_playback_in_progress())
@@ -453,6 +464,14 @@ static void render_window(
 		OXBOX_PERF_MARK(_oxbox_perf_draw_fog)
 		rasterizer_lens_flares_draw();
 		OXBOX_PERF_MARK(_oxbox_perf_draw_lens_flares)
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the resolution scaling test's narrow 3D view stretched to the window, before the HUD and menus */
+		{
+			void rasterizer_xbox_res_scale_finish(void);
+
+			rasterizer_xbox_res_scale_finish();
+		}
+#endif
 		/* port: the 3D view tone mapped (display.hdr) and antialiased
 		(display.anti_aliasing), before the HUD and menus are drawn over it */
 		if (rasterizer_target == _render_target_primary)
@@ -502,6 +521,13 @@ static void render_window(
 	render_debug();
 	editor_render();
 	rasterizer_debug_draw();
+#if defined(HALO_XBOX_TARGET)
+	{
+		extern boolean oxbox_res_scale_drawing;
+
+		oxbox_res_scale_drawing = FALSE;
+	}
+#endif
 	rasterizer_window_end();
 	OXBOX_PERF_MARK(_oxbox_perf_draw_end)
 	profile_render_window_end();

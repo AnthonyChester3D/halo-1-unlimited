@@ -33,6 +33,9 @@ opence.ini online = 0 turns internet play off (port/oxbox/net/oxbox_lwip_ws.c): 
 #if defined(HALO_XBOX_TARGET) && defined(OXBOX_NET_P2P)
 
 #include "cseries.h"
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+#include "oxbox_net_status.h"
+#endif
 #include "tag_files/tag_groups.h"
 #include "interface/ui_widget.h"
 #include "interface/event_manager.h"
@@ -607,6 +610,11 @@ static int listed_rows(int known_count, void **known)
 		if (!online_listed)
 			return 0;
 	}
+	/* (no network: no online game shown, however recently it was heard: they come back with the network) */
+#if defined(OXBOX_OFFLINE_SYSTEM_LINK)
+	if (!net_status_online_usable())
+		return 0;
+#endif
 	game_count = p2p_lobby_games(online_listed->games, MAXIMUM_LISTED);
 	for (index = 0; index < game_count; index++)
 	{

@@ -58,6 +58,7 @@ bot every 20 seconds.
 #include "scenario/scenario_definitions.h"
 #include "physics/collisions.h"
 #include "physics/collision_bsp.h"
+#include "physics/collision_bsp_definitions.h"
 #include "physics/collision_usage.h"
 #include "physics/physics.h"
 #include "ai/path.h"
@@ -329,7 +330,12 @@ arrivals, give-ups, waypoints visited, the bots' time). */
 
 enum
 {
-	BOTS_WAYPOINT_MAXIMUM = 512,     /* (192 up to release 2; the searches' arrays are static, and the search keeps a heap) */
+	BOTS_WAYPOINT_MAXIMUM = 4096,    /* (192 up to release 2, 512 up to v1.84: static arrays on every Xbox. Now the network
+	                                    and its searches' arrays are the host's alone, while it has bots, sized to the map:
+	                                    bots_route_grow, bots_route_search_room) */
+	BOTS_WAYPOINT_FIRST = 256,       /* the network's room at first, doubled as the map's waypoints need */
+	BOTS_GRID_BUCKETS = 1024,        /* the build's spatial hash (2D cells of BOTS_GRID_CELL): finding a waypoint's
+	                                    neighbours without looking at all the others (bots_route_build) */
 	BOTS_LINK_MAXIMUM = 8,
 	BOTS_LINK_MINIMUM = 2,           /* links a waypoint gets however far its neighbours are */
 	BOTS_ROUTE_MAXIMUM = 40,
@@ -352,9 +358,19 @@ enum
 };
 
 #define BOTS_LINK_RANGE 40.f
+#define BOTS_GRID_CELL 8.f
+/* (the free memory a bigger network may never take: what's left for the game, on the Xbox) */
+#define BOTS_MEMORY_RESERVE (256UL * 1024UL)
 #define BOTS_MERGE_DISTANCE 1.f
 #define BOTS_PATHFINDING_RADIUS 0.25f
 #define BOTS_ARRIVAL_DISTANCE 0.9f
+/* ladders (a bot file's ladder lines): the most a map has, and how far above the top end a climbing bot's feet go
+before it steps off to it */
+#define BOTS_LADDER_MAXIMUM 16
+#define BOTS_LADDER_TOP_MARGIN 0.15f
+/* ... and how far up a climbing bot looks (radians): a biped on a climbable surface goes the way it looks, projected
+onto the surface, so looking level into a ladder goes nowhere */
+#define BOTS_LADDER_PITCH 1.1f
 #define BOTS_STEP_DISTANCE 0.45f
 #define BOTS_TURN_PER_TICK 0.35f           /* radians (10 a second) */
 #define BOTS_DESTINATION_MINIMUM 6.f        /* a destination's distance at least */
@@ -408,7 +424,11 @@ static struct
 	long rounds;
 	long forgive_time;
 	long forgive_count;
-	struct bots_waypoint waypoints[BOTS_WAYPOINT_MAXIMUM];
+	struct bots_waypoint *waypoints;        /* (room for waypoint_capacity: the host's, while it has bots) */
+	short waypoint_capacity;
+	boolean waypoints_capped;               /* a waypoint left out: the room couldn't grow (memory, or the maximum) */
+	/* the build's spatial hash: each bucket's first waypoint, each waypoint's next (NULL outside the build) */
+	short *grid_head, *grid_next;
 
 	/* the 10-second report (bot_log) */
 	unsigned long report_time;
@@ -417,6 +437,14 @@ static struct
 	long edge_stops;                        /* steps kept off a death cliff (bots_act) */
 	long gap_hops, gap_jumps, gap_links_found, vehicle_links_learned;
 	boolean learned_dirty;                  /* what the bots learned changed since it was last saved */
+	/* the ladders (bot files' ladder lines): a link climbed by walking along the ladder's facing, into it, until the
+	feet are above the top end, then on to the top end */
+	short ladder_count;
+	struct { short from, to; real i, j; real_point3d foot; } ladders[BOTS_LADDER_MAXIMUM];
+	/* ... and the map's own ladders, found in its collision (climbable surfaces: bots_route_find_ladders), taken as
+	ladder lines once the waypoints are linked */
+	short found_ladder_count;
+	struct { real_point3d foot, top; real i, j; } found_ladders[BOTS_LADDER_MAXIMUM];
 	long learned_save_time;                 /* game time of the last save (or the game's start) */
 	long sightings, firing_ticks, grenades, melees, pickups;
 	long jumps, crouch_jumps, jumps_landed, crouches, straight_up, straight_down, straight_done, overhangs;
@@ -500,6 +528,13 @@ struct bots_brain
 	                                           it, up the ledge or off it */
 	boolean straight;                       /* finishing the hop straight */
 	boolean gap_hop;                        /* ... over a gap: jumping at its edge (a jump link) */
+	short ladder_plus_one;                  /* ... up a ladder (bots_route.ladders' index + 1; 0: none) */
+	boolean ladder_topped;                  /* ... its feet above the top end now: stepping off to it */
+	short ladder_last_plus_one;             /* the ladder climbed last, when it started up it (the climb's time limit,
+	                                           whatever new routes onto the same ladder came meanwhile), and when it
+	                                           was last on it */
+	long ladder_start;
+	long ladder_seen;
 	short vehicle_type;                     /* the vehicle it drives (vehicle_bot_type), while driving */
 	real yaw;                               /* where the bot faces (what its actions say) */
 	real pitch;
@@ -658,6 +693,8 @@ short vehicle_bot_type(long vehicle_index);  /* vehicles.c's (port: the bots') *
 static boolean bots_goal_walk(struct bots_brain *brain, real_point3d const *position, long now);
 static real bots_ease_turn(real left, real most);
 static real bots_ease_aim(real error, real most);
+static void bots_learned_save(void);
+static void bots_stuck_log_write(void);
 static boolean bots_route_to(struct bots_brain *brain, real_point3d const *position, short waypoint, long now);
 #if defined(OXBOX_BOT_TUNING)
 static void bots_brain_stagger(struct bots_brain *brain, long now);
@@ -916,6 +953,103 @@ static boolean bots_height_at(
 	return TRUE;
 }
 
+/* ---- the network's memory (v1.85): the host's alone, while it has bots, sized to the map. Up to v1.84 the network
+(512 waypoints) and its searches' arrays were static: about 90 KB of every Xbox's memory, used only by a host with
+bots. Now the waypoints' room starts at BOTS_WAYPOINT_FIRST and doubles as the map's need (up to
+BOTS_WAYPOINT_MAXIMUM, and never into the last BOTS_MEMORY_RESERVE of free memory: a waypoint that doesn't fit is
+left out, and said), the searches' arrays are made for the built network (bots_route_search_room), and all of it is
+freed when the host stops hosting (bots_route_release) */
+
+/* the searches' arrays, one each per waypoint (bots_explore and its callers; never two searches at once) */
+static struct
+{
+	real *cost;
+	short *previous, *route;
+	short *heap, *heap_at;                  /* the queue: a binary heap of waypoints by cost, and each one's place
+	                                           in it (NONE: not in it), so a waypoint is in it once (v1.85) */
+	byte *done;
+	short heap_count, capacity;
+	void *block;
+} bots_scratch;
+
+static long bots_grid_cell(real v)
+{
+	return (long)floor(v / BOTS_GRID_CELL);
+}
+
+static long bots_grid_bucket(long x, long y)
+{
+	return (long)(((unsigned long)x * 73856093UL ^ (unsigned long)y * 19349663UL) & (BOTS_GRID_BUCKETS - 1));
+}
+
+/* whether `bytes` more leaves the game its reserve of free memory (the Xbox's; elsewhere, yes) */
+static boolean bots_memory_allows(unsigned long bytes)
+{
+#if defined(HALO_XBOX_TARGET)
+	MEMORYSTATUS memory;
+
+	GlobalMemoryStatus(&memory);
+	return memory.dwAvailPhys > bytes + BOTS_MEMORY_RESERVE;
+#else
+	(void)bytes;
+	return TRUE;
+#endif
+}
+
+/* the waypoints' room doubled (and the build's hash's); FALSE when it can't be: the maximum, or the memory */
+static boolean bots_route_grow(void)
+{
+	short capacity = bots_route.waypoint_capacity ? (short)(bots_route.waypoint_capacity * 2) : BOTS_WAYPOINT_FIRST;
+	struct bots_waypoint *waypoints;
+
+	if (capacity > BOTS_WAYPOINT_MAXIMUM)
+		capacity = BOTS_WAYPOINT_MAXIMUM;
+	if (capacity <= bots_route.waypoint_capacity ||
+		!bots_memory_allows((unsigned long)capacity * (sizeof(struct bots_waypoint) + sizeof(short))) ||
+		!(waypoints = (struct bots_waypoint *)realloc(bots_route.waypoints, (size_t)capacity * sizeof(struct bots_waypoint))))
+	{
+		bots_route.waypoints_capped = TRUE;
+		return FALSE;
+	}
+	bots_route.waypoints = waypoints;
+	if (bots_route.grid_head)
+	{
+		short *next = (short *)realloc(bots_route.grid_next, (size_t)capacity * sizeof(short));
+
+		if (!next)
+		{
+			bots_route.waypoints_capped = TRUE;
+			return FALSE;
+		}
+		bots_route.grid_next = next;
+	}
+	bots_route.waypoint_capacity = capacity;
+	return TRUE;
+}
+
+/* the searches' arrays for the network built: FALSE (and no network) when the memory hasn't room */
+static boolean bots_route_search_room(void)
+{
+	long count = bots_route.waypoint_count;
+	unsigned long bytes = (unsigned long)count * (sizeof(real) + 4 * sizeof(short) + 1) + 16;
+
+	if (bots_scratch.block)
+		free(bots_scratch.block);
+	csmemset(&bots_scratch, 0, sizeof(bots_scratch));
+	if (!count)
+		return TRUE;
+	if (!bots_memory_allows(bytes) || !(bots_scratch.block = malloc(bytes)))
+		return FALSE;
+	bots_scratch.cost = (real *)bots_scratch.block;
+	bots_scratch.previous = (short *)(bots_scratch.cost + count);
+	bots_scratch.route = bots_scratch.previous + count;
+	bots_scratch.heap = bots_scratch.route + count;
+	bots_scratch.heap_at = bots_scratch.heap + count;
+	bots_scratch.done = (byte *)(bots_scratch.heap_at + count);
+	bots_scratch.capacity = (short)count;
+	return TRUE;
+}
+
 /* a waypoint for a point of the map's (the one already there within a world unit, or a new one); NONE when
 there is no ground under it, or no room */
 static short bots_route_add(
@@ -927,18 +1061,46 @@ static short bots_route_add(
 
 	if ((surface_index = bots_ground(point, &ground)) == NONE)
 		return NONE;
-	for (index = 0; index < bots_route.waypoint_count; index++)
+	if (bots_route.grid_head)
 	{
-		if (bots_distance3d(&bots_route.waypoints[index].point, &ground) < BOTS_MERGE_DISTANCE)
-			return index;
+		/* (the build: only the waypoints of the cells about it) */
+		long cx = bots_grid_cell(ground.x), cy = bots_grid_cell(ground.y), x, y;
+
+		for (x = cx - 1; x <= cx + 1; x++)
+		{
+			for (y = cy - 1; y <= cy + 1; y++)
+			{
+				for (index = bots_route.grid_head[bots_grid_bucket(x, y)]; index != NONE; index = bots_route.grid_next[index])
+				{
+					if (bots_distance3d(&bots_route.waypoints[index].point, &ground) < BOTS_MERGE_DISTANCE)
+						return index;
+				}
+			}
+		}
 	}
-	if (bots_route.waypoint_count >= BOTS_WAYPOINT_MAXIMUM)
+	else
+	{
+		for (index = 0; index < bots_route.waypoint_count; index++)
+		{
+			if (bots_distance3d(&bots_route.waypoints[index].point, &ground) < BOTS_MERGE_DISTANCE)
+				return index;
+		}
+	}
+	index = bots_route.waypoint_count;
+	if (index >= bots_route.waypoint_capacity && !bots_route_grow())
 		return NONE;
 	csmemset(&bots_route.waypoints[index], 0, sizeof(bots_route.waypoints[index]));
 	bots_route.waypoints[index].point = ground;
 	bots_route.waypoints[index].surface_index = surface_index;
 	bots_route.waypoints[index].last_visit_time = -100000;
 	bots_route.waypoint_count++;
+	if (bots_route.grid_head)
+	{
+		long bucket = bots_grid_bucket(bots_grid_cell(ground.x), bots_grid_cell(ground.y));
+
+		bots_route.grid_next[index] = bots_route.grid_head[bucket];
+		bots_route.grid_head[bucket] = index;
+	}
 	return index;
 }
 
@@ -1003,6 +1165,253 @@ static void bots_link_learn(
 static void bots_learned_load_nodes(void);
 
 /* the map's waypoints and their links (no searches: links are tried as bots walk them) */
+/* the map's ladders, found in its collision: a vertical climbable surface (a ladder's, which walks a biped up while it
+pushes into it) with a floor at its foot on one side and a floor near its top end, behind it or beside it (Prisoner's
+ladders stand in alcoves: the floor at the top is to a side, a step below the ladder's top). Each is kept (bots_route's
+found_ladders) with its foot and top waypoints added: taken as a ladder line once the waypoints are linked
+(bots_route_add_found_ladders). A two-sided ladder (both faces climbable) is found once, from the side its foot is on */
+#define BOTS_LADDER_FIND_STEP 0.6f          /* how far from the ladder its foot and top are looked for */
+static void bots_route_find_ladders(
+	void)
+{
+	struct collision_bsp *bsp = global_collision_bsp_get();
+	long surface_index;
+
+	bots_route.found_ladder_count = 0;
+	if (!bsp)
+		return;
+	for (surface_index = 0; surface_index < bsp->surfaces.count &&
+		bots_route.found_ladder_count < BOTS_LADDER_MAXIMUM; surface_index++)
+	{
+		struct collision_surface const *surface = TAG_BLOCK_GET_ELEMENT(&bsp->surfaces, surface_index,
+			struct collision_surface);
+		real_plane3d plane;
+		real_point3d centre = { 0.f, 0.f, 0.f };
+		real low = REAL_MAX, high = -REAL_MAX;
+		long edge_index = surface->first_edge_index;
+		short count = 0, side, index;
+
+		if (!TEST_FLAG(surface->flags, 2 /* _collision_surface_climbable_bit */))
+			continue;
+		bsp3d_get_plane_from_designator(&bsp->bsp3d, surface->plane_designator, &plane);
+		/* (upright: a ladder, not a climbable slope) */
+		if ((real)fabs(plane.n.k) > 0.3f)
+			continue;
+		/* (its corners, round its edges) */
+		do
+		{
+			struct collision_edge const *edge;
+			struct collision_vertex const *vertex;
+			short end;
+
+			if (edge_index < 0 || edge_index >= bsp->edges.count)
+				break;
+			edge = TAG_BLOCK_GET_ELEMENT(&bsp->edges, edge_index, struct collision_edge);
+			end = edge->surface_indices[0] == surface_index ? 0 : 1;
+			if (edge->vertex_indices[end] < 0 || edge->vertex_indices[end] >= bsp->vertices.count)
+				break;
+			vertex = TAG_BLOCK_GET_ELEMENT(&bsp->vertices, edge->vertex_indices[end], struct collision_vertex);
+			centre.x += vertex->point.x;
+			centre.y += vertex->point.y;
+			low = MIN(low, vertex->point.z);
+			high = MAX(high, vertex->point.z);
+			edge_index = edge->edge_indices[end];
+			count++;
+		}
+		while (edge_index != surface->first_edge_index && count < MAXIMUM_EDGES_PER_COLLISION_SURFACE);
+		if (count < 3 || high - low < 1.f)
+			continue;
+		centre.x /= count;
+		centre.y /= count;
+		/* (the other face of one found already) */
+		for (index = 0; index < bots_route.found_ladder_count; index++)
+		{
+			real_point3d const *foot = &bots_route.found_ladders[index].foot;
+			real di = foot->x - centre.x, dj = foot->y - centre.y;
+
+			if (di * di + dj * dj < 1.f && (real)fabs(foot->z - low) < 0.7f)
+				break;
+		}
+		if (index < bots_route.found_ladder_count)
+			continue;
+		/* (from either face: a floor at the foot in front of it, and one past the top behind it) */
+		for (side = 0; side < 2; side++)
+		{
+			real i = side ? -plane.n.i : plane.n.i, j = side ? -plane.n.j : plane.n.j;
+			real length = (real)sqrt(i * i + j * j);
+			real_point3d probe, foot, top;
+
+			if (length < 0.5f)
+				break;
+			i /= length;
+			j /= length;
+			probe.x = centre.x + i * BOTS_LADDER_FIND_STEP;
+			probe.y = centre.y + j * BOTS_LADDER_FIND_STEP;
+			probe.z = low + 0.3f;
+			if (bots_ground(&probe, &foot) == NONE || (real)fabs(foot.z - low) > 0.6f)
+				continue;
+			/* (the top: behind it, beside it, or behind and beside; the highest floor found within reach of the top end,
+			not the foot's) */
+			{
+				static real const offsets[5][2] = { { -1.f, 0.f }, { 0.f, 1.7f }, { 0.f, -1.7f }, { -1.f, 1.3f },
+					{ -1.f, -1.3f } };
+				short candidate;
+				boolean found = FALSE;
+
+				for (candidate = 0; candidate < 5; candidate++)
+				{
+					real_point3d ground;
+					real back = offsets[candidate][0] * BOTS_LADDER_FIND_STEP, aside = offsets[candidate][1] * BOTS_LADDER_FIND_STEP;
+
+					/* (aside: along the ladder's face, (-j, i)) */
+					probe.x = centre.x + i * back - j * aside;
+					probe.y = centre.y + j * back + i * aside;
+					probe.z = high + 0.3f;
+					if (bots_ground(&probe, &ground) == NONE || ground.z < high - 1.2f || ground.z > high + 0.4f ||
+						ground.z < foot.z + 1.f)
+					{
+						continue;
+					}
+					if (!found || ground.z > top.z)
+						top = ground;
+					found = TRUE;
+				}
+				if (!found)
+					continue;
+			}
+			index = bots_route.found_ladder_count++;
+			bots_route.found_ladders[index].foot = foot;
+			bots_route.found_ladders[index].top = top;
+			bots_route.found_ladders[index].i = -i;
+			bots_route.found_ladders[index].j = -j;
+			bots_route_add(&foot);
+			bots_route_add(&top);
+			if (bots_log_enabled())
+				bots_log("bots: a ladder at (%.2f %.2f) from %.2f to %.2f, climbed facing (%.2f %.2f)", centre.x, centre.y,
+					foot.z, top.z, -i, -j);
+			break;
+		}
+	}
+}
+
+/* a waypoint linked to its nearest (within BOTS_LINK_RANGE, but at least BOTS_LINK_MINIMUM), both ways: as up to v1.84,
+which looked at every other waypoint for each of the 8; now the nearest 16 not linked yet, found in the build's hash, ring
+by ring of cells until no nearer can be left (v1.85: 4096 waypoints, linked in a fraction of the time) */
+static void bots_route_link_nearest(
+	short from)
+{
+	enum { CANDIDATES = 2 * BOTS_LINK_MAXIMUM };
+	struct bots_waypoint const *waypoint = &bots_route.waypoints[from];
+	short candidates[CANDIDATES];
+	real distances[CANDIDATES];
+	short found = 0, picked = 0, index;
+
+	if (bots_route.grid_head)
+	{
+		long cx = bots_grid_cell(waypoint->point.x), cy = bots_grid_cell(waypoint->point.y), ring;
+
+		for (ring = 0; ring <= 64; ring++)              /* (64 rings: 500 units about; past that, the slow way below) */
+		{
+			long x, y;
+
+			/* (none in a farther ring can be nearer than ring * cell: what's found is enough when the ring is past the
+			farthest kept and the list is full, or past the range with the minimum found) */
+			if (ring > 0 && found == CANDIDATES && (real)(ring - 1) * BOTS_GRID_CELL > distances[CANDIDATES - 1])
+				break;
+			if (ring > 0 && (real)(ring - 1) * BOTS_GRID_CELL > BOTS_LINK_RANGE &&
+				found >= BOTS_LINK_MINIMUM + waypoint->link_count)
+				break;
+			for (x = cx - ring; x <= cx + ring; x++)
+			{
+				for (y = cy - ring; y <= cy + ring; y++)
+				{
+					short to;
+
+					if (x != cx - ring && x != cx + ring && y != cy - ring && y != cy + ring)
+						continue;                       /* (the ring's cells only) */
+					for (to = bots_route.grid_head[bots_grid_bucket(x, y)]; to != NONE; to = bots_route.grid_next[to])
+					{
+						real distance;
+						short at;
+
+						if (to == from || bots_grid_cell(bots_route.waypoints[to].point.x) != x ||
+							bots_grid_cell(bots_route.waypoints[to].point.y) != y)
+							continue;
+						distance = bots_weighted_distance(&waypoint->point, &bots_route.waypoints[to].point);
+						if (found == CANDIDATES && distance >= distances[CANDIDATES - 1])
+							continue;
+						at = found < CANDIDATES ? found++ : CANDIDATES - 1;
+						while (at > 0 && distances[at - 1] > distance)
+						{
+							candidates[at] = candidates[at - 1];
+							distances[at] = distances[at - 1];
+							at--;
+						}
+						candidates[at] = to;
+						distances[at] = distance;
+					}
+				}
+			}
+		}
+	}
+	if (!bots_route.grid_head || found < BOTS_LINK_MINIMUM)
+	{
+		/* (no hash, the memory was short; or a waypoint far from all the others: every other waypoint looked at, the
+		nearest kept) */
+		short to;
+
+		found = 0;
+		for (to = 0; to < bots_route.waypoint_count; to++)
+		{
+			real distance;
+			short at;
+
+			if (to == from)
+				continue;
+			distance = bots_weighted_distance(&waypoint->point, &bots_route.waypoints[to].point);
+			if (found == CANDIDATES && distance >= distances[CANDIDATES - 1])
+				continue;
+			at = found < CANDIDATES ? found++ : CANDIDATES - 1;
+			while (at > 0 && distances[at - 1] > distance)
+			{
+				candidates[at] = candidates[at - 1];
+				distances[at] = distances[at - 1];
+				at--;
+			}
+			candidates[at] = to;
+			distances[at] = distance;
+		}
+	}
+	for (index = 0; index < found && picked < BOTS_LINK_MAXIMUM; index++)
+	{
+		if (bots_link_index(from, candidates[index]) != NONE)
+			continue;
+		if (picked >= BOTS_LINK_MINIMUM && distances[index] > BOTS_LINK_RANGE)
+			break;
+		bots_link_add(from, candidates[index]);
+		bots_link_add(candidates[index], from);
+		picked++;
+	}
+}
+
+/* the network and its searches' arrays freed (the host stopped hosting): what the bots learned saved first */
+static void bots_route_release(
+	void)
+{
+	if (!bots_route.waypoints)
+		return;
+	if (bots_route.stuck_log_dirty)
+		bots_stuck_log_write();
+	bots_learned_save();
+	free(bots_route.waypoints);
+	bots_route.waypoints = NULL;
+	bots_route.waypoint_capacity = 0;
+	bots_route.waypoint_count = 0;
+	bots_route.map[0] = 0;
+	bots_route_search_room();                   /* (none: frees them) */
+	bots_log("bots: the waypoints' memory freed (no longer hosting)");
+}
+
 static void bots_route_build(
 	char const *map)
 {
@@ -1010,13 +1419,29 @@ static void bots_route_build(
 	long index;
 	short from;
 
+	unsigned long started = system_milliseconds();
+
 	csstrncpy(bots_route.map, map, sizeof(bots_route.map) - 1);
 	bots_route.map[sizeof(bots_route.map) - 1] = 0;
 	bots_route.waypoint_count = 0;
+	bots_route.waypoints_capped = FALSE;
+	bots_route.ladder_count = 0;
 	bots_route.body_logged = FALSE;
 	csmemset(bots_route.crewless, 0, sizeof(bots_route.crewless));
 	if (!scenario)
 		return;
+	/* (the build's spatial hash, while the waypoints are found and linked) */
+	if ((bots_route.grid_head = (short *)malloc(BOTS_GRID_BUCKETS * sizeof(short))) != NULL)
+	{
+		for (index = 0; index < BOTS_GRID_BUCKETS; index++)
+			bots_route.grid_head[index] = NONE;
+		if (!(bots_route.grid_next = (short *)malloc((size_t)(bots_route.waypoint_capacity ? bots_route.waypoint_capacity : 1) *
+			sizeof(short))))
+		{
+			free(bots_route.grid_head);
+			bots_route.grid_head = NULL;
+		}
+	}
 	/* the teleporters first (a teleporter's way in links to its way out: the game sends a player to the first
 	way out on the same channel, the flags' team index; game_engine.c) */
 	for (index = 0; index < scenario->netgame_flags.count; index++)
@@ -1090,38 +1515,42 @@ static void bots_route_build(
 			bots_route.race_flags[bots_route.race_flag_count++] = flag->position;
 		}
 	}
+	/* the map's own ladders: a waypoint at each one's foot and top */
+	bots_route_find_ladders();
 	/* the files' nodes (bots_learned.txt, bots.txt: another version's bot nodes, for a stock map) */
 	bots_learned_load_nodes();
 	/* each waypoint to its nearest (within the range, but at least 2), both ways */
 	for (from = 0; from < bots_route.waypoint_count; from++)
+		bots_route_link_nearest(from);
+	if (bots_route.grid_head)
 	{
-		short picked;
+		free(bots_route.grid_head);
+		free(bots_route.grid_next);
+		bots_route.grid_head = bots_route.grid_next = NULL;
+	}
+	/* (the room the doubling left over given back, and the searches' arrays made) */
+	if (bots_route.waypoint_count && bots_route.waypoint_count < bots_route.waypoint_capacity)
+	{
+		struct bots_waypoint *waypoints = (struct bots_waypoint *)realloc(bots_route.waypoints,
+			(size_t)bots_route.waypoint_count * sizeof(struct bots_waypoint));
 
-		for (picked = 0; picked < BOTS_LINK_MAXIMUM; picked++)
+		if (waypoints)
 		{
-			short best = NONE;
-			real best_distance = REAL_MAX;
-			short to;
-
-			for (to = 0; to < bots_route.waypoint_count; to++)
-			{
-				real distance;
-
-				if (to == from || bots_link_index(from, to) != NONE)
-					continue;
-				distance = bots_weighted_distance(&bots_route.waypoints[from].point, &bots_route.waypoints[to].point);
-				if (distance < best_distance)
-				{
-					best = to;
-					best_distance = distance;
-				}
-			}
-			if (best == NONE || (picked >= BOTS_LINK_MINIMUM && best_distance > BOTS_LINK_RANGE))
-				break;
-			bots_link_add(from, best);
-			bots_link_add(best, from);
+			bots_route.waypoints = waypoints;
+			bots_route.waypoint_capacity = bots_route.waypoint_count;
 		}
 	}
+	if (!bots_route_search_room())
+	{
+		bots_log("bots: %s: no memory for the searches of %d waypoints: the bots go without them",
+			bots_route.map, (int)bots_route.waypoint_count);
+		bots_route.waypoint_count = 0;
+	}
+	bots_log("bots: %s: %d waypoints%s, %lu KB, built in %lu ms", bots_route.map, (int)bots_route.waypoint_count,
+		bots_route.waypoints_capped ? " (some left out: no room for more)" : "",
+		((unsigned long)bots_route.waypoint_capacity * sizeof(struct bots_waypoint) +
+			(unsigned long)bots_scratch.capacity * (sizeof(real) + 4 * sizeof(short) + 1) + 1023) / 1024,
+		system_milliseconds() - started);
 #if defined(OXBOX_TEST_BOTS)
 	for (from = 0; from < bots_route.waypoint_count; from++)
 	{
@@ -1297,11 +1726,12 @@ static boolean bots_learned_path(
 
 #endif
 
-static short bots_learned_nearest(
-	real_point3d const *point)
+static short bots_learned_nearest_within(
+	real_point3d const *point,
+	real maximum)
 {
 	short index, best = NONE;
-	real best_distance = BOTS_LEARNED_MATCH;
+	real best_distance = maximum;
 
 	for (index = 0; index < bots_route.waypoint_count; index++)
 	{
@@ -1314,6 +1744,96 @@ static short bots_learned_nearest(
 		}
 	}
 	return best;
+}
+
+static short bots_learned_nearest(
+	real_point3d const *point)
+{
+	return bots_learned_nearest_within(point, BOTS_LEARNED_MATCH);
+}
+
+/* a ladder: its foot, its top end (each the waypoint there, or the one it merged with, within a world unit) and the way
+it faces, into it: the link between them climbed (bots_walk). FALSE if it isn't one */
+static boolean bots_ladder_add(
+	real_point3d const *foot,
+	real_point3d const *top,
+	real i,
+	real j)
+{
+	short from = bots_learned_nearest_within(foot, BOTS_MERGE_DISTANCE + 0.1f);
+	short to = bots_learned_nearest_within(top, BOTS_MERGE_DISTANCE + 0.1f);
+	real length = (real)sqrt(i * i + j * j);
+	short index, link;
+
+	if (from == NONE || to == NONE || from == to || length <= 0.01f)
+		return FALSE;
+	if (bots_link_index(from, to) == NONE)
+		bots_link_learn(from, to);
+	link = bots_link_index(from, to);
+	/* (no room at the foot: the link that's the least use given up for it, the one that failed most, else the longest;
+	never a teleporter's, a jump's or another climb's) */
+	if (link == NONE && !bots_route.waypoints[from].teleport_source)
+	{
+		struct bots_waypoint *waypoint = &bots_route.waypoints[from];
+		real best_distance = -1.f;
+		short best = NONE;
+
+		for (index = 0; index < waypoint->link_count; index++)
+		{
+			real distance = bots_distance3d(&waypoint->point, &bots_route.waypoints[waypoint->links[index]].point) +
+				100.f * (real)waypoint->link_failures[index];
+
+			if (TEST_FLAG(waypoint->teleport_links | waypoint->jump_links | waypoint->climb_links, index))
+				continue;
+			if (distance > best_distance)
+			{
+				best = index;
+				best_distance = distance;
+			}
+		}
+		if (best != NONE)
+		{
+			waypoint->links[best] = to;
+			waypoint->link_good[best] = TRUE;
+			waypoint->link_failures[best] = 0;
+			waypoint->jump_failed &= (byte)~FLAG(best);
+			waypoint->vehicle_once[best] = waypoint->vehicle_bad[best] = 0;
+			link = best;
+		}
+	}
+	for (index = 0; index < bots_route.ladder_count; index++)
+	{
+		if (bots_route.ladders[index].from == from && bots_route.ladders[index].to == to)
+			break;
+	}
+	if (link == NONE || index >= BOTS_LADDER_MAXIMUM)
+		return FALSE;
+	bots_route.ladders[index].from = from;
+	bots_route.ladders[index].to = to;
+	bots_route.ladders[index].i = i / length;
+	bots_route.ladders[index].j = j / length;
+	/* (the foot as given: where the climb lines up, whatever waypoint it merged with) */
+	bots_route.ladders[index].foot = *foot;
+	if (index == bots_route.ladder_count)
+		bots_route.ladder_count++;
+	/* (as a climb link: no driver takes it, and a failure before is forgiven) */
+	bots_route.waypoints[from].climb_links |= (byte)FLAG(link);
+	bots_route.waypoints[from].link_failures[link] = 0;
+	return TRUE;
+}
+
+/* the map's ladders (bots_route_find_ladders), as ladder lines, once the waypoints are linked; how many */
+static short bots_route_add_found_ladders(
+	void)
+{
+	short index, count = 0;
+
+	for (index = 0; index < bots_route.found_ladder_count; index++)
+	{
+		count += bots_ladder_add(&bots_route.found_ladders[index].foot, &bots_route.found_ladders[index].top,
+			bots_route.found_ladders[index].i, bots_route.found_ladders[index].j) ? 1 : 0;
+	}
+	return count;
 }
 
 static boolean bots_learned_number(
@@ -1354,7 +1874,7 @@ static long bots_learned_read(
 	text[size] = 0;
 	while (*c)
 	{
-		real numbers[6];
+		real numbers[8];
 		short k, from, to, link;
 		boolean good = FALSE, bad = FALSE, jump = FALSE, jump_failed = FALSE, climb = FALSE;
 		unsigned vehicles = 0;
@@ -1370,6 +1890,19 @@ static long bots_learned_read(
 				;
 			if (k == 3 && bots_route_add((real_point3d const *)&numbers[0]) != NONE)
 				lines++;
+		}
+		/* (a ladder: its foot, its top end, and the way it faces, into it: the link between them climbed) */
+		else if (!nodes && !csstrncmp(c, "ladder", 6))
+		{
+			c += 6;
+			for (k = 0; k < 8 && bots_learned_number(&c, &numbers[k]); k++)
+				;
+			/* (its ends: the waypoints their node lines made, or the ones those merged with, within a world unit) */
+			if (k == 8 && bots_ladder_add((real_point3d const *)&numbers[0], (real_point3d const *)&numbers[3],
+				numbers[6], numbers[7]))
+			{
+				lines++;
+			}
 		}
 		else if (!nodes && !csstrncmp(c, "link", 4))
 		{
@@ -1448,8 +1981,8 @@ static void bots_learned_load(
 	free(text);
 	bots_route.learned_dirty = FALSE;
 	if ((baked || learned) && bots_log_enabled())
-		bots_log("bots: %s: %ld links known from the map's bots.txt, %ld learned in earlier games", bots_route.map, baked,
-			learned);
+		bots_log("bots: %s: %ld links known from the map's bots.txt, %ld learned in earlier games, %d ladders",
+			bots_route.map, baked, learned, (int)bots_route.ladder_count);
 }
 
 /* the waypoints the files add to the map's own (node lines), before the waypoints are linked: a stock map gets a ported
@@ -1491,7 +2024,9 @@ static void bots_learned_save(
 		"# Halo 1 Unlimited: what the bots learned on %s (port/linux/game/bots.c). Deleting this file forgets it.\r\n"
 		"# node <x y z>: a waypoint (the map's spawns, weapons, flags and bot nodes)\r\n"
 		"# link <from x y z> <to x y z>: g walked, b unusable, j a jump over a gap, J a jump that failed, c walked straight\r\n"
-		"#   (a ladder, no search), v vehicle types that don't fit\r\n",
+		"#   (no search), v vehicle types that don't fit\r\n"
+		"# ladder <foot x y z> <top x y z> <facing i j>: climbed along the facing (into the ladder) until the feet are\r\n"
+		"#   above the top end, then stepped off to it\r\n",
 		bots_route.map);
 	/* (every waypoint, the map's own and its bot nodes: a copy of this file as another version's bots.txt brings them) */
 	for (from = 0; from < bots_route.waypoint_count && length > 0 && length < BOTS_LEARNED_FILE_MAXIMUM - 128; from++)
@@ -1525,6 +2060,16 @@ static void bots_learned_save(
 			length += halo_linux_snprintf(text + length, BOTS_LEARNED_FILE_MAXIMUM - length, "\r\n");
 			lines++;
 		}
+	}
+	for (link = 0; link < bots_route.ladder_count && length > 0 && length < BOTS_LEARNED_FILE_MAXIMUM - 128; link++)
+	{
+		real_point3d const *foot = &bots_route.ladders[link].foot;
+		struct bots_waypoint const *top = &bots_route.waypoints[bots_route.ladders[link].to];
+
+		length += halo_linux_snprintf(text + length, BOTS_LEARNED_FILE_MAXIMUM - length,
+			"ladder %.2f %.2f %.2f %.2f %.2f %.2f %.3f %.3f\r\n", foot->x, foot->y, foot->z,
+			top->point.x, top->point.y, top->point.z, bots_route.ladders[link].i, bots_route.ladders[link].j);
+		lines++;
 	}
 	if (length > 0 && !oxbox_write_data_file(path, text, (unsigned long)length) && bots_log_enabled())
 		bots_log("bots: couldn't write %s", path);
@@ -1623,6 +2168,10 @@ static void bots_route_update(
 			bots_brains[index].gap_hop = FALSE;
 		bots_route_build(map);
 		bots_learned_load();
+		/* (the map's own ladders, after the files' ladder lines, which say better) */
+		if (bots_route_add_found_ladders() && bots_log_enabled())
+			bots_log("bots: %s: %d ladders found in the map, %d climbed", bots_route.map,
+				(int)bots_route.found_ladder_count, (int)bots_route.ladder_count);
 		bots_route.game_time = now;
 		for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
 			bots_brain_reset(&bots_brains[index], NONE);
@@ -1819,44 +2368,59 @@ static void bots_link_result(
 	}
 }
 
-/* the search's queue: a binary heap of (cost, waypoint), smallest first; a waypoint may be in it more than once (an
-older, higher cost is skipped when it comes out). At most the 3 starts and one per link looked at */
-static struct bots_queued { real cost; short node; } bots_queue[3 + BOTS_WAYPOINT_MAXIMUM * BOTS_LINK_MAXIMUM];
-static long bots_queue_count;
+/* the search's queue: a binary heap of waypoints, the smallest cost (bots_heap_cost: the search's) first, each waypoint in
+it once, moved up when its cost drops (v1.85: one entry a waypoint, bots_scratch.heap; up to v1.84 a waypoint could be in
+it once a link, a static array of 33 KB) */
+struct bots_queued { real cost; short node; };
+static real const *bots_heap_cost;
+
+static void bots_heap_place(short at, short node)
+{
+	bots_scratch.heap[at] = node;
+	bots_scratch.heap_at[node] = at;
+}
 
 static void bots_queue_push(real cost, short node)
 {
-	long at = bots_queue_count++;
+	short at = bots_scratch.heap_at[node];
 
-	while (at > 0 && bots_queue[(at - 1) / 2].cost > cost)
+	(void)cost;
+	if (at == NONE)
+		at = bots_scratch.heap_count++;
+	while (at > 0 && bots_heap_cost[bots_scratch.heap[(at - 1) / 2]] > bots_heap_cost[node])
 	{
-		bots_queue[at] = bots_queue[(at - 1) / 2];
-		at = (at - 1) / 2;
+		bots_heap_place(at, bots_scratch.heap[(at - 1) / 2]);
+		at = (short)((at - 1) / 2);
 	}
-	bots_queue[at].cost = cost;
-	bots_queue[at].node = node;
+	bots_heap_place(at, node);
 }
 
 static struct bots_queued bots_queue_pop(void)
 {
-	struct bots_queued top = bots_queue[0], last = bots_queue[--bots_queue_count];
-	long at = 0;
+	struct bots_queued top;
+	short last = bots_scratch.heap[--bots_scratch.heap_count];
+	short at = 0;
 
+	top.node = bots_scratch.heap[0];
+	top.cost = bots_heap_cost[top.node];
+	bots_scratch.heap_at[top.node] = NONE;
+	if (!bots_scratch.heap_count)
+		return top;
 	for (;;)
 	{
-		long child = 2 * at + 1;
+		short child = (short)(2 * at + 1);
 
-		if (child >= bots_queue_count)
+		if (child >= bots_scratch.heap_count)
 			break;
-		if (child + 1 < bots_queue_count && bots_queue[child + 1].cost < bots_queue[child].cost)
+		if (child + 1 < bots_scratch.heap_count &&
+			bots_heap_cost[bots_scratch.heap[child + 1]] < bots_heap_cost[bots_scratch.heap[child]])
 			child++;
-		if (bots_queue[child].cost >= last.cost)
+		if (bots_heap_cost[bots_scratch.heap[child]] >= bots_heap_cost[last])
 			break;
-		bots_queue[at] = bots_queue[child];
+		bots_heap_place(at, bots_scratch.heap[child]);
 		at = child;
 	}
-	if (bots_queue_count)
-		bots_queue[at] = last;
+	bots_heap_place(at, last);
 	return top;
 }
 
@@ -1870,7 +2434,7 @@ static short bots_explore(
 	short *previous)
 {
 	short at = NONE;
-	static byte done[BOTS_WAYPOINT_MAXIMUM];
+	byte *done = bots_scratch.done;
 	short starts[3] = { NONE, NONE, NONE };
 	real start_costs[3] = { REAL_MAX, REAL_MAX, REAL_MAX };
 	short count = bots_route.waypoint_count;
@@ -1884,6 +2448,7 @@ static short bots_explore(
 		cost[index] = REAL_MAX;
 		previous[index] = NONE;
 		done[index] = FALSE;
+		bots_scratch.heap_at[index] = NONE;
 		if (bots_avoided(brain, index, now))
 			continue;
 		if (bots_distance2d(position, &bots_route.waypoints[index].point) < BOTS_ARRIVAL_DISTANCE &&
@@ -1912,7 +2477,8 @@ static short bots_explore(
 			}
 		}
 	}
-	bots_queue_count = 0;
+	bots_scratch.heap_count = 0;
+	bots_heap_cost = cost;
 	if (at != NONE)
 	{
 		/* (on a waypoint: from it alone, so its links count what happens on the way) */
@@ -1930,7 +2496,7 @@ static short bots_explore(
 			}
 		}
 	}
-	while (bots_queue_count)
+	while (bots_scratch.heap_count)
 	{
 		struct bots_queued next = bots_queue_pop();
 		real best_cost = next.cost;
@@ -1987,9 +2553,9 @@ static boolean bots_pick_destination(
 	real_point3d const *position,
 	long now)
 {
-	static real cost[BOTS_WAYPOINT_MAXIMUM];
-	static short previous[BOTS_WAYPOINT_MAXIMUM];
-	static short route[BOTS_WAYPOINT_MAXIMUM];
+	real *cost = bots_scratch.cost;
+	short *previous = bots_scratch.previous;
+	short *route = bots_scratch.route;
 	short best = NONE;
 	long best_score = 0;
 	short length = 0;
@@ -2205,6 +2771,49 @@ static void bots_go_straight(
 	brain->hop_deadline = game_time_get() + (long)((2.f + bots_distance3d(position, waypoint)) * BOTS_TICKS_PER_SECOND);
 }
 
+/* the ladder climbed from one waypoint to another (bots_route.ladders' index), NONE if none is */
+static short bots_ladder_of(
+	short from,
+	short to)
+{
+	short index;
+
+	for (index = 0; index < bots_route.ladder_count; index++)
+	{
+		if (bots_route.ladders[index].from == from && bots_route.ladders[index].to == to)
+			return index;
+	}
+	return NONE;
+}
+
+/* onto a ladder's hop (bots_route.ladders' index): straight up it (bots_walk), within a time from when it started up
+the same ladder, however many new routes onto it came meanwhile (a bot whose goal changes while it climbs gets the
+same hop again, and no new time) */
+#define BOTS_LADDER_SAME_CLIMB_TICKS (2 * BOTS_TICKS_PER_SECOND)
+static void bots_ladder_engage(
+	struct bots_brain *brain,
+	short ladder,
+	real_point3d const *position,
+	long now)
+{
+	struct bots_waypoint const *top = &bots_route.waypoints[bots_route.ladders[ladder].to];
+
+	bots_go_straight(brain, position, &top->point);
+	if (brain->ladder_last_plus_one != ladder + 1 || now - brain->ladder_seen > BOTS_LADDER_SAME_CLIMB_TICKS)
+	{
+		brain->ladder_start = now;
+		if (bots_log_enabled())
+			bots_log("bots: onto the ladder at (%.1f %.1f %.1f), for (%.1f %.1f %.1f)", position->x, position->y,
+				position->z, top->point.x, top->point.y, top->point.z);
+	}
+	brain->ladder_last_plus_one = (short)(ladder + 1);
+	brain->ladder_seen = now;
+	brain->ladder_plus_one = (short)(ladder + 1);
+	brain->ladder_topped = FALSE;
+	brain->hop_deadline = brain->ladder_start +
+		(long)((6.f + 2.f * bots_distance3d(&bots_route.ladders[ladder].foot, &top->point)) * BOTS_TICKS_PER_SECOND);
+}
+
 /* a path search for the hop to the bot's waypoint */
 static void bots_search(
 	struct bots_brain *brain,
@@ -2226,10 +2835,19 @@ static void bots_search(
 	brain->straight = FALSE;
 	brain->straight_after = FALSE;
 	brain->gap_hop = FALSE;
+	brain->ladder_plus_one = 0;
 	/* (a jump link: no search, straight for the waypoint, jumping at the gap's edge: bots_move_skills) */
 	if (!brain->driving && brain->from_waypoint != NONE)
 	{
 		short link = bots_link_index(brain->from_waypoint, brain->route[brain->route_position]);
+		short ladder = bots_ladder_of(brain->from_waypoint, brain->route[brain->route_position]);
+
+		/* (a ladder: up it along its facing, then off to the top end: bots_walk) */
+		if (ladder != NONE)
+		{
+			bots_ladder_engage(brain, ladder, &brain->last_position, game_time_get());
+			return;
+		}
 
 		if (link != NONE && TEST_FLAG(bots_route.waypoints[brain->from_waypoint].jump_links, link) &&
 			!TEST_FLAG(bots_route.waypoints[brain->from_waypoint].jump_failed, link))
@@ -2814,6 +3432,9 @@ static boolean bots_arrive(
 	if (brain->straight)
 		bots_route.straight_done++;
 	brain->straight = brain->straight_after = brain->gap_hop = FALSE;
+	if (brain->ladder_plus_one && bots_log_enabled())
+		bots_log("bots: off the ladder's top at (%.1f %.1f %.1f)", position->x, position->y, position->z);
+	brain->ladder_plus_one = 0;
 	brain->arrival_time = now;
 	brain->from_waypoint = reached;
 	brain->route_position++;
@@ -2918,7 +3539,7 @@ static void bots_walk(
 
 	/* at the hop's waypoint (or out of the hop's teleporter): the next hop */
 	if (teleported ||
-		(!bots_teleport_hop(brain) &&
+		(!bots_teleport_hop(brain) && !(brain->ladder_plus_one && !brain->ladder_topped) &&
 			bots_distance2d(&position, &waypoint->point) < (brain->driving ? BOTS_DRIVE_ARRIVAL : BOTS_ARRIVAL_DISTANCE) &&
 			(real)fabs(position.z - waypoint->point.z) < (brain->driving ? 3.f : 1.5f)))
 	{
@@ -2945,6 +3566,18 @@ static void bots_walk(
 		brain->stuck_level = 0;
 		brain->plan_retry_time = now + BOTS_PLAN_RETRY_TICKS / 2;
 		return;
+	}
+
+	/* a ladder's hop (a new route's, or the same climb's again after a new route): up it now, not after a search */
+	if (!brain->ladder_plus_one && !brain->driving && !teleport_hop && brain->from_waypoint != NONE)
+	{
+		short ladder = bots_ladder_of(brain->from_waypoint, brain->route[brain->route_position]);
+
+		if (ladder != NONE)
+		{
+			bots_ladder_engage(brain, ladder, &position, now);
+			hop_point = &waypoint->point;
+		}
 	}
 
 	/* the corners: the next one, and a search when they run out */
@@ -2983,6 +3616,70 @@ static void bots_walk(
 		hop_point = &waypoint->point;
 	}
 	target = brain->path_valid && brain->step_index < brain->step_count ? &brain->steps[brain->step_index] : hop_point;
+
+	/* up a ladder: along its facing, into it, until the feet are above the top end (a climbable surface walks a biped
+	up while it pushes into it); then on to the top end, with a jump off the ladder's top */
+	if (brain->ladder_plus_one && !brain->ladder_topped)
+	{
+		short ladder = (short)(brain->ladder_plus_one - 1);
+
+		if (ladder >= bots_route.ladder_count || bots_route.ladders[ladder].from != brain->from_waypoint ||
+			brain->route_position >= brain->route_count ||
+			brain->route[brain->route_position] != bots_route.ladders[ladder].to)
+		{
+			if (bots_log_enabled())
+				bots_log("bots: off the ladder at (%.1f %.1f %.1f), before its top: a new route", position.x, position.y,
+					position.z);
+			brain->ladder_plus_one = 0;
+		}
+		else if (position.z > waypoint->point.z + BOTS_LADDER_TOP_MARGIN)
+		{
+			if (bots_log_enabled())
+				bots_log("bots: up the ladder at (%.1f %.1f %.1f) in %.1f s", position.x, position.y, position.z,
+					(real)(now - brain->arrival_time) / BOTS_TICKS_PER_SECOND);
+			brain->ladder_topped = TRUE;
+			brain->jump = TRUE;
+			brain->jump_crouch = FALSE;
+			brain->jump_time = now;
+			brain->jump_start_z = position.z;
+			brain->jump_goal = 0.f;
+		}
+		else
+		{
+			/* (not stuck: the hop's deadline is the limit) */
+			brain->ladder_seen = now;
+			brain->progress_point = position;
+			brain->progress_time = now;
+			brain->stuck_level = 0;
+			/* (into it along its facing, and back onto the line through the foot node: a bot that arrived beside it
+			isn't walking into the alcove's side) */
+			real_point3d const *foot = &bots_route.ladders[ladder].foot;
+			real face_i = bots_route.ladders[ladder].i, face_j = bots_route.ladders[ladder].j;
+			real lateral = (position.x - foot->x) * -face_j + (position.y - foot->y) * face_i;
+			real correction = lateral * 2.f > 1.f ? 1.f : lateral * 2.f < -1.f ? -1.f : lateral * 2.f;
+
+			/* (fallen below the foot: given up, next tick) */
+			if (position.z < foot->z - 1.f)
+				brain->hop_deadline = now;
+			/* (still on the floor, off to a side of it: to the foot first, not into the alcove's side) */
+			if (position.z < foot->z + 0.5f && (real)fabs(lateral) > 0.3f)
+			{
+				move_i = foot->x - position.x;
+				move_j = foot->y - position.y;
+			}
+			else
+			{
+				move_i = face_i + face_j * correction;
+				move_j = face_j - face_i * correction;
+			}
+			length = (real)sqrt(move_i * move_i + move_j * move_j);
+			brain->move_i = move_i / length;
+			brain->move_j = move_j / length;
+			brain->walk_yaw = (real)atan2(face_j, face_i);
+			brain->walk_has_yaw = TRUE;
+			return;
+		}
+	}
 
 	/* getting unstuck: in 2 seconds, less than a world unit moved, or no closer to the same corner (sliding along
 	a wall, or bots pushing each other) */
@@ -3556,9 +4253,9 @@ static boolean bots_head_for(
 	real_point3d const *point,
 	long now)
 {
-	static real cost[BOTS_WAYPOINT_MAXIMUM];
-	static short previous[BOTS_WAYPOINT_MAXIMUM];
-	static short route[BOTS_WAYPOINT_MAXIMUM];
+	real *cost = bots_scratch.cost;
+	short *previous = bots_scratch.previous;
+	short *route = bots_scratch.route;
 	short best = NONE;
 	real best_distance = 8.f;
 	short length = 0;
@@ -4101,8 +4798,9 @@ static void bots_fight(
 	bots_scout(brain, unit, weapon_index, distance, now);
 	action->desired_zoom_level = brain->zoom;
 
-	/* aiming and firing (not a Warthog's driver: it steers) */
-	if (brain->target_visible && (!brain->driving || brain->driver_aims))
+	/* aiming and firing (not a Warthog's driver: it steers; nor a bot up a ladder: it looks up the ladder) */
+	if (brain->target_visible && (!brain->driving || brain->driver_aims) &&
+		!(brain->ladder_plus_one && !brain->ladder_topped))
 	{
 		struct object_datum *target_object = object_get(brain->target_unit);
 		real_point3d aim = brain->target_position;
@@ -5708,9 +6406,9 @@ static boolean bots_route_to(
 	short waypoint,
 	long now)
 {
-	static real cost[BOTS_WAYPOINT_MAXIMUM];
-	static short previous[BOTS_WAYPOINT_MAXIMUM];
-	static short route[BOTS_WAYPOINT_MAXIMUM];
+	real *cost = bots_scratch.cost;
+	short *previous = bots_scratch.previous;
+	short *route = bots_scratch.route;
 	short length = 0;
 	short index;
 	short node;
@@ -5820,8 +6518,8 @@ static boolean bots_goal_walk(
 			if (now >= brain->goal_plan_time)
 			{
 				/* (the waypoint nearest the goal of those the bot can reach; a little for the way there too) */
-				static real cost[BOTS_WAYPOINT_MAXIMUM];
-				static short previous[BOTS_WAYPOINT_MAXIMUM];
+				real *cost = bots_scratch.cost;
+				short *previous = bots_scratch.previous;
 				short best = NONE;
 				real best_distance = REAL_MAX;
 				short index;
@@ -5977,6 +6675,12 @@ static void bots_move_skills(
 
 	if (brain->crouch_ticks > 0)
 		brain->crouch_ticks--;
+	/* (up a ladder: no jump at it, nor a crouch under it, whatever's ahead: bots_walk) */
+	if (brain->ladder_plus_one && !brain->ladder_topped)
+	{
+		brain->crouch_ticks = 0;
+		return;
+	}
 	if (airborne)
 	{
 		/* (a crouch-jump crouches on the way up, and stays crouched until it lands) */
@@ -6237,20 +6941,23 @@ static void bots_act(
 	struct player_action *action)
 {
 	real forward_i, forward_j, length;
+	/* (up a ladder: facing it, looking up it, whatever it sees: bots_walk) */
+	boolean climbing = brain->ladder_plus_one && !brain->ladder_topped && !brain->driving;
 
 	if (brain->yaw < 0.f)
 	{
 		brain->yaw = action->desired_facing.yaw;
 		brain->pitch = 0.f;
 	}
-	if (!brain->target_visible)
+	if (!brain->target_visible || climbing)
 	{
 		/* (a guard turns slowly, as a guard does: a third of the rate) */
 		if (brain->walk_has_yaw)
 			brain->yaw += bots_ease_turn(bots_angle_difference(brain->walk_yaw, brain->yaw),
 				brain->goal_kind == _bots_goal_hold && brain->goal_reason == _bots_reason_defend ?
 				BOTS_TURN_PER_TICK / 3.f : BOTS_TURN_PER_TICK);
-		brain->pitch += PIN(-brain->pitch, -BOTS_PITCH_TURN_PER_TICK, BOTS_PITCH_TURN_PER_TICK);
+		brain->pitch += PIN((climbing ? BOTS_LADDER_PITCH : 0.f) - brain->pitch,
+			-BOTS_PITCH_TURN_PER_TICK, BOTS_PITCH_TURN_PER_TICK);
 	}
 	while (brain->yaw >= 2.f * BOTS_PI)
 		brain->yaw -= 2.f * BOTS_PI;
@@ -6430,7 +7137,10 @@ void bots_update(
 	short wanted;
 
 	if (!global_network_game_server_get())
+	{
+		bots_route_release();                   /* (not hosting: the waypoints' memory back to the game) */
 		return;
+	}
 #if !defined(HALO_XBOX_TARGET)
 	if (halo_server_mode())
 		bots_server_settings();

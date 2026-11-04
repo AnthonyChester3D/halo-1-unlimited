@@ -127,6 +127,7 @@ int package_load(char const *path, struct package *package, char *error)
 		manifest_size = u32(header + 112);
 		package->release = u32(header + 116);
 		package->network = u32(header + 120);
+		package->build = u32(header + 124);
 	}
 	if (packed_size > 64 * 1024 * 1024 || package->body_size > 64 * 1024 * 1024 || package->body_size < 4 ||
 		manifest_size > PACKAGE_MAX_MANIFEST)
@@ -456,6 +457,7 @@ int package_make(struct package const *package, struct package_xbe const *xbe, u
 	static unsigned char zeros[CHUNK];
 	unsigned char digest[32];
 	struct sha256 s;
+	int headers = 0;
 
 	sha256_start(&s);
 	for (;;)
@@ -476,7 +478,11 @@ int package_make(struct package const *package, struct package_xbe const *xbe, u
 		{
 			size = u32(p);
 			p += 4;
-			from = op == PICTURES ? pictures : op == HEADER ? header : NULL;
+			/* (the headers in order: ONLINE GAMES, VEHICLE OPTIONS; an older package has only the first) */
+			from = op == PICTURES ? pictures : op == HEADER && header ?
+				header + HEADER_SIZE * (headers < HEADER_COUNT ? headers : HEADER_COUNT - 1) : NULL;
+			if (op == HEADER)
+				headers++;
 			sha256_add_zeros(&s, size);
 		}
 		for (at = 0; at < size; at += CHUNK)

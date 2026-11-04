@@ -1611,6 +1611,18 @@ void rasterizer_set_target(
 			global_window_parameters.camera.viewport_bounds.x0;
 		viewport.Height = global_window_parameters.camera.viewport_bounds.y1 -
 			global_window_parameters.camera.viewport_bounds.y0;
+		/* oxbox: the resolution scaling test: the 3D view into res_scale percent of the window, its top left
+		(rasterizer_xbox_screen_effect.c stretches it after) */
+		{
+			extern int oxbox_setting_res_scale;
+			extern boolean oxbox_res_scale_drawing;
+
+			if (oxbox_res_scale_drawing)
+			{
+				viewport.Width = viewport.Width * (unsigned long)oxbox_setting_res_scale / 100;
+				viewport.Height = viewport.Height * (unsigned long)oxbox_setting_res_scale / 100;
+			}
+		}
 	}
 	else
 	{

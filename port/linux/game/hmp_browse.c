@@ -12,6 +12,9 @@ changes the sort (White, with opence.ini showcase_preview = 1, plays the map's s
 	Genres           a group per genre (maps\genres.txt), a map in each of its genres; then Uncategorized
 	Gametypes        CTF, King of the Hill, Oddball, Race (a map in each it has), Slayer only, Unknown
 	Name             A to Z, a group per letter
+	Downloaded       maps map sharing downloaded, least recently played first (the first to go when a download needs
+	                 room: OPTIONS' KEEP DOWNLOADS UNDER, hmp_share.c), each card saying its size; then the rest. The
+	                 sort's title says how much they take and the limit
 
 Every sort ends with a Hidden group. Black held 1.5 s opens the map's options on its card: Delete (a folder map, A
 twice: its folder goes from both maps folders; not Halo's maps, nor the map the game is on), Hide / Show again, Cancel
@@ -154,7 +157,7 @@ static char const *const default_genres[] =
 };
 static char const *const sort_titles[NUMBER_OF_HMP_SORTS] =
 {
-	"PACKS", "FAVORITES", "MOST PLAYED", "RECENTLY PLAYED", "PLAYERS", "GENRES", "GAMETYPES", "NAME"
+	"PACKS", "FAVORITES", "MOST PLAYED", "RECENTLY PLAYED", "PLAYERS", "GENRES", "GAMETYPES", "NAME", "DOWNLOADED"
 };
 static char const *const engine_titles[5] = { "Capture the Flag", "Slayer", "Oddball", "King of the Hill", "Race" };
 static unsigned char const engine_frames[6] = { 5, 0, 2, 3, 1, 4 };   /* game engine -> Halo's picture frame (5: unknown) */
@@ -180,6 +183,7 @@ static struct
 	boolean parse_players;
 	/* the list's buttons */
 	short sort;
+	long downloads_mb;                      /* (the Downloaded sort's title: what map sharing's downloads take, MB) */
 	char const *black_entry;
 	unsigned long black_last, black_start;
 	boolean black_down;
@@ -503,6 +507,7 @@ static void apply(void)
 	for (b = 0; b < count; b++) g.base[b] = table[b];
 	g.base_count = count;
 	g.capped = FALSE;
+	if (g.sort == _hmp_sort_downloaded) g.downloads_mb = (long)hmp_stats_downloads(NULL, NULL);
 	for (b = 0; b < g.base_count; b++)
 	{
 		struct hmp_rating rating;
@@ -541,6 +546,7 @@ static void apply(void)
 			k = t && t->sort_name[0] >= 'a' && t->sort_name[0] <= 'z' ? t->sort_name[0] - 'a' + 1 : 0;
 			put(&n, capacity, b, k, 0);
 			break;
+		case _hmp_sort_downloaded: put(&n, capacity, b, rating.download_mb ? 0 : 1, rating.order); break;
 		}
 	}
 	for (gap = n / 2; gap > 0; gap /= 2)             /* Shell sort (the base order breaks ties) */
@@ -733,6 +739,16 @@ wchar_t const *hmp_browse_label(long p)
 		else { label_add(&o, "Genre: "); label_add(&o, g.genre_names[group]); }
 		break;
 	case _hmp_sort_gametypes: label_add(&o, gametypes[group > 5 ? 5 : group]); break;
+	case _hmp_sort_downloaded:
+		if (group) { label_add(&o, "Not downloaded"); break; }
+		{
+			struct hmp_rating rating;
+			hmp_stats_get(table[p], &rating);
+			label_add(&o, "Downloaded: ");
+			label_number(&o, rating.download_mb);
+			label_add(&o, " MB");
+		}
+		break;
 	case _hmp_sort_name:
 		if (group) { char c[2]; c[0] = (char)('A' + group - 1); c[1] = 0; label_add(&o, "Names: "); label_add(&o, c); }
 		else label_add(&o, "Names: 0-9 and others");
@@ -931,8 +947,18 @@ void hmp_browse_render(short selected, float alpha)
 	a8 = (unsigned long)(long)(alpha * 255.0f + 0.5f);
 	entry = selected >= 0 && selected < hmp_maps_table_count() ? table[selected] : NULL;
 	hmp_browse_visible(entry);
-	o = put_text(g.text, "SORT: ");
-	put_text(o, sort_titles[g.sort]);
+	{
+		/* (DOWNLOADED: what they take, of KEEP DOWNLOADS UNDER, in place of "SORT:", OXMENU's text: oxbox_menus.c) */
+		extern int oxbox_downloads_title(char *out, int size, long used_mb);
+		char numbers[48];
+		if (g.sort == _hmp_sort_downloaded && oxbox_downloads_title(numbers, sizeof(numbers), g.downloads_mb))
+			put_text(g.text, numbers);
+		else
+		{
+			o = put_text(g.text, "SORT: ");
+			put_text(o, sort_titles[g.sort]);
+		}
+	}
 	text_mode(font, 1, alpha);
 	draw_line(48, 330, 72, 605, g.text);
 	hmp_stats_get(entry ? entry : "", &rating);

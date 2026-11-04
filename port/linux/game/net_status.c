@@ -231,6 +231,14 @@ void net_status_update(void)
 	net_status_poll();
 }
 
+/* whether internet play can work now (a cable, an address, not link-local): the ONLINE PLAY list shows no games
+otherwise (hmp_online.c) */
+boolean net_status_online_usable(void)
+{
+	net_status_poll();
+	return !net_status.known || usable(net_status.status);
+}
+
 boolean net_status_server_list(unsigned long milliseconds_shown)
 {
 	boolean online = FALSE;

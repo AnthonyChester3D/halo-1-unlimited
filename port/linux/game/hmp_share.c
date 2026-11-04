@@ -96,6 +96,13 @@ int __stdcall FlushFileBuffers(HANDLE file);
 void platform_log(char const *format, ...);
 char const *network_game_current_map_name(void);
 char const *cache_files_loaded_map_name(void);
+boolean cache_files_precache_map_loaded(char const *map_name);
+boolean cache_files_precache_is_copying_map(char const *map_name);
+short cache_files_precache_map_status(real *progress);
+static void loading_line(int server, int client, char const *map, u32 now);
+void hmp_maps_missing_title(char const *key, wchar_t const *title);   /* (hmp_maps.c) */
+static void cl_title_start(void);
+static void cl_title(void);
 boolean cache_files_forget_cached_map(char const *map_name);
 void display_error_text_when_main_menu_loaded(wchar_t const *text);
 
@@ -450,6 +457,13 @@ static u32 rcv_window(void) { return g_cfg_auto ? WINDOW_MAX_KB : g_cfg_window; 
    Build 17: the countdown line is one text across the lobby's message bar (maplist.c widens Halo's label
    box while it shows), so it can say who: "Sending map to King: 53%, 1:20 left". */
 static u16 g_status[64];
+/* the downloading map's own name: the worker keeps the start of its info .txt's first block (that file comes before
+the map), the game's thread reads its first line (cl_title) */
+static int g_title_file = -1;                 /* the info .txt's place in the download's files (-1: none) */
+static u8 g_title_raw[128];
+static volatile u32 g_title_len;
+static u16 g_title[32];                       /* "" until known */
+static char g_title_a[40];                    /* ... for the status lines (ASCII; others '?'), with a space after */
 static u16 g_label[64];                     /* the line under the lobby (hmp_share_render) */
 static u16 *g_lo;                           /* where the countdown line is being written */
 static int g_status_on;
@@ -1027,7 +1041,7 @@ ready:
 
 /* ================================================================ client ================ */
 
-enum { CL_IDLE, CL_START, CL_CONNECT, CL_REPLY, CL_RECV, CL_OK, CL_WAIT, CL_LEFT, CL_ASK, CL_NOROOM };
+enum { CL_IDLE, CL_START, CL_CONNECT, CL_REPLY, CL_RECV, CL_OK, CL_WAIT, CL_LEFT, CL_ASK, CL_NOROOM, CL_ROOM };
 static struct {
     int state, s;
     char key[32];
@@ -1045,6 +1059,7 @@ static struct {
     u32 mine;                     /* this console's copy's version ("Version:"; 0 none) */
     u32 rate, rate_t, rate_done;  /* recent download speed (bytes/s), for the time left */
     u32 need_mb, free_mb;         /* CL_NOROOM: what the download needs and what's free (MB) */
+    int room_asked;               /* the room prompt was answered for this download: not asked again (oxbox_menus.c) */
 } g_cl = { .s = NO_SOCK, .xs = { NO_SOCK, NO_SOCK, NO_SOCK } };
 /* not enough room for the host's map: say so on the lobby's map and countdown lines (and in the heartbeats, so the
    host and the others can show who). It stays like this until the map changes; nothing is downloaded. */
@@ -1052,6 +1067,55 @@ static void cl_noroom_text(void) {
     status("No room for this map", -1, 0);
     L_start("No room for this map: needs "); L_u(g_cl.need_mb); L_a(" MB, "); L_u(g_cl.free_mb); L_a(" MB free");
 }
+
+/* ---- the downloads' room (OPTIONS' KEEP DOWNLOADS UNDER: hmp_downloads_limit_mb). Each map map sharing downloads is
+   marked in hmp_stats.txt with its size (dl=: cl_finish). A download that would take them over the limit, or that the
+   drive hasn't room for, offers to delete older downloads first; the choice, the lobby's prompt and the deleting are
+   menu work, in the OXMENU section with the menu screens (oxbox_menus.c's room_choose and the rest, v1.86: nothing of
+   it in memory during a game). Here: asking it (room_check), waiting for its answer (CL_ROOM, 30 s, then as B), and
+   going on (hmp_share_room_resume). With OXMENU not loaded (no menus), nothing is offered and the download goes ahead
+   if the drive has room */
+#define ROOM_ASK_MS 30000
+static void cl_close(void);
+static u32 g_room_asked_at;
+int oxbox_room_choose(char const *key, unsigned long need_mb, unsigned long have_mb);   /* (oxbox_sdk.c: 0 unloaded) */
+/* KEEP DOWNLOADS UNDER when nothing set it (no downloads= in the settings: the installer writes one): on E: (the game
+   there, or downloads in T:\maps), the biggest of 2 GB, 1 GB, 600 MB and 300 MB under half the room free, else 300 MB;
+   on another drive, no limit */
+long hmp_share_default_download_limit_mb(void) {
+    extern int oxbox_installed_on_e(void);
+    static const u32 sizes[4] = { 2048, 1024, 600, 300 };
+    u32 free_mb;
+    int k;
+    maps_writable();
+    if (g_dl_root == 0 && !oxbox_installed_on_e()) return 0;
+    free_mb = free_bytes(g_dl_root) >> 20;
+    for (k = 0; k < 3 && sizes[k] > free_mb / 2; k++) ;
+    lg("downloads: KEEP DOWNLOADS UNDER not set: %u MB (%u MB free on E:)", sizes[k], free_mb);
+    return (long)sizes[k];
+}
+/* room for the download: 1 when it may go ahead, 0 when it waits for the prompt's answer (CL_ROOM). need/have: bytes */
+static int room_check(u32 need, u32 have, u32 now) {
+    if (g_cl.room_asked || oxbox_room_choose(g_cl.key, (need + (1u << 20) - 1) >> 20, have >> 20) <= 0) return 1;
+    cl_close();
+    g_room_asked_at = now | 1;
+    g_cl.state = CL_ROOM;
+    status("Map: delete older downloads?", -1, 0);
+    L_start("Making room: delete older downloads?");
+    return 0;
+}
+/* the prompt answered (oxbox_menus.c, after any deleting), or not in time: the download asked for again, with the room
+   there is now; not asked again for it */
+void hmp_share_room_resume(void) {
+    if (g_cl.state != CL_ROOM) return;
+    g_cl.room_asked = 1;
+    g_cl.state = CL_START;
+}
+static void room_tick(u32 now) {
+    if (g_cl.state == CL_ROOM && now - g_room_asked_at > ROOM_ASK_MS) { lg("downloads: no answer: kept the older downloads"); hmp_share_room_resume(); }
+}
+/* whether the room prompt is waiting for its answer, and for which map's download */
+char const *hmp_share_room_waiting(void) { return g_cl.state == CL_ROOM ? g_cl.key : 0; }
 
 /* the download's data phase, on the worker: every file at once, from every connection */
 struct cst {
@@ -1166,10 +1230,11 @@ static void put_resume(const char *path, const struct resume *rs) {
     if (h != INVALID_HANDLE) { WriteFile(h, rs, sizeof *rs, &put, 0); FlushFileBuffers(h); CloseHandle(h); }
 }
 
-/* a folder's info .txt: its first .txt file (name into `path`, which holds the folder). 1 = found */
+/* a folder's info .txt: info.txt, else another .txt, never the showcase's (showcase.txt), the bots' (bots.txt) or a
+pack's order.txt (name into `path`, which holds the folder). 1 = found */
 static int txt_in(char *path) {
     char *e = path + slen(path);
-    int found = 0;
+    int best = 0;
     HANDLE h;
     scpy(e, "\\*.*");
     h = FindFirstFileA(path, g_fd);
@@ -1177,10 +1242,14 @@ static int txt_in(char *path) {
     if (h == INVALID_HANDLE) return 0;
     do {
         char *nm = g_fd + 0x2c;
-        if (!(*(u32 *)g_fd & 0x10) && ends_with(nm, ".txt") && slen(nm) < 40) { *e = '\\'; scpy(e + 1, nm); found = 1; }
-    } while (!found && FindNextFileA(h, g_fd));
+        int rank;
+        if ((*(u32 *)g_fd & 0x10) || !ends_with(nm, ".txt") || slen(nm) >= 40) continue;
+        rank = !ieq(nm, "showcase.txt") || !ieq(nm, "bots.txt") || !ieq(nm, "order.txt") ? 0 : !ieq(nm, "info.txt") ? 2 : 1;
+        if (rank > best) { *e = '\\'; scpy(e + 1, nm); best = rank; }
+    } while (best < 2 && FindNextFileA(h, g_fd));
     CloseHandle(h);
-    return found;
+    if (!best) *e = 0;
+    return best != 0;
 }
 /* a "Genres:" line in b (n bytes): where it starts and how long it is (with its line end). 1 = there is one */
 static int genres_line(const u8 *b, u32 n, u32 *at, u32 *len) {
@@ -1262,6 +1331,7 @@ static void cl_finish(u32 now) {
     if (!hmp_use_root_c(hmp_find_key(g_cl.key), g_dl_root)) lg("client: the new copy isn't in the map list!");   /* (this one, whatever the clock says) */
     g_sess_key[0] = 0;
     lg("client: installed %s\\%s%s", k_root_name[g_dl_root], g_cl.key + 1, had ? " (replacing the older copy)" : "");
+    hmp_stats_downloaded(g_cl.key, (g_cl.total + (1u << 20) - 1) >> 20);   /* (a download: KEEP DOWNLOADS UNDER counts it) */
     g_cl.state = CL_OK;
     g_status_on = 0;
 }
@@ -1534,12 +1604,13 @@ static void cl_reply(u32 now) {
                    "keep it in: it replaces this console's", g_cl.key, g_cl.r.map_version, g_cl.mine);
         }
     }
-    {                                                 /* room for it? Nothing old is deleted to make room. */
+    {                                                 /* room for it? Older downloads only go when the player says (room_check) */
         u32 need = g_cl.total - g_cl.r.start + g_cl.r.nfiles * CHUNK + (256u << 10), have = free_bytes(g_dl_root);
         if (have < need) {                            /* other maps' partial downloads go first (build 20) */
             g_tidy_keep = 0; cl_tidy(); g_tidy_keep = KEEP_PARTIALS;
             have = free_bytes(g_dl_root);
         }
+        if (!room_check(need, have, now)) return;
         if (have < need) {
             g_cl.need_mb = (need + (1u << 20) - 1) >> 20; g_cl.free_mb = have >> 20;
             lg("client: no room for %s in %s: it needs %u MB, %u MB free; not downloading", g_cl.key, k_root_name[g_dl_root],
@@ -1578,6 +1649,7 @@ static void cl_reply(u32 now) {
     g_cl.xt = now;
     g_job.t_last = now; g_job.pass_max = rcv_window() << 10;
     g_cl.state = CL_RECV;
+    cl_title_start();
     status("Downloading map ", g_cl.total >= 100 ? (int)(g_job.done / (g_cl.total / 100)) : 0, 0);
     L_start("Downloading map: "); L_pct(g_cl.total >= 100 ? (int)(g_job.done / (g_cl.total / 100)) : 0, 0);
     start_worker();
@@ -1613,6 +1685,51 @@ static void cl_extra(u32 now) {
     }
 }
 
+/* the download's info .txt (info.txt first, never the showcase's, the bots' or a pack's order.txt), whose first line
+is the map's name: watched for as the download starts */
+static void cl_title_start(void) {
+    int k, best = 0;
+    g_title_file = -1; g_title_len = 0; g_title[0] = 0; g_title_a[0] = 0;
+    for (k = 1; k < (int)g_cl.r.nfiles; k++) {
+        const char *n = g_cl.r.f[k].name;
+        int rank = !ends_with(n, ".txt") || !ieq(n, "showcase.txt") || !ieq(n, "bots.txt") || !ieq(n, "order.txt") ? 0 :
+            !ieq(n, "info.txt") ? 2 : 1;
+        if (rank > best) { best = rank; g_title_file = k; }
+    }
+}
+/* ... its first line once the worker has it (UTF-16 with a BOM, UTF-8, or ANSI): the lobby and the browser show it
+for the map from then on (hmp_maps_missing_title), and the download's lines say it */
+static void cl_title(void) {
+    const u8 *b = g_title_raw;
+    u32 n, i = 0, k = 0, a = 0;
+    if (g_title[0] || !g_title_len) return;
+    BARRIER();
+    n = g_title_len;
+    if (n >= 2 && b[0] == 0xff && b[1] == 0xfe) {
+        for (i = 2; i + 1 < n && k < 31; i += 2) {
+            u16 c = (u16)(b[i] | (b[i + 1] << 8));
+            if (c == '\r' || c == '\n') break;
+            g_title[k++] = c;
+        }
+    } else {
+        if (n >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf) i = 3;
+        while (i < n && k < 31 && b[i] != '\r' && b[i] != '\n') {
+            u16 c = b[i++];
+            if (c >= 0xc0 && c < 0xe0 && i < n) c = (u16)(((c & 0x1f) << 6) | (b[i++] & 0x3f));
+            else if (c >= 0xe0 && c < 0xf0 && i + 1 < n) { c = (u16)(((c & 0x0f) << 12) | ((b[i] & 0x3f) << 6) | (b[i + 1] & 0x3f)); i += 2; }
+            g_title[k++] = c;
+        }
+    }
+    while (k && g_title[k - 1] == ' ') k--;
+    g_title[k] = 0;
+    if (!k) { g_title_len = 0; g_title_file = -1; return; }   /* (an empty first line: the folder's name stays) */
+    for (i = 0; i < k && a < sizeof g_title_a - 2; i++) g_title_a[a++] = g_title[i] >= 32 && g_title[i] < 127 ? (char)g_title[i] : '?';
+    g_title_a[a++] = ' ';
+    g_title_a[a] = 0;
+    hmp_maps_missing_title(g_cl.key, (wchar_t const *)g_title);
+    lg("client: the map's name: %s", g_title_a);
+}
+
 /* take the download back (the worker has let go) */
 static void cl_take(void) {
     int k;
@@ -1632,7 +1749,15 @@ static int cl_block(struct cst *t) {
     g_job.hpos[f] = off + m;
     t2 = GetTickCount();
     if (t2 - t1 > g_job.wr_max) g_job.wr_max = t2 - t1;
-    if (f) g_job.small[f] |= (u8)(1 << b);
+    if (f) {
+        g_job.small[f] |= (u8)(1 << b);
+        if ((int)f == g_title_file && !b && !g_title_len) {   /* (the info .txt's first block: its first line) */
+            u32 n = m < sizeof g_title_raw ? m : sizeof g_title_raw, i;
+            for (i = 0; i < n; i++) g_title_raw[i] = data[i];
+            BARRIER();
+            g_title_len = n;
+        }
+    }
     else {
         g_have[b >> 3] |= (u8)(1 << (b & 7));
         while (g_job.prefix < g_job.nblk && HAVE(g_job.prefix)) g_job.prefix++;
@@ -1722,8 +1847,11 @@ static void cl_recv(u32 now) {
         {
             int pct = g_cl.total >= 100 ? (int)(done / (g_cl.total / 100)) : 0;
             rate_upd(&g_cl.rate, &g_cl.rate_t, &g_cl.rate_done, done, now);
-            status("Downloading map ", pct, 0);
-            L_start("Downloading map: "); L_pct(pct, g_cl.rate ? (g_cl.total - done) / g_cl.rate + 1 : 0);
+            cl_title();
+            status(g_title[0] ? g_title_a : "Downloading map ", pct, 0);
+            if (g_title[0]) { L_start("Downloading "); L_a(g_title_a); }
+            else L_start("Downloading map: ");
+            L_pct(pct, g_cl.rate ? (g_cl.total - done) / g_cl.rate + 1 : 0);
         }
         return;
     }
@@ -1751,6 +1879,7 @@ static void client_tick(u32 now) {
     case CL_REPLY: cl_reply(now); break;
     case CL_RECV: cl_recv(now); break;
     case CL_WAIT: if (now >= g_cl.retry_at) g_cl.state = CL_START; break;
+    case CL_ROOM: room_tick(now); break;
     }
 }
 
@@ -1919,7 +2048,10 @@ static void machines_tick(u32 now) {
             c->machine = m;
             lg("host: the console downloading the map is machine #%d (it asked before it had joined)", m);
         }
-        if (c->state == 2 && !c->orphan && c->machine >= 0 && c->machine < 16) {
+        /* (sending, or all sent but not all received yet: the console hangs up once it has the map. Taken for done at
+           the last byte sent, its held player was let in with seconds of the map still on the way, and the console,
+           told to start, left the game with its download unfinished, v1.81) */
+        if ((c->state == 2 || c->state == 3) && !c->orphan && c->machine >= 0 && c->machine < 16) {
             g_machine_active[c->machine] = 1;
             g_machine_seen[c->machine] = now ? now : 1;
         }
@@ -1996,7 +2128,8 @@ boolean map_share_holds_players(void) {
        the map) */
     if (client && !global_network_game_server_get() && !network_game_client_get_game(client)->map.name[0]) return TRUE;
     switch (g_cl.state) {
-    case CL_START: case CL_CONNECT: case CL_ASK: case CL_REPLY: case CL_WAIT: case CL_LEFT: case CL_NOROOM: return TRUE;
+    case CL_START: case CL_CONNECT: case CL_ASK: case CL_REPLY: case CL_WAIT: case CL_LEFT: case CL_NOROOM: case CL_ROOM:
+        return TRUE;
     case CL_RECV: return g_cl.r.in_game != 0;
     default: return FALSE;
     }
@@ -2070,9 +2203,40 @@ void map_share_update(void) {
     }
     if (!server && !g_cl.state) g_status_on = 0;
     if (server && !host_sending()) g_status_on = 0;
+    loading_line(server != 0, client != 0, map, now);
     hmp_stats_tick();
     hmp_browse_tick();
     hmp_game_tick();
+}
+
+/* after a download, or any change of map: while a console loads the map (Halo copies it to the cache first, many
+seconds for a big one), the lobby says so, the host "Waiting for players to load the map" and the console itself
+"Loading the map: 40%", rather than the lobby looking stuck. Shown after half a second of it, so a quick load doesn't
+flash it */
+long oxbox_server_machines_loading_map(void);   /* (network_server_manager.c) */
+static void loading_line(int server, int client, char const *map, u32 now) {
+    static u32 since;
+    int loading = 0, pct = -1;
+    real progress = 0.f;
+    if (map && map[0] && !game_in_progress()) {
+        if (server && !host_sending() && oxbox_server_machines_loading_map() > 0) loading = 1;
+        else if (client && !server && (!g_cl.state || g_cl.state == CL_OK) && !cache_files_precache_map_loaded(map)) {
+            loading = 2;
+            if (cache_files_precache_is_copying_map(map)) {
+                cache_files_precache_map_status(&progress);
+                pct = (int)(progress * 100.f);
+            }
+        }
+    }
+    if (!loading) { since = 0; return; }
+    if (!since) since = now | 1;
+    if (now - since < 500) return;
+    if (loading == 1) { status("Waiting for players to load the map", -1, 0); L_start("Waiting for players to load the map"); }
+    else {
+        status("Loading the map ", pct, 0);
+        L_start("Loading the map");
+        if (pct >= 0) { L_a(": "); L_pct(pct, 0); }
+    }
 }
 
 /* the status line in the lobby (the downloading console's and the host's) */
@@ -2092,6 +2256,13 @@ void map_share_render(void) {
 }
 
 boolean hmp_worker_running(void) { return g_worker != 0; }
+
+/* whether map sharing is fetching this map now (asking the host, or downloading it): a game on it that starts meanwhile
+isn't loaded (network_client_manager.c) */
+boolean hmp_share_fetching(char const *key) {
+    return key && g_cl.state && g_cl.state != CL_OK && g_cl.state != CL_LEFT && g_cl.state != CL_NOROOM &&
+        !ieq(g_cl.key, key);
+}
 
 /* oxbox: whether the lobby's countdown bar shows a download's status (bots.c draws its label there otherwise) */
 boolean map_share_status_showing(void) { return g_status_on && g_label[0]; }

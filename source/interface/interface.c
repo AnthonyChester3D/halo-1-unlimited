@@ -464,14 +464,18 @@ void interface_draw_fullscreen_overlays(
 				rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, wide);
 			}
 		}
-		/* (the offer of a newer release, opence.ini update_check: oxbox_sdk.c; on the main menu alone, ui_widget.c giving
-		it A and B) */
-		if (!game_engine && main_menu_screen_is_active())
+		/* (the offer of a newer release, opence.ini update_check: oxbox_sdk.c, on the main menu alone; and map sharing's
+		room prompt, a download over KEEP DOWNLOADS UNDER, in a lobby: hmp_share.c. ui_widget.c gives them A and B) */
+		if (!game_engine)
 		{
 			extern int oxbox_update_prompt_lines(wchar_t lines[5][100]);
+			extern int hmp_share_room_prompt_lines(wchar_t lines[5][100]);
 			extern void draw_quad(rectangle2d *bounds, pixel32 color);
 			wchar_t lines[5][100];
-			int count = oxbox_update_prompt_lines(lines);
+			int count = main_menu_screen_is_active() ? oxbox_update_prompt_lines(lines) : 0;
+
+			if (!count)
+				count = hmp_share_room_prompt_lines(lines);
 			long large = count ? tag_loaded('font', "ui\\large_ui") : NONE;
 
 			if (count && large != NONE)

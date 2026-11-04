@@ -8541,8 +8541,12 @@ static void root_process_event(
 	/* (and the main menu's offer of a newer release, A and B, every other button kept from the menu: oxbox_sdk.c) */
 	{
 		extern int oxbox_update_prompt_button(int a, int b, int pressed);
+		extern int hmp_share_room_prompt_button(int a, int b, int pressed);
 		boolean button = event->type == 3 /* _event_type_button */;
 
+		if (hmp_share_room_prompt_button(button && event->data.button.index == _gamepad_analog_button_a,
+			button && event->data.button.index == _gamepad_analog_button_b, button && event->data.button.value == 1))
+			return;
 		if (oxbox_update_prompt_button(button && event->data.button.index == _gamepad_analog_button_a,
 			button && event->data.button.index == _gamepad_analog_button_b, button && event->data.button.value == 1))
 			return;

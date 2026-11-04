@@ -1305,6 +1305,20 @@ boolean cache_files_give_time_to_precache(
 			}
 		}
 	}
+	/* oxbox: a client's folder map that isn't on this Xbox: nothing to precache. Map sharing asks the host for it once
+	the host's settings name it (cache_files_map_present); until then, a lobby rejoined after a download was cut off
+	(the main menu's map name still the host's) was precached at once, before the settings came, and failed:
+	"failed to load", out of the lobby, the download never resumed (v1.81) */
+	{
+		extern struct network_game_client *global_network_game_client_get(void);
+		extern struct network_game_server *global_network_game_server_get(void);
+
+		if (map_name[0] == '+' && hmp_maps_find(map_name) == NONE && global_network_game_client_get() &&
+			!global_network_game_server_get())
+		{
+			return FALSE;
+		}
+	}
 	/* oxbox: a folder map that failed to load here (cache_files_map_failed): not tried again while it's the map
 	asked for; another map asked for clears it */
 	if (cache_files_failed_map[0])

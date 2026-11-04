@@ -11,7 +11,10 @@ The list shows every Halo it finds: the ones it can install to first, in green; 
 	B      back to the dashboard
 	LT/RT  a page up or down
 A package signed by a key it trusts that carries a newer installer (tools/mkpackage.py --installer) offers to update
-the installer itself. */
+the installer itself.
+
+A test update location (update_url.txt: download.h) points Y, and the game's updater, at another address, a PC's or a
+NAS's; with an allow_unsigned line in it, the test packages there (not signed) are used as signed ones are. */
 #include <hal/video.h>
 #include <hal/xbox.h>
 #include <nxdk/mount.h>
@@ -37,26 +40,30 @@ the installer itself. */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 10
+#define INSTALLER_VERSION 20
 #endif
 __attribute__((used)) static struct
 {
 	char mark[8];
 	unsigned long version;
 } const installer_mark = {{'O', 'X', 'I', 'N', 'S', 'T', 'V', '1'}, INSTALLER_VERSION};
-#define PACKAGE_PATH "D:\\opence.oxpk"
-#define OLD_PACKAGE_PATH "D:\\opence_old.oxpk" /* (the package a download replaced) */
-#define DOWNLOAD_PATH "D:\\opence_download.oxpk"
-#define URL_PATH "D:\\installer_url.txt" /* (another address for updates, its first line: download.h) */
-#define OLD_INSTALLER_PATH "D:\\installer_old.xbe" /* (the installer an update replaced) */
-#define NOTICES_PATH "D:\\THIRD_PARTY.txt"
-#define LOG_PATH "D:\\installer_log.txt"
-#define LAST_PATH "D:\\installer_last.txt" /* the folder of the last install that worked, first in the list next time */
+/* its own folder's files: D:'s, or H:'s when D: isn't its folder (own_folder: the game's updater) */
+static char own_drive = 'D';
+static char const *own_path(char const *name);
+#define PACKAGE_PATH own_path("opence.oxpk")
+#define OLD_PACKAGE_PATH own_path("opence_old.oxpk") /* (the package a download replaced) */
+#define DOWNLOAD_PATH own_path("opence_download.oxpk")
+#define URL_PATH own_path("update_url.txt") /* (a test update location: download.h) */
+#define OLD_URL_PATH own_path("installer_url.txt") /* (its earlier name) */
+#define OLD_INSTALLER_PATH own_path("installer_old.xbe") /* (the installer an update replaced) */
+#define NOTICES_PATH own_path("THIRD_PARTY.txt")
+#define LOG_PATH own_path("installer_log.txt")
+#define LAST_PATH own_path("installer_last.txt") /* the folder of the last install that worked, first in the list next time */
 /* the updater: this installer's copy in each Halo folder it installs to (<Halo>\updater\default.xbe), and the note the
 game leaves beside it (the game's offer of a newer release: port/oxbox/oxbox_sdk.c) to have it update that folder and
 start the game again, with no buttons pressed */
 #define UPDATER_FOLDER "updater"
-#define AUTO_PATH "D:\\auto_update.txt"
+#define AUTO_PATH own_path("auto_update.txt")
 static int auto_mode;
 #define HALO_TITLE_ID 0x4D530004ul
 /* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
@@ -68,6 +75,14 @@ read or written. (v1.53 alone had 'OC' 0002, 4f430002) */
 #define MAX_XBE (16 * 1024 * 1024)
 static struct package package;
 static int package_ok, package_missing, signature;
+static int test_unsigned;          /* (update_url.txt's allow_unsigned: a test location's unsigned packages are used) */
+static char updater_halo[260];     /* (the game's updater: the Halo folder it's in, whose update_url.txt counts too) */
+
+/* a package it uses: signed by a key it trusts, or, with a test location that allows it, not signed at all */
+static int trusted(int sig)
+{
+	return sig == PACKAGE_SIGNED || (sig == PACKAGE_UNSIGNED && test_unsigned);
+}
 static char const *signer;
 static char package_error[256];
 
@@ -271,11 +286,14 @@ static int poll_input(void)
 	return NONE;
 }
 
+/* (the spinner stops while it waits for a button: nothing is being done; and moves again after it) */
 static int wait_input(void)
 {
 	int b;
+	screen_spinner(0);
 	while ((b = poll_input()) == NONE)
 		Sleep(16);
+	screen_spinner(1);
 	return b;
 }
 
@@ -498,9 +516,140 @@ static void to_device(char const *path, char *device, size_t size)
 }
 
 /* "E:\..." from a device path on a partition this has mounted, or 0 */
+/* this XBE's own path, as a device's ("\\Device\\Harddisk0\\Partition6\\games\\Halo\\updater\\default.xbe"). A title
+started with XLaunchNewImage("D:\\updater\\default.xbe") (the game starting its updater) is given its launcher's D: and
+the rest after a ';' ("...\\games\\Halo;\\updater\\default.xbe"): joined here as one path */
+static void kernel_image(char *own, int size)
+{
+	char *semicolon;
+	text_print(own, size, "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	if ((semicolon = strchr(own, ';')) != NULL)
+	{
+		char rest[260];
+		text_print(rest, sizeof(rest), "%s", semicolon + 1);
+		*semicolon = 0;
+		if (semicolon > own && semicolon[-1] == '\\')
+			semicolon[-1] = 0;
+		text_print(own + strlen(own), size - (int)strlen(own), "%s%s", rest[0] == '\\' ? "" : "\\", rest);
+	}
+}
+
+/* where a drive letter points ("\\Device\\Harddisk0\\Partition6\\games\\Halo\\"), or "" */
+static void drive_target(char letter, char *out, int size)
+{
+	ANSI_STRING name, target;
+	OBJECT_ATTRIBUTES attributes;
+	HANDLE handle;
+	char buffer[260], link[8];
+	ULONG length = 0;
+	out[0] = 0;
+	text_print(link, sizeof(link), "\\??\\%c:", letter);
+	RtlInitAnsiString(&name, link);
+	InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+	if (!NT_SUCCESS(NtOpenSymbolicLinkObject(&handle, &attributes)))
+		return;
+	target.Buffer = buffer;
+	target.Length = 0;
+	target.MaximumLength = sizeof(buffer) - 1;
+	if (NT_SUCCESS(NtQuerySymbolicLinkObject(handle, &target, &length)))
+		text_print(out, size, "%.*s", target.Length, target.Buffer);
+	NtClose(handle);
+}
+
+/* a file of its own folder (own_folder): up to 4 of these at once */
+static char const *own_path(char const *name)
+{
+	static char paths[4][64];
+	static int next;
+	char *path = paths[next++ & 3];
+	text_print(path, sizeof(paths[0]), "%c:\\%s", own_drive, name);
+	return path;
+}
+
+static int same_folder(char const *a, char const *b)
+{
+	size_t n = strlen(a), m = strlen(b);
+	if (n && a[n - 1] == '\\') n--;
+	if (m && b[m - 1] == '\\') m--;
+	return n == m && !_strnicmp(a, b, n);
+}
+
+/* its own folder as H: (its files are then H:'s: own_path) */
+static void own_drive_mount(char const *folder)
+{
+	char path[300];
+	text_print(path, sizeof(path), "%s%s", folder, folder[0] && folder[strlen(folder) - 1] == '\\' ? "" : "\\");
+	if (nxIsDriveMounted('H'))
+		nxUnmountDrive('H');
+	if (nxMountDrive('H', path))
+		own_drive = 'H';
+}
+
+/* how it was started, for the screen when it has no package (and the log) */
+static char started_as[2][200];
+
+/* its own folder. D: is, as nxdk or the kernel made it, when it's started from a dashboard or as one; but the game's
+updater was given the game's D:, the Halo folder (XLaunchNewImage("D:\\updater\\default.xbe"), up to v1.74), and its
+own path, joined at the launch path's ';', can name another folder than D:'s. Then its own folder is mounted as H:
+and its files are read there: D: itself is never changed (a remount of D: hung the installer started from C:). D:
+having an updater folder with the game's note in it, and none of its own, says it's the updater given the Halo
+folder */
+static void own_folder(void)
+{
+	char own[260], d[260], line[400];
+	kernel_image(own, sizeof(own));
+	drive_target('D', d, sizeof(d));
+	text_print(started_as[0], sizeof(started_as[0]), "Started as %.*s", XeImageFileName->Length,
+		XeImageFileName->Buffer);
+	text_print(started_as[1], sizeof(started_as[1]), "with D: as %s", d[0] ? d : "(none)");
+	if (!_strnicmp(own, "\\Device\\", 8))
+	{
+		char *slash = strrchr(own, '\\');
+		slash[1] = 0;
+		if (!same_folder(own, d))
+			own_drive_mount(own);
+	}
+	if (own_drive == 'D' && d[0] && !exists("D:\\auto_update.txt") &&
+		exists("D:\\" UPDATER_FOLDER "\\auto_update.txt") && exists("D:\\" UPDATER_FOLDER "\\default.xbe"))
+	{
+		char updater[300];
+		text_print(updater, sizeof(updater), "%s%s" UPDATER_FOLDER "\\", d, d[strlen(d) - 1] == '\\' ? "" : "\\");
+		own_drive_mount(updater);
+	}
+	drive_target(own_drive, d, sizeof(d));
+	text_print(line, sizeof(line), "(%s, %s; its folder, %c:, is %s)", started_as[0], started_as[1], own_drive, d);
+	log_file(line);
+}
+
+/* this XBE's own path as a device's: its own folder (own_folder) and its file's name */
+static void own_image(char *own, int size)
+{
+	char image[260], *name;
+	kernel_image(image, sizeof(image));
+	name = strrchr(image, '\\');
+	drive_target(own_drive, own, size);
+	if (!own[0])
+	{
+		text_print(own, size, "%s", image);
+		return;
+	}
+	text_print(own + strlen(own), size - (int)strlen(own), "%s%s", own[strlen(own) - 1] == '\\' ? "" : "\\",
+		name ? name + 1 : "default.xbe");
+}
+
 static int from_device(char const *device, char *path, size_t size)
 {
 	int i;
+	/* (C:, the dashboard's partition, which isn't mounted: an installer started from there, as a dashboard, is read
+	through D:, its own folder, so it still copies itself into the game as its updater. Not a drive Halo folders are
+	looked for on) */
+	static char const system_prefix[] = "\\Device\\Harddisk0\\Partition2\\";
+	if (!_strnicmp(device, system_prefix, sizeof(system_prefix) - 1))
+	{
+		char const *name = strrchr(device, '\\');
+		text_print(path, size, "%c:\\%s", own_drive, name + 1);
+		return 1;
+	}
 	for (i = 0; i < 3; i++)
 	{
 		char prefix[64];
@@ -715,7 +864,7 @@ static void last_install_read(void)
 static void flush_own_drive(void)
 {
 	char own[260], *slash, drive[260];
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	if ((slash = strrchr(own, '\\')) != NULL)
 		*slash = 0;
 	if (from_device(own, drive, sizeof(drive)))
@@ -764,7 +913,7 @@ static void find_halos(void)
 	halo_count = 0;
 	heading(NULL);
 	/* the folder the installer is in, if it's in Halo's (E:\Games\Halo\OpenCE installer: E:\Games\Halo) */
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	for (i = 0; i < 2 && (slash = strrchr(own, '\\')); i++)
 		*slash = 0;
 	if (from_device(own, path, sizeof(path)))
@@ -815,7 +964,7 @@ static void flush_drive(char const *path)
 	}
 }
 
-static unsigned char pictures[PICTURES_SIZE], header[HEADER_SIZE];
+static unsigned char pictures[PICTURES_SIZE], header[HEADER_COUNT * HEADER_SIZE];
 
 static int free_space(char const *path, unsigned long long need)
 {
@@ -1030,7 +1179,7 @@ static void install_updater(struct halo *h)
 	}
 	else
 		say_in(COLOUR_YELLOW, "  (couldn't write opence_release.txt: the game won't look for updates)");
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER "\\default.xbe", h->path);
 	if (!from_device(own, own_path, sizeof(own_path)))
 	{
@@ -1092,6 +1241,48 @@ static void own_title_folders(void)
 			say_in(COLOUR_YELLOW, "  (%d couldn't be moved)", failed);
 		flush_drive("E:\\");
 	}
+}
+
+/* map sharing's KEEP DOWNLOADS UNDER (the game's OPTIONS), set once, when the game is installed on E:, where room is
+precious: the biggest of 2 GB, 1 GB, 600 MB and 300 MB under half the room free there (else 300 MB), as downloads=<MB>
+in the game's settings. Never changed once the settings have one (the player's choice, or an earlier install's). On
+another drive: no limit, which the game takes when there's none */
+static void downloads_default(struct halo const *h)
+{
+	static unsigned long const sizes[4] = {2048, 1024, 600, 300};
+	char const *path = "E:\\TDATA\\" OWN_TITLE_FOLDER "\\opence_settings.txt";
+	char text[600], line[40];
+	ULARGE_INTEGER available, total, free_total;
+	unsigned long free_mb, got = 0, put = 0;
+	HANDLE file;
+	int k;
+
+	if ((h->path[0] | 0x20) != 'e' || !GetDiskFreeSpaceExA("E:\\", &available, &total, &free_total))
+		return;
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file != INVALID_HANDLE_VALUE)
+	{
+		if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+			got = 0;
+		CloseHandle(file);
+	}
+	text[got] = 0;
+	if (strstr(text, "downloads="))
+		return;
+	free_mb = (unsigned long)(available.QuadPart >> 20);
+	for (k = 0; k < 3 && sizes[k] > free_mb / 2; k++)
+		;
+	CreateDirectoryA("E:\\TDATA", NULL);
+	CreateDirectoryA("E:\\TDATA\\" OWN_TITLE_FOLDER, NULL);
+	file = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return;
+	SetFilePointer(file, 0, NULL, FILE_END);
+	text_print(line, sizeof(line), "%sdownloads=%lu\r\n", got && text[got - 1] != '\n' ? "\r\n" : "", sizes[k]);
+	WriteFile(file, line, (unsigned long)strlen(line), &put, NULL);
+	CloseHandle(file);
+	say("Downloaded maps kept under %lu MB (%lu MB free on E:; OPTIONS in the game changes it).", sizes[k], free_mb);
+	flush_drive("E:\\");
 }
 
 static int install(struct halo *h)
@@ -1195,6 +1386,7 @@ static int install(struct halo *h)
 	install_showcase(h);
 	install_updater(h);
 	own_title_folders();
+	downloads_default(h);
 	say_in(COLOUR_GREEN, "Done: OpenCE is this folder's default.xbe.");
 	return 0;
 }
@@ -1235,6 +1427,7 @@ static int restore(struct halo *h)
 
 static void launch(char const *device)
 {
+	screen_spinner(0);
 	screen_hand_over();
 	XLaunchXBE(device);
 	/* (only if the path didn't convert) */
@@ -1309,11 +1502,11 @@ static void update_installer(void)
 	unsigned long got_size;
 	struct writer w;
 
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	own_image(own, sizeof(own));
 	slash = strrchr(own, '\\');
 	text_print(name, sizeof(name), "%s", slash ? slash + 1 : own);
-	text_print(path, sizeof(path), "D:\\%s", name);
-	text_print(temp, sizeof(temp), "D:\\%s.new", name);
+	text_print(path, sizeof(path), "%c:\\%s", own_drive, name);
+	text_print(temp, sizeof(temp), "%c:\\%s.new", own_drive, name);
 	heading("Updating the installer");
 	log_clear();
 	say("Writing installer version %lu beside this one (%s)...", package.installer_version, name);
@@ -1369,7 +1562,7 @@ static void offer_installer_update(void)
 	int b;
 	if (!package_ok || package.installer_version <= INSTALLER_VERSION)
 		return;
-	if (signature != PACKAGE_SIGNED)
+	if (!trusted(signature))
 	{
 		log_file("(the package's installer isn't used: the package isn't signed by a key this installer trusts)");
 		return;
@@ -1419,23 +1612,51 @@ static void update_progress(void *context, unsigned long done, unsigned long tot
 	screen_show();
 }
 
-/* where updates come from: installer_url.txt's first line, if there's one, else the project's latest release */
+/* one place's update_url.txt: 1 with its address in url (its first http:// or https:// line), allow_unsigned noted */
+static int url_file(char const *path, char *url, int size)
+{
+	FILE *file = fopen(path, "r");
+	char line[512];
+	int found = 0;
+	if (!file)
+		return 0;
+	while (fgets(line, sizeof(line), file))
+	{
+		char *at = line;
+		size_t n = strlen(line);
+		while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' ' || line[n - 1] == '\t'))
+			line[--n] = 0;
+		while (*at == ' ' || *at == '\t')
+			at++;
+		if (!found && (!_strnicmp(at, "https://", 8) || !_strnicmp(at, "http://", 7)))
+		{
+			text_print(url, size, "%s", at);
+			found = 1;
+		}
+		else if (!_stricmp(at, "allow_unsigned"))
+			test_unsigned = 1;
+	}
+	fclose(file);
+	return found;
+}
+
+/* where updates come from: update_url.txt beside the installer (or installer_url.txt, its earlier name), or, for the
+game's updater, the Halo folder's; else the project's latest release */
 static void update_url(char *url, int size)
 {
-	FILE *file = fopen(URL_PATH, "r");
-	size_t n;
-	url[0] = 0;
-	if (file)
+	char path[300];
+	test_unsigned = 0;
+	if (url_file(URL_PATH, url, size) || url_file(OLD_URL_PATH, url, size))
+		return;
+	test_unsigned = 0;
+	if (updater_halo[0])
 	{
-		if (!fgets(url, size, file))
-			url[0] = 0;
-		fclose(file);
+		text_print(path, sizeof(path), "%s\\update_url.txt", updater_halo);
+		if (url_file(path, url, size))
+			return;
 	}
-	n = strlen(url);
-	while (n && (url[n - 1] == '\n' || url[n - 1] == '\r' || url[n - 1] == ' '))
-		url[--n] = 0;
-	if (_strnicmp(url, "https://", 8) && _strnicmp(url, "http://", 7))
-		text_print(url, size, "%s", DOWNLOAD_DEFAULT_URL);
+	test_unsigned = 0;
+	text_print(url, size, "%s", DOWNLOAD_DEFAULT_URL);
 }
 
 /* looks for a newer package online; 1 when opence.oxpk was replaced */
@@ -1486,6 +1707,8 @@ static int check_updates(void)
 		goto back;
 	}
 	say("Found: %s (release %lu)", fresh.name, fresh.release);
+	if (fresh.build)
+		say("  build v1.%02lu", fresh.build);
 	package_manifest_value(&fresh, "date", value, sizeof(value));
 	if (value[0])
 		say("  made %s", value);
@@ -1493,20 +1716,25 @@ static int check_updates(void)
 	if (value[0])
 		say("  %s", value);
 	/* only a package signed by a key it trusts, and not older than the one it has */
-	if (package_verify(&fresh, trusted_keys, trusted_key_count, &fresh_signer) != PACKAGE_SIGNED)
+	b = package_verify(&fresh, trusted_keys, trusted_key_count, &fresh_signer);
+	if (!trusted(b))
 	{
 		say_in(COLOUR_RED, "It isn't signed by a key this installer trusts, so it isn't used.");
 		goto discard;
 	}
-	say_in(COLOUR_GREEN, "  signed (%s)", fresh_signer);
+	if (b == PACKAGE_SIGNED)
+		say_in(COLOUR_GREEN, "  signed (%s)", fresh_signer);
+	else
+		say_in(COLOUR_YELLOW, "  not signed: used because update_url.txt says allow_unsigned (a test location)");
 	if (package_ok && package_same(&fresh, &package))
 	{
 		say_in(COLOUR_GREEN, "That's the package you have: it's up to date.");
 		goto discard;
 	}
-	if (package_ok && signature == PACKAGE_SIGNED && fresh.release < package.release)
+	if (package_ok && trusted(signature) && (fresh.release < package.release ||
+		(fresh.release == package.release && fresh.build < package.build)))
 	{
-		say_in(COLOUR_YELLOW, "That's older than yours (release %lu), so yours is kept.", package.release);
+		say_in(COLOUR_YELLOW, "That's older than yours (%s), so yours is kept.", package.name);
 		goto discard;
 	}
 	if (fresh.installer_version > INSTALLER_VERSION)
@@ -1574,6 +1802,11 @@ static void show_list(void)
 		screen_text(LIST_TOP, 0, COLOUR_RED, "%s", package_error);
 		if (package_missing)
 			screen_text(LIST_TOP + 1, 0, COLOUR_WHITE, "Put opence.oxpk beside this installer, or press Y to download it.");
+		if (package_missing)
+		{
+			screen_text(LIST_TOP + 3, 0, COLOUR_GREY, "%.70s", started_as[0]);
+			screen_text(LIST_TOP + 4, 0, COLOUR_GREY, "%.70s", started_as[1]);
+		}
 	}
 	else if (!halo_count)
 	{
@@ -1654,7 +1887,11 @@ static void auto_update(void)
 
 	auto_mode = 1;
 	log_file("auto update (the game's updater)");
-	text_print(own, sizeof(own), "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	/* (its folder: own_folder's, as a file in it) */
+	drive_target(own_drive, own, sizeof(own));
+	if (own[0] && own[strlen(own) - 1] != '\\')
+		text_print(own + strlen(own), (int)(sizeof(own) - strlen(own)), "\\");
+	text_print(own + strlen(own), (int)(sizeof(own) - strlen(own)), "default.xbe");
 	if (from_device(own, folder, sizeof(folder)) && (slash = strrchr(folder, '\\')) != NULL)
 	{
 		*slash = 0;
@@ -1665,6 +1902,7 @@ static void auto_update(void)
 			halo_count = 0;
 			add_halo(folder);
 			h = halo_count ? &halos[0] : NULL;
+			text_print(updater_halo, sizeof(updater_halo), "%s", folder);
 		}
 	}
 	if (!h)
@@ -1676,7 +1914,7 @@ static void auto_update(void)
 	/* (a newer package; and the installer it carries, which starts again and goes on from here) */
 	if (check_updates())
 		offer_installer_update();
-	if (!package_ok || signature != PACKAGE_SIGNED)
+	if (!package_ok || !trusted(signature))
 	{
 		heading("Updating Halo 1 Unlimited");
 		say_in(COLOUR_RED, "There's no package signed by a key this updater trusts: nothing changed.");
@@ -1719,10 +1957,12 @@ done:
 
 int main(void)
 {
+	own_folder();
 	nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
 	nxMountDrive('F', "\\Device\\Harddisk0\\Partition6\\");
 	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
 	screen_init();
+	screen_spinner(1);                 /* (something moves at once: the reading and the rest take a while) */
 	SDL_Init(SDL_INIT_GAMECONTROLLER);
 	heading("Reading the package...");
 	{
@@ -1734,6 +1974,10 @@ int main(void)
 	package_read();
 	if (exists(AUTO_PATH))
 		auto_update();
+	{
+		char url[512];
+		update_url(url, sizeof(url)); /* (update_url.txt's allow_unsigned, for the installer the package carries) */
+	}
 	offer_installer_update();
 	last_install_read();
 	if (last_install[0])

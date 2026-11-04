@@ -7,8 +7,12 @@ in keys.txt), and nothing secret is sent. */
 #ifndef OXBOX_DOWNLOAD_H
 #define OXBOX_DOWNLOAD_H
 
-/* where updates come from: the project's latest release's package (installer_url.txt beside the installer, its first
-line, names another: https:// or http://) */
+/* where updates come from: the project's latest release's package, or a test update location: update_url.txt (beside
+the installer; for the game and its updater, in the Halo folder), its first http:// or https:// line, a PC's or a
+NAS's web server (installer_url.txt, its earlier name, still counts beside the installer). An allow_unsigned line in
+it has the test packages there, not signed (mkpackage.py's), used as signed ones are; without it they're refused, so
+sign them (sign.cmd) or add the line. Its packages are newer when their release is, or their build at the same
+release (mkpackage.py --build). */
 #define DOWNLOAD_DEFAULT_URL "https://github.com/AnthonyChester3D/halo-1-unlimited/releases/latest/download/opence.oxpk"
 
 /* what download.c tells as it goes: a step (text), or how much is in so far (total 0: not known) */

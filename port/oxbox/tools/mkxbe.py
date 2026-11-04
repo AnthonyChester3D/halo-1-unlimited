@@ -162,6 +162,21 @@ if upd_end > upd_start:
     add_section(d, 'OXUPD', 5, upd_start, upd_end - upd_start, upd_raw, len(updb))
     struct.pack_into('<I', d, 0x10c, upd_start + upd_size - base)   # size of image
     nsec += 1
+# Halo 1 Unlimited's Xbox menu screens (port/oxbox/oxbox_menus.c: link.ld's .oxmenu and .oxmenu.bss), likewise its
+# own section, OXMENU, right after OXUPD, loaded while ui.map is and unloaded when a game's map loads (oxbox_sdk.c)
+menu_start, menu_load_end, menu_end = sym['__oxmenu_start'], sym['__oxmenu_load_end'], sym['__oxmenu_end']
+menu_size = 0
+if menu_end > menu_start:
+    subprocess.run(['llvm-objcopy', '-O', 'binary', '--only-section=.oxmenu', elf, os.path.join(os.path.dirname(elf), 'oxbox_menus.bin')], check=True)
+    menub = open(os.path.join(os.path.dirname(elf), 'oxbox_menus.bin'), 'rb').read()
+    assert len(menub) == menu_load_end - menu_start, (hex(len(menub)), hex(menu_load_end - menu_start))
+    assert upd_size and menu_start == upd_start + upd_size and not menu_start & 0xFFF, (hex(menu_start), hex(upd_start + upd_size))
+    menu_raw = len(d)
+    d += menub + bytes((-len(menub)) % 0x1000)
+    menu_size = ((menu_end + 0xFFF) & ~0xFFF) - menu_start
+    add_section(d, 'OXMENU', 5, menu_start, menu_end - menu_start, menu_raw, len(menub))
+    struct.pack_into('<I', d, 0x10c, menu_start + menu_size - base)   # size of image
+    nsec += 1
 
 # mainXapiStartup: call main(0, 0, 0) -> call oxbox_entry(0, 0, 0)
 site = 0x15cb1
@@ -228,6 +243,23 @@ if mark > 0:
         print('note: port/oxbox/online_games.dxt3 not found: the ONLINE GAMES header will be blank')
         header = bytes(32768)
     assert len(header) == 32768 and d.find(b'OXONLIN1', mark + 1) < 0
+    while len(d) % 16: d.append(0)
+    struct.pack_into('<II', d, mark + 8, len(d), len(header))
+    d += header
+# the gametype editor's VEHICLE OPTIONS header and the main menu's OPTIONS screen's (DXT3 512 x 64, installer/pictures.c;
+# oxbox_menus.c), after it, the same way (OXVEHIC1, OXOPTNS1: oxbox_entry.c). The installer fills the headers in their
+# order in the file (installer/package.c)
+for _magic, _file, _what in ((b'OXVEHIC1', 'vehicle_options.dxt3', 'VEHICLE OPTIONS'), (b'OXOPTNS1', 'options.dxt3', 'OPTIONS')):
+    mark = d.find(_magic)
+    if mark <= 0:
+        continue
+    _header = os.path.join(ROOT, 'port', 'oxbox', _file)
+    if os.path.exists(_header):
+        header = open(_header, 'rb').read()
+    else:
+        print('note: port/oxbox/%s not found: %s will have a plain text header' % (_file, _what))
+        header = bytes(32768)
+    assert len(header) == 32768 and d.find(_magic, mark + 1) < 0
     while len(d) % 16: d.append(0)
     struct.pack_into('<II', d, mark + 8, len(d), len(header))
     d += header

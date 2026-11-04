@@ -5943,6 +5943,29 @@ static boolean network_game_server_idle_postgame_tasks(
 	return success;
 }
 
+/* oxbox: how many of the game's machines haven't loaded its map yet, in the lobby (0 out of it): the lobby says the
+host is waiting for them rather than looking stuck (hmp_share.c) */
+long oxbox_server_machines_loading_map(
+	void)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	long i, count = 0;
+
+	if (!server || server->state != _network_game_server_state_pregame)
+		return 0;
+	for (i = 0; i < MAXIMUM_NETWORK_MACHINE_COUNT; i++)
+	{
+		struct network_game_server_client_machine *machine = server->client_machines + i;
+
+		if (machine->machine_index >= 0 && machine->machine_index < MAXIMUM_NETWORK_MACHINE_COUNT &&
+			!TEST_FLAG(machine->flags, _network_client_machine_precached_bit))
+		{
+			count++;
+		}
+	}
+	return count;
+}
+
 static boolean network_game_server_have_all_machines_have_precached(
 	struct network_game_server *server)
 {

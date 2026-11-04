@@ -773,6 +773,68 @@ boolean network_game_client_handle_message(
 
 /* ---------- private code */
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_ADVERTISED_XBOX_FLAG)
+/* oxbox: a dedicated server's linked game (a Custom Edition map, played here on its Xbox port: the PC builds'
+port/linux/game/linked_maps.c): listed by the Xbox map, as the game's settings name it once joined, not by the Custom
+Edition map this Xbox hasn't got (halo_port_limits.h) */
+static void oxbox_advertised_linked_map(
+	struct message_server_game_advertise *advertisement)
+{
+	extern long hmp_maps_count(void);
+	extern char const *hmp_maps_key(long i);
+	byte const *reserved = advertisement->reserved;
+	char key[HALO_PORT_ADVERTISED_LINKED_KEY_SIZE + 1];
+	unsigned long version = 0;
+	long index, length;
+
+	if (!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & OXBOX_ADVERTISED_XBOX_FLAG) ||
+		reserved[HALO_PORT_ADVERTISED_LINKED_KEY_OFFSET] != '+')
+	{
+		return;
+	}
+	for (length = 0; length < HALO_PORT_ADVERTISED_LINKED_KEY_SIZE &&
+		reserved[HALO_PORT_ADVERTISED_LINKED_KEY_OFFSET + length]; length++)
+	{
+		key[length] = (char)reserved[HALO_PORT_ADVERTISED_LINKED_KEY_OFFSET + length];
+	}
+	key[length] = 0;
+	for (index = 0; index < 4; index++)
+		version |= (unsigned long)reserved[HALO_PORT_ADVERTISED_LINKED_VERSION_OFFSET + index] << (index * 8);
+	csmemset(advertisement->map.name, 0, sizeof(advertisement->map.name));
+	csstrncpy(advertisement->map.name, key, sizeof(advertisement->map.name) - 1);
+	/* (a key that filled its bytes may be cut short: this Xbox's folder map it begins, if one) */
+	if (length == HALO_PORT_ADVERTISED_LINKED_KEY_SIZE)
+	{
+		for (index = 0; index < hmp_maps_count(); index++)
+		{
+			char const *candidate = hmp_maps_key(index);
+			long at;
+
+			if (!candidate)
+				continue;
+			for (at = 0; at < length; at++)
+			{
+				char a = candidate[at], b = key[at];
+
+				if (a >= 'A' && a <= 'Z')
+					a = (char)(a + 32);
+				if (b >= 'A' && b <= 'Z')
+					b = (char)(b + 32);
+				if (a != b)
+					break;
+			}
+			if (at == length)
+			{
+				csstrncpy(advertisement->map.name, candidate, sizeof(advertisement->map.name) - 1);
+				break;
+			}
+		}
+	}
+	advertisement->map.name[sizeof(advertisement->map.name) - 1] = 0;
+	advertisement->map.version = (long)version;
+}
+#endif
+
 static boolean network_game_client_handle_message_server_game_advertise(
 	struct network_game_client *client,
 	word *message,
@@ -796,6 +858,9 @@ static boolean network_game_client_handle_message_server_game_advertise(
 		{
 			if (transport_is_nonce(&advertisement, TRANSPORT_NONCE_LENGTH))
 			{
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_ADVERTISED_XBOX_FLAG)
+				oxbox_advertised_linked_map(&advertisement);
+#endif
 				network_game_client_new_advertised_game(client, &advertisement);
 			}
 		}

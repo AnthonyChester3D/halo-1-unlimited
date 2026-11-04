@@ -309,6 +309,15 @@ static void map_d_to_image_folder(void)
 	platform_log("D: is %s (status %08lx); the XBE: %s", folder, (unsigned long)status, oxbox_image_path);
 }
 
+/* whether the game is on the hard drive's E: (Partition1), where room is precious (map sharing's KEEP DOWNLOADS UNDER:
+hmp_share.c) */
+int oxbox_installed_on_e(void)
+{
+	int _strnicmp(const char *a, const char *b, size_t count);
+
+	return !_strnicmp(oxbox_image_path, "\\Device\\Harddisk0\\Partition1\\", 29);
+}
+
 /* ---------- reading the XBE's own file (the effects image, the pictures): by d:\<its name>, or else by the
 path the kernel loaded it from (a launcher or BIOS that starts it in a way that leaves d:\<name> elsewhere) */
 
@@ -654,6 +663,11 @@ static void read_settings(const char *path)
 			oxbox_setting_audio_effects = value != 0;
 		else if (same_text(name, "fps_counter"))
 			display_framerate = value != 0;
+		else if (same_text(name, "res_scale"))
+		{
+			extern int oxbox_setting_res_scale;   /* (the resolution scaling test: rasterizer_xbox_screen_effect.c) */
+			oxbox_setting_res_scale = value;
+		}
 		else if (same_text(name, "bot_log"))
 			oxbox_setting_bot_log = value != 0;
 		else if (same_text(name, "perf_log"))
@@ -921,6 +935,44 @@ int oxbox_xbe_online_header_read(void *buffer, unsigned long size)
 	return own_xbe_read(oxbox_online_marker.offset, buffer, size);
 }
 #endif
+
+/* the gametype editor's VEHICLE OPTIONS header and the main menu's OPTIONS screen's (32 KB each, DXT3 512 x 64:
+installer/pictures.c), the same way, after the others (oxbox_menus.c, hmp_maps.c's menu_word_read): header 0
+VEHICLE OPTIONS, 1 OPTIONS. TRUE when read; present: TRUE when the file has it (not blank) */
+static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_vehicle_marker = { "OXVEHIC1", 0, 0 };
+static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_options_marker = { "OXOPTNS1", 0, 0 };
+
+static void oxbox_menu_header(int which, unsigned long *offset, unsigned long *size)
+{
+	*offset = which ? oxbox_options_marker.offset : oxbox_vehicle_marker.offset;
+	*size = which ? oxbox_options_marker.size : oxbox_vehicle_marker.size;
+}
+
+int oxbox_xbe_menu_header_read(int which, void *buffer, unsigned long size)
+{
+	unsigned long offset, have;
+
+	oxbox_menu_header(which, &offset, &have);
+	if (!offset || size != have)
+		return 0;
+	return own_xbe_read(offset, buffer, size);
+}
+
+int oxbox_xbe_menu_header_present(int which)
+{
+	unsigned char first[16];
+	unsigned long offset, size;
+	int index;
+
+	/* (the block at the first letter's middle: the header's top left is clear even when it's there) */
+	oxbox_menu_header(which, &offset, &size);
+	if (!offset || size < (8 * 128 + 11) * 16 || !own_xbe_read(offset + (8 * 128 + 10) * 16, first, sizeof(first)))
+		return 0;
+	for (index = 0; index < (int)sizeof(first); index++)
+		if (first[index])
+			return 1;
+	return 0;
+}
 
 int oxbox_picture_read(long index, void *buffer, unsigned long size)
 {

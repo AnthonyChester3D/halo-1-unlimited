@@ -2,7 +2,7 @@
 player's own retail Halo XBE, with none of Microsoft's code or Halo's art in it.
 
 Usage: python3 port/oxbox/tools/mkpackage.py out.oxpk "name" RETAIL.xbe BUILD.xbe [RETAIL2.xbe BUILD2.xbe ...]
-           [--release N] [--network N] [--notes "text"] [--installer INSTALLER.xbe] [--showcase DIR]
+           [--release N] [--network N] [--build N] [--notes "text"] [--installer INSTALLER.xbe] [--showcase DIR]
 
 (--release: the release's number, which goes up by one each release (0, the default: a test); --network: the
 network version its online play speaks; --notes: a line about it; --installer: the installer's XBE
@@ -27,7 +27,8 @@ The format (little-endian), read by port/oxbox/installer/package.c:
         8   u32 body's size (zlib), 12 u32 its size unpacked
         16  SHA-256 of the body (as stored)
         48  the package's name (64 bytes, ASCII, NUL-padded)
-        112 u32 the manifest's size, u32 release, u32 network version, u32 (zero)
+        112 u32 the manifest's size, u32 release, u32 network version, u32 build (--build: the main menu's v1.NN, 0
+            in older packages; a test update location's packages are newer when their build is, at the same release)
     the manifest: "key: value" lines (ASCII): name, release, network, date, notes, makes (the retail XBEs), and with
         an installer: "installer" (its version), "installer size", "installer sha256" (hex); with showcase files:
         "showcase files" (how many), "showcase size" (their section's bytes)
@@ -114,9 +115,11 @@ class Index:
 
 
 def generated_regions(build):
-    """the build's pictures (OXWORDS1) and ONLINE GAMES header (OXONLIN1, online builds), from their markers"""
+    """the build's pictures (OXWORDS1), ONLINE GAMES header (OXONLIN1, online builds) and VEHICLE OPTIONS header
+    (OXVEHIC1) and OPTIONS header (OXOPTNS1), from their markers: the headers in that order in the file, as the installer fills them"""
     regions = []
-    for magic, kind, size in ((b'OXWORDS1', PICTURES, PICTURES_SIZE), (b'OXONLIN1', HEADER, HEADER_SIZE)):
+    for magic, kind, size in ((b'OXWORDS1', PICTURES, PICTURES_SIZE), (b'OXONLIN1', HEADER, HEADER_SIZE),
+                              (b'OXVEHIC1', HEADER, HEADER_SIZE), (b'OXOPTNS1', HEADER, HEADER_SIZE)):
         mark = build.find(magic)
         if mark < 0:
             assert kind == HEADER, 'no pictures marker in the build'
@@ -299,6 +302,7 @@ def main():
     parser.add_argument('xbes', nargs='+')
     parser.add_argument('--release', type=int, default=0)
     parser.add_argument('--network', type=int, default=0)
+    parser.add_argument('--build', type=int, default=0)
     parser.add_argument('--notes', default='')
     parser.add_argument('--installer')
     parser.add_argument('--showcase')
@@ -356,7 +360,7 @@ def main():
     manifest = manifest.encode('ascii')
     header = b'OXPK' + struct.pack('<III', FORMAT, len(packed), len(body)) + hashlib.sha256(packed).digest()
     header += name.encode('ascii').ljust(64, b'\0')[:64]
-    header += struct.pack('<IIII', len(manifest), args.release, args.network, 0)
+    header += struct.pack('<IIII', len(manifest), args.release, args.network, args.build)
     assert len(header) == 128
     open(out_path, 'wb').write(header + manifest + packed)
     for (retail, build, steps), e in zip(made, encoded):

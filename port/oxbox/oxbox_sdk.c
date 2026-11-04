@@ -412,6 +412,110 @@ link.ld puts the perf log (oxbox_perf.c) in the XBE section OXPERF (mkxbe.py), w
 perf_log off it takes no memory, and the game's hooks (oxbox_perf.h) find oxbox_perf NULL. With perf_log = 1 in
 opence.ini, start-up loads it here, once, and oxbox_perf points at its hooks. */
 
+/* ---------- Halo 1 Unlimited's menu screens (oxbox_menus.c), in their own section, OXMENU: loaded when ui.map has
+loaded (the menus: cache_files.c calls menu_tags_loaded with each map's name), unloaded before the next map loads
+(menu_tags_unloaded), so a game never carries their code. The rest answer "not ours" while it isn't loaded. */
+
+boolean oxbox_menus_loaded(void);
+void oxbox_menus_unloaded(void);
+boolean oxbox_menus_tag(long tag_index);
+boolean oxbox_menus_function(void *widget, void *event, long function_index, boolean *widget_deleted);
+short oxbox_menus_frame(long list_tag_index, short index);
+
+static void *oxbox_menus_section;
+
+static void *oxbox_section_named(char const *name)
+{
+	const unsigned char *header = (const unsigned char *)0x10000;
+	unsigned long count = *(const unsigned long *)(header + 0x11C);
+	unsigned char *sections = *(unsigned char *const *)(header + 0x120);
+	unsigned long index;
+
+	for (index = 0; index < count; index++)
+		if (!strcmp(*(const char *const *)(sections + index * 0x38 + 0x14), name))
+			return sections + index * 0x38;
+	return NULL;
+}
+
+void menu_tags_loaded(char const *map_name)
+{
+	oxbox_section_proc load_section = (oxbox_section_proc)oxbox_kernel_export(327);
+	oxbox_section_proc unload_section = (oxbox_section_proc)oxbox_kernel_export(328);
+	void *section;
+
+	if (oxbox_menus_section || !map_name || strcmp(map_name, "ui"))
+		return;
+	section = oxbox_section_named("OXMENU");
+	if (!section || !load_section || !unload_section || load_section(section) < 0)
+	{
+		platform_log("menus: the OXMENU section couldn't be loaded: Halo 1 Unlimited's screens aren't added");
+		return;
+	}
+	oxbox_menus_section = section;
+	if (!oxbox_menus_loaded())
+	{
+		unload_section(section);
+		oxbox_menus_section = NULL;
+	}
+}
+
+void menu_tags_unloaded(void)
+{
+	oxbox_section_proc unload_section = (oxbox_section_proc)oxbox_kernel_export(328);
+
+	if (!oxbox_menus_section)
+		return;
+	oxbox_menus_unloaded();
+	if (unload_section)
+		unload_section(oxbox_menus_section);
+	oxbox_menus_section = NULL;
+}
+
+boolean pc_menu_tag(long tag_index)
+{
+	return oxbox_menus_section ? oxbox_menus_tag(tag_index) : FALSE;
+}
+
+boolean pc_menu_event_function_invoke(void *widget, void *event, long function_index, boolean *widget_deleted)
+{
+	return oxbox_menus_section ? oxbox_menus_function(widget, event, function_index, widget_deleted) : FALSE;
+}
+
+/* map sharing's room prompt (hmp_share.c, interface.c, ui_widget.c) and the map list's DOWNLOADED title (hmp_browse.c):
+OXMENU's, menu work; without it, nothing offered, drawn or taken */
+int oxbox_menus_room_choose(char const *key, unsigned long need_mb, unsigned long have_mb);
+int oxbox_menus_room_lines(wchar_t lines[5][100]);
+int oxbox_menus_room_button(int a, int b, int pressed);
+void oxbox_menus_downloads_title(char *out, int size, long used_mb);
+
+int oxbox_room_choose(char const *key, unsigned long need_mb, unsigned long have_mb)
+{
+	return oxbox_menus_section ? oxbox_menus_room_choose(key, need_mb, have_mb) : 0;
+}
+
+int hmp_share_room_prompt_lines(wchar_t lines[5][100])
+{
+	return oxbox_menus_section ? oxbox_menus_room_lines(lines) : 0;
+}
+
+int hmp_share_room_prompt_button(int a, int b, int pressed)
+{
+	return oxbox_menus_section ? oxbox_menus_room_button(a, b, pressed) : 0;
+}
+
+int oxbox_downloads_title(char *out, int size, long used_mb)
+{
+	if (!oxbox_menus_section)
+		return 0;
+	oxbox_menus_downloads_title(out, size, used_mb);
+	return 1;
+}
+
+short oxbox_menus_description_frame(long list_tag_index, short index)
+{
+	return oxbox_menus_section ? oxbox_menus_frame(list_tag_index, index) : index;
+}
+
 #include "oxbox_perf.h"
 
 struct oxbox_perf_hooks *oxbox_perf;
@@ -532,24 +636,100 @@ from GitHub by the XBE section OXUPD (net/oxbox_update.c, Mbed TLS: about 180 KB
 unloaded as soon as the answer is in, or when a map starts loading. The installed release is the installer's word in
 D:\opence_release.txt. A newer one is offered on the main menu (interface.c draws it, ui_widget.c gives it the
 buttons): A launches the updater, the installer's copy in D:\updater (it writes it there when it installs), with a
-note, auto_update.txt, that has it update this folder and start the game again; B asks again next boot. */
+note, auto_update.txt, that has it update this folder and start the game again; B asks again next boot.
+
+A test update location: D:\update_url.txt (the Halo folder's; installer/download.h), its first http:// or https:// line,
+is asked instead of GitHub, even on a test build (release 0), and the updater fetches from it too. A package there is
+newer when its release is, or, at the same release, its build (mkpackage.py --build) is above this one's. */
 
 int oxbox_setting_update_check = 1;
 volatile long oxbox_update_found_release = -1, oxbox_update_found_network = -1;   /* (OXUPD's answer) */
+volatile long oxbox_update_found_build = 0;
+
+#ifndef OXBOX_BUILD_NUMBER
+#define OXBOX_BUILD_NUMBER 0
+#endif
 
 #define OXBOX_UPDATE_URL "https://github.com/AnthonyChester3D/halo-1-unlimited/releases/latest/download/opence.oxpk"
 #define OXBOX_RELEASE_PATH "D:\\opence_release.txt"
 #define OXBOX_UPDATER_PATH "D:\\updater\\default.xbe"
 #define OXBOX_UPDATER_NOTE "D:\\updater\\auto_update.txt"
+#define OXBOX_TEST_URL_PATH "D:\\update_url.txt"
 
 static struct
 {
 	int state;                         /* 0 not yet, 1 checking, 2 done (or not to be done) */
 	long installed_release, installed_network;
 	int offer, dismissed, updater_missing;
+	char url[512];                     /* (GitHub's, or update_url.txt's) */
 	unsigned long started, drawn, closed;
 	void *section;
+	int forced;                        /* (asked for now: the main menu's OPTIONS' CHECK FOR UPDATES) */
+	int status;                        /* (that look's answer on the main menu: oxbox_update_status) */
+	unsigned long status_at;
 } oxbox_update;
+
+/* what a look asked for now says on the main menu (no newer release found is said; one found is offered) */
+enum { _update_status_none, _update_status_looking, _update_status_newest, _update_status_unreached,
+	_update_status_no_network, _update_status_failed };
+
+static void oxbox_update_status(int status)
+{
+	oxbox_update.status = status;
+	oxbox_update.status_at = GetTickCount();
+}
+
+/* the main menu's OPTIONS' CHECK FOR UPDATES (oxbox_menus.c): a look online now, whatever the startup's found or
+skipped (a test build's too, release 0, and with update_check = 0 in opence.ini), so a new test package can be tried
+without going back to the dashboard. Its answer, or the offer, shows on the main menu */
+void oxbox_update_check_now(void)
+{
+	oxbox_update.forced = 1;
+	oxbox_update.dismissed = 0;
+	oxbox_update_status(_update_status_looking);
+	if (oxbox_update.state == 2)
+	{
+		oxbox_update.state = 0;
+		oxbox_update.offer = 0;
+	}
+	platform_log("update: CHECK FOR UPDATES: looking now");
+}
+
+/* update_url.txt's address (its first http:// or https:// line) in oxbox_update.url: 1, else GitHub's: 0 */
+static int oxbox_update_read_url(void)
+{
+	HANDLE file = CreateFileA(OXBOX_TEST_URL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	char text[1024];
+	DWORD got = 0;
+	char *line, *end;
+
+	strcpy(oxbox_update.url, OXBOX_UPDATE_URL);
+	if (file == INVALID_HANDLE_VALUE)
+		return 0;
+	if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+		got = 0;
+	CloseHandle(file);
+	text[got] = 0;
+	for (line = text; *line; line = end)
+	{
+		size_t length;
+
+		end = line + strcspn(line, "\r\n");
+		length = (size_t)(end - line);
+		end += strspn(end, "\r\n");
+		while (length && (line[length - 1] == ' ' || line[length - 1] == '\t'))
+			length--;
+		while (length && (*line == ' ' || *line == '\t'))
+			line++, length--;
+		if (length < sizeof(oxbox_update.url) && (!strncmp(line, "https://", 8) || !strncmp(line, "http://", 7)))
+		{
+			memcpy(oxbox_update.url, line, length);
+			oxbox_update.url[length] = 0;
+			return 1;
+		}
+	}
+	return 0;
+}
 
 /* the installer's word on what's installed (D:\opence_release.txt: "release N", "network N"): 0 if it isn't there */
 static void oxbox_update_read_installed(void)
@@ -600,12 +780,18 @@ void oxbox_update_frame(int menus)
 		int oxbox_lwip_address(unsigned long *address, int *dhcp);
 		oxbox_section_proc load_section;
 		unsigned long address;
-		int dhcp;
+		int dhcp, test_location;
 
-		if (!menus || now < 8000)          /* (the boot's own work first) */
+		if (!menus || (now < 8000 && !oxbox_update.forced))   /* (the boot's own work first) */
 			return;
 		oxbox_update_read_installed();
-		if (!oxbox_setting_update_check || (oxbox_update.installed_release == 0 && oxbox_setting_update_check != 2))
+		test_location = oxbox_update_read_url();
+		{
+			extern void hmp_settings_ready(void);   /* (the main menu's OPTIONS' settings: hmp_game.c) */
+			hmp_settings_ready();
+		}
+		if (!oxbox_update.forced && (!oxbox_setting_update_check ||
+			(oxbox_update.installed_release == 0 && oxbox_setting_update_check != 2 && !test_location)))
 		{
 			platform_log("update: no check (%s)", oxbox_setting_update_check ? "a test build: release 0" :
 				"update_check = 0 in opence.ini");
@@ -613,12 +799,25 @@ void oxbox_update_frame(int menus)
 			return;
 		}
 		if (!oxbox_lwip_address(&address, &dhcp))
-			return;                        /* (no network yet: no section loaded for nothing) */
+		{
+			/* (no network yet: no section loaded for nothing; asked for now, said) */
+			if (oxbox_update.forced)
+			{
+				platform_log("update: no network: no check");
+				oxbox_update_status(_update_status_no_network);
+				oxbox_update.forced = 0;
+				oxbox_update.state = 2;
+			}
+			return;
+		}
 		load_section = (oxbox_section_proc)oxbox_kernel_export(327);
 		oxbox_update.section = oxbox_update_section();
 		if (!load_section || !oxbox_update.section || load_section(oxbox_update.section) < 0)
 		{
 			platform_log("update: the OXUPD section couldn't be loaded: no check");
+			if (oxbox_update.forced)
+				oxbox_update_status(_update_status_failed);
+			oxbox_update.forced = 0;
 			oxbox_update.state = 2;
 			return;
 		}
@@ -631,13 +830,17 @@ void oxbox_update_frame(int menus)
 		{
 			if (!menus)
 				goto unload;
-			if (!oxbox_update_check_start(OXBOX_UPDATE_URL))
+			oxbox_update_found_release = -1;
+			oxbox_update_found_network = -1;
+			oxbox_update_found_build = 0;
+			if (!oxbox_update_check_start(oxbox_update.url))
 			{
 				platform_log("update: the check couldn't start");
 				goto unload;
 			}
 			oxbox_update.started = now;
-			platform_log("update: looking for a newer release (this is release %ld)", oxbox_update.installed_release);
+			platform_log("update: looking for a newer release at %s (this is release %ld build %d)", oxbox_update.url,
+				oxbox_update.installed_release, OXBOX_BUILD_NUMBER);
 			return;
 		}
 		if (!menus)
@@ -654,18 +857,68 @@ unload:
 				unload_section(oxbox_update.section);
 		}
 		oxbox_update.state = 2;
-		if (oxbox_update_found_release > oxbox_update.installed_release)
+		if (oxbox_update_found_release > oxbox_update.installed_release ||
+			(oxbox_update_found_release == oxbox_update.installed_release && oxbox_update_found_build > OXBOX_BUILD_NUMBER))
 		{
 			oxbox_update.offer = 1;
 			oxbox_update.updater_missing = GetFileAttributesA(OXBOX_UPDATER_PATH) == 0xFFFFFFFF;
-			platform_log("update: release %ld is newer than this one (%ld): offered on the main menu%s",
-				oxbox_update_found_release, oxbox_update.installed_release,
+			platform_log("update: release %ld build %ld is newer than this one (release %ld build %d): offered on the main "
+				"menu%s", oxbox_update_found_release, oxbox_update_found_build, oxbox_update.installed_release,
+				OXBOX_BUILD_NUMBER,
 				oxbox_update.updater_missing ? " (no updater in D:\\updater: the installer's Y)" : "");
+			oxbox_update_status(_update_status_none);
 		}
+		else if (oxbox_update.forced)
+		{
+			platform_log("update: CHECK FOR UPDATES: %s", oxbox_update_found_release < 0 ? "no answer" : "nothing newer");
+			oxbox_update_status(oxbox_update_found_release < 0 ? _update_status_unreached : _update_status_newest);
+		}
+		oxbox_update.forced = 0;
 	}
 #else
 	(void)menus;
 #endif
+}
+
+/* starts the updater, this folder's updater\\default.xbe, with its own folder as its D:, the way a dashboard starts a
+title ("\\Device\\...\\Halo\\updater;default.xbe" in the launch data page, then a quick reboot). XLaunchNewImage
+("D:\\updater\\default.xbe") gave it this game's D:, the Halo folder, so it worked on the game's files as its own. Returns
+only when it couldn't */
+static void oxbox_launch_updater(void)
+{
+	typedef struct { unsigned short Length, MaximumLength; char *Buffer; } oxbox_ansi_string;
+	oxbox_ansi_string *image = (oxbox_ansi_string *)oxbox_kernel_export(326);       /* XeImageFileName */
+	unsigned char **launch_page = (unsigned char **)oxbox_kernel_export(164);       /* LaunchDataPage */
+	void *(WINAPI *allocate)(unsigned long) = (void *(WINAPI *)(unsigned long))oxbox_kernel_export(165);
+	void (WINAPI *persist)(void *, unsigned long, int) = (void (WINAPI *)(void *, unsigned long, int))oxbox_kernel_export(178);
+	void (WINAPI *reboot)(int) = (void (WINAPI *)(int))oxbox_kernel_export(49);   /* HalReturnToFirmware */
+	const unsigned char *header = (const unsigned char *)0x10000;
+	const unsigned char *certificate = *(const unsigned char *const *)(header + 0x118);
+	char folder[300], *slash, *semicolon;
+	unsigned char *page;
+	int length;
+
+	if (!image || !image->Buffer || !launch_page || !allocate || !persist || !reboot)
+		return;
+	length = image->Length < sizeof(folder) - 1 ? image->Length : sizeof(folder) - 1;
+	memcpy(folder, image->Buffer, length);
+	folder[length] = 0;
+	/* (a title a dashboard started: "...\\Halo;default.xbe") */
+	if ((semicolon = strchr(folder, ';')) != NULL)
+		*semicolon = '\\';
+	if (strncmp(folder, "\\Device\\", 8) || (slash = strrchr(folder, '\\')) == NULL)
+		return;
+	*slash = 0;
+	if (!*launch_page && !(*launch_page = (unsigned char *)allocate(0x1000)))
+		return;
+	page = *launch_page;
+	persist(page, 0x1000, 1);
+	memset(page, 0, 0x1000);
+	*(unsigned long *)(page + 4) = *(const unsigned long *)(certificate + 8);   /* (the title id: LDT_TITLE, 0) */
+	if (halo_linux_snprintf((char *)page + 8, 520, "%s\\updater;default.xbe", folder) >= 520)
+		return;
+	platform_log("update: starting %s", (char *)page + 8);
+	reboot(2);                                                                   /* (the quick reboot) */
 }
 
 /* the main menu's offer: its lines (up to 5, 100 characters each), or 0 when there's none to show */
@@ -675,9 +928,42 @@ int oxbox_update_prompt_lines(wchar_t lines[5][100])
 	int count = 0, line, index;
 
 	if (!oxbox_update.offer || oxbox_update.dismissed)
-		return 0;
-	halo_linux_snprintf(text[count++], 100, "Halo 1 Unlimited release %ld is available (you have release %ld).",
-		oxbox_update_found_release, oxbox_update.installed_release);
+	{
+		/* (a look asked for now: looking, or its answer, until A or B, an answer gone by itself after 15 s) */
+		if (oxbox_update.status != _update_status_looking && GetTickCount() - oxbox_update.status_at > 15000)
+			oxbox_update.status = _update_status_none;
+		switch (oxbox_update.status)
+		{
+		case _update_status_looking:
+			halo_linux_snprintf(text[count++], 100, "Looking online for a newer release...");
+			break;
+		case _update_status_newest:
+			halo_linux_snprintf(text[count++], 100, "You have the newest release (v1.%02d).", OXBOX_BUILD_NUMBER);
+			break;
+		case _update_status_unreached:
+			halo_linux_snprintf(text[count++], 100, "Couldn't reach the update server.");
+			halo_linux_snprintf(text[count++], 100, "Is the Xbox online? Try again in a while.");
+			break;
+		case _update_status_no_network:
+			halo_linux_snprintf(text[count++], 100, "This Xbox isn't connected to a network.");
+			break;
+		case _update_status_failed:
+			halo_linux_snprintf(text[count++], 100, "Couldn't look for a newer release right now.");
+			break;
+		default:
+			return 0;
+		}
+		text[count++][0] = 0;
+		halo_linux_snprintf(text[count++], 100, oxbox_update.status == _update_status_looking ?
+			"B: hide (a newer release is still offered)" : "B: OK");
+		goto widen;
+	}
+	if (oxbox_update_found_release == oxbox_update.installed_release)
+		halo_linux_snprintf(text[count++], 100, "Halo 1 Unlimited v1.%02ld is available (you have v1.%02d).",
+			oxbox_update_found_build, OXBOX_BUILD_NUMBER);
+	else
+		halo_linux_snprintf(text[count++], 100, "Halo 1 Unlimited release %ld is available (you have release %ld).",
+			oxbox_update_found_release, oxbox_update.installed_release);
 	if (oxbox_update_found_network > oxbox_update.installed_network && oxbox_update.installed_network)
 		halo_linux_snprintf(text[count++], 100, "Online games need it: yours can't join them until it's updated.");
 	text[count++][0] = 0;
@@ -691,6 +977,7 @@ int oxbox_update_prompt_lines(wchar_t lines[5][100])
 		halo_linux_snprintf(text[count++], 100, "A: update now (the updater starts, then the game again)");
 		halo_linux_snprintf(text[count++], 100, "B: later");
 	}
+widen:
 	for (line = 0; line < count; line++)
 	{
 		for (index = 0; text[line][index] && index < 99; index++)
@@ -704,7 +991,8 @@ int oxbox_update_prompt_lines(wchar_t lines[5][100])
 /* whether the offer is on the screen (drawn in the last half second): the showcase waits */
 int oxbox_update_prompt_showing(void)
 {
-	return oxbox_update.offer && !oxbox_update.dismissed && GetTickCount() - oxbox_update.drawn < 500;
+	return ((oxbox_update.offer && !oxbox_update.dismissed) || oxbox_update.status) &&
+		GetTickCount() - oxbox_update.drawn < 500;
 }
 
 /* a button pressed (or held) while the offer may be on the screen: 1 when it's the offer's (the menu doesn't get
@@ -715,6 +1003,16 @@ int oxbox_update_prompt_button(int a, int b, int pressed)
 
 	if (oxbox_update.closed && now - oxbox_update.closed < 500 && (a || b) && !pressed)
 		return 1;                      /* (still held from closing it) */
+	/* (a look's status or answer: A or B closes it; the menu keeps every other button) */
+	if ((!oxbox_update.offer || oxbox_update.dismissed) && oxbox_update.status && now - oxbox_update.drawn <= 500)
+	{
+		if (pressed && (a || b))
+		{
+			oxbox_update.status = _update_status_none;
+			oxbox_update.closed = now;
+		}
+		return a || b;
+	}
 	if (!oxbox_update.offer || oxbox_update.dismissed || now - oxbox_update.drawn > 500)
 		return 0;
 	if (!pressed)
@@ -743,7 +1041,8 @@ int oxbox_update_prompt_button(int a, int b, int pressed)
 		}
 		CloseHandle(note);
 		platform_log("update: starting the updater");
-		XLaunchNewImageA(OXBOX_UPDATER_PATH, NULL);
+		oxbox_launch_updater();
+		XLaunchNewImageA(OXBOX_UPDATER_PATH, NULL);   /* (if that couldn't: as before) */
 		platform_log("update: the updater didn't start");
 		DeleteFileA(OXBOX_UPDATER_NOTE);
 		oxbox_update.updater_missing = 1;

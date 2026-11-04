@@ -127,11 +127,19 @@ static struct
 
 /* OpenCE's settings (T:\\opence_settings.txt: "name=value" lines) */
 enum { _aspect_dashboard, _aspect_standard, _aspect_widescreen, NUMBER_OF_ASPECTS };
+enum { _attract_showcase, _attract_movies, _attract_off, NUMBER_OF_ATTRACTS };
 static struct
 {
 	boolean loaded;
 	long aspect;
-} hmp_settings;
+	long attract;                            /* (NONE: opence.ini's showcase says) */
+	long attract_seconds;                    /* (0: opence.ini's showcase_seconds says) */
+	long downloads_mb;                       /* (KEEP DOWNLOADS UNDER, MB; 0 no limit; NONE not set: hmp_share.c decides) */
+} hmp_settings = { FALSE, 0, NONE, 0, NONE };
+
+/* the main menu's OPTIONS' ATTRACT MODE WAIT values, and KEEP DOWNLOADS UNDER's (MB; 0: no limit) */
+static long const attract_waits[4] = { 30, 60, 120, 300 };
+static long const download_limits[5] = { 300, 600, 1024, 2048, 0 };
 
 /* ---------- private code */
 
@@ -254,6 +262,16 @@ static void end_game(void)
 
 /* ---------- OpenCE's settings and the main menu's OPTIONS */
 
+/* the settings the main menu's OPTIONS keeps, over opence.ini's (the showcase's). (Its CHECK FOR UPDATES looks online
+now, oxbox_sdk.c's oxbox_update_check_now: there's no turning the check off there, so it isn't turned off by accident;
+v1.81's updates=off is ignored) */
+static void settings_apply(void)
+{
+	extern int oxbox_setting_showcase, oxbox_setting_showcase_seconds;
+	if (hmp_settings.attract != NONE) oxbox_setting_showcase = hmp_settings.attract == _attract_showcase;
+	if (hmp_settings.attract_seconds > 0) oxbox_setting_showcase_seconds = hmp_settings.attract_seconds;
+}
+
 static void settings_load(void)
 {
 	char buffer[512], *line, *next;
@@ -275,7 +293,28 @@ static void settings_load(void)
 			char const *v = line + 7;
 			hmp_settings.aspect = !strncmp(v, "4:3", 3) ? _aspect_standard : !strncmp(v, "16:9", 4) ? _aspect_widescreen : _aspect_dashboard;
 		}
+		else if (!strncmp(line, "attract=", 8))
+		{
+			char const *v = line + 8;
+			hmp_settings.attract = !strncmp(v, "showcase", 8) ? _attract_showcase : !strncmp(v, "movies", 6) ?
+				_attract_movies : !strncmp(v, "off", 3) ? _attract_off : NONE;
+		}
+		else if (!strncmp(line, "downloads=", 10))
+		{
+			char const *v = line + 10;
+			long n = 0;
+			while (*v >= '0' && *v <= '9' && n < 1000000) n = n * 10 + (*v++ - '0');
+			hmp_settings.downloads_mb = !strncmp(line + 10, "none", 4) ? 0 : n > 0 ? n : NONE;
+		}
+		else if (!strncmp(line, "attract_seconds=", 16))
+		{
+			char const *v = line + 16;
+			long n = 0;
+			while (*v >= '0' && *v <= '9' && n < 100000) n = n * 10 + (*v++ - '0');
+			hmp_settings.attract_seconds = n;
+		}
 	}
+	settings_apply();
 }
 
 static void settings_save(void)
@@ -288,6 +327,27 @@ static void settings_save(void)
 	for (a = "; OpenCE's settings (Halo doesn't read this file)\r\naspect="; *a; ) *o++ = *a++;
 	for (a = aspects[hmp_settings.aspect]; *a; ) *o++ = *a++;
 	*o++ = '\r'; *o++ = '\n';
+	if (hmp_settings.attract != NONE)
+	{
+		static char const *const attracts[NUMBER_OF_ATTRACTS] = { "showcase", "movies", "off" };
+		for (a = "attract="; *a; ) *o++ = *a++;
+		for (a = attracts[hmp_settings.attract]; *a; ) *o++ = *a++;
+		*o++ = '\r'; *o++ = '\n';
+	}
+	if (hmp_settings.attract_seconds > 0)
+	{
+		extern int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
+		o += halo_linux_snprintf(o, (size_t)(buffer + sizeof(buffer) - o), "attract_seconds=%ld\r\n",
+			hmp_settings.attract_seconds);
+	}
+	if (hmp_settings.downloads_mb != NONE)
+	{
+		extern int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
+		if (hmp_settings.downloads_mb > 0)
+			o += halo_linux_snprintf(o, (size_t)(buffer + sizeof(buffer) - o), "downloads=%ld\r\n", hmp_settings.downloads_mb);
+		else
+			for (a = "downloads=none\r\n"; *a; ) *o++ = *a++;
+	}
 	file = CreateFileA(SETTINGS_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE) { hmp_log("options: couldn't write " SETTINGS_PATH); return; }
 	if (!WriteFile(file, buffer, (unsigned long)(o - buffer), &put, NULL) || put != (unsigned long)(o - buffer))
@@ -297,6 +357,74 @@ static void settings_save(void)
 
 /* (the backup of Halo's profiles and gametypes in T:\opence_backup, made the first time while the game shared Halo's
 saves, is gone: the game has its own save folder now, and nothing of the player's is copied onto their drive) */
+
+/* the settings read (and laid over opence.ini's): for what uses them before the menus do (oxbox_sdk.c's update
+check, showcase.c's wait) */
+void hmp_settings_ready(void)
+{
+	settings_load();
+}
+
+/* the attract mode is off (the main menu's OPTIONS): nothing plays on the main menu (attract_mode.c) */
+boolean hmp_attract_off(void)
+{
+	settings_load();
+	return hmp_settings.attract == _attract_off;
+}
+
+/* the main menu's OPTIONS (port/oxbox/oxbox_menus.c): SCREEN SHAPE, ATTRACT MODE, ATTRACT MODE WAIT, CHECK FOR
+UPDATES, as its spinners' values */
+void hmp_options_get(short *values)
+{
+	extern int oxbox_setting_showcase, oxbox_setting_showcase_seconds;
+	long seconds, k, best = 1;
+	settings_load();
+	values[0] = (short)hmp_settings.aspect;
+	values[1] = (short)(hmp_settings.attract != NONE ? hmp_settings.attract :
+		oxbox_setting_showcase ? _attract_showcase : _attract_movies);
+	seconds = hmp_settings.attract_seconds > 0 ? hmp_settings.attract_seconds :
+		oxbox_setting_showcase_seconds > 0 ? oxbox_setting_showcase_seconds : 75;
+	for (k = 0; k < 4; k++)
+	{
+		long d = attract_waits[k] - seconds, e = attract_waits[best] - seconds;
+		if ((d < 0 ? -d : d) < (e < 0 ? -e : e)) best = k;
+	}
+	values[2] = (short)best;
+	{
+		long limit = hmp_downloads_limit_mb();
+		values[3] = 4;
+		for (k = 0; k < 4; k++) if (download_limits[k] == limit) values[3] = (short)k;
+		if (values[3] == 4 && limit > 0)                        /* (a limit not in the list: the nearest below) */
+			for (k = 0; k < 4; k++) if (download_limits[k] <= limit) values[3] = (short)k;
+	}
+	values[4] = 0;                                          /* (CHECK FOR UPDATES: an action, A) */
+}
+
+void hmp_options_set(short const *values)
+{
+	settings_load();
+	hmp_settings.aspect = values[0] >= 0 && values[0] < NUMBER_OF_ASPECTS ? values[0] : _aspect_dashboard;
+	hmp_settings.attract = values[1] >= 0 && values[1] < NUMBER_OF_ATTRACTS ? values[1] : _attract_showcase;
+	hmp_settings.attract_seconds = attract_waits[values[2] >= 0 && values[2] < 4 ? values[2] : 1];
+	hmp_settings.downloads_mb = download_limits[values[3] >= 0 && values[3] < 5 ? values[3] : 4];
+	settings_apply();
+	settings_save();
+	hmp_log("options: kept (shape %ld, attract %ld after %ld s, downloads under %ld MB)", hmp_settings.aspect,
+		hmp_settings.attract, hmp_settings.attract_seconds, hmp_settings.downloads_mb);
+}
+
+/* KEEP DOWNLOADS UNDER (MB; 0: no limit): the player's, else the installer's (it writes downloads= into the settings
+when it installs: below the drive's free space on E:), else the same worked out here (hmp_share.c) */
+long hmp_downloads_limit_mb(void)
+{
+	settings_load();
+	if (hmp_settings.downloads_mb == NONE)
+	{
+		hmp_settings.downloads_mb = hmp_share_default_download_limit_mb();
+		settings_save();                                     /* (kept: the free space changes as maps come and go) */
+	}
+	return hmp_settings.downloads_mb;
+}
 
 /* the screen shape: -1 as the dashboard says, 0 4:3, 1 widescreen (xbox/oxbox_sdk.c's oxbox_widescreen) */
 int hmp_settings_aspect(void)
@@ -345,6 +473,13 @@ static void options_open(short local, struct widget_instance *menu, struct widge
 	settings_load();
 	options_text_update();
 	for (w = list->child; w && w != item; w = w->next) index++;
+	/* (Halo 1 Unlimited's OPTIONS screen, built into ui.map as it loads: port/oxbox/oxbox_menus.c; else the dialog) */
+	if (ui_widget_load_by_name_or_tag("h1u\\options_screen", NONE, NULL, owner, menu->definition_tag_index,
+		list->definition_tag_index, index))
+	{
+		hmp_game_globals.options_focus[local] = TRUE;   /* (OPTIONS chosen again when the main menu comes back) */
+		return;
+	}
 	/* (the main menu goes on the history stack, so it comes back, on OPTIONS, when the dialog closes) */
 	dialog = ui_widget_load_by_name_or_tag("ui\\shell\\error\\error_nonmodal_fullscreen", NONE, NULL, owner,
 		menu->definition_tag_index, list->definition_tag_index, index);

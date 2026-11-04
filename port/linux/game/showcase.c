@@ -1470,7 +1470,14 @@ static void showcase_back_at_menu(
 unsigned long showcase_idle_milliseconds(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* (the main menu's OPTIONS' ATTRACT MODE WAIT, over opence.ini's: hmp_game.c; for Halo's movies too) */
+	extern void hmp_settings_ready(void);
+	hmp_settings_ready();
+	if (oxbox_setting_showcase_seconds > 0)
+#else
 	if (oxbox_setting_showcase && oxbox_setting_showcase_seconds > 0)
+#endif
 		return (unsigned long)(oxbox_setting_showcase_seconds < 5 ? 5 : oxbox_setting_showcase_seconds) * 1000ul;
 	return 75000ul;
 }

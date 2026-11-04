@@ -1002,6 +1002,34 @@ void game_precache_new_map(
 			while (!map_status);
 
 #if defined(HALO_XBOX_TARGET)
+			/* oxbox: a copy into the cache that failed (a read that came back wrong: v1.82 on a console, ui.map's data
+			not inflating at boot, though the same file had loaded a minute before and loaded again after) is made
+			once more from the start before the damaged disc error, which sends the console back to the dashboard */
+			if (map_status == _cached_map_file_failed)
+			{
+				error(_error_silent, "copying map '%s' into the cache failed: trying it once more", map_name);
+				cache_files_precache_map_end();
+				if (cache_files_precache_map_begin(map_name, blocking))
+				{
+					cache_files_precache_set_priority(blocking);
+					game_globals->loading_progress = 0.0f;
+					do
+					{
+						map_status = cache_files_precache_map_status(&game_globals->loading_progress);
+						main_pregame_render();
+						main_rasterizer_throttle();
+						main_present_frame();
+					}
+					while (!map_status);
+					error(_error_silent, "copying map '%s' again %s", map_name,
+						map_status == _cached_map_file_failed ? "failed too" : "worked");
+				}
+				else
+				{
+					error(_error_silent, "map '%s' couldn't be copied again", map_name);
+					display_error_damaged_media();
+				}
+			}
 			/* oxbox: let the loading animation play out (progress_bar.c) */
 			if (map_status != _cached_map_file_failed)
 			{

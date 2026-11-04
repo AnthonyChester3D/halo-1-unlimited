@@ -162,7 +162,7 @@ enum
 {
 	SET, SET_H, CAMP, CAMP_H, DEMO, DEMO_H, MP, MP_H,
 	RULES_0, RULES_1, RULES_2, RULES_3, RULES_4,
-	FOUND, PROFILE,
+	FOUND, PROFILE, ITEMS, LEVEL, CHOOSE,
 	WANTED
 };
 
@@ -177,6 +177,9 @@ static struct wanted wanted[WANTED] = {
 	WANT(RULES, 4, 256, 256),
 	WANT(MAIN_MENU "multiplayer_type_select\\connected\\server_list\\header_found_games", 0, 512, 64),
 	WANT(MAIN_MENU "multiplayer_type_select\\connected\\4way_profile_select\\header_select_profile", 0, 512, 64),
+	WANT(MAIN_MENU "settings_select\\multiplayer_setup\\item_options_edit\\header_item_options", 0, 512, 64),
+	WANT(MAIN_MENU "solo_level_select\\header_load_level", 0, 512, 64),
+	WANT(MAIN_MENU "difficulty_select\\header_choose_difficulty", 0, 512, 64),
 };
 
 /* the tags' data (a copy of the map's tag data), and where each bitmap wanted is */
@@ -845,57 +848,121 @@ static int gametype_picture(unsigned char const *rgba, unsigned char *out)
 	return 0;
 }
 
-/* ---- the ONLINE GAMES header: letters of SYSTEM LINK GAMES and SELECT PROFILE (512 x 64) ---- */
+/* ---- the headers made of letters (512 x 64): ONLINE GAMES (from SYSTEM LINK GAMES and SELECT PROFILE), VEHICLE
+OPTIONS (from LOAD LEVEL, SELECT PROFILE, CHOOSE DIFFICULTY and ITEM OPTIONS) and OPTIONS (from ITEM OPTIONS).
+
+Each is laid on a glow bar like the headers' own: the bar's start (its columns left of the text), a column of it
+between two words where no letter's glow reaches, repeated under the whole text, and its fading end (its columns
+right of the text), so there is no gap between the pieces and the ends fade as Halo's do. Then each piece (a
+letter, or a word whole: its columns) with its glow, to halfway to its neighbours' cores (8 at the ends), over it */
 
 static int const found_cores[][2] = {{30, 49}, {51, 90}, {93, 110}, {113, 129}, {134, 157}, {174, 187}, {191, 194},
 	{200, 218}, {224, 241}, {254, 273}, {275, 296}, {299, 323}, {327, 343}, {347, 366}};
 static int const profile_cores[][2] = {{30, 49}, {53, 69}, {74, 87}, {90, 106}, {110, 127}, {129, 146}, {161, 179},
 	{183, 201}, {204, 224}, {229, 245}, {250, 253}, {258, 271}, {274, 291}};
-/* ONLINE GAMES: each piece (a letter, or GAMES whole: its columns), from which header, and the space before it */
-struct header_piece
-{
-	int profile, x0, x1, space;
-};
-static struct header_piece const header_pieces[] = {
-	{1, 204, 224, 0}, /* O */
-	{0, 200, 218, 4}, /* N */
-	{0, 174, 187, 5}, /* L */
-	{0, 191, 194, 3}, /* I */
-	{0, 200, 218, 5}, /* N */
-	{0, 113, 129, 4}, /* E */
-	{0, 254, 366, 13}, /* GAMES */
-};
+static int const items_cores[][2] = {{31, 35}, {38, 56}, {58, 75}, {79, 103}, {119, 139}, {143, 160}, {163, 180},
+	{184, 187}, {191, 212}, {216, 234}, {238, 257}};
+static int const level_cores[][2] = {{31, 44}, {47, 67}, {69, 90}, {93, 112}, {127, 141}, {143, 160}, {162, 182},
+	{185, 201}, {205, 219}};
+static int const choose_cores[][2] = {{30, 47}, {51, 67}, {71, 91}, {95, 115}, {118, 137}, {141, 157}, {174, 192},
+	{197, 200}, {206, 222}, {226, 242}, {247, 250}, {255, 271}, {276, 293}, {299, 350}};
 #define HEADER_LEFT 30
 
-static void header_compose(unsigned char const *found, unsigned char const *profile, unsigned char *out)
+enum { S_FOUND, S_PROFILE, S_ITEMS, S_LEVEL, S_CHOOSE, HEADER_SOURCES };
+static int const (*const source_cores[HEADER_SOURCES])[2] = {found_cores, profile_cores, items_cores, level_cores,
+	choose_cores};
+static int const source_core_counts[HEADER_SOURCES] = {
+	(int)(sizeof(found_cores) / sizeof(*found_cores)), (int)(sizeof(profile_cores) / sizeof(*profile_cores)),
+	(int)(sizeof(items_cores) / sizeof(*items_cores)), (int)(sizeof(level_cores) / sizeof(*level_cores)),
+	(int)(sizeof(choose_cores) / sizeof(*choose_cores))};
+
+/* a piece: from which header, its columns, and the space before it (source -1 ends a list) */
+struct header_piece
 {
-	int x = HEADER_LEFT, p;
+	int source, x0, x1, space;
+};
+
+/* its glow bar: from which header, a column of the bar alone (between two of its words), and where the bar's fading
+end starts (right of its text) */
+struct header_bar
+{
+	int source, column, end;
+};
+
+static struct header_piece const online_pieces[] = {
+	{S_PROFILE, 204, 224, 0}, /* O */
+	{S_FOUND, 200, 218, 4},   /* N */
+	{S_FOUND, 174, 187, 5},   /* L */
+	{S_FOUND, 191, 194, 3},   /* I */
+	{S_FOUND, 200, 218, 5},   /* N */
+	{S_FOUND, 113, 129, 4},   /* E */
+	{S_FOUND, 254, 366, 13},  /* GAMES */
+	{-1, 0, 0, 0}};
+static struct header_bar const online_bar = {S_FOUND, 247, 367};
+
+static struct header_piece const vehicle_pieces[] = {
+	{S_LEVEL, 162, 182, 0},    /* V */
+	{S_PROFILE, 53, 69, 2},    /* E */
+	{S_CHOOSE, 51, 67, 3},     /* H */
+	{S_ITEMS, 31, 35, 3},      /* I */
+	{S_PROFILE, 110, 127, 3},  /* C */
+	{S_PROFILE, 74, 87, 3},    /* L */
+	{S_PROFILE, 90, 106, 2},   /* E */
+	{S_ITEMS, 119, 257, 15},   /* OPTIONS */
+	{-1, 0, 0, 0}};
+static struct header_bar const items_bar = {S_ITEMS, 111, 258};
+
+static struct header_piece const options_pieces[] = {
+	{S_ITEMS, 119, 257, 1},    /* OPTIONS */
+	{-1, 0, 0, 0}};
+
+/* copies column `from` of source over column `to` of out, as it is */
+static void bar_column(unsigned char *out, int to, unsigned char const *source, int from)
+{
+	int y;
+	for (y = 0; y < 64; y++)
+		memcpy(out + (y * 512 + to) * 4, source + (y * 512 + from) * 4, 4);
+}
+
+static void header_compose(struct header_piece const *pieces, struct header_bar const *bar,
+	unsigned char const *const *images, unsigned char *out)
+{
+	struct header_piece const *piece;
+	unsigned char const *bar_image = images[bar->source];
+	int x = HEADER_LEFT, end, cx;
 	memset(out, 0, 512 * 64 * 4);
-	for (p = 0; p < (int)(sizeof(header_pieces) / sizeof(*header_pieces)); p++)
+	for (piece = pieces; piece->source >= 0; piece++)
+		x += piece->space + piece->x1 - piece->x0 + 1;
+	end = x;
+	/* (the bar: its start, its middle under the text, its fading end) */
+	for (cx = 0; cx < HEADER_LEFT; cx++)
+		bar_column(out, cx, bar_image, cx);
+	for (cx = HEADER_LEFT; cx < end && cx < 512; cx++)
+		bar_column(out, cx, bar_image, bar->column);
+	for (cx = 0; end + cx < 512 && bar->end + cx < 512; cx++)
+		bar_column(out, end + cx, bar_image, bar->end + cx);
+	/* (the pieces, over it) */
+	x = HEADER_LEFT;
+	for (piece = pieces; piece->source >= 0; piece++)
 	{
-		struct header_piece const *piece = &header_pieces[p];
-		int const (*cores)[2] = piece->profile ? profile_cores : found_cores;
-		int count = piece->profile ? (int)(sizeof(profile_cores) / sizeof(*profile_cores)) :
-			(int)(sizeof(found_cores) / sizeof(*found_cores));
-		unsigned char const *image = piece->profile ? profile : found;
-		int left = piece->x0 - 8, right = piece->x1 + 8, i, cx;
-		/* (its glow: to halfway to the neighbours' cores, 8 at the ends) */
+		int const (*c)[2] = source_cores[piece->source];
+		int count = source_core_counts[piece->source], left = piece->x0 - 8, right = piece->x1 + 8, i;
 		for (i = 0; i < count; i++)
 		{
-			if (cores[i][1] < piece->x0)
-				left = (cores[i][1] + piece->x0) / 2 + 1;
+			if (c[i][1] < piece->x0)
+				left = (c[i][1] + piece->x0) / 2 + 1;
 		}
 		for (i = count - 1; i >= 0; i--)
 		{
-			if (cores[i][0] > piece->x1)
-				right = (piece->x1 + cores[i][0]) / 2;
+			if (c[i][0] > piece->x1)
+				right = (piece->x1 + c[i][0]) / 2;
 		}
 		x += piece->space;
 		for (cx = left; cx <= right; cx++)
 		{
 			int to = x - (piece->x0 - left) + (cx - left);
 			if (to >= 0 && to < 512 && cx >= 0 && cx < 512)
-				letter_column(out, 512, to, image, 512, cx);
+				letter_column(out, 512, to, images[piece->source], 512, cx);
 		}
 		x += piece->x1 - piece->x0 + 1;
 	}
@@ -1005,9 +1072,20 @@ int pictures_make(char const *ui_map_path, unsigned char *pictures, unsigned cha
 			goto done;
 		}
 	}
-	progress("making the ONLINE GAMES header");
-	header_compose(rgba[FOUND], rgba[PROFILE], picture);
-	dxt3_encode(picture, 512, 64, header);
+	{
+		unsigned char const *images[HEADER_SOURCES];
+		images[S_FOUND] = rgba[FOUND], images[S_PROFILE] = rgba[PROFILE], images[S_ITEMS] = rgba[ITEMS];
+		images[S_LEVEL] = rgba[LEVEL], images[S_CHOOSE] = rgba[CHOOSE];
+		progress("making the ONLINE GAMES header");
+		header_compose(online_pieces, &online_bar, images, picture);
+		dxt3_encode(picture, 512, 64, header);
+		progress("making the VEHICLE OPTIONS header");
+		header_compose(vehicle_pieces, &items_bar, images, picture);
+		dxt3_encode(picture, 512, 64, header + HEADER_SIZE);
+		progress("making the OPTIONS header");
+		header_compose(options_pieces, &items_bar, images, picture);
+		dxt3_encode(picture, 512, 64, header + 2 * HEADER_SIZE);
+	}
 	result = 0;
 done:
 	for (w = 0; w < WANTED; w++)

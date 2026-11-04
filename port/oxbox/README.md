@@ -129,7 +129,8 @@ Developers' tools (opence.ini, off by default):
   first 128 bytes of the latest release's package from GitHub (its header: release and network version) and, if it's
   newer than `opence_release.txt` (the installer writes it), offers it on the main menu: A starts the updater (the
   installer's copy in `updater\`, which it puts there when it installs) with a note, `auto_update.txt`, so it updates
-  this folder to the latest signed package and starts the game again; B asks again next boot. The check's code (and
+  this folder to the latest signed package and starts the game again; B asks again next boot. The main menu's
+  OPTIONS, CHECK FOR UPDATES, looks now (whatever `update_check` says) and says what it found. The check's code (and
   Mbed TLS's, about 180 KB) is an XBE section of its own, OXUPD, loaded for the check and unloaded after it. Nothing is
   sent but the request.
 - Without the switch, the build is byte for byte what it was.

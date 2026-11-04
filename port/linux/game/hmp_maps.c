@@ -433,11 +433,20 @@ static void build_list(void)
 
 /* ---------- private code: the scan */
 
+/* a .txt's claim to be a folder map's info .txt: info.txt first, then any other, but never the showcase's
+(showcase.txt) or the bots' (bots.txt) files, nor a pack's order.txt; 0 for none */
+static short info_rank(char const *f)
+{
+	if (!ends_with(f, ".txt") || !ieq(f, "showcase.txt") || !ieq(f, "bots.txt") || !ieq(f, "order.txt")) return 0;
+	return !ieq(f, "info.txt") ? 2 : 1;
+}
+
 /* what's in a map's folder (in maps folder map->root): its .map, .txt, preview.bin and the .map's time. TRUE = a .map */
 static boolean list_folder(struct hmp_map *map)
 {
 	struct _WIN32_FIND_DATAA *find = &hmp_maps_globals.find[1];
 	char map_file[48] = "", info_file[48] = "";
+	short info_best = 0;
 	HANDLE handle;
 	map->picture = 0;
 	map->map_time_low = map->map_time_high = 0;
@@ -455,7 +464,11 @@ static boolean list_folder(struct hmp_map *map)
 			map->map_time_low = find->ftLastWriteTime.dwLowDateTime;
 			map->map_time_high = find->ftLastWriteTime.dwHighDateTime;
 		}
-		else if (!info_file[0] && ends_with(f, ".txt")) scpy(info_file, f);
+		else if (ends_with(f, ".txt"))
+		{
+			short rank = info_rank(f);
+			if (rank > info_best) { scpy(info_file, f); info_best = rank; }
+		}
 		else if (!ieq(f, "preview.bin") && !find->nFileSizeHigh && find->nFileSizeLow == PREVIEW_SIZE) map->picture = 1;
 	}
 	while (FindNextFileA(handle, find));
@@ -1547,8 +1560,19 @@ oxbox_picture_read). TRUE when this bitmap is one of them, read */
 static boolean menu_word_read(struct bitmap_data *bitmap, unsigned char *buffer, long size)
 {
 	extern int oxbox_picture_read(long index, void *buffer, unsigned long size);
+	extern int oxbox_xbe_menu_header_read(int which, void *buffer, unsigned long size);
 	char const *name;
 	long word, frame;
+	/* (port/oxbox/oxbox_menus.c's headers, VEHICLE OPTIONS and OPTIONS: its bitmaps, from the XBE's file) */
+	if (bitmap->width == 512 && bitmap->height == 64 && bitmap->format == 15 && size == 32768 &&
+		bitmap->tag_index != NONE)
+	{
+		name = tag_get_name(bitmap->tag_index);
+		if (!csstrcasecmp(name, "h1u\\vehicle_options_header"))
+			return oxbox_xbe_menu_header_read(0, buffer, (unsigned long)size) != 0;
+		if (!csstrcasecmp(name, "h1u\\options_header"))
+			return oxbox_xbe_menu_header_read(1, buffer, (unsigned long)size) != 0;
+	}
 	if (bitmap->width != 256 || bitmap->height != 64 || bitmap->format != 15 /* DXT3 */ || size != 16384 ||
 		bitmap->tag_index == NONE) return FALSE;
 	name = tag_get_name(bitmap->tag_index);
@@ -1675,6 +1699,17 @@ static short missing_name_index(char const *key)
 	missing_names[i].key[sizeof(missing_names[i].key) - 1] = 0;
 	key_folder_name(key, missing_names[i].name, NUMBEROF(missing_names[i].name));
 	return (short)(HMP_MISSING_NAME_BASE + i);
+}
+
+/* a map this console is downloading: its own name (its info .txt's first line, which comes first), shown for it from
+then on in place of its folder's (hmp_share.c) */
+void hmp_maps_missing_title(char const *key, wchar_t const *title)
+{
+	short index = missing_name_index(key);
+	long i = index - HMP_MISSING_NAME_BASE, k;
+	if (!title || !title[0] || i < 0 || i >= HMP_MISSING_NAMES) return;
+	for (k = 0; title[k] && k < (long)NUMBEROF(missing_names[i].name) - 1; k++) missing_names[i].name[k] = title[k];
+	missing_names[i].name[k] = 0;
 }
 
 short custom_edition_maps_display_index(char const *level_name)
