@@ -3019,6 +3019,9 @@ short network_game_server_bot_count(
 		else if (network_player_is_valid(&server->game.players[index]))
 			persons++;
 	}
+	/* port: and the players held while their machines download the map: people about to play (the bots stayed for
+	them; counted out, they left a game the downloaders were held from, and with nobody in it the game ended) */
+	persons += (short)network_game_server_held_player_count;
 	if (people)
 		*people = persons;
 	return bots;

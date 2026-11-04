@@ -143,6 +143,8 @@ static struct
 	long current_index;
 	boolean current_is_interposed;
 	boolean entry_applied;
+	/* the lobby's countdown held for a download nobody in it has finished (said once) */
+	boolean waiting_for_download;
 	real lobby_seconds;
 	real map_checked_seconds;
 	/* the game: its seconds, the seconds it has been empty and without a
@@ -258,6 +260,27 @@ static long server_player_count(
 	{
 		if (network_player_is_valid(&game->players[index]) && !network_player_is_bot(&game->players[index]))
 			count++;
+	}
+	return count;
+}
+
+/* the people in the lobby whose machines have the game's map (not still downloading it: map_share.c,
+map_share_xbox.c) */
+static long server_people_with_map(
+	void)
+{
+	boolean map_share_machine_needs_map(long machine_index);
+	struct network_game *game = server_game();
+	long count = 0;
+	long index;
+
+	for (index = 0; game && index < MAXIMUM_SLOTS; index++)
+	{
+		if (network_player_is_valid(&game->players[index]) && !network_player_is_bot(&game->players[index]) &&
+			!map_share_machine_needs_map(game->players[index].machine_index))
+		{
+			count++;
+		}
 	}
 	return count;
 }
@@ -1843,10 +1866,17 @@ static void server_lobby(
 			network_game_server_change_map_name(network_server, server.current.level);
 		}
 	}
-	/* the countdown: held below the players wanted, started with them in */
+	/* the countdown: held below the players wanted, started with them in. And held while every person in the lobby
+	is still downloading the map: a game started then had no one in it but the bots (the downloaders' players are
+	held until they have it), the bots left with nobody to play, the game ended, and the next map's download began */
 	countdown = network_game_server_port_countdown_milliseconds(network_server);
-	if (players < minimum)
+	if (players < minimum || (players > 0 && !server_people_with_map()))
 	{
+		if (players >= minimum && !server.waiting_for_download)
+		{
+			server.waiting_for_download = TRUE;
+			server_log(_server_log_info, "lobby", "waiting for the map's download: nobody in the lobby has it yet");
+		}
 		if (!network_game_server_port_countdown_paused(network_server))
 		{
 			network_game_server_pause_countdown(network_server, TRUE);
@@ -1857,6 +1887,8 @@ static void server_lobby(
 	else if (countdown == NONE || network_game_server_port_countdown_paused(network_server))
 	{
 		long lobby_seconds = PIN(config_integer("server.lobby_seconds"), 0, 300);
+
+		server.waiting_for_download = FALSE;
 
 		/* (as the game's server checks it each tick, its teams as
 		server.team_start says: a countdown it does not allow it stops at
