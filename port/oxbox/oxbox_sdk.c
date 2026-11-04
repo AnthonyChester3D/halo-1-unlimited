@@ -793,6 +793,47 @@ unload:
 #endif
 }
 
+/* starts the updater, this folder's updater\\default.xbe, with its own folder as its D:, the way a dashboard starts a
+title ("\\Device\\...\\Halo\\updater;default.xbe" in the launch data page, then a quick reboot). XLaunchNewImage
+("D:\\updater\\default.xbe") gave it this game's D:, the Halo folder, so it worked on the game's files as its own. Returns
+only when it couldn't */
+static void oxbox_launch_updater(void)
+{
+	typedef struct { unsigned short Length, MaximumLength; char *Buffer; } oxbox_ansi_string;
+	oxbox_ansi_string *image = (oxbox_ansi_string *)oxbox_kernel_export(326);       /* XeImageFileName */
+	unsigned char **launch_page = (unsigned char **)oxbox_kernel_export(164);       /* LaunchDataPage */
+	void *(WINAPI *allocate)(unsigned long) = (void *(WINAPI *)(unsigned long))oxbox_kernel_export(165);
+	void (WINAPI *persist)(void *, unsigned long, int) = (void (WINAPI *)(void *, unsigned long, int))oxbox_kernel_export(178);
+	void (WINAPI *reboot)(int) = (void (WINAPI *)(int))oxbox_kernel_export(49);   /* HalReturnToFirmware */
+	const unsigned char *header = (const unsigned char *)0x10000;
+	const unsigned char *certificate = *(const unsigned char *const *)(header + 0x118);
+	char folder[300], *slash, *semicolon;
+	unsigned char *page;
+	int length;
+
+	if (!image || !image->Buffer || !launch_page || !allocate || !persist || !reboot)
+		return;
+	length = image->Length < sizeof(folder) - 1 ? image->Length : sizeof(folder) - 1;
+	memcpy(folder, image->Buffer, length);
+	folder[length] = 0;
+	/* (a title a dashboard started: "...\\Halo;default.xbe") */
+	if ((semicolon = strchr(folder, ';')) != NULL)
+		*semicolon = '\\';
+	if (strncmp(folder, "\\Device\\", 8) || (slash = strrchr(folder, '\\')) == NULL)
+		return;
+	*slash = 0;
+	if (!*launch_page && !(*launch_page = (unsigned char *)allocate(0x1000)))
+		return;
+	page = *launch_page;
+	persist(page, 0x1000, 1);
+	memset(page, 0, 0x1000);
+	*(unsigned long *)(page + 4) = *(const unsigned long *)(certificate + 8);   /* (the title id: LDT_TITLE, 0) */
+	if (halo_linux_snprintf((char *)page + 8, 520, "%s\\updater;default.xbe", folder) >= 520)
+		return;
+	platform_log("update: starting %s", (char *)page + 8);
+	reboot(2);                                                                   /* (the quick reboot) */
+}
+
 /* the main menu's offer: its lines (up to 5, 100 characters each), or 0 when there's none to show */
 int oxbox_update_prompt_lines(wchar_t lines[5][100])
 {
@@ -872,7 +913,8 @@ int oxbox_update_prompt_button(int a, int b, int pressed)
 		}
 		CloseHandle(note);
 		platform_log("update: starting the updater");
-		XLaunchNewImageA(OXBOX_UPDATER_PATH, NULL);
+		oxbox_launch_updater();
+		XLaunchNewImageA(OXBOX_UPDATER_PATH, NULL);   /* (if that couldn't: as before) */
 		platform_log("update: the updater didn't start");
 		DeleteFileA(OXBOX_UPDATER_NOTE);
 		oxbox_update.updater_missing = 1;

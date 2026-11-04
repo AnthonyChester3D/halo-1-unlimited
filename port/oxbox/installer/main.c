@@ -40,7 +40,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 14
+#define INSTALLER_VERSION 15
 #endif
 __attribute__((used)) static struct
 {
@@ -513,7 +513,7 @@ static void to_device(char const *path, char *device, size_t size)
 /* this XBE's own path, as a device's ("\\Device\\Harddisk0\\Partition6\\games\\Halo\\updater\\default.xbe"). A title
 started with XLaunchNewImage("D:\\updater\\default.xbe") (the game starting its updater) is given its launcher's D: and
 the rest after a ';' ("...\\games\\Halo;\\updater\\default.xbe"): joined here as one path */
-static void own_image(char *own, int size)
+static void kernel_image(char *own, int size)
 {
 	char *semicolon;
 	text_print(own, size, "%.*s", XeImageFileName->Length, XeImageFileName->Buffer);
@@ -528,20 +528,88 @@ static void own_image(char *own, int size)
 	}
 }
 
-/* D: made this XBE's own folder. The kernel gives a title its launcher's D: when it was started with a D: path (the
-game starting its updater, D:\\updater\\default.xbe: D: was the Halo folder, so the updater read and wrote the Halo
-folder's files as its own, and put a new installer in place of the game's default.xbe); nxdk's own D: is only
-made when there's none */
-static void own_folder_as_d(void)
+/* where D: points ("\\Device\\Harddisk0\\Partition6\\games\\Halo\\"), or "" */
+static void d_target(char *out, int size)
 {
-	char own[260], *slash;
-	own_image(own, sizeof(own));
-	if ((slash = strrchr(own, '\\')) == NULL)
+	ANSI_STRING name, target;
+	OBJECT_ATTRIBUTES attributes;
+	HANDLE handle;
+	char buffer[260];
+	ULONG length = 0;
+	out[0] = 0;
+	RtlInitAnsiString(&name, "\\??\\D:");
+	InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+	if (!NT_SUCCESS(NtOpenSymbolicLinkObject(&handle, &attributes)))
 		return;
-	slash[1] = 0;
+	target.Buffer = buffer;
+	target.Length = 0;
+	target.MaximumLength = sizeof(buffer) - 1;
+	if (NT_SUCCESS(NtQuerySymbolicLinkObject(handle, &target, &length)))
+		text_print(out, size, "%.*s", target.Length, target.Buffer);
+	NtClose(handle);
+}
+
+static void d_mount(char const *folder)
+{
+	char path[300];
+	text_print(path, sizeof(path), "%s%s", folder, folder[0] && folder[strlen(folder) - 1] == '\\' ? "" : "\\");
 	if (nxIsDriveMounted('D'))
 		nxUnmountDrive('D');
-	nxMountDrive('D', own);
+	nxMountDrive('D', path);
+}
+
+/* how it was started, for the screen when it has no package (and the log) */
+static char started_as[2][200];
+
+/* D: made this XBE's own folder. A title started with a D: path (the game starting its updater with
+XLaunchNewImage("D:\\updater\\default.xbe") up to v1.74) is given its launcher's D:, the Halo folder: the updater then
+read and wrote the Halo folder's files as its own. Its own path, if it's a device's, says its folder; and when D: has
+an updater folder with the game's note in it (and none of its own), D: is the Halo folder: its updater folder is ours */
+static void own_folder_as_d(void)
+{
+	char own[260], d[260], line[400];
+	kernel_image(own, sizeof(own));
+	d_target(d, sizeof(d));
+	text_print(started_as[0], sizeof(started_as[0]), "Started as %.*s", XeImageFileName->Length, XeImageFileName->Buffer);
+	text_print(started_as[1], sizeof(started_as[1]), "with D: as %s", d[0] ? d : "(none)");
+	if (!_strnicmp(own, "\\Device\\", 8))
+	{
+		char *slash = strrchr(own, '\\');
+		slash[1] = 0;
+		if (_stricmp(own, d))
+			d_mount(own);
+	}
+	if (!exists(AUTO_PATH) && exists("D:\\" UPDATER_FOLDER "\\auto_update.txt") &&
+		exists("D:\\" UPDATER_FOLDER "\\default.xbe"))
+	{
+		char halo[260], updater[300];
+		d_target(halo, sizeof(halo));
+		if (halo[0])
+		{
+			text_print(updater, sizeof(updater), "%s%s" UPDATER_FOLDER "\\", halo,
+				halo[strlen(halo) - 1] == '\\' ? "" : "\\");
+			d_mount(updater);
+		}
+	}
+	d_target(d, sizeof(d));
+	text_print(line, sizeof(line), "(%s, %s; D: is %s)", started_as[0], started_as[1], d);
+	log_file(line);
+}
+
+/* this XBE's own path as a device's: D:'s folder (own_folder_as_d made it its own) and its file's name */
+static void own_image(char *own, int size)
+{
+	char image[260], *name;
+	kernel_image(image, sizeof(image));
+	name = strrchr(image, '\\');
+	d_target(own, size);
+	if (!own[0])
+	{
+		text_print(own, size, "%s", image);
+		return;
+	}
+	text_print(own + strlen(own), size - (int)strlen(own), "%s%s", own[strlen(own) - 1] == '\\' ? "" : "\\",
+		name ? name + 1 : "default.xbe");
 }
 
 static int from_device(char const *device, char *path, size_t size)
@@ -1665,6 +1733,11 @@ static void show_list(void)
 		screen_text(LIST_TOP, 0, COLOUR_RED, "%s", package_error);
 		if (package_missing)
 			screen_text(LIST_TOP + 1, 0, COLOUR_WHITE, "Put opence.oxpk beside this installer, or press Y to download it.");
+		if (package_missing)
+		{
+			screen_text(LIST_TOP + 3, 0, COLOUR_GREY, "%.70s", started_as[0]);
+			screen_text(LIST_TOP + 4, 0, COLOUR_GREY, "%.70s", started_as[1]);
+		}
 	}
 	else if (!halo_count)
 	{
@@ -1745,7 +1818,11 @@ static void auto_update(void)
 
 	auto_mode = 1;
 	log_file("auto update (the game's updater)");
-	own_image(own, sizeof(own));
+	/* (its folder: D:'s, which own_folder_as_d made it, as a file in it) */
+	d_target(own, sizeof(own));
+	if (own[0] && own[strlen(own) - 1] != '\\')
+		text_print(own + strlen(own), (int)(sizeof(own) - strlen(own)), "\\");
+	text_print(own + strlen(own), (int)(sizeof(own) - strlen(own)), "default.xbe");
 	if (from_device(own, folder, sizeof(folder)) && (slash = strrchr(folder, '\\')) != NULL)
 	{
 		*slash = 0;
