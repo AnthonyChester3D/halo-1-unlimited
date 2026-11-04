@@ -779,6 +779,14 @@ void map_share_level_name_choose(
 	long length;
 
 	globals->chosen_level[0] = 0;
+	/* (a folder map: by its folder's own name, as the Xboxes list it) */
+	if (level_name && level_name[0] == '+')
+	{
+		extern boolean map_share_xbox_key_as_folder(char *level_name, long size);
+
+		map_share_xbox_key_as_folder(level_name, size);
+		return;
+	}
 	if (!level_name || !custom_edition_level_name(level_name) || !custom_edition_map_file_named(level_name, path) ||
 		!map_share_map_hash(path, hash))
 	{

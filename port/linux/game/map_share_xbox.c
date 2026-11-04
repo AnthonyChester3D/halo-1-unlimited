@@ -392,6 +392,18 @@ long hmp_maps_find(char const *level_name)
 
 /* the .map of a folder map (a "+key"): its path, TRUE; FALSE for any other level name (a folder map not here: a path no
 file has) */
+/* a folder map's key as its folder has it ("+customed/anxiety" as "+CustomEd/Anxiety": a rotation's or a command's,
+lower cased): FALSE when it's no folder map's */
+boolean map_share_xbox_key_as_folder(char *level_name, long size)
+{
+	long index = hmp_maps_find(level_name);
+
+	if (index == NONE || (long)strlen(folder_maps.maps[index].key) >= size)
+		return FALSE;
+	snprintf(level_name, (size_t)size, "%s", folder_maps.maps[index].key);
+	return TRUE;
+}
+
 boolean hmp_map_file_path(char const *level_name, char *path, long size)
 {
 	long index;

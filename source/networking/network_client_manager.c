@@ -2569,9 +2569,10 @@ static boolean network_game_client_map_name_is_valid(
 
 	if (!memchr(map_name, '\0', size))
 		return FALSE;
-#if defined(HALO_XBOX_TARGET)
 	/* oxbox: a folder map's key ("+folder", "+pack/folder": port/linux/game/hmp_maps.c), looked up in this
-	console's own list of folders, never opened as a path: the characters a folder's name can have */
+	machine's own list of folders, never opened as a path: the characters a folder's name can have. (port: the
+	dedicated server's too, port/linux/game/map_share_xbox.c, whose own machine joins its game: refused, it
+	left and hosted again, over and over) */
 	if (map_name[0] == '+')
 	{
 		for (character = map_name + 1; *character; character++)
@@ -2581,7 +2582,6 @@ static boolean network_game_client_map_name_is_valid(
 		}
 		return map_name[1] != 0 && !strstr(map_name, "..");
 	}
-#endif
 	for (character = map_name; *character; character++)
 	{
 		if (!((*character >= 'a' && *character <= 'z') || (*character >= 'A' && *character <= 'Z') ||

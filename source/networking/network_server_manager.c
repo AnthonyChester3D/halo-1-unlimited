@@ -2377,9 +2377,26 @@ void network_game_server_client_machine_is_precached(
 	char const *map_name)
 {
 	char const *multiplayer_map_name = main_get_multiplayer_map_name();
+#if !defined(HALO_XBOX_TARGET)
+	/* port: an Xbox in a game on a linked map loads the map's Xbox port, and says it has that (its key,
+	port/linux/game/linked_maps.c) */
+	extern char const *linked_map_key(void);
+	char const *linked = linked_map_key();
+#endif
 
-	if (!csstrcmp(multiplayer_map_name, map_name))
+	/* (port: a folder map's key, as each machine's folder spells it: in any case) */
+	if (!csstrcmp(multiplayer_map_name, map_name) ||
+		(map_name && map_name[0] == '+' && !csstrcasecmp(multiplayer_map_name, map_name)))
+	{
 		SET_FLAG(client_machine->flags, _network_client_machine_precached_bit, TRUE);
+	}
+#if !defined(HALO_XBOX_TARGET)
+	else if (linked && map_name && !csstrcasecmp(linked, map_name))
+		SET_FLAG(client_machine->flags, _network_client_machine_precached_bit, TRUE);
+	else
+		network_event("machine %d has precached '%s', not the game's '%s'", client_machine->machine_index, map_name,
+			multiplayer_map_name);
+#endif
 
 	return;
 }
