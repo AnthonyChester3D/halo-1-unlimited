@@ -46,6 +46,7 @@ int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
 /* (hmp_game.c's: the main menu's OPTIONS, OPTIONS_ROWS values) */
 void hmp_options_get(short *values);
 void hmp_options_set(short const *values);
+void oxbox_update_check_now(void);
 
 /* ---------- constants */
 
@@ -841,9 +842,9 @@ static char const *const options_wait_help[4] = {
 	"The attract mode starts after a minute on the\r\nmain menu with nothing pressed.",
 	"The attract mode starts after 2 minutes on the\r\nmain menu with nothing pressed.",
 	"The attract mode starts after 5 minutes on the\r\nmain menu with nothing pressed." };
-static char const *const options_updates_help[2] = {
-	"At startup, Halo 1 Unlimited looks online for a\r\nnewer release, and offers it on the main menu.",
-	"Halo 1 Unlimited never looks online for a newer\r\nrelease (the installer's Y still can)." };
+static char const *const options_updates_values[1] = { "NOW" };
+static char const *const options_updates_help[1] = {
+	"Press A to look online for a newer release now.\r\nIt's looked for at every startup too." };
 
 static void options_rows(struct menu_row *rows)
 {
@@ -853,8 +854,8 @@ static void options_rows(struct menu_row *rows)
 	rows[1].values = options_attract_values, rows[1].help = (char const **)options_attract_help;
 	rows[2].label = options_labels[2], rows[2].model = _row_model_widest, rows[2].value_count = 4;
 	rows[2].values = options_wait_values, rows[2].help = (char const **)options_wait_help;
-	rows[3].label = options_labels[3], rows[3].model = _row_model_yes_no, rows[3].value_count = 2;
-	rows[3].values = yes_no_values, rows[3].help = (char const **)options_updates_help;
+	rows[3].label = options_labels[3], rows[3].model = _row_model_yes_no, rows[3].value_count = 1;
+	rows[3].values = options_updates_values, rows[3].help = (char const **)options_updates_help;
 }
 
 static void menus_build(void)
@@ -1001,6 +1002,16 @@ static boolean options_function(struct menu_widget_instance *list, boolean save)
 	for (index = 0; index < OPTIONS_ROWS; index++)
 		values[index] = spinners[index]->selected_index;
 	hmp_options_set(values);
+	/* (A on CHECK FOR UPDATES: the settings kept as any A keeps them, then a look online now, its answer on the main
+	menu the screen goes back to: oxbox_sdk.c) */
+	{
+		struct menu_widget_instance *row = list->child;
+
+		for (index = 0; row && index < 3; index++)
+			row = row->next;
+		if (row && list->focused_child == row)
+			oxbox_update_check_now();
+	}
 	return TRUE;
 }
 

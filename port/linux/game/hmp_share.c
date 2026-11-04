@@ -1995,7 +1995,10 @@ static void machines_tick(u32 now) {
             c->machine = m;
             lg("host: the console downloading the map is machine #%d (it asked before it had joined)", m);
         }
-        if (c->state == 2 && !c->orphan && c->machine >= 0 && c->machine < 16) {
+        /* (sending, or all sent but not all received yet: the console hangs up once it has the map. Taken for done at
+           the last byte sent, its held player was let in with seconds of the map still on the way, and the console,
+           told to start, left the game with its download unfinished, v1.81) */
+        if ((c->state == 2 || c->state == 3) && !c->orphan && c->machine >= 0 && c->machine < 16) {
             g_machine_active[c->machine] = 1;
             g_machine_seen[c->machine] = now ? now : 1;
         }

@@ -134,8 +134,7 @@ static struct
 	long aspect;
 	long attract;                            /* (NONE: opence.ini's showcase says) */
 	long attract_seconds;                    /* (0: opence.ini's showcase_seconds says) */
-	long updates;                            /* (NONE: opence.ini's update_check says; 1 on, 0 off) */
-} hmp_settings = { FALSE, 0, NONE, 0, NONE };
+} hmp_settings = { FALSE, 0, NONE, 0 };
 
 /* the main menu's OPTIONS' ATTRACT MODE WAIT values */
 static long const attract_waits[4] = { 30, 60, 120, 300 };
@@ -261,14 +260,14 @@ static void end_game(void)
 
 /* ---------- OpenCE's settings and the main menu's OPTIONS */
 
-/* the settings the main menu's OPTIONS keeps, over opence.ini's (the showcase's, the update check's) */
+/* the settings the main menu's OPTIONS keeps, over opence.ini's (the showcase's). (Its CHECK FOR UPDATES looks online
+now, oxbox_sdk.c's oxbox_update_check_now: there's no turning the check off there, so it isn't turned off by accident;
+v1.81's updates=off is ignored) */
 static void settings_apply(void)
 {
-	extern int oxbox_setting_showcase, oxbox_setting_showcase_seconds, oxbox_setting_update_check;
+	extern int oxbox_setting_showcase, oxbox_setting_showcase_seconds;
 	if (hmp_settings.attract != NONE) oxbox_setting_showcase = hmp_settings.attract == _attract_showcase;
 	if (hmp_settings.attract_seconds > 0) oxbox_setting_showcase_seconds = hmp_settings.attract_seconds;
-	if (hmp_settings.updates == 0) oxbox_setting_update_check = 0;
-	else if (hmp_settings.updates == 1 && !oxbox_setting_update_check) oxbox_setting_update_check = 1;
 }
 
 static void settings_load(void)
@@ -305,8 +304,6 @@ static void settings_load(void)
 			while (*v >= '0' && *v <= '9' && n < 100000) n = n * 10 + (*v++ - '0');
 			hmp_settings.attract_seconds = n;
 		}
-		else if (!strncmp(line, "updates=", 8))
-			hmp_settings.updates = !strncmp(line + 8, "on", 2) ? 1 : !strncmp(line + 8, "off", 3) ? 0 : NONE;
 	}
 	settings_apply();
 }
@@ -333,11 +330,6 @@ static void settings_save(void)
 		extern int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
 		o += halo_linux_snprintf(o, (size_t)(buffer + sizeof(buffer) - o), "attract_seconds=%ld\r\n",
 			hmp_settings.attract_seconds);
-	}
-	if (hmp_settings.updates != NONE)
-	{
-		for (a = hmp_settings.updates ? "updates=on" : "updates=off"; *a; ) *o++ = *a++;
-		*o++ = '\r'; *o++ = '\n';
 	}
 	file = CreateFileA(SETTINGS_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE) { hmp_log("options: couldn't write " SETTINGS_PATH); return; }
@@ -367,7 +359,7 @@ boolean hmp_attract_off(void)
 UPDATES, as its spinners' values */
 void hmp_options_get(short *values)
 {
-	extern int oxbox_setting_showcase, oxbox_setting_showcase_seconds, oxbox_setting_update_check;
+	extern int oxbox_setting_showcase, oxbox_setting_showcase_seconds;
 	long seconds, k, best = 1;
 	settings_load();
 	values[0] = (short)hmp_settings.aspect;
@@ -381,7 +373,7 @@ void hmp_options_get(short *values)
 		if ((d < 0 ? -d : d) < (e < 0 ? -e : e)) best = k;
 	}
 	values[2] = (short)best;
-	values[3] = oxbox_setting_update_check ? 0 : 1;
+	values[3] = 0;                                          /* (CHECK FOR UPDATES: an action, A) */
 }
 
 void hmp_options_set(short const *values)
@@ -390,11 +382,10 @@ void hmp_options_set(short const *values)
 	hmp_settings.aspect = values[0] >= 0 && values[0] < NUMBER_OF_ASPECTS ? values[0] : _aspect_dashboard;
 	hmp_settings.attract = values[1] >= 0 && values[1] < NUMBER_OF_ATTRACTS ? values[1] : _attract_showcase;
 	hmp_settings.attract_seconds = attract_waits[values[2] >= 0 && values[2] < 4 ? values[2] : 1];
-	hmp_settings.updates = values[3] == 1 ? 0 : 1;
 	settings_apply();
 	settings_save();
-	hmp_log("options: kept (shape %ld, attract %ld after %ld s, updates %s)", hmp_settings.aspect, hmp_settings.attract,
-		hmp_settings.attract_seconds, hmp_settings.updates ? "on" : "off");
+	hmp_log("options: kept (shape %ld, attract %ld after %ld s)", hmp_settings.aspect, hmp_settings.attract,
+		hmp_settings.attract_seconds);
 }
 
 /* the screen shape: -1 as the dashboard says, 0 4:3, 1 widescreen (xbox/oxbox_sdk.c's oxbox_widescreen) */
