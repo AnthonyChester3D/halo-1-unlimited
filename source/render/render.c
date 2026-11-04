@@ -350,7 +350,7 @@ static void render_window(
 		extern int oxbox_setting_res_scale;
 		extern boolean oxbox_res_scale_drawing;
 
-		oxbox_res_scale_drawing = oxbox_setting_res_scale >= 50 && oxbox_setting_res_scale < 100 &&
+		oxbox_res_scale_drawing = oxbox_setting_res_scale >= 1 && oxbox_setting_res_scale < 100 &&
 			rasterizer_target == _render_target_primary && main_get_window_count() == 1 && !bink_playback_in_progress();
 	}
 #endif

@@ -1438,7 +1438,7 @@ void _rasterizer_screen_flash(
 	return;
 }
 
-/* ---------- oxbox: the resolution scaling test (opence.ini res_scale = 50 to 99; 0, the default, off)
+/* ---------- oxbox: the resolution scaling test (opence.ini res_scale = 1 to 99; 0, the default, off: 10 is 64 x 48 pixels, for the fun of it)
 
 A test, for measuring: the 3D view is drawn into res_scale percent of the window (its top left: rasterizer_set_target
 narrows the window's viewport while oxbox_res_scale_drawing), then stretched to the whole window here, after the 3D
