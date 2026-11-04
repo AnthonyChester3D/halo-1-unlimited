@@ -217,9 +217,10 @@ boolean hmp_online_picture_read(long fake_index, void *buffer, long size);
 
 /* KEEP DOWNLOADS UNDER when nothing set it: below the free space on E:, else no limit */
 long hmp_share_default_download_limit_mb(void);
-/* the room prompt (a download over the limit: delete older downloads?): its lines, and a button pressed */
-int hmp_share_room_prompt_lines(wchar_t lines[5][100]);
-int hmp_share_room_prompt_button(int a, int b, int pressed);
+/* the room prompt (a download over the limit: delete older downloads?), drawn and answered by the OXMENU section
+(oxbox_menus.c): the map whose download waits for it (NULL: none), and its answer given */
+char const *hmp_share_room_waiting(void);
+void hmp_share_room_resume(void);
 
 /* the lobby's map name and countdown line while map sharing has something to say */
 boolean hmp_share_status_active(void);

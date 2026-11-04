@@ -1059,7 +1059,7 @@ static struct {
     u32 mine;                     /* this console's copy's version ("Version:"; 0 none) */
     u32 rate, rate_t, rate_done;  /* recent download speed (bytes/s), for the time left */
     u32 need_mb, free_mb;         /* CL_NOROOM: what the download needs and what's free (MB) */
-    int room_asked;               /* the room prompt was answered for this download: not asked again (g_room) */
+    int room_asked;               /* the room prompt was answered for this download: not asked again (oxbox_menus.c) */
 } g_cl = { .s = NO_SOCK, .xs = { NO_SOCK, NO_SOCK, NO_SOCK } };
 /* not enough room for the host's map: say so on the lobby's map and countdown lines (and in the heartbeats, so the
    host and the others can show who). It stays like this until the map changes; nothing is downloaded. */
@@ -1069,37 +1069,16 @@ static void cl_noroom_text(void) {
 }
 
 /* ---- the downloads' room (OPTIONS' KEEP DOWNLOADS UNDER: hmp_downloads_limit_mb). Each map map sharing downloads is
-   marked in hmp_stats.txt with its size (dl=). A download that would take them over the limit, or that the drive hasn't
-   room for, offers to delete older downloads first: the least recently played (hidden ones before the rest), never a
-   favorite, one of the last 10 played, the map being fetched, or a map with a copy in both maps folders (the player's
-   own may be one of them). The lobby asks (A: delete them, B: keep them); nothing is deleted unasked. B, or no answer
-   in 30 s: the download goes ahead over the limit if the drive has room, else it's "no room" as before. */
-#define ROOM_VICTIMS 8
+   marked in hmp_stats.txt with its size (dl=: cl_finish). A download that would take them over the limit, or that the
+   drive hasn't room for, offers to delete older downloads first; the choice, the lobby's prompt and the deleting are
+   menu work, in the OXMENU section with the menu screens (oxbox_menus.c's room_choose and the rest, v1.86: nothing of
+   it in memory during a game). Here: asking it (room_check), waiting for its answer (CL_ROOM, 30 s, then as B), and
+   going on (hmp_share_room_resume). With OXMENU not loaded (no menus), nothing is offered and the download goes ahead
+   if the drive has room */
 #define ROOM_ASK_MS 30000
 static void cl_close(void);
-static struct {
-    char keys[ROOM_VICTIMS][32];
-    u16 mb[ROOM_VICTIMS];
-    int n, short_of_room;         /* chosen; the drive itself hasn't room without them */
-    u32 freed_mb, need_mb, limit_mb, used_mb, asked_at, drawn, closed;
-} g_room;
-struct room_pick { const char *best; u32 best_order; int best_hidden; u16 best_mb; };
-static int room_chosen(const char *key) {
-    int k;
-    for (k = 0; k < g_room.n; k++) if (!ieq(g_room.keys[k], key)) return 1;
-    return 0;
-}
-static void room_each(void *context, char const *key, struct hmp_rating const *rating) {
-    struct room_pick *p = (struct room_pick *)context;
-    int k = hmp_find_key(key);
-    if (rating->favorite || rating->recent || !ieq(key, g_cl.key) || room_chosen(key) || k < 0 || hmp_both_c(k)) return;
-    if (p->best && (p->best_hidden > rating->hidden || (p->best_hidden == rating->hidden && p->best_order <= rating->order)))
-        return;
-    p->best = key; p->best_order = rating->order; p->best_hidden = rating->hidden; p->best_mb = rating->download_mb;
-}
-static void room_own(void *context, char const *key, struct hmp_rating const *rating) {
-    if (!ieq(key, g_cl.key)) *(u32 *)context = rating->download_mb;
-}
+static u32 g_room_asked_at;
+int oxbox_room_choose(char const *key, unsigned long need_mb, unsigned long have_mb);   /* (oxbox_sdk.c: 0 unloaded) */
 /* KEEP DOWNLOADS UNDER when nothing set it (no downloads= in the settings: the installer writes one): on E: (the game
    there, or downloads in T:\maps), the biggest of 2 GB, 1 GB, 600 MB and 300 MB under half the room free, else 300 MB;
    on another drive, no limit */
@@ -1117,99 +1096,26 @@ long hmp_share_default_download_limit_mb(void) {
 }
 /* room for the download: 1 when it may go ahead, 0 when it waits for the prompt's answer (CL_ROOM). need/have: bytes */
 static int room_check(u32 need, u32 have, u32 now) {
-    u32 own = 0, need_mb = (need + (1u << 20) - 1) >> 20, over = 0, short_mb = 0, want;
-    long limit;
-    if (g_cl.room_asked) return 1;
-    limit = hmp_downloads_limit_mb();
-    memset(&g_room, 0, sizeof g_room);
-    g_room.used_mb = hmp_stats_downloads(room_own, &own);
-    g_room.used_mb -= own < g_room.used_mb ? own : g_room.used_mb;   /* (an older copy of this map is replaced) */
-    if (limit > 0 && g_room.used_mb + need_mb > (u32)limit) over = g_room.used_mb + need_mb - (u32)limit;
-    if (have < need) short_mb = ((need - have) >> 20) + 1;
-    want = over > short_mb ? over : short_mb;
-    if (!want) return 1;
-    while (g_room.n < ROOM_VICTIMS && g_room.freed_mb < want) {
-        struct room_pick p;
-        memset(&p, 0, sizeof p);
-        hmp_stats_downloads(room_each, &p);
-        if (!p.best) break;
-        scpy(g_room.keys[g_room.n], p.best);
-        g_room.mb[g_room.n++] = p.best_mb;
-        g_room.freed_mb += p.best_mb;
-    }
-    g_room.need_mb = need_mb; g_room.limit_mb = limit > 0 ? (u32)limit : 0; g_room.short_of_room = short_mb != 0;
-    if (!g_room.n) {
-        lg("downloads: %s (%u MB) takes them over %u MB (%u MB used), but every older download is a favorite or played "
-           "lately: none deleted", g_cl.key, need_mb, g_room.limit_mb, g_room.used_mb);
-        return 1;
-    }
-    lg("downloads: %s needs %u MB (%u MB of downloads, limit %u MB, %u MB free): asking to delete %d older downloads (%u MB)",
-       g_cl.key, need_mb, g_room.used_mb, g_room.limit_mb, have >> 20, g_room.n, g_room.freed_mb);
+    if (g_cl.room_asked || oxbox_room_choose(g_cl.key, (need + (1u << 20) - 1) >> 20, have >> 20) <= 0) return 1;
     cl_close();
-    g_room.asked_at = now | 1;
+    g_room_asked_at = now | 1;
     g_cl.state = CL_ROOM;
     status("Map: delete older downloads?", -1, 0);
     L_start("Making room: delete older downloads?");
     return 0;
 }
-/* the prompt's answer: delete = 1 (A), 0 (B or no answer) */
-static void room_answer(int del) {
-    int k;
+/* the prompt answered (oxbox_menus.c, after any deleting), or not in time: the download asked for again, with the room
+   there is now; not asked again for it */
+void hmp_share_room_resume(void) {
+    if (g_cl.state != CL_ROOM) return;
     g_cl.room_asked = 1;
-    g_room.closed = GetTickCount();
-    if (del) {
-        for (k = 0; k < g_room.n; k++) {
-            if (hmp_maps_delete(g_room.keys[k])) lg("downloads: deleted %s (%u MB) to make room", g_room.keys[k], (u32)g_room.mb[k]);
-            hmp_stats_downloaded(g_room.keys[k], 0);
-        }
-        hmp_maps_scan();
-    } else
-        lg("downloads: kept the older downloads%s", g_room.short_of_room ? " (no room for this map without them)" : " (over the limit)");
-    g_room.n = 0;
-    g_cl.state = CL_START;                       /* (asked again: the reply is checked with the room there is now) */
+    g_cl.state = CL_START;
 }
 static void room_tick(u32 now) {
-    if (g_cl.state == CL_ROOM && now - g_room.asked_at > ROOM_ASK_MS) { lg("downloads: no answer"); room_answer(0); }
+    if (g_cl.state == CL_ROOM && now - g_room_asked_at > ROOM_ASK_MS) { lg("downloads: no answer: kept the older downloads"); hmp_share_room_resume(); }
 }
-int hmp_share_room_prompt_lines(wchar_t lines[5][100]) {
-    char text[5][100], *o;
-    const char *name = g_cl.key[0] ? g_cl.key + 1 : "", *slash;
-    int count = 0, line, i, k;
-    if (g_cl.state != CL_ROOM || !g_room.n) return 0;
-    if ((slash = strrchr(name, '/')) != 0) name = slash + 1;
-    o = scpy(text[count], "Making room for "); o = scpy(o, name); o = scpy(o, " ("); o = put_u(o, g_room.need_mb);
-    scpy(o, " MB).");
-    count++;
-    o = scpy(text[count], "Delete "); o = put_u(o, (u32)g_room.n); o = scpy(o, g_room.n == 1 ? " older downloaded map (" :
-        " older downloaded maps ("); o = put_u(o, g_room.freed_mb); scpy(o, " MB)?");
-    count++;
-    o = text[count];
-    for (k = 0; k < g_room.n && o < text[count] + 80; k++) {
-        const char *n = g_room.keys[k] + 1, *s = strrchr(n, '/');
-        if (s) n = s + 1;
-        if (k) o = scpy(o, ", ");
-        for (i = 0; n[i] && o < text[count] + 90; i++) *o++ = n[i];
-    }
-    if (k < g_room.n) o = scpy(o, "...");
-    *o = 0;
-    count++;
-    text[count++][0] = 0;
-    o = scpy(text[count++], g_room.n == 1 ? "A: delete it   B: keep it" : "A: delete them   B: keep them");
-    scpy(o, g_room.short_of_room ? " (no download)" : " (over the limit)");
-    for (line = 0; line < count; line++) {
-        for (i = 0; text[line][i] && i < 99; i++) lines[line][i] = (wchar_t)(unsigned char)text[line][i];
-        lines[line][i] = 0;
-    }
-    g_room.drawn = GetTickCount();
-    return count;
-}
-int hmp_share_room_prompt_button(int a, int b, int pressed) {
-    u32 now = GetTickCount();
-    if (g_room.closed && now - g_room.closed < 500 && (a || b) && !pressed) return 1;   /* (still held from answering) */
-    if (g_cl.state != CL_ROOM || !g_room.n || now - g_room.drawn > 500) return 0;
-    if (pressed && (a || b)) room_answer(a);
-    return a || b;
-}
+/* whether the room prompt is waiting for its answer, and for which map's download */
+char const *hmp_share_room_waiting(void) { return g_cl.state == CL_ROOM ? g_cl.key : 0; }
 
 /* the download's data phase, on the worker: every file at once, from every connection */
 struct cst {
@@ -1698,7 +1604,7 @@ static void cl_reply(u32 now) {
                    "keep it in: it replaces this console's", g_cl.key, g_cl.r.map_version, g_cl.mine);
         }
     }
-    {                                                 /* room for it? Older downloads only go when the player says (g_room) */
+    {                                                 /* room for it? Older downloads only go when the player says (room_check) */
         u32 need = g_cl.total - g_cl.r.start + g_cl.r.nfiles * CHUNK + (256u << 10), have = free_bytes(g_dl_root);
         if (have < need) {                            /* other maps' partial downloads go first (build 20) */
             g_tidy_keep = 0; cl_tidy(); g_tidy_keep = KEEP_PARTIALS;

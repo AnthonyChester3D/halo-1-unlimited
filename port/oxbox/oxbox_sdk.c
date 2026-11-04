@@ -481,6 +481,36 @@ boolean pc_menu_event_function_invoke(void *widget, void *event, long function_i
 	return oxbox_menus_section ? oxbox_menus_function(widget, event, function_index, widget_deleted) : FALSE;
 }
 
+/* map sharing's room prompt (hmp_share.c, interface.c, ui_widget.c) and the map list's DOWNLOADED title (hmp_browse.c):
+OXMENU's, menu work; without it, nothing offered, drawn or taken */
+int oxbox_menus_room_choose(char const *key, unsigned long need_mb, unsigned long have_mb);
+int oxbox_menus_room_lines(wchar_t lines[5][100]);
+int oxbox_menus_room_button(int a, int b, int pressed);
+void oxbox_menus_downloads_title(char *out, int size, long used_mb);
+
+int oxbox_room_choose(char const *key, unsigned long need_mb, unsigned long have_mb)
+{
+	return oxbox_menus_section ? oxbox_menus_room_choose(key, need_mb, have_mb) : 0;
+}
+
+int hmp_share_room_prompt_lines(wchar_t lines[5][100])
+{
+	return oxbox_menus_section ? oxbox_menus_room_lines(lines) : 0;
+}
+
+int hmp_share_room_prompt_button(int a, int b, int pressed)
+{
+	return oxbox_menus_section ? oxbox_menus_room_button(a, b, pressed) : 0;
+}
+
+int oxbox_downloads_title(char *out, int size, long used_mb)
+{
+	if (!oxbox_menus_section)
+		return 0;
+	oxbox_menus_downloads_title(out, size, used_mb);
+	return 1;
+}
+
 short oxbox_menus_description_frame(long list_tag_index, short index)
 {
 	return oxbox_menus_section ? oxbox_menus_frame(list_tag_index, index) : index;

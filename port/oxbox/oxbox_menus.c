@@ -1025,6 +1025,221 @@ static boolean options_function(struct menu_widget_instance *list, boolean save)
 	return TRUE;
 }
 
+/* ---- map sharing's room (OPTIONS' KEEP DOWNLOADS UNDER), menu work (v1.86: here, not in memory during a game). A
+download that would take the downloads over the limit, or that the drive hasn't room for (hmp_share.c's room_check
+asks room_choose), offers to delete older downloads first: the least recently played (hidden ones before the rest),
+never a favorite, one of the last 10 played, the map being fetched, or a map with a copy in both maps folders (the
+player's own may be one of them). The lobby asks (A: delete them, B: keep them); nothing is deleted unasked */
+
+/* (hmp's: hmp.h's struct hmp_rating, the fields read here) */
+struct room_rating
+{
+	unsigned long plays, order;
+	unsigned char favorite, hidden, known, recent;
+	unsigned short download_mb, pad;
+};
+unsigned long hmp_stats_downloads(void (*each)(void *context, char const *key, struct room_rating const *rating),
+	void *context);
+void hmp_stats_downloaded(char const *name, unsigned long mb);
+long hmp_downloads_limit_mb(void);
+long hmp_maps_find(char const *level_name);
+boolean hmp_maps_both(long map_index);
+boolean hmp_maps_delete(char const *key);
+void hmp_maps_scan(void);
+void hmp_log(char const *format, ...);
+char const *hmp_share_room_waiting(void);
+void hmp_share_room_resume(void);
+unsigned long __stdcall GetTickCount(void);
+
+#define ROOM_VICTIMS 8
+
+static struct
+{
+	char keys[ROOM_VICTIMS][32];
+	unsigned short mb[ROOM_VICTIMS];
+	short count;
+	boolean short_of_room;                  /* the drive itself hasn't room without them */
+	char const *fetching;                   /* (the map being fetched: never one of them) */
+	unsigned long freed_mb, need_mb, drawn, closed;
+} room;
+
+struct room_pick { char const *best; unsigned long best_order; long best_hidden; unsigned short best_mb; unsigned long own_mb; };
+
+static boolean room_same(char const *a, char const *b)
+{
+	for (; *a && *b; a++, b++)
+	{
+		if ((*a | 0x20) != (*b | 0x20) && !(*a == '\\' && *b == '/') && !(*a == '/' && *b == '\\'))
+			return FALSE;
+	}
+	return *a == *b;
+}
+
+static void room_each(void *context, char const *key, struct room_rating const *rating)
+{
+	struct room_pick *pick = (struct room_pick *)context;
+	long map = hmp_maps_find(key);
+	short index;
+
+	if (room_same(key, room.fetching))
+	{
+		pick->own_mb = rating->download_mb;     /* (an older copy of the map being fetched: replaced) */
+		return;
+	}
+	if (rating->favorite || rating->recent || map == NONE || hmp_maps_both(map))
+		return;
+	for (index = 0; index < room.count; index++)
+	{
+		if (room_same(room.keys[index], key))
+			return;
+	}
+	if (pick->best && (pick->best_hidden > rating->hidden ||
+		(pick->best_hidden == rating->hidden && pick->best_order <= rating->order)))
+		return;
+	pick->best = key;
+	pick->best_order = rating->order;
+	pick->best_hidden = rating->hidden;
+	pick->best_mb = rating->download_mb;
+}
+
+/* the downloads to offer for key's (need_mb, with have_mb free): how many (0: none needed, or none to offer) */
+int oxbox_menus_room_choose(char const *key, unsigned long need_mb, unsigned long have_mb)
+{
+	struct room_pick pick;
+	unsigned long used, over = 0, short_mb = 0, want;
+	long limit = hmp_downloads_limit_mb();
+
+	csmemset(&room, 0, sizeof(room));
+	csmemset(&pick, 0, sizeof(pick));
+	room.fetching = key;
+	used = hmp_stats_downloads(room_each, &pick);
+	used -= pick.own_mb < used ? pick.own_mb : used;
+	if (limit > 0 && used + need_mb > (unsigned long)limit)
+		over = used + need_mb - (unsigned long)limit;
+	if (have_mb < need_mb + 1)
+		short_mb = need_mb + 1 - have_mb;
+	want = over > short_mb ? over : short_mb;
+	if (!want)
+		return 0;
+	while (room.count < ROOM_VICTIMS && room.freed_mb < want)
+	{
+		csmemset(&pick, 0, sizeof(pick));
+		hmp_stats_downloads(room_each, &pick);
+		if (!pick.best)
+			break;
+		strncpy(room.keys[room.count], pick.best, sizeof(room.keys[0]) - 1);
+		room.mb[room.count++] = pick.best_mb;
+		room.freed_mb += pick.best_mb;
+	}
+	room.need_mb = need_mb;
+	room.short_of_room = short_mb != 0;
+	if (!room.count)
+	{
+		hmp_log("downloads: %s (%lu MB) takes them over %ld MB (%lu MB used), but every older download is a favorite or "
+			"played lately: none deleted", key, need_mb, limit, used);
+		return 0;
+	}
+	hmp_log("downloads: %s needs %lu MB (%lu MB of downloads, limit %ld MB, %lu MB free): asking to delete %d older "
+		"downloads (%lu MB)", key, need_mb, used, limit, have_mb, (int)room.count, room.freed_mb);
+	return room.count;
+}
+
+/* the prompt's lines (up to 5), while hmp_share.c waits for its answer; 0 when there's none */
+int oxbox_menus_room_lines(wchar_t lines[5][100])
+{
+	char text[5][100], *o, *end;
+	char const *key = hmp_share_room_waiting(), *name, *slash;
+	short count = 0, line, k;
+	long i;
+
+	if (!key || !room.count)
+		return 0;
+	name = key[0] == '+' ? key + 1 : key;
+	if ((slash = strrchr(name, '/')) != NULL)
+		name = slash + 1;
+	text_print(text[count++], 100, "Making room for %s (%lu MB).", name, room.need_mb);
+	text_print(text[count++], 100, "Delete %d older downloaded map%s (%lu MB)?", (int)room.count, room.count == 1 ? "" : "s",
+		room.freed_mb);
+	o = text[count];
+	end = text[count] + 90;
+	for (k = 0; k < room.count && o < text[count] + 80; k++)
+	{
+		char const *n = room.keys[k][0] == '+' ? room.keys[k] + 1 : room.keys[k], *s = strrchr(n, '/');
+
+		if (s)
+			n = s + 1;
+		if (k)
+		{
+			*o++ = ',';
+			*o++ = ' ';
+		}
+		while (*n && o < end)
+			*o++ = *n++;
+	}
+	if (k < room.count)
+	{
+		*o++ = '.';
+		*o++ = '.';
+		*o++ = '.';
+	}
+	*o = 0;
+	count++;
+	text[count++][0] = 0;
+	text_print(text[count++], 100, "%s%s", room.count == 1 ? "A: delete it   B: keep it" : "A: delete them   B: keep them",
+		room.short_of_room ? " (no download)" : " (over the limit)");
+	for (line = 0; line < count; line++)
+	{
+		for (i = 0; text[line][i] && i < 99; i++)
+			lines[line][i] = (wchar_t)(unsigned char)text[line][i];
+		lines[line][i] = 0;
+	}
+	room.drawn = GetTickCount();
+	return count;
+}
+
+/* a button while the prompt may be up: 1 when it's the prompt's (A deletes them, B keeps them) */
+int oxbox_menus_room_button(int a, int b, int pressed)
+{
+	unsigned long now = GetTickCount();
+	short k;
+
+	if (room.closed && now - room.closed < 500 && (a || b) && !pressed)
+		return 1;                                /* (still held from answering) */
+	if (!hmp_share_room_waiting() || !room.count || now - room.drawn > 500)
+		return 0;
+	if (pressed && (a || b))
+	{
+		room.closed = now;
+		if (a)
+		{
+			for (k = 0; k < room.count; k++)
+			{
+				if (hmp_maps_delete(room.keys[k]))
+					hmp_log("downloads: deleted %s (%d MB) to make room", room.keys[k], (int)room.mb[k]);
+				hmp_stats_downloaded(room.keys[k], 0);
+			}
+			hmp_maps_scan();
+		}
+		else
+			hmp_log("downloads: kept the older downloads%s", room.short_of_room ? " (no room for this map without them)" :
+				" (over the limit)");
+		room.count = 0;
+		hmp_share_room_resume();
+	}
+	return a || b;
+}
+
+/* the map list's DOWNLOADED title: what the downloads take, of KEEP DOWNLOADS UNDER (hmp_browse.c) */
+void oxbox_menus_downloads_title(char *out, int size, long used_mb)
+{
+	long limit = hmp_downloads_limit_mb();
+
+	if (limit > 0)
+		text_print(out, size, "DOWNLOADS %ld/%ld MB", used_mb, limit);
+	else
+		text_print(out, size, "DOWNLOADS %ld MB", used_mb);
+}
+
 /* ---------- public code (oxbox_sdk.c's, while OXMENU is loaded: its menu_tags_loaded and the rest call these) */
 
 /* ui.map has loaded: TRUE when screens were added (else nothing is, and the section can go) */

@@ -947,19 +947,17 @@ void hmp_browse_render(short selected, float alpha)
 	a8 = (unsigned long)(long)(alpha * 255.0f + 0.5f);
 	entry = selected >= 0 && selected < hmp_maps_table_count() ? table[selected] : NULL;
 	hmp_browse_visible(entry);
-	if (g.sort == _hmp_sort_downloaded)               /* (what they take, of KEEP DOWNLOADS UNDER: no room for "SORT:") */
 	{
-		extern int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
+		/* (DOWNLOADED: what they take, of KEEP DOWNLOADS UNDER, in place of "SORT:", OXMENU's text: oxbox_menus.c) */
+		extern int oxbox_downloads_title(char *out, int size, long used_mb);
 		char numbers[48];
-		long limit = hmp_downloads_limit_mb();
-		if (limit > 0) halo_linux_snprintf(numbers, sizeof(numbers), "DOWNLOADS %ld/%ld MB", g.downloads_mb, limit);
-		else halo_linux_snprintf(numbers, sizeof(numbers), "DOWNLOADS %ld MB", g.downloads_mb);
-		put_text(g.text, numbers);
-	}
-	else
-	{
-		o = put_text(g.text, "SORT: ");
-		put_text(o, sort_titles[g.sort]);
+		if (g.sort == _hmp_sort_downloaded && oxbox_downloads_title(numbers, sizeof(numbers), g.downloads_mb))
+			put_text(g.text, numbers);
+		else
+		{
+			o = put_text(g.text, "SORT: ");
+			put_text(o, sort_titles[g.sort]);
+		}
 	}
 	text_mode(font, 1, alpha);
 	draw_line(48, 330, 72, 605, g.text);
