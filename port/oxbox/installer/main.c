@@ -40,7 +40,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 19
+#define INSTALLER_VERSION 20
 #endif
 __attribute__((used)) static struct
 {
@@ -1243,6 +1243,48 @@ static void own_title_folders(void)
 	}
 }
 
+/* map sharing's KEEP DOWNLOADS UNDER (the game's OPTIONS), set once, when the game is installed on E:, where room is
+precious: the biggest of 2 GB, 1 GB, 600 MB and 300 MB under half the room free there (else 300 MB), as downloads=<MB>
+in the game's settings. Never changed once the settings have one (the player's choice, or an earlier install's). On
+another drive: no limit, which the game takes when there's none */
+static void downloads_default(struct halo const *h)
+{
+	static unsigned long const sizes[4] = {2048, 1024, 600, 300};
+	char const *path = "E:\\TDATA\\" OWN_TITLE_FOLDER "\\opence_settings.txt";
+	char text[600], line[40];
+	ULARGE_INTEGER available, total, free_total;
+	unsigned long free_mb, got = 0, put = 0;
+	HANDLE file;
+	int k;
+
+	if ((h->path[0] | 0x20) != 'e' || !GetDiskFreeSpaceExA("E:\\", &available, &total, &free_total))
+		return;
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file != INVALID_HANDLE_VALUE)
+	{
+		if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+			got = 0;
+		CloseHandle(file);
+	}
+	text[got] = 0;
+	if (strstr(text, "downloads="))
+		return;
+	free_mb = (unsigned long)(available.QuadPart >> 20);
+	for (k = 0; k < 3 && sizes[k] > free_mb / 2; k++)
+		;
+	CreateDirectoryA("E:\\TDATA", NULL);
+	CreateDirectoryA("E:\\TDATA\\" OWN_TITLE_FOLDER, NULL);
+	file = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return;
+	SetFilePointer(file, 0, NULL, FILE_END);
+	text_print(line, sizeof(line), "%sdownloads=%lu\r\n", got && text[got - 1] != '\n' ? "\r\n" : "", sizes[k]);
+	WriteFile(file, line, (unsigned long)strlen(line), &put, NULL);
+	CloseHandle(file);
+	say("Downloaded maps kept under %lu MB (%lu MB free on E:; OPTIONS in the game changes it).", sizes[k], free_mb);
+	flush_drive("E:\\");
+}
+
 static int install(struct halo *h)
 {
 	char main[200], backup[200], temp[220], ui_map[200], error[256], line[SCREEN_COLUMNS + 8];
@@ -1344,6 +1386,7 @@ static int install(struct halo *h)
 	install_showcase(h);
 	install_updater(h);
 	own_title_folders();
+	downloads_default(h);
 	say_in(COLOUR_GREEN, "Done: OpenCE is this folder's default.xbe.");
 	return 0;
 }

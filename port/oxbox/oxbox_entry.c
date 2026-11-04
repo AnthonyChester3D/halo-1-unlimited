@@ -309,6 +309,15 @@ static void map_d_to_image_folder(void)
 	platform_log("D: is %s (status %08lx); the XBE: %s", folder, (unsigned long)status, oxbox_image_path);
 }
 
+/* whether the game is on the hard drive's E: (Partition1), where room is precious (map sharing's KEEP DOWNLOADS UNDER:
+hmp_share.c) */
+int oxbox_installed_on_e(void)
+{
+	int _strnicmp(const char *a, const char *b, size_t count);
+
+	return !_strnicmp(oxbox_image_path, "\\Device\\Harddisk0\\Partition1\\", 29);
+}
+
 /* ---------- reading the XBE's own file (the effects image, the pictures): by d:\<its name>, or else by the
 path the kernel loaded it from (a launcher or BIOS that starts it in a way that leaves d:\<name> elsewhere) */
 

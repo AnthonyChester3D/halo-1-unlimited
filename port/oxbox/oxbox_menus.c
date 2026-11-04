@@ -17,7 +17,8 @@ Its A or START keeps what's chosen in the gametype being edited (player_ui's edi
 writes with the rest.
 
 OPTIONS, the main menu's (hmp_game.c opens it in place of its old dialog, and keeps the settings): SCREEN SHAPE,
-ATTRACT MODE (the showcase, Halo's movies, off), ATTRACT MODE WAIT and CHECK FOR UPDATES.
+ATTRACT MODE (the showcase, Halo's movies, off), ATTRACT MODE WAIT, KEEP DOWNLOADS UNDER (map sharing's limit:
+hmp_share.c) and CHECK FOR UPDATES.
 
 Both are laid out as ITEM OPTIONS is (copies of its rows, its help box under them: a line for each row's values),
 with a header picture made by the installer from Halo's own header letters (oxbox_entry.c), or a text title.
@@ -99,7 +100,7 @@ enum
 	_widget_type_spinner_list,
 
 	VEHICLE_OPTION_ROWS = 1 + NUMBER_OF_VEHICLE_CATEGORIES,
-	OPTIONS_ROWS = 4,
+	OPTIONS_ROWS = 5,
 	MAXIMUM_ROWS = 8,
 	ROW_STEP = 30,
 	EDIT_ROW_STEP = 33,
@@ -825,7 +826,7 @@ static void vehicle_editor_patch(struct cache_file_tag_instance *grown, long scr
 /* ---- the main menu's OPTIONS (hmp_game.c opens it, and keeps the settings: hmp_options_get, hmp_options_set) */
 
 static char const *const options_labels[OPTIONS_ROWS] =
-	{ "SCREEN SHAPE:", "ATTRACT MODE:", "ATTRACT MODE WAIT:", "CHECK FOR UPDATES:" };
+	{ "SCREEN SHAPE:", "ATTRACT MODE:", "ATTRACT MODE WAIT:", "KEEP DOWNLOADS UNDER:", "CHECK FOR UPDATES:" };
 static char const *const options_shape_values[3] = { "AS THE DASHBOARD", "4:3", "WIDESCREEN" };
 static char const *const options_shape_help[3] = {
 	"The screen shape the Xbox dashboard's settings\r\nsay (the dashboard's Settings, Video).",
@@ -842,6 +843,13 @@ static char const *const options_wait_help[4] = {
 	"The attract mode starts after a minute on the\r\nmain menu with nothing pressed.",
 	"The attract mode starts after 2 minutes on the\r\nmain menu with nothing pressed.",
 	"The attract mode starts after 5 minutes on the\r\nmain menu with nothing pressed." };
+static char const *const options_downloads_values[5] = { "300 MB", "600 MB", "1 GB", "2 GB", "NO LIMIT" };
+static char const *const options_downloads_help[5] = {
+	"Downloaded maps are kept under 300 MB: older\r\nones go when you say (never your favorites).",
+	"Downloaded maps are kept under 600 MB: older\r\nones go when you say (never your favorites).",
+	"Downloaded maps are kept under 1 GB: older\r\nones go when you say (never your favorites).",
+	"Downloaded maps are kept under 2 GB: older\r\nones go when you say (never your favorites).",
+	"Downloaded maps are kept until the drive is\r\nfull. The map list's DOWNLOADED sort lists them." };
 static char const *const options_updates_values[1] = { "NOW" };
 static char const *const options_updates_help[1] = {
 	"Press A to look online for a newer release now.\r\nIt's looked for at every startup too." };
@@ -854,8 +862,10 @@ static void options_rows(struct menu_row *rows)
 	rows[1].values = options_attract_values, rows[1].help = (char const **)options_attract_help;
 	rows[2].label = options_labels[2], rows[2].model = _row_model_widest, rows[2].value_count = 4;
 	rows[2].values = options_wait_values, rows[2].help = (char const **)options_wait_help;
-	rows[3].label = options_labels[3], rows[3].model = _row_model_yes_no, rows[3].value_count = 1;
-	rows[3].values = options_updates_values, rows[3].help = (char const **)options_updates_help;
+	rows[3].label = options_labels[3], rows[3].model = _row_model_widest, rows[3].value_count = 5;
+	rows[3].values = options_downloads_values, rows[3].help = (char const **)options_downloads_help;
+	rows[4].label = options_labels[4], rows[4].model = _row_model_yes_no, rows[4].value_count = 1;
+	rows[4].values = options_updates_values, rows[4].help = (char const **)options_updates_help;
 }
 
 static void menus_build(void)
@@ -1007,7 +1017,7 @@ static boolean options_function(struct menu_widget_instance *list, boolean save)
 	{
 		struct menu_widget_instance *row = list->child;
 
-		for (index = 0; row && index < 3; index++)
+		for (index = 0; row && index < 4; index++)
 			row = row->next;
 		if (row && list->focused_child == row)
 			oxbox_update_check_now();

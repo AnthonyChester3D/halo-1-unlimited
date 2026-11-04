@@ -10,7 +10,8 @@ console keeps T:\hmp_stats.txt (E:\TDATA\4c4a4855\hmp_stats.txt), one line per m
 - plays: matches started on the map on this console (counted once a match has run a second);
 - last / first: the day of the last play, the day the map first showed up in the list ("-" while the clock isn't set);
 - fav, hide: from the map list (Y, Black held) and the postgame (Y);
-- order: when it was last played, as a count (the Recently played sort needs no clock).
+- order: when it was last played, as a count (the Recently played sort needs no clock);
+- dl: a map map sharing downloaded, its size in MB (the downloads' limit, OPTIONS' KEEP DOWNLOADS UNDER: hmp_share.c).
 A line "*settings  sort=genres" remembers the list's sort. Lines for maps not in the list now are kept; lines
 starting with # are notes. Read once (the first scan); written after a scan finds new maps and when a match starts,
 by the background thread (hmp_share.c), as hmp_stats.tmp and then the swap.
@@ -33,7 +34,8 @@ by the background thread (hmp_share.c), as hmp_stats.tmp and then the swap.
 #define STATS_PATH "T:\\hmp_stats.txt"
 #define STATS_TEMPORARY_PATH "T:\\hmp_stats.tmp"
 #define MAXIMUM_STATS 4096
-#define LINE_FIELDS 104
+#define LINE_FIELDS 114
+#define RECENT_PLAYS 10                     /* (the maps played last a download's room is never made from: hmp_share.c) */
 #define INVALID_FILE ((HANDLE)-1)
 
 /* ---------- structures */
@@ -42,7 +44,8 @@ struct stat_line
 {
 	char key[32];
 	unsigned long plays, last, first, order;
-	unsigned char favorite, hidden, pad[2];
+	unsigned char favorite, hidden;
+	unsigned short download_mb;         /* (a map map sharing downloaded: its size, MB; 0 for one that wasn't) */
 };
 
 /* ---------- prototypes */
@@ -77,7 +80,7 @@ static struct
 
 static char const *const sort_names[NUMBER_OF_HMP_SORTS] =
 {
-	"packs", "favorites", "played", "recent", "players", "genres", "gametypes", "name"
+	"packs", "favorites", "played", "recent", "players", "genres", "gametypes", "name", "downloaded"
 };
 
 /* ---------- private code */
@@ -255,6 +258,7 @@ static void parse_line(char *s)
 		else if (!ieq(name, "first")) line->first = get_date(value);
 		else if (!ieq(name, "fav")) line->favorite = number(value) != 0;
 		else if (!ieq(name, "hide")) line->hidden = number(value) != 0;
+		else if (!ieq(name, "dl")) line->download_mb = (unsigned short)(number(value) > 65535 ? 65535 : number(value));
 		else if (!ieq(name, "order"))
 		{
 			line->order = number(value);
@@ -310,7 +314,7 @@ static void format(void)
 {
 	static char const head[] = "# Halo Universal play stats (one line per map): plays = matches started on this Xbox, last = last "
 		"played, first = first seen, fav = favorite (Y), hide = hidden (hold Black), order = when last played (higher = more "
-		"recent)\r\n";
+		"recent), dl = downloaded by map sharing (MB)\r\n";
 	unsigned long need = sizeof(head) + 40;
 	char *o;
 	long i;
@@ -341,6 +345,7 @@ static void format(void)
 		o = scpy(o, "  fav="); *o++ = (char)('0' + line->favorite);
 		o = scpy(o, "  hide="); *o++ = (char)('0' + line->hidden);
 		if (line->order) { o = scpy(o, "  order="); o = put_number(o, line->order); }
+		if (line->download_mb) { o = scpy(o, "  dl="); o = put_number(o, line->download_mb); }
 		o = scpy(o, "\r\n");
 	}
 	hmp_stats_globals.buffer_length = (unsigned long)(o - hmp_stats_globals.buffer);
@@ -481,6 +486,7 @@ void hmp_stats_get(char const *name, struct hmp_rating *rating)
 	rating->order = line->order;
 	rating->favorite = line->favorite;
 	rating->hidden = line->hidden;
+	rating->download_mb = line->download_mb;
 	rating->known = 1;
 }
 
@@ -497,6 +503,48 @@ void hmp_stats_set(char const *name, short what, long value)
 	hmp_stats_globals.dirty = TRUE;
 	hmp_log("stats: %s: %s", key, what == 0 ? (line->favorite ? "favorite" : "not a favorite") :
 		(line->hidden ? "hidden" : "shown again"));
+}
+
+/* a map map sharing downloaded (hmp_share.c): its size, MB (0: not a download any more) */
+void hmp_stats_downloaded(char const *name, unsigned long mb)
+{
+	char key[32];
+	struct stat_line *line;
+	if (!hmp_stats_globals.loaded) load();
+	normalize(key, name ? name : "");
+	if (!key[0] || (!(line = find(key)) && !(line = add(key)))) return;
+	line->download_mb = (unsigned short)(mb > 65535 ? 65535 : mb ? mb : 1);
+	if (!mb) line->download_mb = 0;
+	hmp_stats_globals.dirty = TRUE;
+}
+
+/* the downloaded maps (hmp_stats_downloaded) the map list has now, each told with its rating; their MB in all */
+unsigned long hmp_stats_downloads(void (*each)(void *context, char const *key, struct hmp_rating const *rating),
+	void *context)
+{
+	unsigned long total = 0;
+	long map, maps = hmp_maps_count();
+	if (!hmp_stats_globals.loaded) load();
+	for (map = 0; map < maps; map++)
+	{
+		char key[32];
+		struct stat_line *line;
+		char const *name = hmp_maps_key(map);
+		if (!name) continue;
+		normalize(key, name);
+		if (!key[0] || !(line = find(key)) || !line->download_mb) continue;
+		total += line->download_mb;
+		if (each)
+		{
+			struct hmp_rating rating;
+			memset(&rating, 0, sizeof(rating));
+			rating.plays = line->plays, rating.order = line->order, rating.favorite = line->favorite;
+			rating.hidden = line->hidden, rating.download_mb = line->download_mb, rating.known = 1;
+			rating.recent = line->order && hmp_stats_globals.order_maximum - line->order < RECENT_PLAYS;
+			each(context, name, &rating);
+		}
+	}
+	return total;
 }
 
 short hmp_stats_sort(void)

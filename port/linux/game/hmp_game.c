@@ -134,10 +134,12 @@ static struct
 	long aspect;
 	long attract;                            /* (NONE: opence.ini's showcase says) */
 	long attract_seconds;                    /* (0: opence.ini's showcase_seconds says) */
-} hmp_settings = { FALSE, 0, NONE, 0 };
+	long downloads_mb;                       /* (KEEP DOWNLOADS UNDER, MB; 0 no limit; NONE not set: hmp_share.c decides) */
+} hmp_settings = { FALSE, 0, NONE, 0, NONE };
 
-/* the main menu's OPTIONS' ATTRACT MODE WAIT values */
+/* the main menu's OPTIONS' ATTRACT MODE WAIT values, and KEEP DOWNLOADS UNDER's (MB; 0: no limit) */
 static long const attract_waits[4] = { 30, 60, 120, 300 };
+static long const download_limits[5] = { 300, 600, 1024, 2048, 0 };
 
 /* ---------- private code */
 
@@ -297,6 +299,13 @@ static void settings_load(void)
 			hmp_settings.attract = !strncmp(v, "showcase", 8) ? _attract_showcase : !strncmp(v, "movies", 6) ?
 				_attract_movies : !strncmp(v, "off", 3) ? _attract_off : NONE;
 		}
+		else if (!strncmp(line, "downloads=", 10))
+		{
+			char const *v = line + 10;
+			long n = 0;
+			while (*v >= '0' && *v <= '9' && n < 1000000) n = n * 10 + (*v++ - '0');
+			hmp_settings.downloads_mb = !strncmp(line + 10, "none", 4) ? 0 : n > 0 ? n : NONE;
+		}
 		else if (!strncmp(line, "attract_seconds=", 16))
 		{
 			char const *v = line + 16;
@@ -330,6 +339,14 @@ static void settings_save(void)
 		extern int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
 		o += halo_linux_snprintf(o, (size_t)(buffer + sizeof(buffer) - o), "attract_seconds=%ld\r\n",
 			hmp_settings.attract_seconds);
+	}
+	if (hmp_settings.downloads_mb != NONE)
+	{
+		extern int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
+		if (hmp_settings.downloads_mb > 0)
+			o += halo_linux_snprintf(o, (size_t)(buffer + sizeof(buffer) - o), "downloads=%ld\r\n", hmp_settings.downloads_mb);
+		else
+			for (a = "downloads=none\r\n"; *a; ) *o++ = *a++;
 	}
 	file = CreateFileA(SETTINGS_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE) { hmp_log("options: couldn't write " SETTINGS_PATH); return; }
@@ -373,7 +390,14 @@ void hmp_options_get(short *values)
 		if ((d < 0 ? -d : d) < (e < 0 ? -e : e)) best = k;
 	}
 	values[2] = (short)best;
-	values[3] = 0;                                          /* (CHECK FOR UPDATES: an action, A) */
+	{
+		long limit = hmp_downloads_limit_mb();
+		values[3] = 4;
+		for (k = 0; k < 4; k++) if (download_limits[k] == limit) values[3] = (short)k;
+		if (values[3] == 4 && limit > 0)                        /* (a limit not in the list: the nearest below) */
+			for (k = 0; k < 4; k++) if (download_limits[k] <= limit) values[3] = (short)k;
+	}
+	values[4] = 0;                                          /* (CHECK FOR UPDATES: an action, A) */
 }
 
 void hmp_options_set(short const *values)
@@ -382,10 +406,24 @@ void hmp_options_set(short const *values)
 	hmp_settings.aspect = values[0] >= 0 && values[0] < NUMBER_OF_ASPECTS ? values[0] : _aspect_dashboard;
 	hmp_settings.attract = values[1] >= 0 && values[1] < NUMBER_OF_ATTRACTS ? values[1] : _attract_showcase;
 	hmp_settings.attract_seconds = attract_waits[values[2] >= 0 && values[2] < 4 ? values[2] : 1];
+	hmp_settings.downloads_mb = download_limits[values[3] >= 0 && values[3] < 5 ? values[3] : 4];
 	settings_apply();
 	settings_save();
-	hmp_log("options: kept (shape %ld, attract %ld after %ld s)", hmp_settings.aspect, hmp_settings.attract,
-		hmp_settings.attract_seconds);
+	hmp_log("options: kept (shape %ld, attract %ld after %ld s, downloads under %ld MB)", hmp_settings.aspect,
+		hmp_settings.attract, hmp_settings.attract_seconds, hmp_settings.downloads_mb);
+}
+
+/* KEEP DOWNLOADS UNDER (MB; 0: no limit): the player's, else the installer's (it writes downloads= into the settings
+when it installs: below the drive's free space on E:), else the same worked out here (hmp_share.c) */
+long hmp_downloads_limit_mb(void)
+{
+	settings_load();
+	if (hmp_settings.downloads_mb == NONE)
+	{
+		hmp_settings.downloads_mb = hmp_share_default_download_limit_mb();
+		settings_save();                                     /* (kept: the free space changes as maps come and go) */
+	}
+	return hmp_settings.downloads_mb;
 }
 
 /* the screen shape: -1 as the dashboard says, 0 4:3, 1 widescreen (xbox/oxbox_sdk.c's oxbox_widescreen) */

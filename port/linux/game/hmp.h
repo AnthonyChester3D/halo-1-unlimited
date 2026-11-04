@@ -65,6 +65,7 @@ enum
 	_hmp_sort_genres,
 	_hmp_sort_gametypes,
 	_hmp_sort_name,
+	_hmp_sort_downloaded,
 	NUMBER_OF_HMP_SORTS
 };
 
@@ -77,7 +78,9 @@ struct hmp_rating
 	unsigned char favorite;
 	unsigned char hidden;
 	unsigned char known;
-	unsigned char pad;
+	unsigned char recent;           /* (one of the last 10 maps played: hmp_stats_downloads) */
+	unsigned short download_mb;     /* (a map map sharing downloaded: its size, MB) */
+	unsigned short pad;
 };
 
 struct bitmap_data;
@@ -178,6 +181,9 @@ unsigned long hmp_today(void);
 void hmp_stats_seen(char const *name);
 void hmp_stats_get(char const *name, struct hmp_rating *rating);
 void hmp_stats_set(char const *name, short what, long value);
+void hmp_stats_downloaded(char const *name, unsigned long mb);
+unsigned long hmp_stats_downloads(void (*each)(void *context, char const *key, struct hmp_rating const *rating),
+	void *context);
 short hmp_stats_sort(void);
 void hmp_stats_set_sort(short sort);
 void hmp_stats_tick(void);
@@ -185,6 +191,9 @@ void hmp_stats_tick(void);
 boolean hmp_stats_flush(void);
 
 /* ---------- prototypes/HMP_GAME.C */
+
+/* OPTIONS' KEEP DOWNLOADS UNDER: MB, 0 for no limit */
+long hmp_downloads_limit_mb(void);
 
 void hmp_game_pause_menu_opened(struct widget_instance *root, short local_player_index);
 boolean hmp_game_handles_leave(struct widget_instance *widget);
@@ -205,6 +214,12 @@ struct bitmap_data *hmp_online_picture(long bitmap_tag_index, short *frame_index
 boolean hmp_online_picture_read(long fake_index, void *buffer, long size);
 
 /* ---------- prototypes/HMP_SHARE.C */
+
+/* KEEP DOWNLOADS UNDER when nothing set it: below the free space on E:, else no limit */
+long hmp_share_default_download_limit_mb(void);
+/* the room prompt (a download over the limit: delete older downloads?): its lines, and a button pressed */
+int hmp_share_room_prompt_lines(wchar_t lines[5][100]);
+int hmp_share_room_prompt_button(int a, int b, int pressed);
 
 /* the lobby's map name and countdown line while map sharing has something to say */
 boolean hmp_share_status_active(void);
