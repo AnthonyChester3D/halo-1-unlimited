@@ -325,7 +325,12 @@ arrivals, give-ups, waypoints visited, the bots' time). */
 
 enum
 {
-	BOTS_WAYPOINT_MAXIMUM = 512,     /* (192 up to release 2; the searches' arrays are static, and the search keeps a heap) */
+	BOTS_WAYPOINT_MAXIMUM = 4096,    /* (192 up to release 2, 512 up to v1.84: static arrays on every Xbox. Now the network
+	                                    and its searches' arrays are the host's alone, while it has bots, sized to the map:
+	                                    bots_route_grow, bots_route_search_room) */
+	BOTS_WAYPOINT_FIRST = 256,       /* the network's room at first, doubled as the map's waypoints need */
+	BOTS_GRID_BUCKETS = 1024,        /* the build's spatial hash (2D cells of BOTS_GRID_CELL): finding a waypoint's
+	                                    neighbours without looking at all the others (bots_route_build) */
 	BOTS_LINK_MAXIMUM = 8,
 	BOTS_LINK_MINIMUM = 2,           /* links a waypoint gets however far its neighbours are */
 	BOTS_ROUTE_MAXIMUM = 40,
@@ -348,6 +353,9 @@ enum
 };
 
 #define BOTS_LINK_RANGE 40.f
+#define BOTS_GRID_CELL 8.f
+/* (the free memory a bigger network may never take: what's left for the game, on the Xbox) */
+#define BOTS_MEMORY_RESERVE (256UL * 1024UL)
 #define BOTS_MERGE_DISTANCE 1.f
 #define BOTS_PATHFINDING_RADIUS 0.25f
 #define BOTS_ARRIVAL_DISTANCE 0.9f
@@ -411,7 +419,11 @@ static struct
 	long rounds;
 	long forgive_time;
 	long forgive_count;
-	struct bots_waypoint waypoints[BOTS_WAYPOINT_MAXIMUM];
+	struct bots_waypoint *waypoints;        /* (room for waypoint_capacity: the host's, while it has bots) */
+	short waypoint_capacity;
+	boolean waypoints_capped;               /* a waypoint left out: the room couldn't grow (memory, or the maximum) */
+	/* the build's spatial hash: each bucket's first waypoint, each waypoint's next (NULL outside the build) */
+	short *grid_head, *grid_next;
 
 	/* the 10-second report (bot_log) */
 	unsigned long report_time;
@@ -676,6 +688,8 @@ short vehicle_bot_type(long vehicle_index);  /* vehicles.c's (port: the bots') *
 static boolean bots_goal_walk(struct bots_brain *brain, real_point3d const *position, long now);
 static real bots_ease_turn(real left, real most);
 static real bots_ease_aim(real error, real most);
+static void bots_learned_save(void);
+static void bots_stuck_log_write(void);
 static boolean bots_route_to(struct bots_brain *brain, real_point3d const *position, short waypoint, long now);
 #if defined(OXBOX_BOT_TUNING)
 static void bots_brain_stagger(struct bots_brain *brain, long now);
@@ -934,6 +948,103 @@ static boolean bots_height_at(
 	return TRUE;
 }
 
+/* ---- the network's memory (v1.85): the host's alone, while it has bots, sized to the map. Up to v1.84 the network
+(512 waypoints) and its searches' arrays were static: about 90 KB of every Xbox's memory, used only by a host with
+bots. Now the waypoints' room starts at BOTS_WAYPOINT_FIRST and doubles as the map's need (up to
+BOTS_WAYPOINT_MAXIMUM, and never into the last BOTS_MEMORY_RESERVE of free memory: a waypoint that doesn't fit is
+left out, and said), the searches' arrays are made for the built network (bots_route_search_room), and all of it is
+freed when the host stops hosting (bots_route_release) */
+
+/* the searches' arrays, one each per waypoint (bots_explore and its callers; never two searches at once) */
+static struct
+{
+	real *cost;
+	short *previous, *route;
+	short *heap, *heap_at;                  /* the queue: a binary heap of waypoints by cost, and each one's place
+	                                           in it (NONE: not in it), so a waypoint is in it once (v1.85) */
+	byte *done;
+	short heap_count, capacity;
+	void *block;
+} bots_scratch;
+
+static long bots_grid_cell(real v)
+{
+	return (long)floor(v / BOTS_GRID_CELL);
+}
+
+static long bots_grid_bucket(long x, long y)
+{
+	return (long)(((unsigned long)x * 73856093UL ^ (unsigned long)y * 19349663UL) & (BOTS_GRID_BUCKETS - 1));
+}
+
+/* whether `bytes` more leaves the game its reserve of free memory (the Xbox's; elsewhere, yes) */
+static boolean bots_memory_allows(unsigned long bytes)
+{
+#if defined(HALO_XBOX_TARGET)
+	MEMORYSTATUS memory;
+
+	GlobalMemoryStatus(&memory);
+	return memory.dwAvailPhys > bytes + BOTS_MEMORY_RESERVE;
+#else
+	(void)bytes;
+	return TRUE;
+#endif
+}
+
+/* the waypoints' room doubled (and the build's hash's); FALSE when it can't be: the maximum, or the memory */
+static boolean bots_route_grow(void)
+{
+	short capacity = bots_route.waypoint_capacity ? (short)(bots_route.waypoint_capacity * 2) : BOTS_WAYPOINT_FIRST;
+	struct bots_waypoint *waypoints;
+
+	if (capacity > BOTS_WAYPOINT_MAXIMUM)
+		capacity = BOTS_WAYPOINT_MAXIMUM;
+	if (capacity <= bots_route.waypoint_capacity ||
+		!bots_memory_allows((unsigned long)capacity * (sizeof(struct bots_waypoint) + sizeof(short))) ||
+		!(waypoints = (struct bots_waypoint *)realloc(bots_route.waypoints, (size_t)capacity * sizeof(struct bots_waypoint))))
+	{
+		bots_route.waypoints_capped = TRUE;
+		return FALSE;
+	}
+	bots_route.waypoints = waypoints;
+	if (bots_route.grid_head)
+	{
+		short *next = (short *)realloc(bots_route.grid_next, (size_t)capacity * sizeof(short));
+
+		if (!next)
+		{
+			bots_route.waypoints_capped = TRUE;
+			return FALSE;
+		}
+		bots_route.grid_next = next;
+	}
+	bots_route.waypoint_capacity = capacity;
+	return TRUE;
+}
+
+/* the searches' arrays for the network built: FALSE (and no network) when the memory hasn't room */
+static boolean bots_route_search_room(void)
+{
+	long count = bots_route.waypoint_count;
+	unsigned long bytes = (unsigned long)count * (sizeof(real) + 4 * sizeof(short) + 1) + 16;
+
+	if (bots_scratch.block)
+		free(bots_scratch.block);
+	csmemset(&bots_scratch, 0, sizeof(bots_scratch));
+	if (!count)
+		return TRUE;
+	if (!bots_memory_allows(bytes) || !(bots_scratch.block = malloc(bytes)))
+		return FALSE;
+	bots_scratch.cost = (real *)bots_scratch.block;
+	bots_scratch.previous = (short *)(bots_scratch.cost + count);
+	bots_scratch.route = bots_scratch.previous + count;
+	bots_scratch.heap = bots_scratch.route + count;
+	bots_scratch.heap_at = bots_scratch.heap + count;
+	bots_scratch.done = (byte *)(bots_scratch.heap_at + count);
+	bots_scratch.capacity = (short)count;
+	return TRUE;
+}
+
 /* a waypoint for a point of the map's (the one already there within a world unit, or a new one); NONE when
 there is no ground under it, or no room */
 static short bots_route_add(
@@ -945,18 +1056,46 @@ static short bots_route_add(
 
 	if ((surface_index = bots_ground(point, &ground)) == NONE)
 		return NONE;
-	for (index = 0; index < bots_route.waypoint_count; index++)
+	if (bots_route.grid_head)
 	{
-		if (bots_distance3d(&bots_route.waypoints[index].point, &ground) < BOTS_MERGE_DISTANCE)
-			return index;
+		/* (the build: only the waypoints of the cells about it) */
+		long cx = bots_grid_cell(ground.x), cy = bots_grid_cell(ground.y), x, y;
+
+		for (x = cx - 1; x <= cx + 1; x++)
+		{
+			for (y = cy - 1; y <= cy + 1; y++)
+			{
+				for (index = bots_route.grid_head[bots_grid_bucket(x, y)]; index != NONE; index = bots_route.grid_next[index])
+				{
+					if (bots_distance3d(&bots_route.waypoints[index].point, &ground) < BOTS_MERGE_DISTANCE)
+						return index;
+				}
+			}
+		}
 	}
-	if (bots_route.waypoint_count >= BOTS_WAYPOINT_MAXIMUM)
+	else
+	{
+		for (index = 0; index < bots_route.waypoint_count; index++)
+		{
+			if (bots_distance3d(&bots_route.waypoints[index].point, &ground) < BOTS_MERGE_DISTANCE)
+				return index;
+		}
+	}
+	index = bots_route.waypoint_count;
+	if (index >= bots_route.waypoint_capacity && !bots_route_grow())
 		return NONE;
 	csmemset(&bots_route.waypoints[index], 0, sizeof(bots_route.waypoints[index]));
 	bots_route.waypoints[index].point = ground;
 	bots_route.waypoints[index].surface_index = surface_index;
 	bots_route.waypoints[index].last_visit_time = -100000;
 	bots_route.waypoint_count++;
+	if (bots_route.grid_head)
+	{
+		long bucket = bots_grid_bucket(bots_grid_cell(ground.x), bots_grid_cell(ground.y));
+
+		bots_route.grid_next[index] = bots_route.grid_head[bucket];
+		bots_route.grid_head[bucket] = index;
+	}
 	return index;
 }
 
@@ -1150,6 +1289,124 @@ static void bots_route_find_ladders(
 	}
 }
 
+/* a waypoint linked to its nearest (within BOTS_LINK_RANGE, but at least BOTS_LINK_MINIMUM), both ways: as up to v1.84,
+which looked at every other waypoint for each of the 8; now the nearest 16 not linked yet, found in the build's hash, ring
+by ring of cells until no nearer can be left (v1.85: 4096 waypoints, linked in a fraction of the time) */
+static void bots_route_link_nearest(
+	short from)
+{
+	enum { CANDIDATES = 2 * BOTS_LINK_MAXIMUM };
+	struct bots_waypoint const *waypoint = &bots_route.waypoints[from];
+	short candidates[CANDIDATES];
+	real distances[CANDIDATES];
+	short found = 0, picked = 0, index;
+
+	if (bots_route.grid_head)
+	{
+		long cx = bots_grid_cell(waypoint->point.x), cy = bots_grid_cell(waypoint->point.y), ring;
+
+		for (ring = 0; ring <= 64; ring++)              /* (64 rings: 500 units about; past that, the slow way below) */
+		{
+			long x, y;
+
+			/* (none in a farther ring can be nearer than ring * cell: what's found is enough when the ring is past the
+			farthest kept and the list is full, or past the range with the minimum found) */
+			if (ring > 0 && found == CANDIDATES && (real)(ring - 1) * BOTS_GRID_CELL > distances[CANDIDATES - 1])
+				break;
+			if (ring > 0 && (real)(ring - 1) * BOTS_GRID_CELL > BOTS_LINK_RANGE &&
+				found >= BOTS_LINK_MINIMUM + waypoint->link_count)
+				break;
+			for (x = cx - ring; x <= cx + ring; x++)
+			{
+				for (y = cy - ring; y <= cy + ring; y++)
+				{
+					short to;
+
+					if (x != cx - ring && x != cx + ring && y != cy - ring && y != cy + ring)
+						continue;                       /* (the ring's cells only) */
+					for (to = bots_route.grid_head[bots_grid_bucket(x, y)]; to != NONE; to = bots_route.grid_next[to])
+					{
+						real distance;
+						short at;
+
+						if (to == from || bots_grid_cell(bots_route.waypoints[to].point.x) != x ||
+							bots_grid_cell(bots_route.waypoints[to].point.y) != y)
+							continue;
+						distance = bots_weighted_distance(&waypoint->point, &bots_route.waypoints[to].point);
+						if (found == CANDIDATES && distance >= distances[CANDIDATES - 1])
+							continue;
+						at = found < CANDIDATES ? found++ : CANDIDATES - 1;
+						while (at > 0 && distances[at - 1] > distance)
+						{
+							candidates[at] = candidates[at - 1];
+							distances[at] = distances[at - 1];
+							at--;
+						}
+						candidates[at] = to;
+						distances[at] = distance;
+					}
+				}
+			}
+		}
+	}
+	if (!bots_route.grid_head || found < BOTS_LINK_MINIMUM)
+	{
+		/* (no hash, the memory was short; or a waypoint far from all the others: every other waypoint looked at, the
+		nearest kept) */
+		short to;
+
+		found = 0;
+		for (to = 0; to < bots_route.waypoint_count; to++)
+		{
+			real distance;
+			short at;
+
+			if (to == from)
+				continue;
+			distance = bots_weighted_distance(&waypoint->point, &bots_route.waypoints[to].point);
+			if (found == CANDIDATES && distance >= distances[CANDIDATES - 1])
+				continue;
+			at = found < CANDIDATES ? found++ : CANDIDATES - 1;
+			while (at > 0 && distances[at - 1] > distance)
+			{
+				candidates[at] = candidates[at - 1];
+				distances[at] = distances[at - 1];
+				at--;
+			}
+			candidates[at] = to;
+			distances[at] = distance;
+		}
+	}
+	for (index = 0; index < found && picked < BOTS_LINK_MAXIMUM; index++)
+	{
+		if (bots_link_index(from, candidates[index]) != NONE)
+			continue;
+		if (picked >= BOTS_LINK_MINIMUM && distances[index] > BOTS_LINK_RANGE)
+			break;
+		bots_link_add(from, candidates[index]);
+		bots_link_add(candidates[index], from);
+		picked++;
+	}
+}
+
+/* the network and its searches' arrays freed (the host stopped hosting): what the bots learned saved first */
+static void bots_route_release(
+	void)
+{
+	if (!bots_route.waypoints)
+		return;
+	if (bots_route.stuck_log_dirty)
+		bots_stuck_log_write();
+	bots_learned_save();
+	free(bots_route.waypoints);
+	bots_route.waypoints = NULL;
+	bots_route.waypoint_capacity = 0;
+	bots_route.waypoint_count = 0;
+	bots_route.map[0] = 0;
+	bots_route_search_room();                   /* (none: frees them) */
+	bots_log("bots: the waypoints' memory freed (no longer hosting)");
+}
+
 static void bots_route_build(
 	char const *map)
 {
@@ -1157,14 +1414,29 @@ static void bots_route_build(
 	long index;
 	short from;
 
+	unsigned long started = system_milliseconds();
+
 	csstrncpy(bots_route.map, map, sizeof(bots_route.map) - 1);
 	bots_route.map[sizeof(bots_route.map) - 1] = 0;
 	bots_route.waypoint_count = 0;
+	bots_route.waypoints_capped = FALSE;
 	bots_route.ladder_count = 0;
 	bots_route.body_logged = FALSE;
 	csmemset(bots_route.crewless, 0, sizeof(bots_route.crewless));
 	if (!scenario)
 		return;
+	/* (the build's spatial hash, while the waypoints are found and linked) */
+	if ((bots_route.grid_head = (short *)malloc(BOTS_GRID_BUCKETS * sizeof(short))) != NULL)
+	{
+		for (index = 0; index < BOTS_GRID_BUCKETS; index++)
+			bots_route.grid_head[index] = NONE;
+		if (!(bots_route.grid_next = (short *)malloc((size_t)(bots_route.waypoint_capacity ? bots_route.waypoint_capacity : 1) *
+			sizeof(short))))
+		{
+			free(bots_route.grid_head);
+			bots_route.grid_head = NULL;
+		}
+	}
 	/* the teleporters first (a teleporter's way in links to its way out: the game sends a player to the first
 	way out on the same channel, the flags' team index; game_engine.c) */
 	for (index = 0; index < scenario->netgame_flags.count; index++)
@@ -1244,34 +1516,36 @@ static void bots_route_build(
 	bots_learned_load_nodes();
 	/* each waypoint to its nearest (within the range, but at least 2), both ways */
 	for (from = 0; from < bots_route.waypoint_count; from++)
+		bots_route_link_nearest(from);
+	if (bots_route.grid_head)
 	{
-		short picked;
+		free(bots_route.grid_head);
+		free(bots_route.grid_next);
+		bots_route.grid_head = bots_route.grid_next = NULL;
+	}
+	/* (the room the doubling left over given back, and the searches' arrays made) */
+	if (bots_route.waypoint_count && bots_route.waypoint_count < bots_route.waypoint_capacity)
+	{
+		struct bots_waypoint *waypoints = (struct bots_waypoint *)realloc(bots_route.waypoints,
+			(size_t)bots_route.waypoint_count * sizeof(struct bots_waypoint));
 
-		for (picked = 0; picked < BOTS_LINK_MAXIMUM; picked++)
+		if (waypoints)
 		{
-			short best = NONE;
-			real best_distance = REAL_MAX;
-			short to;
-
-			for (to = 0; to < bots_route.waypoint_count; to++)
-			{
-				real distance;
-
-				if (to == from || bots_link_index(from, to) != NONE)
-					continue;
-				distance = bots_weighted_distance(&bots_route.waypoints[from].point, &bots_route.waypoints[to].point);
-				if (distance < best_distance)
-				{
-					best = to;
-					best_distance = distance;
-				}
-			}
-			if (best == NONE || (picked >= BOTS_LINK_MINIMUM && best_distance > BOTS_LINK_RANGE))
-				break;
-			bots_link_add(from, best);
-			bots_link_add(best, from);
+			bots_route.waypoints = waypoints;
+			bots_route.waypoint_capacity = bots_route.waypoint_count;
 		}
 	}
+	if (!bots_route_search_room())
+	{
+		bots_log("bots: %s: no memory for the searches of %d waypoints: the bots go without them",
+			bots_route.map, (int)bots_route.waypoint_count);
+		bots_route.waypoint_count = 0;
+	}
+	bots_log("bots: %s: %d waypoints%s, %lu KB, built in %lu ms", bots_route.map, (int)bots_route.waypoint_count,
+		bots_route.waypoints_capped ? " (some left out: no room for more)" : "",
+		((unsigned long)bots_route.waypoint_capacity * sizeof(struct bots_waypoint) +
+			(unsigned long)bots_scratch.capacity * (sizeof(real) + 4 * sizeof(short) + 1) + 1023) / 1024,
+		system_milliseconds() - started);
 #if defined(OXBOX_TEST_BOTS)
 	for (from = 0; from < bots_route.waypoint_count; from++)
 	{
@@ -2000,44 +2274,59 @@ static void bots_link_result(
 	}
 }
 
-/* the search's queue: a binary heap of (cost, waypoint), smallest first; a waypoint may be in it more than once (an
-older, higher cost is skipped when it comes out). At most the 3 starts and one per link looked at */
-static struct bots_queued { real cost; short node; } bots_queue[3 + BOTS_WAYPOINT_MAXIMUM * BOTS_LINK_MAXIMUM];
-static long bots_queue_count;
+/* the search's queue: a binary heap of waypoints, the smallest cost (bots_heap_cost: the search's) first, each waypoint in
+it once, moved up when its cost drops (v1.85: one entry a waypoint, bots_scratch.heap; up to v1.84 a waypoint could be in
+it once a link, a static array of 33 KB) */
+struct bots_queued { real cost; short node; };
+static real const *bots_heap_cost;
+
+static void bots_heap_place(short at, short node)
+{
+	bots_scratch.heap[at] = node;
+	bots_scratch.heap_at[node] = at;
+}
 
 static void bots_queue_push(real cost, short node)
 {
-	long at = bots_queue_count++;
+	short at = bots_scratch.heap_at[node];
 
-	while (at > 0 && bots_queue[(at - 1) / 2].cost > cost)
+	(void)cost;
+	if (at == NONE)
+		at = bots_scratch.heap_count++;
+	while (at > 0 && bots_heap_cost[bots_scratch.heap[(at - 1) / 2]] > bots_heap_cost[node])
 	{
-		bots_queue[at] = bots_queue[(at - 1) / 2];
-		at = (at - 1) / 2;
+		bots_heap_place(at, bots_scratch.heap[(at - 1) / 2]);
+		at = (short)((at - 1) / 2);
 	}
-	bots_queue[at].cost = cost;
-	bots_queue[at].node = node;
+	bots_heap_place(at, node);
 }
 
 static struct bots_queued bots_queue_pop(void)
 {
-	struct bots_queued top = bots_queue[0], last = bots_queue[--bots_queue_count];
-	long at = 0;
+	struct bots_queued top;
+	short last = bots_scratch.heap[--bots_scratch.heap_count];
+	short at = 0;
 
+	top.node = bots_scratch.heap[0];
+	top.cost = bots_heap_cost[top.node];
+	bots_scratch.heap_at[top.node] = NONE;
+	if (!bots_scratch.heap_count)
+		return top;
 	for (;;)
 	{
-		long child = 2 * at + 1;
+		short child = (short)(2 * at + 1);
 
-		if (child >= bots_queue_count)
+		if (child >= bots_scratch.heap_count)
 			break;
-		if (child + 1 < bots_queue_count && bots_queue[child + 1].cost < bots_queue[child].cost)
+		if (child + 1 < bots_scratch.heap_count &&
+			bots_heap_cost[bots_scratch.heap[child + 1]] < bots_heap_cost[bots_scratch.heap[child]])
 			child++;
-		if (bots_queue[child].cost >= last.cost)
+		if (bots_heap_cost[bots_scratch.heap[child]] >= bots_heap_cost[last])
 			break;
-		bots_queue[at] = bots_queue[child];
+		bots_heap_place(at, bots_scratch.heap[child]);
 		at = child;
 	}
-	if (bots_queue_count)
-		bots_queue[at] = last;
+	bots_heap_place(at, last);
 	return top;
 }
 
@@ -2051,7 +2340,7 @@ static short bots_explore(
 	short *previous)
 {
 	short at = NONE;
-	static byte done[BOTS_WAYPOINT_MAXIMUM];
+	byte *done = bots_scratch.done;
 	short starts[3] = { NONE, NONE, NONE };
 	real start_costs[3] = { REAL_MAX, REAL_MAX, REAL_MAX };
 	short count = bots_route.waypoint_count;
@@ -2065,6 +2354,7 @@ static short bots_explore(
 		cost[index] = REAL_MAX;
 		previous[index] = NONE;
 		done[index] = FALSE;
+		bots_scratch.heap_at[index] = NONE;
 		if (bots_avoided(brain, index, now))
 			continue;
 		if (bots_distance2d(position, &bots_route.waypoints[index].point) < BOTS_ARRIVAL_DISTANCE &&
@@ -2093,7 +2383,8 @@ static short bots_explore(
 			}
 		}
 	}
-	bots_queue_count = 0;
+	bots_scratch.heap_count = 0;
+	bots_heap_cost = cost;
 	if (at != NONE)
 	{
 		/* (on a waypoint: from it alone, so its links count what happens on the way) */
@@ -2111,7 +2402,7 @@ static short bots_explore(
 			}
 		}
 	}
-	while (bots_queue_count)
+	while (bots_scratch.heap_count)
 	{
 		struct bots_queued next = bots_queue_pop();
 		real best_cost = next.cost;
@@ -2168,9 +2459,9 @@ static boolean bots_pick_destination(
 	real_point3d const *position,
 	long now)
 {
-	static real cost[BOTS_WAYPOINT_MAXIMUM];
-	static short previous[BOTS_WAYPOINT_MAXIMUM];
-	static short route[BOTS_WAYPOINT_MAXIMUM];
+	real *cost = bots_scratch.cost;
+	short *previous = bots_scratch.previous;
+	short *route = bots_scratch.route;
 	short best = NONE;
 	long best_score = 0;
 	short length = 0;
@@ -3868,9 +4159,9 @@ static boolean bots_head_for(
 	real_point3d const *point,
 	long now)
 {
-	static real cost[BOTS_WAYPOINT_MAXIMUM];
-	static short previous[BOTS_WAYPOINT_MAXIMUM];
-	static short route[BOTS_WAYPOINT_MAXIMUM];
+	real *cost = bots_scratch.cost;
+	short *previous = bots_scratch.previous;
+	short *route = bots_scratch.route;
 	short best = NONE;
 	real best_distance = 8.f;
 	short length = 0;
@@ -6021,9 +6312,9 @@ static boolean bots_route_to(
 	short waypoint,
 	long now)
 {
-	static real cost[BOTS_WAYPOINT_MAXIMUM];
-	static short previous[BOTS_WAYPOINT_MAXIMUM];
-	static short route[BOTS_WAYPOINT_MAXIMUM];
+	real *cost = bots_scratch.cost;
+	short *previous = bots_scratch.previous;
+	short *route = bots_scratch.route;
 	short length = 0;
 	short index;
 	short node;
@@ -6133,8 +6424,8 @@ static boolean bots_goal_walk(
 			if (now >= brain->goal_plan_time)
 			{
 				/* (the waypoint nearest the goal of those the bot can reach; a little for the way there too) */
-				static real cost[BOTS_WAYPOINT_MAXIMUM];
-				static short previous[BOTS_WAYPOINT_MAXIMUM];
+				real *cost = bots_scratch.cost;
+				short *previous = bots_scratch.previous;
 				short best = NONE;
 				real best_distance = REAL_MAX;
 				short index;
@@ -6681,7 +6972,10 @@ void bots_update(
 	short wanted;
 
 	if (!global_network_game_server_get())
+	{
+		bots_route_release();                   /* (not hosting: the waypoints' memory back to the game) */
 		return;
+	}
 #if defined(OXBOX_TEST_BOT_KILLS)
 	bots_test_update();
 #endif
