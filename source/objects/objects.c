@@ -4231,6 +4231,25 @@ long object_new_by_name(
 			name->runtime_scenario_datum_index,
 			placement_tag_block_element_size);
 
+	/* port (v1.87): a vehicle a script places, as the gametype's vehicle categories say (one of their spots: the counts
+	rein in a map's scripted vehicles too; game_engine_vehicle_spot_planned): left out, or another of its category */
+	if (name->runtime_object_type == _object_type_vehicle)
+	{
+		short entry;
+
+		if (game_engine_vehicle_spot_planned((short)name->runtime_scenario_datum_index, &entry))
+		{
+			short own_entry = object->palette_entry_index;
+			long object_index;
+
+			if (entry == NONE)
+				return NONE;
+			object->palette_entry_index = entry;
+			object_index = object_new_from_scenario(object, palette);
+			object->palette_entry_index = own_entry;
+			return object_index;
+		}
+	}
 	return object_new_from_scenario(
 		object,
 		palette);
