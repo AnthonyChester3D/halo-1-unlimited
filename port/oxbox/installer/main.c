@@ -40,7 +40,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 16
+#define INSTALLER_VERSION 17
 #endif
 __attribute__((used)) static struct
 {
@@ -286,11 +286,14 @@ static int poll_input(void)
 	return NONE;
 }
 
+/* (the spinner stops while it waits for a button: nothing is being done; and moves again after it) */
 static int wait_input(void)
 {
 	int b;
+	screen_spinner(0);
 	while ((b = poll_input()) == NONE)
 		Sleep(16);
+	screen_spinner(1);
 	return b;
 }
 
@@ -1381,6 +1384,7 @@ static int restore(struct halo *h)
 
 static void launch(char const *device)
 {
+	screen_spinner(0);
 	screen_hand_over();
 	XLaunchXBE(device);
 	/* (only if the path didn't convert) */
@@ -1915,6 +1919,7 @@ int main(void)
 	nxMountDrive('F', "\\Device\\Harddisk0\\Partition6\\");
 	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
 	screen_init();
+	screen_spinner(1);                 /* (something moves at once: the reading and the rest take a while) */
 	SDL_Init(SDL_INIT_GAMECONTROLLER);
 	heading("Reading the package...");
 	{

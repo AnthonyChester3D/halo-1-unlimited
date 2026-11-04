@@ -23,6 +23,9 @@ int screen_text(int row, int column, unsigned long colour, char const *format, .
 void screen_row(int row, unsigned long background);
 /* draws what changed */
 void screen_show(void);
+/* the spinner in the bottom right corner, which moves on its own (a thread) while the installer works: on, or off
+(its corner then shows the screen's own text again) */
+void screen_spinner(int on);
 /* the screen blanked (the video encoder's output, not a picture in memory) while the console starts the next XBE,
 whose Direct3D shows the screen again at its first frame */
 void screen_hand_over(void);
