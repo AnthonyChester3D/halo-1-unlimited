@@ -126,6 +126,7 @@ char const *hmp_maps_file(long map_index, short which);
 short hmp_maps_root(long map_index);
 boolean hmp_maps_both(long map_index);
 boolean hmp_maps_map_path(long map_index, short root, char *path, long size);
+boolean hmp_maps_link_path(short root, char const *folder, char *path, long size);
 boolean hmp_maps_use_root(long map_index, short root);
 unsigned long hmp_maps_version(long map_index);
 long hmp_maps_unpin_all(void (*each)(char const *key));

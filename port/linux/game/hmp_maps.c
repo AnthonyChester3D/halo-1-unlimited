@@ -13,6 +13,10 @@ the retail XBE's addresses).
 			order.txt            optional: the pack's own order
 			Abyss\ ...
 
+A map's folder can hold a map.link in place of its .map: one line, the path of a .map somewhere else on the hard drive
+("F:\Games\Halo NHE\maps\atlas.map"), played where it is. The installer makes these for a map pack it imports (another
+Halo's maps: port/oxbox/installer/packs.c), as a pack in T:\maps; deleting such a map deletes its folder, never the .map.
+
 T:\maps (E:\TDATA\4c4a4855\maps: the game's own storage on the hard drive) is read the same way after d:\maps; a map in
 both is listed once (the higher "Version:" in its info .txt, else the newer .map; map sharing can switch to the copy
 that matches the host for a game, and switches back when the game is left: hmp_maps_unpin_all).
@@ -69,6 +73,7 @@ the list's table and the text caches are the menus' and are freed when a game ma
 #define NOT_IN_PACK_ORDER 0x7fff
 #define LEVEL_PICTURES_TAG_NAME "ui\\shell\\bitmaps\\mp_map_grafix"
 #define INVALID_FILE ((HANDLE)-1)
+#define MAXIMUM_LINK_PATH 200                /* a map.link's path */
 
 /* ---------- structures */
 
@@ -87,6 +92,7 @@ struct hmp_map
 	char mark;
 	char pinned;                                 /* map sharing chose this copy for the session */
 	char problem;                                /* the map checks': 0 not checked, 1 fine, else a reason's + 2 */
+	char linked;                                 /* map_file is a map.link's path (a pack's .map, played in place) */
 };
 
 struct hmp_info
@@ -222,6 +228,12 @@ static char *key_path(char *buffer, short root, char const *key, char const *fil
 static char *folder_path(char *buffer, long i, char const *file)
 {
 	return key_path(buffer, hmp_maps_globals.maps[i].root, MAP_KEY(i), file);
+}
+/* a map's .map: in its folder, or where its map.link points */
+static char *map_path(char *buffer, struct hmp_map const *map)
+{
+	if (map->linked) { scpy(buffer, map_string(map->map_file)); return buffer; }
+	return key_path(buffer, map->root, map_string(map->key), map_string(map->map_file));
 }
 /* "<root><pack>\<file>" for a pack's map */
 static char *pack_path(char *buffer, long i, char const *file)
@@ -441,14 +453,34 @@ static short info_rank(char const *f)
 	return !ieq(f, "info.txt") ? 2 : 1;
 }
 
+/* a map.link's path: one line, a .map on the hard drive's E:, F: or G: ("F:\Games\Halo NHE\maps\atlas.map"). FALSE =
+none, or not such a path */
+static boolean link_read(char const *path, char *target)
+{
+	unsigned long got = 0;
+	long n;
+	HANDLE file = open_read(path);
+	if (file == INVALID_FILE) return FALSE;
+	if (!ReadFile(file, target, MAXIMUM_LINK_PATH - 1, &got, NULL)) got = 0;
+	CloseHandle(file);
+	target[got] = 0;
+	for (n = 0; target[n] && target[n] != '\r' && target[n] != '\n'; n++) ;
+	while (n && target[n - 1] == ' ') n--;
+	target[n] = 0;
+	return n > 7 && n < MAXIMUM_LINK_PATH - 1 && strchr("EFGefg", target[0]) && target[1] == ':' && target[2] == '\\' &&
+		ends_with(target, ".map") && !strstr(target, "..");
+}
+
 /* what's in a map's folder (in maps folder map->root): its .map, .txt, preview.bin and the .map's time. TRUE = a .map */
 static boolean list_folder(struct hmp_map *map)
 {
 	struct _WIN32_FIND_DATAA *find = &hmp_maps_globals.find[1];
 	char map_file[48] = "", info_file[48] = "";
 	short info_best = 0;
+	boolean link = FALSE;
 	HANDLE handle;
 	map->picture = 0;
+	map->linked = 0;
 	map->map_time_low = map->map_time_high = 0;
 	key_path(hmp_maps_globals.path, map->root, map_string(map->key), "*.*");
 	handle = FindFirstFileA(hmp_maps_globals.path, find);
@@ -470,9 +502,27 @@ static boolean list_folder(struct hmp_map *map)
 			if (rank > info_best) { scpy(info_file, f); info_best = rank; }
 		}
 		else if (!ieq(f, "preview.bin") && !find->nFileSizeHigh && find->nFileSizeLow == PREVIEW_SIZE) map->picture = 1;
+		else if (!ieq(f, "map.link")) link = TRUE;
 	}
 	while (FindNextFileA(handle, find));
 	CloseHandle(handle);
+	if (!map_file[0] && link)
+	{
+		/* (a pack's .map elsewhere: its path, and its time from its own folder) */
+		char target[MAXIMUM_LINK_PATH];
+		HANDLE target_find;
+		key_path(hmp_maps_globals.path, map->root, map_string(map->key), "map.link");
+		if (!link_read(hmp_maps_globals.path, target)) return FALSE;
+		target_find = FindFirstFileA(target, find);
+		if (target_find == INVALID_FILE) return FALSE;
+		CloseHandle(target_find);
+		map->map_time_low = find->ftLastWriteTime.dwLowDateTime;
+		map->map_time_high = find->ftLastWriteTime.dwHighDateTime;
+		map->map_file = names_add(target);
+		map->info_file = info_file[0] ? names_add(info_file) : NONE;
+		map->linked = 1;
+		return map->map_file != NONE;
+	}
 	if (!map_file[0]) return FALSE;
 	map->map_file = names_add(map_file);
 	map->info_file = info_file[0] ? names_add(info_file) : NONE;
@@ -1465,7 +1515,7 @@ boolean hmp_map_file_path(char const *level_name, char *path, long size)
 	if (!level_name || level_name[0] != '+') return FALSE;
 	i = hmp_maps_find(level_name);
 	if (i == NONE) buffer[0] = 0;          /* (a folder map this console hasn't: no file) */
-	else folder_path(buffer, i, map_string(hmp_maps_globals.maps[i].map_file));
+	else map_path(buffer, &hmp_maps_globals.maps[i]);
 	if ((long)strlen(buffer) >= size) buffer[0] = 0;
 	strcpy(path, buffer);
 	if (!path[0]) strcpy(path, "d:\\maps\\+missing+.map");   /* (a path no file has) */
@@ -1479,13 +1529,29 @@ char const *hmp_maps_file(long i, short which)
 	map = &hmp_maps_globals.maps[i];
 	switch (which)
 	{
-	case 0: return map_string(map->map_file);
+	case 0:
+		/* (a map.link's .map is sent under its own file name) */
+		if (map->linked && strrchr(map_string(map->map_file), '\\')) return strrchr(map_string(map->map_file), '\\') + 1;
+		return map_string(map->map_file);
 	case 1: return map->info_file != NONE ? map_string(map->info_file) : NULL;
 	case 2: return map->picture ? "preview.bin" : NULL;
 	case 3: return map->series ? "series.bin" : NULL;
 	default: return "showcase.txt";        /* (map sharing sends it when the folder has one) */
 	}
 }
+/* where a folder's map.link points ("pack/map" in maps folder root): map sharing sends that .map. FALSE = no link */
+boolean hmp_maps_link_path(short root, char const *folder, char *path, long size)
+{
+	char buffer[300], target[MAXIMUM_LINK_PATH], key[64];
+	if (strlen(folder) > sizeof(key) - 2) return FALSE;
+	key[0] = '+';
+	scpy(key + 1, folder);
+	key_path(buffer, root, key, "map.link");
+	if (!link_read(buffer, target) || (long)strlen(target) >= size) return FALSE;
+	strcpy(path, target);
+	return TRUE;
+}
+
 short hmp_maps_root(long i) { return i >= 0 && i < hmp_maps_globals.map_count ? hmp_maps_globals.maps[i].root : 0; }
 boolean hmp_maps_both(long i) { return i >= 0 && i < hmp_maps_globals.map_count && hmp_maps_globals.maps[i].both; }
 
@@ -1497,14 +1563,14 @@ boolean hmp_maps_map_path(long i, short root, char *path, long size)
 	if (i < 0 || i >= hmp_maps_globals.map_count) return FALSE;
 	if (root == NONE || root == hmp_maps_globals.maps[i].root)
 	{
-		folder_path(buffer, i, map_string(hmp_maps_globals.maps[i].map_file));
+		map_path(buffer, &hmp_maps_globals.maps[i]);
 	}
 	else
 	{
 		copy = hmp_maps_globals.maps[i];
 		copy.root = (char)root;
 		if (!list_folder(&copy)) { hmp_maps_globals.names_size = names_size; return FALSE; }
-		key_path(buffer, root, map_string(copy.key), map_string(copy.map_file));
+		map_path(buffer, &copy);
 		hmp_maps_globals.names_size = names_size;    /* (the names just looked at aren't kept) */
 	}
 	if ((long)strlen(buffer) >= size) return FALSE;

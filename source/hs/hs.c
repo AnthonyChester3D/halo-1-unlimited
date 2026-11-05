@@ -13436,7 +13436,8 @@ static void hs_allocate(
 			scenario->hs_string_constants.size = 0;
 		if (hs_syntax_data && hs_syntax_data_allocated)
 			return;
-		error(0, "the scenario's script data is missing or damaged; its scripts won't run");
+		/* (port: not _error_immediate, which ends the game: the map goes on without its scripts) */
+		error(_error_silent, "the scenario's script data is missing or damaged; its scripts won't run");
 	}
 
 #if defined(HALO_XBOX_TARGET)

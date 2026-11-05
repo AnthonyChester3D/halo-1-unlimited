@@ -309,6 +309,28 @@ static void map_d_to_image_folder(void)
 	platform_log("D: is %s (status %08lx); the XBE: %s", folder, (unsigned long)status, oxbox_image_path);
 }
 
+/* E:, F: and G: are the hard drive's partitions (1, 6 and 7), as the dashboards and the installer name them: a map
+pack the installer imported is played where it is, from another Halo's folder on one of them (port/linux/game/
+hmp_maps.c's map.link). A letter already there is left as it is */
+static void map_hard_drive_letters(void)
+{
+	LONG (WINAPI *create_link)(oxbox_object_string *, oxbox_object_string *) = oxbox_kernel_export(67);
+	static char names[3][7] = {"\\??\\E:", "\\??\\F:", "\\??\\G:"};
+	static char targets[3][30] = {"\\Device\\Harddisk0\\Partition1\\", "\\Device\\Harddisk0\\Partition6\\",
+		"\\Device\\Harddisk0\\Partition7\\"};
+	int k;
+
+	if (!create_link)
+		return;
+	for (k = 0; k < 3; k++)
+	{
+		oxbox_object_string link = { 6, 7, names[k] };
+		oxbox_object_string target = { (unsigned short)strlen(targets[k]), (unsigned short)(strlen(targets[k]) + 1),
+			targets[k] };
+		create_link(&link, &target);
+	}
+}
+
 /* whether the game is on the hard drive's E: (Partition1), where room is precious (map sharing's KEEP DOWNLOADS UNDER:
 hmp_share.c) */
 int oxbox_installed_on_e(void)
@@ -853,6 +875,7 @@ int oxbox_entry(int argc, char **argv, char **envp)
 	}
 #endif
 	map_d_to_image_folder();
+	map_hard_drive_letters();
 	GlobalMemoryStatus(&memory);
 	platform_log("OpenCE on the Xbox (proof of concept): image %p-%p, bss %p-%p",
 		__oxbox_image_start, __oxbox_image_end, __oxbox_bss_start, __oxbox_bss_end);
