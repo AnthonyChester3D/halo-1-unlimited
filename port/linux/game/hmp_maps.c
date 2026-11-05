@@ -1508,6 +1508,70 @@ wchar_t const *hmp_maps_title(char const *level_name)
 	return info ? info->name : NULL;
 }
 
+/* A level name a script asks for (map_name) as a folder map's key, when it names one (TRUE, the key in `out`):
+- "+./folder": the folder map beside `current` (in its pack; a loose one's: a loose one), as Halo Map Porter names a
+  split level's pieces (its opening cutscene, the level, its closing cutscene) without knowing the folders' names here;
+- a plain name ("lumoria_b", "levels\\x\\lumoria_b"): a folder map whose folder or .map is that name, in `current`'s
+  pack first, as a campaign's maps name the next one (a Custom Edition campaign's map_name). */
+boolean hmp_maps_resolve(char const *name, char const *current, char *out, long size)
+{
+	char key[300];
+	char const *leaf, *slash;
+	long i, best = NONE, prefix = 0;
+	if (!name || !out || size < 2) return FALSE;
+	if (!hmp_maps_globals.scanned) hmp_maps_scan();
+	/* the current map's pack: "+pack/" (or "+" for a loose map) */
+	if (current && current[0] == '+')
+	{
+		slash = strrchr(current, '/');
+		prefix = slash ? (long)(slash - current) + 1 : 1;
+		if (prefix >= (long)sizeof(key) - 2) prefix = 1;
+	}
+	if (name[0] == '+' && name[1] == '.' && name[2] == '/')
+	{
+		if (prefix && (long)strlen(name + 3) + prefix < (long)sizeof(key))
+		{
+			memcpy(key, current, (size_t)prefix);
+			strcpy(key + prefix, name + 3);
+			i = hmp_maps_find(key);
+			if (i != NONE && (long)strlen(MAP_KEY(i)) < size)
+			{
+				strcpy(out, MAP_KEY(i));
+				return TRUE;
+			}
+		}
+		/* (not beside it, or the current map isn't a folder map (a stock level's file stood in for): any folder
+		map with that folder's name) */
+		leaf = name + 3;
+	}
+	else
+	{
+		if (name[0] == '+') return FALSE;
+		leaf = strrchr(name, '\\');
+		leaf = leaf ? leaf + 1 : name;
+	}
+	if (!leaf[0]) return FALSE;
+	for (i = 0; i < hmp_maps_globals.map_count; i++)
+	{
+		char const *k = MAP_KEY(i), *kl = strrchr(k, '/'), *file = map_string(hmp_maps_globals.maps[i].map_file), *fl;
+		char stem[128];
+		long n;
+		boolean match;
+		kl = kl ? kl + 1 : k + 1;
+		fl = strrchr(file, '\\');
+		fl = fl ? fl + 1 : file;
+		for (n = 0; fl[n] && fl[n] != '.' && n < (long)sizeof(stem) - 1; n++) stem[n] = fl[n];
+		stem[n] = 0;
+		match = !ieq(kl, leaf) || !ieq(stem, leaf);
+		if (!match) continue;
+		if (best == NONE) best = i;
+		if (prefix && !strncmp(k, current, (size_t)prefix) && (prefix == 1 ? !strchr(k + 1, '/') : TRUE)) { best = i; break; }
+	}
+	if (best == NONE || (long)strlen(MAP_KEY(best)) >= size) return FALSE;
+	strcpy(out, MAP_KEY(best));
+	return TRUE;
+}
+
 boolean hmp_map_file_path(char const *level_name, char *path, long size)
 {
 	long i;

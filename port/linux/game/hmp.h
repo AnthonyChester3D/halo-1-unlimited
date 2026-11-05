@@ -119,6 +119,9 @@ boolean hmp_maps_same_pack(char const *entry0, char const *entry1);
 wchar_t const *hmp_maps_title(char const *level_name);
 /* the .map of a folder map (a "+key"): the path, TRUE; FALSE for any other level name */
 boolean hmp_map_file_path(char const *level_name, char *path, long size);
+/* a level name a script asks for (map_name: "+./folder" beside the current map, or a plain map name a folder map
+has) as a folder map's key in `out` (TRUE); FALSE when it names none */
+boolean hmp_maps_resolve(char const *name, char const *current, char *out, long size);
 /* map sharing: map i's files (0 the .map, 1 the .txt, 2 preview.bin, 3 its pack's series.bin; NULL = none), which
 maps folder its copy is in (0 d:\maps, 1 T:\maps), whether there's a copy in the other, the .map's path in maps folder
 `root` (NONE: the copy in use), and switching to the copy in `root` for the rest of the session */
