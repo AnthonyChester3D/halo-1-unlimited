@@ -188,6 +188,12 @@ static void log_write(const char *text, unsigned long length)
 		log_write_out(0);
 }
 
+/* everything logged so far written out and flushed to the disk now (a crash's report, a halt's) */
+void oxbox_log_flush(void)
+{
+	log_write_out(1);
+}
+
 /* the writer thread, once the kernel's services are up (oxbox_entry) */
 static void log_start_writer(void)
 {
@@ -694,6 +700,11 @@ static void read_settings(const char *path)
 			oxbox_setting_bot_log = value != 0;
 		else if (same_text(name, "perf_log"))
 			oxbox_setting_perf_log = value != 0;
+		else if (same_text(name, "log_pools"))
+		{
+			extern int oxbox_setting_log_pools;   /* (oxbox_diagnostics.c) */
+			oxbox_setting_log_pools = value != 0;
+		}
 		else if (same_text(name, "map_check"))
 		{
 			extern int oxbox_setting_map_check;
@@ -853,6 +864,51 @@ static char *const oxbox_overlay_zero[16][2] = {
 	{ __ovlz15_start, __ovlz15_end },
 };
 
+/* ---------- a crash's report
+
+The game's thread runs inside an exception handler of ours, the outermost of the code's own (an x86 exception
+registration on the stack, at fs:[0], as a compiler's __try makes one). A crash that nothing handles (an access
+violation, an illegal instruction, a division by zero) reaches it before the kernel stops the console: it writes
+"crash:" lines (what happened, where, the registers and the game's code addresses on the stack, the call chain to
+look up in the build's oxbox.elf) and flushes the log, then lets the crash go on as before. */
+
+struct oxbox_exception_registration
+{
+	struct oxbox_exception_registration *next;
+	int (__cdecl *handler)(unsigned long *, void *, unsigned char *, void *);
+};
+
+static int __cdecl oxbox_crash_handler(unsigned long *record, void *frame, unsigned char *context, void *dispatcher)
+{
+	static int reported;
+	unsigned long code = record[0], flags = record[1], local;
+	void oxbox_log_stack(char const *why, unsigned long const *start);
+	(void)frame;
+	(void)dispatcher;
+
+	/* (not on the way back up, a debugger's breakpoints and steps, or twice) */
+	if ((flags & 0x66) || code == 0x80000003 || code == 0x80000004 || reported)
+		return 1;
+	reported = 1;
+	platform_log("crash: exception %08lx at %08lx%s%08lx", code, record[3],
+		code == 0xC0000005 && record[4] >= 2 ? (record[5] ? ", writing " : ", reading ") : ", ",
+		code == 0xC0000005 && record[4] >= 2 ? record[6] : 0UL);
+	if (context)
+	{
+		/* (the Xbox's CONTEXT: its registers after the 516-byte floating point save area) */
+		unsigned long const *r = (unsigned long const *)(context + 4 + 516);
+		platform_log("crash: eip %08lx esp %08lx ebp %08lx eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx",
+			r[7], r[10], r[6], r[5], r[2], r[4], r[3], r[1], r[0]);
+		if (r[10] > 0x10000)
+			oxbox_log_stack("crash", (unsigned long const *)r[10]);
+	}
+	else
+		oxbox_log_stack("crash", &local);
+	platform_log("crash: (look the addresses up in this build's oxbox.elf)");
+	oxbox_log_flush();
+	return 1;   /* (ExceptionContinueSearch) */
+}
+
 int oxbox_entry(int argc, char **argv, char **envp)
 {
 	int result;
@@ -894,7 +950,16 @@ int oxbox_entry(int argc, char **argv, char **envp)
 		oxbox_perf_load();
 	}
 	oxbox_stage = 2;
-	result = main();
+	/* (a crash in the game's thread reported before the kernel stops: oxbox_crash_handler) */
+	{
+		struct oxbox_exception_registration registration;
+
+		registration.handler = oxbox_crash_handler;
+		__asm__ volatile ("movl %%fs:0, %0" : "=r"(registration.next));
+		__asm__ volatile ("movl %0, %%fs:0" : : "r"(&registration) : "memory");
+		result = main();
+		__asm__ volatile ("movl %0, %%fs:0" : : "r"(registration.next) : "memory");
+	}
 	platform_log("main returned %d", result);
 	oxbox_stage = 3;
 	return result;

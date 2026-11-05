@@ -3193,6 +3193,18 @@ void halt_and_catch_fire(
 	it ends with exit code 1 (port/linux/game/server_director.c) */
 	if (halo_server_mode())
 		server_fatal(error_get());
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the call chain that got here, in the log, written out now (port/oxbox/oxbox_diagnostics.c) */
+	if (!global_screenshot_count.halt_recursion_lock)
+	{
+		unsigned long here;
+		void oxbox_log_stack(char const *why, unsigned long const *start);
+		void oxbox_log_flush(void);
+
+		oxbox_log_stack("halt", &here);
+		oxbox_log_flush();
+	}
+#endif
 	if (!global_screenshot_count.halt_recursion_lock)
 	{
 		scenario = global_scenario_try_and_get();
@@ -3916,11 +3928,16 @@ static boolean main_loop_iteration(
 		if (oxbox_perf)
 			oxbox_perf->frame(frame_probe_marks, NUMBER_OF_FRAME_PROBE_MARKS);
 #endif
-#if defined(OXBOX_TEST_POOLS)
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: bookmarks, and the pools' log when it's on (port/oxbox/oxbox_diagnostics.c) */
 		{
-			void game_state_report_pools(void);
+			void oxbox_diagnostics_frame(void);
+			extern int oxbox_setting_log_pools;
 
-			game_state_report_pools();
+#if defined(OXBOX_TEST_POOLS)
+			oxbox_setting_log_pools = 1;
+#endif
+			oxbox_diagnostics_frame();
 		}
 #endif
 		profile_frame_end();

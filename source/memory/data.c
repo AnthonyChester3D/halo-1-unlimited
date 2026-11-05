@@ -333,7 +333,20 @@ long datum_new(
 	(datum_delete lowers it), rather than walking a full array again. A full
 	array (the AI's props, with many actors) was walked on every new datum. */
 	if (result == NONE)
+	{
 		data->first_free_absolute_index = data->maximum_count;
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the first time in a map one of the game state's pools is full, the log says so
+		(port/oxbox/oxbox_diagnostics.c) */
+		{
+			extern boolean game_state_holds(void const *address);
+			extern void oxbox_limit_hit(char const *what, long limit);
+
+			if (game_state_holds(data))
+				oxbox_limit_hit(data->name, data->maximum_count);
+		}
+#endif
+	}
 
 	return result;
 }

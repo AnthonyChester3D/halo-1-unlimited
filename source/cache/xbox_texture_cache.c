@@ -1421,6 +1421,13 @@ void *_texture_cache_bitmap_get_hardware_format(
 			error(
 				_error_silent,
 				"YOU GOT STABBED!!!! double-click \"GETSTABBED.BAT\" on your PC now!!!");
+#if defined(HALO_XBOX_TARGET)
+				{
+					extern void oxbox_limit_hit(char const *what, long limit);
+
+					oxbox_limit_hit("texture cache", 0);
+				}
+#endif
 			/* (port: chatter, shown as config.toml's game.console_log says) */
 			if (terminal_shows(_terminal_message_chatter))
 			{

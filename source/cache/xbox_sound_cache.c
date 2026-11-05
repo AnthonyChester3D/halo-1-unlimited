@@ -664,6 +664,13 @@ static void sound_cache_start_loading_sound(
 		error(
 			_error_silent,
 			"SOUND CACHE BLOWN!!!! double-click \"GETSTABBED.BAT\" on your PC now!!!");
+#if defined(HALO_XBOX_TARGET)
+			{
+				extern void oxbox_limit_hit(char const *what, long limit);
+
+				oxbox_limit_hit("sound cache", 0);
+			}
+#endif
 		/* (port: chatter, shown as config.toml's game.console_log says) */
 		if (terminal_shows(_terminal_message_chatter))
 		{
