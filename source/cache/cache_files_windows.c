@@ -273,7 +273,8 @@ struct cache_file_request
 	boolean blocking;
 	boolean pending;
 	boolean running;
-	byte pad1F;
+	/* oxbox: read from the shared file the open map draws on, not the map (cache_file_read) */
+	boolean shared;
 };
 
 typedef BOOL (WINAPI *cached_map_async_request_proc)(
@@ -418,6 +419,13 @@ static void cached_map_file_invalidate(
 	short map_file_index);
 static short cached_map_files_find_map(
 	const char *map_name);
+#if defined(HALO_XBOX_TARGET)
+static boolean shared_file_path(const char *key, char *path);
+boolean cache_files_shared_wanted(const char *map_name, char *key);
+static boolean cache_files_shared_open(const char *map_name, short *map_file_index);
+static boolean shared_slot_kept(short map_file_index);
+static short shared_open_map_file_index = NONE;
+#endif
 
 /* ---------- globals */
 
@@ -567,7 +575,7 @@ boolean cache_files_forget_cached_map(
 	short map_file_index = cached_map_files_find_map(map_name);
 
 	if (map_file_index == NONE || map_file_index == cache_file_globals.open_map_file_index ||
-		map_file_index == cache_file_globals.copying_to_map_file_index)
+		map_file_index == cache_file_globals.copying_to_map_file_index || map_file_index == shared_open_map_file_index)
 	{
 		return FALSE;
 	}
@@ -604,6 +612,11 @@ boolean cache_files_precache_map_loaded(
 	of that file name (port/linux/game/custom_edition_cache.c) */
 	if (custom_edition_level_name(map_name))
 		return custom_edition_cache_playable(map_name);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: nor is a map whose shared file isn't (cache_files_shared_wanted) */
+	if (cache_files_shared_wanted(map_name, NULL))
+		return FALSE;
+#endif
 	return cached_map_files_find_map(tag_name_strip_path(map_name)) != NONE;
 }
 
@@ -650,7 +663,7 @@ boolean cache_files_precache_map_begin(
 			/* oxbox: a folder map's file names itself whatever its maker called it; the cache slot gets its key
 			(cache_files_precache_map_end) */
 			if (_stricmp(header.name, cache_map_name) != 0
-				&& cache_map_name[0] != '+'
+				&& cache_map_name[0] != '+' && cache_map_name[0] != '*'
 				)
 			{
 				error(_error_silent, "map '%s' names itself '%s' in its header: refused", cache_map_name, header.name);
@@ -755,7 +768,7 @@ void cache_files_precache_map_end(
 	cached_map_file_read_header(cache_file_globals.copying_to_map_file_index);
 	/* oxbox: a folder map's slot is found by its key ("+Precipice"), whatever name the map has inside (Halo
 	Universal's cache identity) */
-	if (cache_file_globals.copying_to_map_file_name[0] == '+')
+	if (cache_file_globals.copying_to_map_file_name[0] == '+' || cache_file_globals.copying_to_map_file_name[0] == '*')
 	{
 		struct cached_map_file *map_file = cached_map_file_get(cache_file_globals.copying_to_map_file_index);
 
@@ -832,6 +845,9 @@ void cache_file_close(
 		cache_requests_flush();
 		cache_file_globals.open_map_file_index = NONE;
 	}
+#if defined(HALO_XBOX_TARGET)
+	shared_open_map_file_index = NONE;
+#endif
 
 	return;
 }
@@ -866,6 +882,12 @@ boolean cache_file_open(
 
 		return FALSE;
 	}
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a map that draws on a shared file opens only with that file cached, the right version (docs/shared_maps.md) */
+	shared_open_map_file_index = NONE;
+	if (!cache_files_shared_open(scenario_name, &shared_open_map_file_index))
+		return FALSE;
+#endif
 	memset(
 		cache_file_globals.requests,
 		0,
@@ -899,6 +921,27 @@ short cache_file_read(
 
 		return request_index;
 	}
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: an offset with its top bit set is in the shared file the open map draws on (docs/shared_maps.md) */
+	boolean shared = FALSE;
+
+	if (offset < 0)
+	{
+		long length = shared_open_map_file_index != NONE ?
+			cached_map_file_get(shared_open_map_file_index)->header.file_length : 0;
+
+		offset &= 0x7FFFFFFF;
+		if (shared_open_map_file_index == NONE || size < 0 || offset > length || size > length - offset)
+		{
+			error(_error_silent, "shared file read of %08x bytes at %08x refused (%s)", size, offset,
+				shared_open_map_file_index == NONE ? "the map has no shared file" : "past its end");
+			*completion_flag_reference = _cache_file_read_failed;
+
+			return NONE;
+		}
+		shared = TRUE;
+	}
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\cache\\cache_files_windows.c",
 		269,
@@ -942,6 +985,11 @@ short cache_file_read(
 	request->pending = TRUE;
 	request->blocking = blocking;
 	request->running = FALSE;
+#if defined(HALO_XBOX_TARGET)
+	request->shared = shared;
+#else
+	request->shared = FALSE;
+#endif
 	cache_file_windows_thread_wake();
 
 	return request_index;
@@ -1241,6 +1289,11 @@ static void cache_file_windows_thread_proc(
 			}
 
 			file = cached_map_file_get_handle(cache_file_globals.open_map_file_index);
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: a shared file's read (cache_file_read) */
+			if (best_request->shared && shared_open_map_file_index != NONE)
+				file = cached_map_file_get_handle(shared_open_map_file_index);
+#endif
 			match_assert(
 				"c:\\halo\\SOURCE\\cache\\cache_files_windows.c",
 				1327,
@@ -1317,6 +1370,13 @@ static void cache_file_get_map_path(
 
 		if (hmp_map_file_path(map_name, path, MAXIMUM_MAP_PATH_LENGTH))
 			return;
+		/* oxbox: a shared file ("*name": cache_files_shared_wanted found where it is) */
+		if (map_name[0] == '*')
+		{
+			if (!shared_file_path(map_name, path))
+				path[0] = 0;
+			return;
+		}
 	}
 	length = snprintf(path, MAXIMUM_MAP_PATH_LENGTH, "%s%s.map", cache_files_map_directory(), map_name);
 
@@ -1405,7 +1465,11 @@ static short cached_map_files_find_free_map(
 		map_file_index <= last_map_file_index;
 		map_file_index++)
 	{
-		if (cache_file_globals.open_map_file_index != map_file_index)
+		if (cache_file_globals.open_map_file_index != map_file_index
+#if defined(HALO_XBOX_TARGET)
+			&& !shared_slot_kept(map_file_index)
+#endif
+			)
 		{
 			struct cached_map_file *map_file = cached_map_file_get(map_file_index);
 
@@ -1433,7 +1497,25 @@ static short cached_map_files_find_free_map(
 		{
 			struct cached_map_file *map_file = cached_map_file_get(map_file_index);
 
-			if (cache_file_globals.open_map_file_index != map_file_index &&
+			if (cache_file_globals.open_map_file_index != map_file_index && !shared_slot_kept(map_file_index) &&
+				cached_map_file_get_size(map_file_index) > file_length &&
+				(best_map_file_index == NONE ||
+					CompareFileTime(&best_map_file->last_modification_date, &map_file->last_modification_date) > 0))
+			{
+				best_map_file_index = map_file_index;
+				best_map_file = map_file;
+			}
+		}
+	}
+	/* oxbox: a campaign map too busy for the campaign's two (one holding the shared file it draws on, the other
+	the map being played) goes into a multiplayer one if it fits: a map drawing on a shared file is small */
+	if (best_map_file_index == NONE && first_map_file_index == 0)
+	{
+		for (map_file_index = 3; map_file_index <= 5; map_file_index++)
+		{
+			struct cached_map_file *map_file = cached_map_file_get(map_file_index);
+
+			if (cache_file_globals.open_map_file_index != map_file_index && !shared_slot_kept(map_file_index) &&
 				cached_map_file_get_size(map_file_index) > file_length &&
 				(best_map_file_index == NONE ||
 					CompareFileTime(&best_map_file->last_modification_date, &map_file->last_modification_date) > 0))
@@ -1802,6 +1884,204 @@ static short cached_map_files_find_map(
 }
 
 #if defined(HALO_XBOX_TARGET)
+/* ---------- oxbox: shared files (docs/shared_maps.md)
+
+A folder map can keep its textures' and sounds' data in a shared file beside it (or in the folder above it: a pack's
+or a campaign's), named in its header, so maps that use the same data store it once. The shared file is a cache file
+like a map (a header, its data compressed after it) with no tags; it's copied into a campaign cache file (278 MiB) as
+a map is, and kept there while a map that draws on it is loaded or played. A texture's or sound's offset with its top
+bit set is in the shared file (cache_file_read). */
+
+#ifndef FILE_SHARE_READ
+#define FILE_SHARE_READ 0x00000001
+#endif
+
+enum
+{
+	SHARED_REFERENCE_OFFSET = 0x700,    /* in the map's header */
+	SHARED_REFERENCE_SIGNATURE = 'shrd',
+	SHARED_REFERENCE_VERSION = 1,
+};
+
+struct cache_file_shared_reference
+{
+	unsigned long signature;
+	long version;
+	char name[32];                      /* the shared file's, without .shared */
+	unsigned long checksum;             /* its header's checksum */
+	long length;                        /* its header's file_length */
+	long standalone_length;             /* the map built without it: its file's size and its header's checksum, the */
+	unsigned long standalone_checksum;  /* map's identity in map sharing (port/linux/game/hmp_share.c) */
+};
+
+/* the last map looked at: what shared file it draws on and where that is */
+static struct
+{
+	char map_name[64];
+	unsigned long time;
+	boolean has;
+	char key[32];                       /* "*name", its cache file's name */
+	char path[256];                     /* "" when it's nowhere */
+	unsigned long checksum;
+	long length;
+} shared_lookup;
+
+/* the shared file of the map being loaded: its cache file is kept for it */
+static char shared_kept_key[32];
+
+/* a folder map's shared reference, and where its shared file is (looked up again 2 seconds on) */
+static boolean shared_reference_get(
+	const char *map_name)
+{
+	extern boolean hmp_map_file_path(char const *level_name, char *path, long size);
+	struct cache_file_header header;
+	struct cache_file_shared_reference reference;
+	char path[256];
+	unsigned long now = system_milliseconds();
+	unsigned long got = 0;
+	HANDLE file;
+	char *slash;
+	int k;
+
+	if (!map_name || map_name[0] != '+')
+		return FALSE;
+	if (!_stricmp(shared_lookup.map_name, map_name) && now - shared_lookup.time < 2000)
+		return shared_lookup.has;
+	csmemset(&shared_lookup, 0, sizeof(shared_lookup));
+	csstrncpy(shared_lookup.map_name, map_name, sizeof(shared_lookup.map_name) - 1);
+	shared_lookup.time = now;
+	if (!hmp_map_file_path(map_name, path, sizeof(path)))
+		return FALSE;
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return FALSE;
+	if (!ReadFile(file, &header, sizeof(header), &got, NULL))
+		got = 0;
+	CloseHandle(file);
+	if (got != sizeof(header))
+		return FALSE;
+	csmemcpy(&reference, (byte const *)&header + SHARED_REFERENCE_OFFSET, sizeof(reference));
+	if (reference.signature != SHARED_REFERENCE_SIGNATURE || reference.version != SHARED_REFERENCE_VERSION ||
+		!memchr(reference.name, 0, sizeof(reference.name)) || !reference.name[0] || strlen(reference.name) > 30)
+	{
+		return FALSE;
+	}
+	for (k = 0; reference.name[k]; k++)
+	{
+		if (strchr("\\/:*?\"<>|", reference.name[k]) || reference.name[k] < ' ')
+			return FALSE;
+	}
+	shared_lookup.has = TRUE;
+	shared_lookup.key[0] = '*';
+	csstrncpy(shared_lookup.key + 1, reference.name, sizeof(shared_lookup.key) - 2);
+	shared_lookup.checksum = reference.checksum;
+	shared_lookup.length = reference.length;
+	/* (beside the map, else in the folder above it) */
+	for (k = 0; k < 2; k++)
+	{
+		HANDLE found;
+
+		slash = strrchr(path, '\\');
+		if (!slash)
+			break;
+		*slash = 0;
+		if ((int)strlen(path) + 1 + (int)strlen(reference.name) + 8 >= (int)sizeof(shared_lookup.path))
+			break;
+		sprintf(shared_lookup.path, "%s\\%s.shared", path, reference.name);
+		found = CreateFileA(shared_lookup.path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+		if (found != INVALID_HANDLE_VALUE)
+		{
+			CloseHandle(found);
+			return TRUE;
+		}
+		shared_lookup.path[0] = 0;
+	}
+	platform_log("shared: %s draws on %s.shared, which is neither beside it nor in the folder above", map_name,
+		reference.name);
+	return TRUE;
+}
+
+static boolean shared_file_path(
+	const char *key,
+	char *path)
+{
+	if (!shared_lookup.has || _stricmp(key, shared_lookup.key) || !shared_lookup.path[0])
+		return FALSE;
+	strcpy(path, shared_lookup.path);
+	return TRUE;
+}
+
+/* the cache file holding the shared file a map draws on, the right version, or NONE */
+static short shared_cached(
+	void)
+{
+	short map_file_index = cached_map_files_find_map(shared_lookup.key);
+	struct cached_map_file *map_file;
+
+	if (map_file_index == NONE)
+		return NONE;
+	map_file = cached_map_file_get(map_file_index);
+	if (map_file->header.checksum == shared_lookup.checksum && map_file->header.file_length == shared_lookup.length)
+		return map_file_index;
+	/* (another version: copied again) */
+	if (map_file_index != cache_file_globals.open_map_file_index && map_file_index != shared_open_map_file_index &&
+		map_file_index != cache_file_globals.copying_to_map_file_index)
+	{
+		platform_log("shared: %s is cached in another version: copied again", shared_lookup.key + 1);
+		map_file->header.name[0] = 0;
+	}
+	return NONE;
+}
+
+/* TRUE if a map draws on a shared file that isn't cached yet (its cache file name in key[32]): it's precached first
+(cache_files.c). The shared file a map asked about draws on keeps its cache file */
+boolean cache_files_shared_wanted(
+	const char *map_name,
+	char *key)
+{
+	if (!shared_reference_get(map_name))
+	{
+		/* (a map that draws on none: a shared file kept for an earlier one may go) */
+		if (map_name && cached_map_files_find_map(tag_name_strip_path(map_name)) != NONE)
+			shared_kept_key[0] = 0;
+		return FALSE;
+	}
+	csstrncpy(shared_kept_key, shared_lookup.key, sizeof(shared_kept_key) - 1);
+	if (shared_cached() != NONE)
+		return FALSE;
+	if (key)
+		csstrncpy(key, shared_lookup.key, 31);
+	return TRUE;
+}
+
+/* a map opened: the cache file of the shared file it draws on (NONE: none). FALSE: it draws on one not cached */
+static boolean cache_files_shared_open(
+	const char *map_name,
+	short *map_file_index)
+{
+	*map_file_index = NONE;
+	if (!shared_reference_get(map_name))
+		return TRUE;
+	*map_file_index = shared_cached();
+	if (*map_file_index == NONE)
+	{
+		error(_error_silent, "the map '%s' draws on %s.shared, which isn't cached", map_name, shared_lookup.key + 1);
+		platform_log("shared: %s draws on %s.shared, which isn't cached: not opened", map_name, shared_lookup.key + 1);
+		return FALSE;
+	}
+	platform_log("shared: %s opened with %s.shared (cache file %d)", map_name, shared_lookup.key + 1, (int)*map_file_index);
+	return TRUE;
+}
+
+/* a cache file not to copy another map into: the shared file of the map open, or of the map being loaded */
+static boolean shared_slot_kept(
+	short map_file_index)
+{
+	if (map_file_index == shared_open_map_file_index)
+		return TRUE;
+	return shared_kept_key[0] && !_stricmp(cached_map_file_get(map_file_index)->header.name, shared_kept_key);
+}
+
 /* ---------- oxbox: checking a folder map before it's loaded (port/linux/game/hmp_maps.c's map checks) */
 
 #include "../../port/third_party/zlib/zlib_prefixed.h"
