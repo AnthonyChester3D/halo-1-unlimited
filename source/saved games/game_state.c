@@ -294,6 +294,17 @@ void game_state_initialize_for_new_map(
 	object_bounds_cache_invalidate();
 	game_state_note_event("map start");
 	game_state_data_arrays_new_map();
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the last map's limits said, and this map's pools counted afresh (port/oxbox/oxbox_diagnostics.c) */
+	{
+		void oxbox_limits_new_map(void);
+
+		void game_state_pool_peaks_new_map(void);
+
+		oxbox_limits_new_map();
+		game_state_pool_peaks_new_map();
+	}
+#endif
 #if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
 	/* oxbox: the AI's pools at this map's sizes (cache_files.c did it as the map's tags loaded, and lent what it
 	leaves: this is the same layout again, and the first map's) */
@@ -353,13 +364,19 @@ void game_state_save(
 	multiplayer, the menus) */
 	if (game_state_ai_pools_lending())
 	{
-		error(_error_silent, "no checkpoint on this map: its AI's room is lent to the texture cache");
+		platform_log("checkpoint: none saved on this map: its AI's room is lent to the texture cache");
 		return;
 	}
 	game_state_call_before_save_procs();
 
 	main_stop_time();
-	game_state_globals.saved_game_valid = (game_state_write_to_file()!=FALSE);
+	{
+		unsigned long started = system_milliseconds();
+
+		game_state_globals.saved_game_valid = (game_state_write_to_file()!=FALSE);
+		platform_log("checkpoint: %s at %ld s (%ld KB, %lu ms)", game_state_globals.saved_game_valid ? "saved" : "NOT saved",
+			(long)(game_time_get() / 30), (long)(GAME_STATE_SIZE / 1024), system_milliseconds() - started);
+	}
 	main_start_time();
 	game_state_note_event("checkpoint saved");
 
@@ -387,6 +404,7 @@ void game_state_revert(
 {
 	if (!game_state_globals.saved_game_valid && !recover_saved_games_hack)
 	{
+		platform_log("checkpoint: none to go back to: the map starts over");
 		main_reset_map();
 
 		return;
@@ -398,9 +416,12 @@ void game_state_revert(
 	the map starts over */
 	if (!game_state_read_from_file())
 	{
+		platform_log("checkpoint: the saved one didn't read: the map starts over");
 		game_state_globals.saved_game_valid = FALSE;
 		main_reset_map();
 	}
+	else
+		platform_log("checkpoint: back to the one saved (now %ld s into the map)", (long)(game_time_get() / 30));
 	game_state_call_after_load_procs();
 
 	return;
@@ -686,12 +707,25 @@ static struct game_state_allocation *game_state_allocation_new(
 	return allocation;
 }
 
-#if defined(OXBOX_TEST_POOLS)
-/* oxbox test builds: how full the game state's pools get. Each frame (main.c) every data array's live entries
-and the memory pools' use are noted; every 10 seconds of a game, the most of each this session go in the log (only
-those with any use), with their maximum */
-static short game_state_pool_peaks[MAXIMUM_GAME_STATE_ALLOCATIONS];
-static long game_state_pool_bytes_peaks[MAXIMUM_GAME_STATE_ALLOCATIONS];
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: how full the game state's pools get (opence.ini log_pools = 1: port/oxbox/oxbox_diagnostics.c calls
+this each frame). Every data array's live entries and the memory pools' use are noted; every 10 seconds of a game,
+the most of each this map go in the log (only those with any use), with their maximum. Its memory (1.5 KB) is
+taken only once it's on */
+static short *game_state_pool_peaks;
+static long *game_state_pool_bytes_peaks;
+static boolean game_state_pool_unused_told;
+
+/* (a new map: its pools counted afresh) */
+void game_state_pool_peaks_new_map(void)
+{
+	if (game_state_pool_peaks)
+	{
+		csmemset(game_state_pool_peaks, 0, MAXIMUM_GAME_STATE_ALLOCATIONS * sizeof(short));
+		csmemset(game_state_pool_bytes_peaks, 0, MAXIMUM_GAME_STATE_ALLOCATIONS * sizeof(long));
+	}
+	game_state_pool_unused_told = FALSE;
+}
 
 void game_state_report_pools(
 	void)
@@ -699,6 +733,25 @@ void game_state_report_pools(
 	static unsigned long last_report;
 	unsigned long now = system_milliseconds();
 	long index;
+	struct scenario const *scenario = global_scenario_try_and_get();
+
+	/* (not the main menu's: only maps played) */
+	if (!scenario || scenario->type == _scenario_type_main_menu)
+		return;
+	if (!game_state_pool_peaks)
+	{
+		game_state_pool_peaks = (short *)malloc(MAXIMUM_GAME_STATE_ALLOCATIONS * sizeof(short));
+		game_state_pool_bytes_peaks = (long *)malloc(MAXIMUM_GAME_STATE_ALLOCATIONS * sizeof(long));
+		if (!game_state_pool_peaks || !game_state_pool_bytes_peaks)
+		{
+			if (game_state_pool_peaks)
+				free(game_state_pool_peaks);
+			game_state_pool_peaks = NULL;
+			return;
+		}
+		csmemset(game_state_pool_peaks, 0, MAXIMUM_GAME_STATE_ALLOCATIONS * sizeof(short));
+		csmemset(game_state_pool_bytes_peaks, 0, MAXIMUM_GAME_STATE_ALLOCATIONS * sizeof(long));
+	}
 
 	for (index = 0; index < game_state_allocation_count; index++)
 	{
@@ -763,15 +816,17 @@ void game_state_report_pools(
 		}
 		if (length)
 			platform_log("pools: %s", line);
-		/* (and once a session, the reserved room nothing has used yet, the biggest first: the measuring pass's
-		candidates for lending) */
+		/* (and once a map, two minutes in, the reserved room nothing has used yet: the measuring pass's candidates
+		for lending) */
 		{
-			static boolean unused_told;
+			static unsigned long map_started;
 			long total = 0;
 
-			if (!unused_told && now > 120000)
+			if (game_time_get() < 30)
+				map_started = now;
+			if (!game_state_pool_unused_told && now - map_started > 120000)
 			{
-				unused_told = TRUE;
+				game_state_pool_unused_told = TRUE;
 				for (index = 0; index < game_state_allocation_count; index++)
 				{
 					struct game_state_allocation const *allocation = &game_state_allocations[index];
@@ -793,6 +848,15 @@ void game_state_report_pools(
 	}
 }
 #endif
+
+/* oxbox: whether a data array is one of the game state's (data.c tells port/oxbox/oxbox_diagnostics.c when one of
+those is full; the caches' are full as they work) */
+boolean game_state_holds(
+	void const *address)
+{
+	byte const *base = game_state_globals.base_address;
+	return base && (byte const *)address >= base && (byte const *)address < base + GAME_STATE_SIZE;
+}
 
 /* whether [address, address+size) lies in the game state */
 static boolean game_state_image_contains(
