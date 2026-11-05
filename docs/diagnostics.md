@@ -12,6 +12,8 @@ and oxbox_entry.c:
 | `crash: exception <code> at <address>`, registers, `crash: stack ...` | a crash (the exception handler around main) | none |
 | `halt: stack ...` | the game halting on an error | none |
 | `memory: the tag cache (...) couldn't be had: N blocks of 64 KB taken; trying again` | start-up: the game state's or tag cache's fixed memory was taken (seen once in xemu), with the taken blocks; tried again for up to 2 s | none |
+| `co-op: this map's scripts know co-op` / `name player0 alone` | the first co-op frame of a campaign map: whether the other players follow player0 (PC maps) or the map's own scripts place them (Bungie's) | none |
+| `co-op: a script moved a player to (x y z): N other players follow` | a script teleports a player in co-op, on a map that names player0 alone | none |
 | `pools: <pool> used/max ...` | every 10 s of a map, with opence.ini `log_pools = 1` | off: one test a frame; on: 1.5 KB and a walk of the pools every 10 s |
 
 Memory: the code and its tables take about 5 KB of the image (measured in xemu on Precipice: 644 KB free in v1.89,

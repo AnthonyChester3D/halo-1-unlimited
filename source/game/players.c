@@ -239,6 +239,7 @@ symbols in this file:
 #include "devices/devices.h"
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
 #include "local_bots.h" /* port: port/linux/game/local_bots.c (OpenCE's bots.c) */
+#include "coop_scripts.h" /* port: a PC map's cutscene played through in co-op */
 #include "cutscene/cinematics.h" /* port: network co-op's first spawns */
 #include "editor/editor_stubs.h"
 #include "effects/effects.h"
@@ -2572,7 +2573,7 @@ been free on foot for a while (players_coop_room_to_spawn). */
 static boolean players_coop_extras_held(
 	void)
 {
-	return game_time_get() < COOP_LEVEL_START_TICKS || cinematic_in_progress() || !players_coop_room_to_spawn();
+	return game_time_get() < COOP_LEVEL_START_TICKS || coop_scripts_cinematic_holds() || !players_coop_room_to_spawn();
 }
 
 /* Co-op host: TRUE if a player who hasn't spawned on this level yet may
@@ -2960,7 +2961,7 @@ static boolean players_respawn_network_coop(
 			continue;
 		if (first_spawn)
 		{
-			if (player->statistics.deaths != 0 || cinematic_in_progress() ||
+			if (player->statistics.deaths != 0 || coop_scripts_cinematic_holds() ||
 				game_time_get() < COOP_LEVEL_START_TICKS)
 			{
 				continue;
@@ -5013,7 +5014,7 @@ void players_update_before_game(
 							player_spawn(iterator.datum_index);
 							player_place_beside_teammate(iterator.datum_index);
 						}
-						else if (players_coop_use_majority() && !cinematic_in_progress() &&
+						else if (players_coop_use_majority() && !coop_scripts_cinematic_holds() &&
 							players_checkpoint.valid)
 						{
 							players_respawn_network_coop(TRUE);

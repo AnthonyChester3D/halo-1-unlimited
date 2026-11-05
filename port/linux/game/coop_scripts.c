@@ -23,6 +23,17 @@ fires for whoever walks into it, and what it starts is sent to the clients
   follow player0: wherever the scripts put player0, they go too. A crowd
   does not fit on one spot (Truth and Reconciliation's grav lift leaves
   them on the beach), so they spread around that flag.
+
+A map whose scripts don't know co-op at all (every PC map: Custom Edition has
+none) names player0 alone, as `(unit (list_get (players) 0))`, and may keep a
+cutscene running into play (Lumoria's letterbox, until the player has walked
+a way in). The engine shows one screen during a cutscene and holds the other
+players' spawns and respawns, so co-op on such a map left the second player
+in the drop pod and the screen on the first. On those maps (and only those:
+coop_scripts_map_coop_aware) everyone past player0 follows, split screen
+included, and a cutscene the players have their input and their own cameras
+back in counts as play (coop_scripts_cinematic_holds). Stock levels name
+player1 and test game_is_cooperative, so nothing changes for them.
 */
 
 /* ---------- headers */
@@ -31,6 +42,10 @@ fires for whoever walks into it, and what it starts is sent to the clients
 #include "ai/ai.h"
 #include "game/game.h"
 #include "game/players.h"
+#include "camera/director.h"
+#include "cutscene/cinematics.h"
+#include "hs/hs.h"
+#include "hs/hs_scenario_definitions.h"
 #include "hs/object_lists.h"
 #include "math/real_math.h"
 #include "objects/objects.h"
@@ -50,12 +65,89 @@ fires for whoever walks into it, and what it starts is sent to the clients
 /* players the scripts name: player0 and player1 */
 #define NAMED_PLAYERS 2
 
+void platform_log(char const *format, ...);
+
+/* ---------- globals */
+
+/* whether this map's scripts know co-op: -1 not looked at yet (coop_scripts_new_map) */
+static char coop_scripts_aware = -1;
+
+extern struct data_array *hs_syntax_data;
+
 /* ---------- private code */
 
 static boolean coop_scripts_host(
 	void)
 {
 	return game_connection() == _game_connection_network_server && network_coop_active();
+}
+
+/* a script node by its index (the syntax data's datum index), or NULL */
+static struct hs_syntax_node const *coop_scripts_node(
+	long node_index)
+{
+	short absolute_index = (short)(node_index & 0xFFFF);
+
+	if (node_index == NONE || !hs_syntax_data || absolute_index < 0 || absolute_index >= hs_syntax_data->count)
+		return NULL;
+	return (struct hs_syntax_node const *)((byte const *)hs_syntax_data->data + absolute_index * hs_syntax_data->size);
+}
+
+/* whether the map's scripts know co-op: they test game_is_cooperative, or reach a player past the first
+((list_get (players) 1), or a player1 script, Bungie's levels' name for it) */
+static boolean coop_scripts_scan(
+	void)
+{
+	short game_is_cooperative_index = hs_find_function_by_name("game_is_cooperative");
+	short list_get_index = hs_find_function_by_name("list_get");
+	short players_index = hs_find_function_by_name("players");
+	short index;
+
+	if (!hs_syntax_data || hs_find_script_by_name("player1") != NONE)
+		return TRUE;
+	for (index = 0; index < hs_syntax_data->count; index++)
+	{
+		struct hs_syntax_node const *node = coop_scripts_node(index);
+		struct hs_syntax_node const *list;
+		struct hs_syntax_node const *element;
+		long value;
+
+		/* (a function's call: not a primitive (bit 0), a script's call (bit 1) or a variable (bit 2)) */
+		if (!node || !node->datum_header || (node->flags & 7))
+			continue;
+		if (node->function_index == game_is_cooperative_index)
+			return TRUE;
+		if (node->function_index != list_get_index)
+			continue;
+		/* (its children: the function's name, the list, the index) */
+		list = coop_scripts_node(coop_scripts_node(node->data) ? coop_scripts_node(node->data)->next_node_index : NONE);
+		element = list ? coop_scripts_node(list->next_node_index) : NULL;
+		if (!list || !element || (list->flags & 7) || list->function_index != players_index || !(element->flags & 1))
+			continue;
+		value = element->type == _hs_type_short_integer ? element->short_value : element->data;
+		if (element->type != _hs_type_short_integer && element->type != _hs_type_long_integer)
+			continue;
+		if (value >= 1)
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+/* the players the scripts name: player0 and player1, or player0 alone on a map that doesn't know co-op */
+static short coop_scripts_named_players(
+	void)
+{
+	return coop_scripts_map_coop_aware() ? NAMED_PLAYERS : 1;
+}
+
+/* whether this machine moves the players the scripts don't name: a network co-op host, or co-op on this machine
+(split screen) on a map that doesn't know co-op */
+static boolean coop_scripts_lead(
+	void)
+{
+	return coop_scripts_host() ||
+		(game_connection() == _game_connection_local && game_is_cooperative() && !coop_scripts_map_coop_aware());
 }
 
 /* the seat label to look for when boarding a follower: player0's own up to
@@ -83,6 +175,35 @@ static void follower_seat_name(
 
 /* ---------- public code */
 
+void coop_scripts_new_map(
+	void)
+{
+	coop_scripts_aware = -1;
+}
+
+boolean coop_scripts_map_coop_aware(
+	void)
+{
+	if (coop_scripts_aware < 0 && global_scenario_try_and_get())
+	{
+		coop_scripts_aware = (char)coop_scripts_scan();
+		platform_log("co-op: this map's scripts %s", coop_scripts_aware ?
+			"know co-op (as Bungie's levels do)" : "name player0 alone (a PC map's): the other players follow them");
+	}
+	return coop_scripts_aware != 0;
+}
+
+boolean coop_scripts_cinematic_holds(
+	void)
+{
+	if (!cinematic_in_progress())
+		return FALSE;
+	/* a cutscene the players play through: co-op, their input and their own cameras back, on a map that doesn't
+	know co-op */
+	return !(game_is_cooperative() && player_input_enabled() && director_camera_scripted && !*director_camera_scripted &&
+		!coop_scripts_map_coop_aware());
+}
+
 boolean coop_scripts_any_player_will_do(
 	long object_list_index)
 {
@@ -90,7 +211,7 @@ boolean coop_scripts_any_player_will_do(
 	long object_index;
 	boolean any = FALSE;
 
-	if (!coop_scripts_host())
+	if (!coop_scripts_lead())
 		return FALSE;
 	for (object_index = object_list_get_first(object_list_index, &reference_index);
 		object_index != NONE;
@@ -124,8 +245,24 @@ static short players_following(
 	short position;
 	short count = 0;
 
-	if (unit_index == NONE || !coop_scripts_host())
+	short named = coop_scripts_named_players();
+
+	if (unit_index == NONE || !coop_scripts_lead())
 		return 0;
+	/* (a map whose scripts name player0 alone: whichever player they moved is player0, everyone else follows.
+	(players) doesn't list them in the player data's order on the Xbox: split screen's second player can be first) */
+	if (named == 1)
+	{
+		if (player_index_from_unit_index(unit_index) == NONE)
+			return 0;
+		data_iterator_new(&iterator, player_data);
+		while ((player = data_iterator_next(&iterator)) != NULL)
+		{
+			if (player->unit_index != NONE && player->unit_index != unit_index && count < maximum_count)
+				unit_indices[count++] = player->unit_index;
+		}
+		return count;
+	}
 	/* hs_players adds each unit to the head of a reference list. Its
 	player0 is the LAST live unit in datum order, not the first. Keep that
 	same order here, including gaps left by dead or disconnected players. */
@@ -137,7 +274,7 @@ static short players_following(
 	}
 	if (player_count == 0 || players[player_count - 1] != unit_index)
 		return 0;
-	for (position = player_count - NAMED_PLAYERS - 1;
+	for (position = player_count - named - 1;
 		position >= 0 && count < maximum_count;
 		position--)
 	{
@@ -311,7 +448,7 @@ boolean coop_scripts_arrive_at(
 	short direction_index;
 	boolean stacked;
 
-	if (!coop_scripts_host() || player_index == NONE || !destination)
+	if (!coop_scripts_lead() || player_index == NONE || !destination)
 		return FALSE;
 	player = player_get(player_index);
 	unit_index = player->unit_index;
@@ -372,6 +509,11 @@ void coop_scripts_teleport_followers(
 	long player0_index;
 	real_point3d origin;
 
+	if (coop_scripts_lead() && destination && player_index_from_unit_index(unit_index) != NONE)
+	{
+		platform_log("co-op: a script moved a player to (%.1f %.1f %.1f): %d other players follow", destination->x,
+			destination->y, destination->z, (int)count);
+	}
 	if (count == 0 || !destination)
 		return;
 	/* player0's own teleport only searches an arm's length. If that missed,
@@ -399,6 +541,8 @@ void coop_scripts_teleport_followers(
 		{
 			arrived[arrived_count++] = followers[index];
 		}
+		else
+			platform_log("co-op: a player following couldn't be placed there");
 	}
 }
 

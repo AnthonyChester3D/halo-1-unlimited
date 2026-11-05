@@ -12,6 +12,22 @@ Campaign scripts made to work for every player in network co-op
 
 /* ---------- prototypes */
 
+/* a new map: its scripts looked at afresh (game_state.c) */
+void coop_scripts_new_map(
+	void);
+
+/* whether the map's scripts know co-op (they test game_is_cooperative or name
+a player past the first, as Bungie's levels do); FALSE for a PC map's */
+boolean coop_scripts_map_coop_aware(
+	void);
+
+/* cinematic_in_progress(), as co-op sees it: FALSE as well during a cutscene
+the players play through (their input and their own cameras back) on a map
+that doesn't know co-op, so split screen and spawns carry on (main.c,
+players.c) */
+boolean coop_scripts_cinematic_holds(
+	void);
+
 /* hs_library_external.c's volume_test_objects_all: whether to count the
 list as inside once any of it is, because every object in it is a player */
 boolean coop_scripts_any_player_will_do(
