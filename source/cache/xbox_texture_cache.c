@@ -142,17 +142,22 @@ enum
 physical_memory_allocate chose, in pages (texture_cache_new) */
 static long xbox_texture_cache_page_count = HALO_PORT_TEXTURE_CACHE_PAGE_COUNT;
 #if defined(HALO_XBOX_TARGET)
-/* oxbox: the tag cache's memory a map left free, lent to the texture cache for that map (texture_cache_lend):
-the cache's pages then run from the lower of the two memories to the end of the upper, and a locked block keeps
-it off what lies between them (the map's structure bsps, the rest of memory) */
+/* oxbox: the memory a map leaves free, lent to the texture cache for that map (texture_cache_lend): the tag
+cache's between the map's tag data and its structure bsps, and the game state's the AI's pools leave on a map
+that doesn't need their room (game_state.c). The cache's pages then run from the lowest of the memories to the
+end of the highest, and a locked block keeps it off what lies between each two (the map's bsps, the rest of the
+game state, the rest of memory) */
 /* (oxbox: not static: the perf log reads it, port/oxbox/oxbox_perf.c) */
 struct
 {
-	byte *start;            /* (NULL: none lent) */
+	byte *start;            /* the tag cache's (NULL: none of it lent) */
 	long size;
-	long gap_block_index;   /* the locked block between the two (NONE: none) */
-	long page_count;        /* the cache's pages while lent (the two memories and what lies between them) */
-} texture_cache_lent = { NULL, 0, NONE, 0 };
+	long gap_block_index;   /* the locked blocks between the memories (NONE: none) */
+	long page_count;        /* the cache's pages while lent (0: nothing lent) */
+	byte *start2;           /* the game state's (NULL: none of it lent) */
+	long size2;
+	long gap_block_index2;
+} texture_cache_lent = { NULL, 0, NONE, 0, NULL, 0, NONE };
 /* the most textures the cache may hold: its own pages' worth and some (more of them fit while memory is lent) */
 #define XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES (xbox_texture_cache_page_count + 512)
 #else
@@ -596,16 +601,20 @@ static boolean compare(
 
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: the memory lent back: the cache emptied (waiting for the graphics chip to finish with each texture),
-the memory cached again, as tag data is read into it, and the cache on its own memory alone */
+the memory cached again, as tag data and the game state are written into it, and the cache on its own memory
+alone */
 static void texture_cache_unlend(
 	void)
 {
-	if (!texture_cache_lent.start)
+	if (!texture_cache_lent.page_count)
 		return;
 	IDirect3DDevice8_KickPushBuffer(global_d3d_device);
 	lruv_flush(xbox_texture_cache_globals.cache);
-	texture_cache_lent.gap_block_index = NONE;
-	XPhysicalProtect(texture_cache_lent.start, texture_cache_lent.size, PAGE_READWRITE);
+	texture_cache_lent.gap_block_index = texture_cache_lent.gap_block_index2 = NONE;
+	if (texture_cache_lent.start)
+		XPhysicalProtect(texture_cache_lent.start, texture_cache_lent.size, PAGE_READWRITE);
+	if (texture_cache_lent.start2)
+		XPhysicalProtect(texture_cache_lent.start2, texture_cache_lent.size2, PAGE_READWRITE);
 	lruv_initialize(
 		xbox_texture_cache_globals.cache,
 		"xbox texture cache",
@@ -615,48 +624,80 @@ static void texture_cache_unlend(
 		texture_cache_delete_block_proc,
 		texture_cache_locked_block_proc);
 	xbox_texture_cache_globals.base_address = physical_memory_get_texture_cache_base_address();
-	texture_cache_lent.start = NULL;
-	texture_cache_lent.size = 0;
+	texture_cache_lent.start = texture_cache_lent.start2 = NULL;
+	texture_cache_lent.size = texture_cache_lent.size2 = 0;
 	texture_cache_lent.page_count = 0;
 }
 
-/* oxbox: size bytes from start (the tag cache's memory between a map's tag data and its lowest structure bsp:
-cache_files.c) lent to the texture cache until the map closes (texture_cache_close), or the cache's memory is
-taken for a movie or a map's copy (texture_cache_steal_memory). Both memories are whole pages of the cache from
-the lower one's start; the pages of what lies between them are a locked block. Nothing is lent while the cache's
-memory is taken. */
+/* oxbox: memory a map leaves free lent to the texture cache until the map closes (texture_cache_close), or the
+cache's memory is taken for a movie or a map's copy (texture_cache_steal_memory): size bytes from start (the tag
+cache's, between the map's tag data and its lowest structure bsp: cache_files.c) and size2 from start2 (the game
+state's the AI's pools leave: game_state.c), either of them none (NULL). Each memory is whole pages of the cache,
+counted from the lowest one's start; the pages of what lies between two are a locked block. Nothing is lent while
+the cache's memory is taken. */
 void texture_cache_lend(
 	void *start,
-	long size)
+	long size,
+	void *start2,
+	long size2)
 {
-	byte *own = physical_memory_get_texture_cache_base_address();
-	long own_size = XBOX_TEXTURE_CACHE_SIZE;
-	byte *lent = (byte *)start;
-	byte *low, *high, *first_end, *second_start, *second_end;
-	long page_count, gap_first, gap_last;
+	struct lend_memory
+	{
+		byte *start, *end;
+		int kind;                       /* 0 the cache's own, 1 the tag cache's, 2 the game state's */
+		long first_page, end_page;
+	} memories[3], swap;
+	long gaps[2] = { NONE, NONE }, page_count, lent_pages = 0;
+	int count = 0, i, k, gap_count = 0;
 
 	texture_cache_unlend();
-	if (xbox_texture_cache_globals.stolen_memory || !lent || size < XBOX_TEXTURE_CACHE_PAGE_SIZE ||
-		(lent < own + own_size && lent + size > own))
-	{
+	if (xbox_texture_cache_globals.stolen_memory)
 		return;
+	memories[count].start = physical_memory_get_texture_cache_base_address();
+	memories[count].end = memories[count].start + XBOX_TEXTURE_CACHE_SIZE;
+	memories[count++].kind = 0;
+	if (start && size >= XBOX_TEXTURE_CACHE_PAGE_SIZE)
+	{
+		memories[count].start = (byte *)start;
+		memories[count].end = (byte *)start + size;
+		memories[count++].kind = 1;
 	}
-	low = lent < own ? lent : own;
-	high = lent < own ? own : lent;
-	first_end = lent < own ? lent + size : own + own_size;
-	second_end = lent < own ? own + own_size : lent + size;
-	/* (pages of the cache counted from low: the first memory's whole pages, then the second's, starting at its
-	first whole page) */
-	gap_first = (long)(first_end - low) / XBOX_TEXTURE_CACHE_PAGE_SIZE;
-	gap_last = (long)((high - low) + XBOX_TEXTURE_CACHE_PAGE_SIZE - 1) / XBOX_TEXTURE_CACHE_PAGE_SIZE;
-	second_start = low + gap_last * XBOX_TEXTURE_CACHE_PAGE_SIZE;
-	page_count = (long)(second_end - low) / XBOX_TEXTURE_CACHE_PAGE_SIZE;
-	if (second_start >= second_end || page_count <= gap_last || page_count > 0x8000)
+	if (start2 && size2 >= XBOX_TEXTURE_CACHE_PAGE_SIZE)
+	{
+		memories[count].start = (byte *)start2;
+		memories[count].end = (byte *)start2 + size2;
+		memories[count++].kind = 2;
+	}
+	if (count == 1)
+		return;
+	/* (lowest first; none may overlap another) */
+	for (i = 0; i < count; i++)
+		for (k = i + 1; k < count; k++)
+			if (memories[k].start < memories[i].start)
+				swap = memories[i], memories[i] = memories[k], memories[k] = swap;
+	for (i = 0; i + 1 < count; i++)
+		if (memories[i].end > memories[i + 1].start)
+			return;
+	/* (each memory's whole pages, counted from the lowest's start) */
+	for (i = 0; i < count; i++)
+	{
+		memories[i].first_page = (long)((memories[i].start - memories[0].start) + XBOX_TEXTURE_CACHE_PAGE_SIZE - 1) /
+			XBOX_TEXTURE_CACHE_PAGE_SIZE;
+		memories[i].end_page = (long)(memories[i].end - memories[0].start) / XBOX_TEXTURE_CACHE_PAGE_SIZE;
+		if (memories[i].end_page <= memories[i].first_page)
+			return;
+		if (memories[i].kind)
+			lent_pages += memories[i].end_page - memories[i].first_page;
+	}
+	page_count = memories[count - 1].end_page;
+	if (page_count > 0x8000)
 		return;
 
 	IDirect3DDevice8_KickPushBuffer(global_d3d_device);
 	lruv_flush(xbox_texture_cache_globals.cache);
-	XPhysicalProtect(lent, size, XBOX_TEXTURE_CACHE_PROTECTION);
+	for (i = 0; i < count; i++)
+		if (memories[i].kind)
+			XPhysicalProtect(memories[i].start, (long)(memories[i].end - memories[i].start), XBOX_TEXTURE_CACHE_PROTECTION);
 	lruv_initialize(
 		xbox_texture_cache_globals.cache,
 		"xbox texture cache",
@@ -665,31 +706,51 @@ void texture_cache_lend(
 		XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
 		texture_cache_delete_block_proc,
 		texture_cache_locked_block_proc);
-	texture_cache_lent.gap_block_index = gap_last > gap_first ?
-		lruv_block_new_at(xbox_texture_cache_globals.cache, gap_first, gap_last - gap_first) : NONE;
-	if (gap_last > gap_first && texture_cache_lent.gap_block_index == NONE)
+	for (i = 0; i + 1 < count; i++)
 	{
-		/* (no block for what lies between: the cache stays on its own memory) */
-		XPhysicalProtect(lent, size, PAGE_READWRITE);
-		lruv_initialize(
-			xbox_texture_cache_globals.cache,
-			"xbox texture cache",
-			XBOX_TEXTURE_CACHE_PAGE_COUNT,
-			XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS,
-			XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
-			texture_cache_delete_block_proc,
-			texture_cache_locked_block_proc);
-		return;
+		long gap_first = memories[i].end_page, gap_last = memories[i + 1].first_page;
+		if (gap_last <= gap_first)
+			continue;
+		gaps[gap_count] = lruv_block_new_at(xbox_texture_cache_globals.cache, gap_first, gap_last - gap_first);
+		if (gaps[gap_count] == NONE)
+		{
+			/* (no block for what lies between: the cache stays on its own memory) */
+			for (k = 0; k < count; k++)
+				if (memories[k].kind)
+					XPhysicalProtect(memories[k].start, (long)(memories[k].end - memories[k].start), PAGE_READWRITE);
+			texture_cache_lent.gap_block_index = texture_cache_lent.gap_block_index2 = NONE;
+			lruv_initialize(
+				xbox_texture_cache_globals.cache,
+				"xbox texture cache",
+				XBOX_TEXTURE_CACHE_PAGE_COUNT,
+				XBOX_TEXTURE_CACHE_PAGE_SIZE_BITS,
+				XBOX_TEXTURE_CACHE_MAXIMUM_TEXTURES,
+				texture_cache_delete_block_proc,
+				texture_cache_locked_block_proc);
+			return;
+		}
+		/* (each kept as it's made: a gap's block is known as soon as there is one) */
+		if (gap_count == 0)
+			texture_cache_lent.gap_block_index = gaps[0];
+		else
+			texture_cache_lent.gap_block_index2 = gaps[1];
+		gap_count++;
 	}
-	xbox_texture_cache_globals.base_address = low;
-	texture_cache_lent.start = lent;
-	texture_cache_lent.size = size;
+	xbox_texture_cache_globals.base_address = memories[0].start;
 	texture_cache_lent.page_count = page_count;
+	for (i = 0; i < count; i++)
+	{
+		if (memories[i].kind == 1)
+			texture_cache_lent.start = memories[i].start, texture_cache_lent.size = (long)(memories[i].end - memories[i].start);
+		else if (memories[i].kind == 2)
+			texture_cache_lent.start2 = memories[i].start, texture_cache_lent.size2 = (long)(memories[i].end - memories[i].start);
+	}
 	{
 		void platform_log(char const *format, ...);
 
-		platform_log("texture cache: %ld KB of the tag cache lent for this map: %ld KB in all",
-			(long)(size / 1024), (long)((page_count - (gap_last - gap_first)) * (XBOX_TEXTURE_CACHE_PAGE_SIZE / 1024)));
+		platform_log("texture cache: %ld KB of the tag cache and %ld KB of the game state lent for this map: %ld KB in all",
+			(long)(texture_cache_lent.size / 1024), (long)(texture_cache_lent.size2 / 1024),
+			(long)((XBOX_TEXTURE_CACHE_PAGE_COUNT + lent_pages) * (XBOX_TEXTURE_CACHE_PAGE_SIZE / 1024)));
 	}
 }
 
@@ -717,7 +778,7 @@ static boolean texture_cache_locked_block_proc(
 
 #if defined(HALO_XBOX_TARGET)
 	/* oxbox: the block between the cache's own memory and the tag cache's it is lent is never given up */
-	if (block_index == texture_cache_lent.gap_block_index)
+	if (block_index == texture_cache_lent.gap_block_index || block_index == texture_cache_lent.gap_block_index2)
 		return TRUE;
 #endif
 	texture = datum_get(
@@ -736,9 +797,12 @@ static void texture_cache_delete_block_proc(
 
 #if defined(HALO_XBOX_TARGET)
 	/* oxbox: that block holds no texture */
-	if (block_index == texture_cache_lent.gap_block_index)
+	if (block_index == texture_cache_lent.gap_block_index || block_index == texture_cache_lent.gap_block_index2)
 	{
-		texture_cache_lent.gap_block_index = NONE;
+		if (block_index == texture_cache_lent.gap_block_index)
+			texture_cache_lent.gap_block_index = NONE;
+		else
+			texture_cache_lent.gap_block_index2 = NONE;
 		return;
 	}
 #endif

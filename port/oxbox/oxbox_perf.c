@@ -147,6 +147,9 @@ extern struct
 	long size;
 	long gap_block_index;
 	long page_count;
+	byte *start2;
+	long size2;
+	long gap_block_index2;
 } texture_cache_lent;
 
 /* xbox_sound_cache.c */
@@ -1162,7 +1165,8 @@ static void counters_since(
 /* a lruv cache's pages in use, less one block's (NONE: none) */
 static long cache_used_pages(
 	struct lruv_cache *cache,
-	long except_block_index)
+	long except_block_index,
+	long except_block_index2)
 {
 	struct data_iterator iterator;
 	struct lruv_cache_block *block;
@@ -1173,7 +1177,7 @@ static long cache_used_pages(
 	data_iterator_new(&iterator, cache->blocks);
 	while ((block = data_iterator_next(&iterator)) != NULL)
 	{
-		if (iterator.datum_index != except_block_index)
+		if (iterator.datum_index != except_block_index && iterator.datum_index != except_block_index2)
 			pages += block->page_count;
 	}
 	return pages;
@@ -1339,7 +1343,8 @@ static void memory_row(
 		texture_page_kb = (1 << textures->page_size_bits) / 1024;
 	if (sounds)
 		sound_page_kb = (1 << sounds->page_size_bits) / 1024;
-	gap_pages = texture_cache_lent.start ? block_pages(textures, texture_cache_lent.gap_block_index) : 0;
+	gap_pages = texture_cache_lent.page_count ? block_pages(textures, texture_cache_lent.gap_block_index) +
+		block_pages(textures, texture_cache_lent.gap_block_index2) : 0;
 
 	line.length = 0;
 	put_text(&line, "M,");
@@ -1362,12 +1367,13 @@ static void memory_row(
 	put_signed(&line, bsp_size / 1024); put_comma(&line);
 	put_signed(&line, global_structure_bsp_index); put_comma(&line);
 	put_signed(&line, textures ? (textures->page_count - gap_pages) * texture_page_kb : 0); put_comma(&line);
-	put_signed(&line, cache_used_pages(textures, texture_cache_lent.start ? texture_cache_lent.gap_block_index : NONE) *
+	put_signed(&line, cache_used_pages(textures, texture_cache_lent.page_count ? texture_cache_lent.gap_block_index : NONE,
+		texture_cache_lent.page_count ? texture_cache_lent.gap_block_index2 : NONE) *
 		texture_page_kb);
 	put_comma(&line);
-	put_signed(&line, texture_cache_lent.start ? texture_cache_lent.size / 1024 : 0); put_comma(&line);
+	put_signed(&line, (texture_cache_lent.size + texture_cache_lent.size2) / 1024); put_comma(&line);
 	put_signed(&line, sounds ? sounds->page_count * sound_page_kb : 0); put_comma(&line);
-	put_signed(&line, cache_used_pages(sounds, NONE) * sound_page_kb); put_comma(&line);
+	put_signed(&line, cache_used_pages(sounds, NONE, NONE) * sound_page_kb); put_comma(&line);
 	put_unsigned(&line, oxbox_system_live / 1024); put_comma(&line);
 	put_unsigned(&line, oxbox_system_peak / 1024); put_comma(&line);
 	put_unsigned(&line, oxbox_heap_live / 1024); put_comma(&line);

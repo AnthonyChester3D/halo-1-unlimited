@@ -565,14 +565,26 @@ void actors_initialize(
 	void)
 {
 	actor_types_initialize();
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox: sized for each map (game_state.c's AI pools) */
+	actor_data = game_state_data_new_ai_pool("actor", MAXIMUM_ACTORS, HALO_PORT_MULTIPLAYER_ACTORS,
+		HALO_PORT_FEW_ACTORS, sizeof(struct actor_datum), &actor_data);
+#else
 	actor_data = game_state_data_new("actor", MAXIMUM_ACTORS, sizeof(struct actor_datum));
+#endif
 	match_assert("c:\\halo\\SOURCE\\ai\\actors.c", 121, actor_data);
 	swarm_data = game_state_data_new("swarm", MAXIMUM_SWARMS, sizeof(struct swarm_datum));
 	match_assert("c:\\halo\\SOURCE\\ai\\actors.c", 124, swarm_data);
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	swarm_component_data = game_state_data_new_ai_pool("swarm component", MAXIMUM_SWARM_COMPONENTS,
+		HALO_PORT_MULTIPLAYER_SWARM_COMPONENTS, HALO_PORT_FEW_SWARM_COMPONENTS, SWARM_COMPONENT_DATUM_SIZE,
+		&swarm_component_data);
+#else
 	swarm_component_data = game_state_data_new(
 		"swarm component",
 		MAXIMUM_SWARM_COMPONENTS,
 		SWARM_COMPONENT_DATUM_SIZE);
+#endif
 	match_assert("c:\\halo\\SOURCE\\ai\\actors.c", 127, swarm_component_data);
 
 	return;
