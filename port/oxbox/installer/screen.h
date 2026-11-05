@@ -5,6 +5,9 @@ into the framebuffer, only the characters that changed */
 
 #define SCREEN_COLUMNS 72
 #define SCREEN_ROWS 27
+/* the spinner's corner, bottom right (screen_spinner): the log is written beside it */
+#define SCREEN_SPINNER_COLUMNS 20
+#define SCREEN_SPINNER_ROWS 12
 
 #define COLOUR_BLACK 0x000000
 #define COLOUR_WHITE 0xE8E8E8
