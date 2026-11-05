@@ -145,4 +145,12 @@ extern boolean recover_saved_games_hack;
 
 /* ---------- public code */
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+/* oxbox: the AI's pools, sized for each map in a block of the game state (game_state.c) */
+struct scenario;
+struct data_array *game_state_data_new_ai_pool(const char *name, short campaign_count, short multiplayer_count,
+	short few_count, short size, struct data_array **owner);
+void game_state_ai_pools_lay_out(struct scenario const *scenario, void **idle, long *idle_size);
+#endif
+
 #endif // __GAME_STATE_H

@@ -2419,6 +2419,21 @@ static void main_won_map_private(
 void main_set_map_name(
 	char const *map_name)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a map's script naming the next map (map_name): a folder map beside this one ("+./folder", a Halo Map
+	Porter split level's next piece), or the folder map a plain name is (a campaign's next level, "lumoria_b"), when
+	it isn't one of the campaign's own (port/linux/game/hmp_maps.c) */
+	{
+		extern boolean hmp_maps_resolve(char const *name, char const *current, char *out, long size);
+		static char resolved[256];
+
+		if (map_name && (map_name[0] == '+' || main_get_solo_level_from_name(map_name) == NONE) &&
+			hmp_maps_resolve(map_name, main_globals.soloplayer_map_name, resolved, (long)sizeof(resolved)))
+		{
+			map_name = resolved;
+		}
+	}
+#endif
 	main_globals.want_to_be_at_main_menu = FALSE;
 	csstrncpy(main_globals.soloplayer_map_name, map_name, NUMBEROF(main_globals.soloplayer_map_name) - 1);
 	main_globals.soloplayer_map_name[NUMBEROF(main_globals.soloplayer_map_name) - 1] = 0;

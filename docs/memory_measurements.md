@@ -85,3 +85,29 @@ Before v1.85, every Xbox had about 85 KB set aside for them, bots or not.
 Build with `-DOXBOX_TEST_POOLS` added to `OXBOX_EXTRA`. Each 10 seconds of a game, the log gets
 `pools:` lines (the session's peaks). Two minutes in, it adds `pools unused:` lines listing the
 reserved room nothing has used yet, biggest first.
+
+## The AI's pools sized for each map (v1.89)
+
+Test build 30 cut the AI's pools to a quarter of the Xbox's for every map (64 actors, 192 props, 128 swarm
+components) and gave the 528 KB to the texture cache. Campaign levels need the Xbox's sizes (and network co-op's
+extra enemies more of the same), so v1.89 sizes them for each map instead:
+
+- The three pools share one block of the game state with room for the Xbox's sizes (708 KB). The game state is
+  540 KB bigger for it (it still ends 84 KB short of the tag cache), and the texture cache's own memory 528 KB
+  smaller.
+- Each map, as its tags load, the pools are laid out again in the block at the sizes the map needs: all of them
+  for a campaign level, a quarter for a multiplayer map with encounters (Precipice), a few for any other map (no
+  encounters: most multiplayer maps, the menus).
+- What the map leaves of the block is lent to the texture cache with the tag cache's free memory, until the map
+  closes. A map that lends it keeps no checkpoint (multiplayer maps have none anyway).
+
+What each kind of map gets, in xemu:
+
+| Map | AI pools | Lent to the texture cache | Textures in all (v1.88) |
+|---|---|---|---|
+| Blood Gulch (no encounters) | 13 KB | 672 KB + the tag cache's 14,040 KB | 35,760 KB (35,624 KB) |
+| Precipice (encounters) | 180 KB | 512 KB + the tag cache's 1,176 KB | 22,736 KB (22,760 KB) |
+| Lumoria a10 (campaign) | 707 KB | none (its tag cache gap is under 1 MB) | 21,056 KB (21,584 KB) |
+
+So multiplayer maps keep the texture memory they had (136 KB more on a map without encounters, 24 KB less on one
+with them), and campaign levels have the Xbox's AI room for 528 KB less. Free memory in a 6-bot match on Precipice: 720 KB, as before.

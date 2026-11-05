@@ -1425,12 +1425,22 @@ static void cache_file_lend_free_tag_memory(
 	struct cache_file_tag_header *tag_header = cache_file_globals.tag_header;
 	struct scenario *scenario;
 	long index;
+	void *idle = NULL;
+	long idle_size = 0;
 
 	if (!tag_header || tag_header->scenario_tag_index == NONE)
 		return;
 	scenario = tag_get(SCENARIO_TAG, tag_header->scenario_tag_index);
 	if (!scenario)
 		return;
+	/* (and the game state's the AI's pools leave on a map that doesn't need their room: saved games/game_state.c) */
+	{
+		extern void game_state_ai_pools_lay_out(struct scenario const *scenario, void **idle, long *idle_size);
+
+		game_state_ai_pools_lay_out(scenario, &idle, &idle_size);
+		if (idle_size < 0x10000)
+			idle = NULL, idle_size = 0;
+	}
 	for (index = 0; index < scenario->structure_bsp_references.count; index++)
 	{
 		struct scenario_structure_bsp_reference *reference = TAG_BLOCK_GET_ELEMENT(
@@ -1439,15 +1449,22 @@ static void cache_file_lend_free_tag_memory(
 			struct scenario_structure_bsp_reference);
 		byte *bsp = (byte *)reference->base_address;
 
-		/* (one that would load over the tag data, or outside the cache, is refused when it loads: nothing is lent) */
+		/* (one that would load over the tag data, or outside the cache, is refused when it loads: none of the tag
+		cache is lent) */
 		if (bsp < start || bsp >= tag_cache + TAG_CACHE_SIZE)
+		{
+			if (idle)
+				texture_cache_lend(NULL, 0, idle, idle_size);
 			return;
+		}
 		if (bsp < end)
 			end = bsp;
 	}
 	end = (byte *)((unsigned long)end & ~0x3FFFUL);
 	if (end - start >= 0x100000)
-		texture_cache_lend(start, (long)(end - start));
+		texture_cache_lend(start, (long)(end - start), idle, idle_size);
+	else if (idle)
+		texture_cache_lend(NULL, 0, idle, idle_size);
 }
 #endif
 

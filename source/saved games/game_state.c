@@ -106,6 +106,7 @@ symbols in this file:
 #include "tag_files.h"
 #include "cache_files.h"
 #include "scenario.h"
+#include "scenario_definitions.h"
 #include "main.h"
 #include "objects.h"
 #include "game_sound.h"
@@ -291,6 +292,7 @@ static void game_state_note_event(
 }
 
 static void game_state_data_arrays_new_map(void);
+static boolean game_state_ai_pools_lending(void);
 
 void game_state_initialize_for_new_map(
 	void)
@@ -304,6 +306,16 @@ void game_state_initialize_for_new_map(
 	object_function_inputs_forget();
 	game_state_note_event("map start");
 	game_state_data_arrays_new_map();
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox: the AI's pools at this map's sizes (cache_files.c did it as the map's tags loaded, and lent what it
+	leaves: this is the same layout again, and the first map's) */
+	{
+		void *idle;
+		long idle_size;
+
+		game_state_ai_pools_lay_out(global_scenario_index != NONE ? global_scenario_get() : NULL, &idle, &idle_size);
+	}
+#endif
 
 	game_state_globals.locked = TRUE;
 	game_state_globals.saved_game_valid = FALSE;
@@ -349,6 +361,13 @@ void game_state_dispose_from_old_map(
 void game_state_save(
 	void)
 {
+	/* oxbox: not while some of the game state is lent to the texture cache (a map that doesn't need the AI's room:
+	multiplayer, the menus) */
+	if (game_state_ai_pools_lending())
+	{
+		error(_error_silent, "no checkpoint on this map: its AI's room is lent to the texture cache");
+		return;
+	}
 	game_state_call_before_save_procs();
 
 	main_stop_time();
@@ -1021,6 +1040,180 @@ struct data_array *game_state_data_new(
 
 	return data;
 }
+
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+/* oxbox: the AI's pools (the actors, their knowledge of units, the swarms' components), sized for each map. They
+share one block of the game state, room for the Xbox's sizes. Each map, before its AI starts, they're laid out
+again in it, one after another, at the sizes the map needs (game_state_ai_pools_lay_out): all of them for a
+campaign level, a quarter for a multiplayer map with encounters, a few for any other (most multiplayer maps, the
+menus). What a map leaves of the block is lent to the texture cache until the map closes (cache_files.c). The
+pools are empty at that point (each map's AI starts afresh), and a map's layout is the same every time it loads,
+so a checkpoint finds them where it left them. A map that lends some of the block saves no checkpoint (that
+memory holds textures then): multiplayer maps keep none anyway. */
+#define GAME_STATE_AI_POOL_MAXIMUM 4
+
+enum
+{
+	_game_state_ai_pools_campaign,
+	_game_state_ai_pools_multiplayer,
+	_game_state_ai_pools_few,
+	NUMBER_OF_GAME_STATE_AI_POOL_SIZES
+};
+
+static struct
+{
+	byte *block;
+	long pool_count;
+	struct
+	{
+		char const *name;
+		short counts[NUMBER_OF_GAME_STATE_AI_POOL_SIZES];
+		short size;
+		struct data_array **owner;
+		long allocation_index;
+	} pools[GAME_STATE_AI_POOL_MAXIMUM];
+	short sizes;                        /* the layout in place (NONE: the first map's not laid out yet) */
+	boolean lending;                    /* the layout leaves some of the block to lend */
+} game_state_ai_pools = { NULL, 0, { { 0 } }, NONE, FALSE };
+
+static long game_state_ai_pool_bytes(
+	short sizes,
+	long count)
+{
+	long index, bytes = 0;
+
+	for (index = 0; index < count; index++)
+	{
+		bytes += data_allocation_size(game_state_ai_pools.pools[index].counts[sizes], game_state_ai_pools.pools[index].size);
+		bytes = (bytes + 3) & ~3;
+	}
+	return bytes;
+}
+
+/* an AI pool: made at its full size in the block, after the ones before; a pool past the block's room is an
+ordinary data array, made at its full size and never laid out again */
+struct data_array *game_state_data_new_ai_pool(
+	const char *name,
+	short campaign_count,
+	short multiplayer_count,
+	short few_count,
+	short size,
+	struct data_array **owner)
+{
+	long index = game_state_ai_pools.pool_count, offset;
+	struct data_array *data;
+	struct game_state_allocation *allocation;
+
+	if (!game_state_ai_pools.block)
+		game_state_ai_pools.block = game_state_malloc("ai pools", "data arrays", HALO_PORT_GAME_STATE_AI_POOLS_SIZE);
+	offset = game_state_ai_pool_bytes(_game_state_ai_pools_campaign, index);
+	if (index >= GAME_STATE_AI_POOL_MAXIMUM ||
+		offset + data_allocation_size(campaign_count, size) > HALO_PORT_GAME_STATE_AI_POOLS_SIZE)
+	{
+		error(_error_silent, "the AI pools' block has no room for '%s' (%d of %d bytes): made in the game state",
+			name, (int)data_allocation_size(campaign_count, size), (int)HALO_PORT_GAME_STATE_AI_POOLS_SIZE);
+		return game_state_data_new(name, campaign_count, size);
+	}
+	game_state_ai_pools.pools[index].name = name;
+	game_state_ai_pools.pools[index].counts[_game_state_ai_pools_campaign] = campaign_count;
+	game_state_ai_pools.pools[index].counts[_game_state_ai_pools_multiplayer] = MAX(1, MIN(multiplayer_count, campaign_count));
+	game_state_ai_pools.pools[index].counts[_game_state_ai_pools_few] = MAX(1, MIN(few_count, campaign_count));
+	game_state_ai_pools.pools[index].size = size;
+	game_state_ai_pools.pools[index].owner = owner;
+	game_state_ai_pools.pools[index].allocation_index = game_state_allocation_count;
+	game_state_ai_pools.pool_count++;
+
+	data = (struct data_array *)(game_state_ai_pools.block + offset);
+	data_initialize(data, name, campaign_count, size);
+	allocation = game_state_allocation_new(_game_state_allocation_data, data);
+	if (allocation)
+	{
+		allocation->maximum_count = campaign_count;
+		allocation->element_size = size;
+		allocation->good_time = NONE;
+	}
+	else
+		game_state_ai_pools.pools[index].allocation_index = NONE;
+
+	return data;
+}
+
+/* the sizes a map's AI needs: all for a campaign level (or a map whose type isn't known), a quarter for a
+multiplayer map with encounters, a few for the rest */
+static short game_state_ai_pool_sizes_for(
+	struct scenario const *scenario)
+{
+	if (!scenario || scenario->type == _scenario_type_solo)
+		return _game_state_ai_pools_campaign;
+	return scenario->ai_encounters.count > 0 ? _game_state_ai_pools_multiplayer : _game_state_ai_pools_few;
+}
+
+/* the pools laid out for a map (the same layout again if it's in place), and what's left of the block in whole
+16 KB pages (none: *idle NULL) */
+void game_state_ai_pools_lay_out(
+	struct scenario const *scenario,
+	void **idle,
+	long *idle_size)
+{
+	short sizes = game_state_ai_pool_sizes_for(scenario);
+	long index, offset = 0;
+	byte *start, *end;
+
+	*idle = NULL;
+	*idle_size = 0;
+	if (!game_state_ai_pools.block || !game_state_ai_pools.pool_count)
+		return;
+	for (index = 0; index < game_state_ai_pools.pool_count; index++)
+	{
+		struct data_array *data = (struct data_array *)(game_state_ai_pools.block + offset);
+		short count = game_state_ai_pools.pools[index].counts[sizes];
+
+		data_initialize(data, game_state_ai_pools.pools[index].name, count, game_state_ai_pools.pools[index].size);
+		*game_state_ai_pools.pools[index].owner = data;
+		if (game_state_ai_pools.pools[index].allocation_index != NONE)
+		{
+			struct game_state_allocation *allocation =
+				&game_state_allocations[game_state_ai_pools.pools[index].allocation_index];
+
+			allocation->address = data;
+			allocation->maximum_count = count;
+			allocation->good_time = NONE;
+		}
+		offset += data_allocation_size(count, game_state_ai_pools.pools[index].size);
+		offset = (offset + 3) & ~3;
+	}
+	start = (byte *)(((unsigned long)(game_state_ai_pools.block + offset) + 0x3FFF) & ~0x3FFFUL);
+	end = (byte *)((unsigned long)(game_state_ai_pools.block + HALO_PORT_GAME_STATE_AI_POOLS_SIZE) & ~0x3FFFUL);
+	game_state_ai_pools.lending = sizes != _game_state_ai_pools_campaign && end > start;
+	if (game_state_ai_pools.lending)
+	{
+		*idle = start;
+		*idle_size = (long)(end - start);
+	}
+	if (sizes != game_state_ai_pools.sizes)
+	{
+		static char const *const names[NUMBER_OF_GAME_STATE_AI_POOL_SIZES] = {
+			"a campaign level's (all)", "a multiplayer map with encounters' (a quarter)", "a map without encounters' (a few)"};
+
+		platform_log("game state: the AI's pools at %s sizes: %ld of %ld KB, %ld KB left for the texture cache",
+			names[sizes], offset / 1024, (long)HALO_PORT_GAME_STATE_AI_POOLS_SIZE / 1024, *idle_size / 1024);
+		game_state_ai_pools.sizes = sizes;
+	}
+}
+
+/* whether this map's layout leaves memory to lend (its checkpoints aren't saved) */
+static boolean game_state_ai_pools_lending(
+	void)
+{
+	return game_state_ai_pools.lending;
+}
+#else
+static boolean game_state_ai_pools_lending(
+	void)
+{
+	return FALSE;
+}
+#endif
 
 /* port: a data array in order: an array (its signature, its own elements)
 made valid for the map, with an identifier to give out and counts that fit

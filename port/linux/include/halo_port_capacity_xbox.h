@@ -40,7 +40,10 @@ layout: saved games of builds before it no longer load. */
 CPU pools and 163,840 of decal vertices, "game state:" in oxbox_log.txt. It still starts at 0x80061000, and the tag
 cache at 0x803A6000; the 612 KB between them are free for the rest of the game (physical_memory_map.c allocates the
 game state's size alone), and the texture cache is 512 KB bigger for it. */
-#define HALO_PORT_GAME_STATE_CPU_SIZE 0x284000 /* (xbox: 0x305000) */
+/* oxbox (v1.89): 540 KB more, for the AI's pools at the Xbox's sizes (below): 3,166,116 bytes of CPU pools, and the
+game state ends 84 KB short of the tag cache. A map that doesn't need the AI's room lends what it leaves to the
+texture cache (game_state.c's AI pools), so multiplayer maps lose none of their textures for it */
+#define HALO_PORT_GAME_STATE_CPU_SIZE 0x308000 /* (xbox: 0x305000; test build 30 to v1.88: 0x284000) */
 #define HALO_PORT_GAME_STATE_GPU_SIZE 0x28000 /* (xbox: 0x40000) */
 #else
 #define HALO_PORT_GAME_STATE_CPU_SIZE 0x305000 /* (xbox) */
@@ -76,10 +79,12 @@ buffers, and OpenCE code and data placed over the retail game's unused code as w
 #if defined(OXBOX_NET_P2P)
 /* (the online test builds with internet play: 17 pages, 272 KB, to OpenCE's p2p layer, Monocypher and KCP, so that a game
 has build 40's free memory) */
-#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x545
+#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x524
 #else
-#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x556
+#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x535
 #endif
+/* (v1.89: 33 pages fewer, 528 KB, for the game state's AI pools at the Xbox's sizes; a map that doesn't need their
+room lends what it leaves back to the cache: game_state.c) */
 #elif defined(HALO_ARM64_GUEST) || defined(HALO_WEB)
 #define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x280 /* (xbox: 0x580; the proof of concept frees 12 MB for its larger image) */
 #else
@@ -130,15 +135,24 @@ the actors, and their knowledge of the units about them (props: with many
 players, more each), have room for several times a level's own. */
 
 #if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
-/* oxbox (test build 30): multiplayer's AI, a quarter of the Xbox's. Maps that use AI with care have a few dozen at
-most (Precipice: 10 actors and 8 props at the peak, test build 24's measurement); past 64, an encounter's next
-actor isn't made (actor_place: "cannot create actor", its unit deleted). Distributed-netcode clients make no actors
-at all. 538 KB less game state (the actors 351 KB, the props 176 KB, the swarm components 8 KB), which goes to the
-texture cache; network co-op (coop_enemies.c) has no room for its extra enemies at this size. */
-#define HALO_PORT_MAXIMUM_ACTORS 64 /* (xbox: 256) */
-#define HALO_PORT_MAXIMUM_PROPS 192 /* (xbox: 768) */
+/* oxbox (v1.89): the Xbox's sizes, sized again for each map (game_state.c's AI pools): a campaign level has them
+all; a multiplayer map with encounters a quarter (test build 30 to v1.88's sizes for every map: maps that use AI
+with care have a few dozen at most, Precipice 10 actors and 8 props at the peak; past that, an encounter's next
+actor isn't made, actor_place's "cannot create actor"); any other map (no encounters: most multiplayer maps, the
+menus) a few. The room a map doesn't use is lent to the texture cache. Network co-op (coop_enemies.c) has a
+campaign level's room for its extra enemies. */
+#define HALO_PORT_MAXIMUM_ACTORS 256 /* (xbox) */
+#define HALO_PORT_MAXIMUM_PROPS 768 /* (xbox) */
 #define HALO_PORT_MAXIMUM_SWARMS 32 /* (xbox) */
-#define HALO_PORT_MAXIMUM_SWARM_COMPONENTS 128 /* (xbox: 256) */
+#define HALO_PORT_MAXIMUM_SWARM_COMPONENTS 256 /* (xbox) */
+#define HALO_PORT_MULTIPLAYER_ACTORS 64
+#define HALO_PORT_MULTIPLAYER_PROPS 192
+#define HALO_PORT_MULTIPLAYER_SWARM_COMPONENTS 128
+#define HALO_PORT_FEW_ACTORS 4
+#define HALO_PORT_FEW_PROPS 16
+#define HALO_PORT_FEW_SWARM_COMPONENTS 16
+/* the room the three take at the Xbox's sizes, data arrays' headers included (708 KB) */
+#define HALO_PORT_GAME_STATE_AI_POOLS_SIZE 0xB1000
 #else
 #define HALO_PORT_MAXIMUM_ACTORS 256 /* (xbox) */
 #define HALO_PORT_MAXIMUM_PROPS 768 /* (xbox) */

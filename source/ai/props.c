@@ -96,7 +96,13 @@ void props_initialize(
 	void)
 {
 	/* port: the native builds' larger pool (halo_port_capacity.h) */
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox: sized for each map (game_state.c's AI pools) */
+	prop_data = game_state_data_new_ai_pool("prop", HALO_PORT_MAXIMUM_PROPS, HALO_PORT_MULTIPLAYER_PROPS,
+		HALO_PORT_FEW_PROPS, sizeof(struct prop_datum), &prop_data);
+#else
 	prop_data = game_state_data_new("prop", HALO_PORT_MAXIMUM_PROPS, sizeof(struct prop_datum));
+#endif
 
 	match_assert("c:\\halo\\SOURCE\\ai\\props.c", 0x24, prop_data);
 
