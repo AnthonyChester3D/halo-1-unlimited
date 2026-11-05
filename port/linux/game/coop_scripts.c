@@ -249,8 +249,7 @@ static short players_following(
 
 	if (unit_index == NONE || !coop_scripts_lead())
 		return 0;
-	/* (a map whose scripts name player0 alone: whichever player they moved is player0, everyone else follows.
-	(players) doesn't list them in the player data's order on the Xbox: split screen's second player can be first) */
+	/* (a map whose scripts name player0 alone: whichever player they moved is player0, everyone else follows) */
 	if (named == 1)
 	{
 		if (player_index_from_unit_index(unit_index) == NONE)
