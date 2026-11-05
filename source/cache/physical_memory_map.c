@@ -73,16 +73,103 @@ static struct physical_memory_map_globals physical_memory_map_globals;
 static long physical_memory_texture_cache_size = TEXTURE_CACHE_SIZE;
 static long physical_memory_sound_cache_size = SOUND_CACHE_SIZE;
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the game state and the tag cache have to be at fixed addresses (a map's tag data points into the tag cache
+at 0x803A6000). Once in xemu (2026-11-05) a page in the tag cache's range was taken at start-up: the allocation
+failed and the game crashed as the menus loaded. So both are taken first thing (oxbox_entry.c, before a file is
+opened or a thread started), and one that fails is tried again for up to 2 seconds; the 64 KB blocks found taken
+are logged. */
+LPVOID WINAPI retail_XPhysicalAlloc(SIZE_T size, ULONG_PTR address, ULONG_PTR alignment, DWORD protect);
+void platform_log(char const *format, ...);
+
+static void *physical_memory_fixed_alloc(
+	char const *what,
+	unsigned long size,
+	unsigned long address)
+{
+	void *result = NULL;
+	int attempt;
+
+#if defined(OXBOX_TEST_FIXED_ALLOC)
+	/* (a test: a block of the tag cache's taken for its first three tries) */
+	void *test_hold = what[0] == 't' ? retail_XPhysicalAlloc(0x10000, (address + 0x100000) & 0x7FFFFFFF, 0, PAGE_READWRITE) : NULL;
+#endif
+
+	for (attempt = 0; attempt < 100; attempt++)
+	{
+#if defined(OXBOX_TEST_FIXED_ALLOC)
+		if (attempt == 3 && test_hold)
+			XPhysicalFree(test_hold);
+#endif
+		result = retail_XPhysicalAlloc(size, address & 0x7FFFFFFF, 0, PAGE_READWRITE);
+		if (result == (void *)address)
+			break;
+		if (result)
+			XPhysicalFree(result);
+		result = NULL;
+		if (attempt == 0)
+		{
+			unsigned long block;
+			int taken = 0;
+
+			for (block = address; block < address + size; block += 0x10000)
+			{
+				void *probe = retail_XPhysicalAlloc(0x10000, block & 0x7FFFFFFF, 0, PAGE_READWRITE);
+
+				if (probe == (void *)block)
+					XPhysicalFree(probe);
+				else
+				{
+					if (probe)
+						XPhysicalFree(probe);
+					if (taken++ < 8)
+						platform_log("memory: the %s's block at %08lx is taken", what, block);
+				}
+			}
+			platform_log("memory: the %s (%lu KB at %08lx) couldn't be had: %d blocks of 64 KB taken; trying again",
+				what, size / 1024, address, taken);
+		}
+		Sleep(20);
+	}
+	if (attempt)
+		platform_log("memory: the %s at %08lx: %s after %d tries", what, address, result ? "had" : "NOT had", attempt + 1);
+	return result;
+}
+
+void physical_memory_reserve_fixed(
+	void)
+{
+	if (!physical_memory_map_globals.game_state_base_address)
+		physical_memory_map_globals.game_state_base_address =
+			physical_memory_fixed_alloc("game state", GAME_STATE_SIZE, GAME_STATE_BASE_ADDRESS);
+	if (!physical_memory_map_globals.tag_cache_base_address)
+	{
+		physical_memory_map_globals.tag_cache_base_address =
+			physical_memory_fixed_alloc("tag cache", TAG_CACHE_SIZE, TAG_CACHE_BASE_ADDRESS);
+		platform_log("memory: game state %lu KB at %p, tag cache %lu KB at %p (fixed)", (unsigned long)GAME_STATE_SIZE / 1024,
+			physical_memory_map_globals.game_state_base_address, (unsigned long)TAG_CACHE_SIZE / 1024,
+			physical_memory_map_globals.tag_cache_base_address);
+	}
+}
+#endif
+
 /* ---------- public code */
 
 void physical_memory_allocate(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: taken at start-up (physical_memory_reserve_fixed) */
+	physical_memory_reserve_fixed();
+#else
 	physical_memory_map_globals.game_state_base_address = XPhysicalAlloc(GAME_STATE_SIZE, GAME_STATE_BASE_ADDRESS & 0x7FFFFFFF, 0, PAGE_READWRITE);
+#endif
 #line 46 "c:\\halo\\SOURCE\\cache\\physical_memory_map.c"
 	match_assert(__FILE__, __LINE__, (unsigned long)physical_memory_map_globals.game_state_base_address==GAME_STATE_BASE_ADDRESS);
 
+#if !defined(HALO_XBOX_TARGET)
 	physical_memory_map_globals.tag_cache_base_address = XPhysicalAlloc(TAG_CACHE_SIZE, TAG_CACHE_BASE_ADDRESS & 0x7FFFFFFF, 0, PAGE_READWRITE);
+#endif
 #line 50 "c:\\halo\\SOURCE\\cache\\physical_memory_map.c"
 	match_assert(__FILE__, __LINE__, (unsigned long)physical_memory_map_globals.tag_cache_base_address==TAG_CACHE_BASE_ADDRESS);
 

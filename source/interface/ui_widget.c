@@ -7370,6 +7370,14 @@ static void widget_instance_render_recursive(
 				hmp_lobby_text_drawn(widget, &text_bounds);
 			}
 #endif
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: the games list's selected game's ping under its details (ui_widget_game_data_input_functions.c) */
+			{
+				extern void oxbox_games_ping_text_drawn(struct widget_instance *widget, rectangle2d const *bounds);
+
+				oxbox_games_ping_text_drawn(widget, &text_bounds);
+			}
+#endif
 #if defined(OXBOX_NET_P2P)
 			/* oxbox: the games list's rows: an Xbox beside an Xbox host's game (port/linux/game/hmp_online.c) */
 			{
