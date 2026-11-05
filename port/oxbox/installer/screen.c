@@ -31,8 +31,8 @@ static struct cell wanted[SCREEN_ROWS][SCREEN_COLUMNS], shown[SCREEN_ROWS][SCREE
 static unsigned long row_background[SCREEN_ROWS];
 
 /* the spinner's corner, which it draws itself while it runs (screen_show leaves it alone) */
-#define SPIN_ROWS 6
-#define SPIN_COLUMNS 12
+#define SPIN_ROWS SCREEN_SPINNER_ROWS
+#define SPIN_COLUMNS SCREEN_SPINNER_COLUMNS
 #define SPIN_TOP (SCREEN_ROWS - SPIN_ROWS)
 #define SPIN_LEFT (SCREEN_COLUMNS - SPIN_COLUMNS)
 static volatile LONG spinner_running, spinner_wanted;
@@ -159,74 +159,153 @@ void screen_hand_over(void)
 	AvSendTVEncoderOption((PVOID)VIDEO_BASE, VIDEO_ENC_VIDEOENABLE, TRUE, NULL);
 }
 
-/* ---- the spinner: a Halo ring rising into the sky, turning, in characters (Llama's design), drawn in half-size
-characters (4 x 8 pixels: 24 x 12 of them in the corner's 12 x 6 cells) by a thread of its own every 60 ms, so it
-moves while the installer is busy reading, writing or downloading */
+/* ---- the spinner: a Halo ring rising into the sky, turning, with clouds drifting over it, among stars that thin out
+towards the corner's edges (Llama's design: ringpy.py), drawn in small characters (3 x 6 pixels: 53 x 32 of them in
+the corner's 20 x 12 cells) by a thread of its own every 60 ms, so it moves while the installer is busy reading,
+writing or downloading */
 
-#define SPIN_WIDE (SPIN_COLUMNS * 2)
-#define SPIN_HIGH (SPIN_ROWS * 2)
+#define SPIN_GLYPH_WIDE 3
+#define SPIN_GLYPH_HIGH 6
+#define SPIN_WIDE (SPIN_COLUMNS * 8 / SPIN_GLYPH_WIDE)
+#define SPIN_HIGH (SPIN_ROWS * 16 / SPIN_GLYPH_HIGH)
+/* (ringpy.py's view of 100 x 60 characters, scaled to the corner's) */
+#define SPIN_FOV_X (42.0f * SPIN_WIDE / 100.0f)
+#define SPIN_FOV_Y (24.0f * SPIN_HIGH / 60.0f)
+#define SPIN_BAND 0.25f                 /* the ring's half width over its radius (5 / 20) */
+#define SPIN_STEP 0.02f                 /* its turn each frame (60 ms) */
 #define SPIN_BLUE 0x2E5FD0
 #define SPIN_CYAN 0x40C8D8
 #define SPIN_GREEN 0x50E060
 #define SPIN_STONE 0xA8A8A8
 #define SPIN_SNOW 0xF4F4F4
 #define SPIN_METAL 0x7A7A7A
-#define SPIN_BAND 0.3f
+#define SPIN_STAR 0x5A5A5A
+#define SPIN_BRIGHT_STAR 0x8C8C8C
 
-/* where a half-size character's place is on the ring (phi), and whether it's on it */
+static float spinner_screen_x(int x)
+{
+	return ((float)x + 0.5f - (float)SPIN_WIDE / 2.0f) / (SPIN_FOV_X * 0.5f);
+}
+
+static float spinner_screen_y(int y)
+{
+	return ((float)SPIN_HIGH / 2.0f - (float)y - 0.5f) / (SPIN_FOV_Y * 0.5f);
+}
+
+/* where a small character's place is across the ring (phi), and whether it's on it */
 static float spinner_phi(int x, int y)
 {
-	float sy = ((float)SPIN_HIGH / 2.0f - (float)y - 0.5f) / ((float)SPIN_HIGH * 0.6f);
-	float sx = ((float)x - (float)SPIN_WIDE / 2.0f + 0.5f) / ((float)SPIN_WIDE * 0.5f);
-	return sx * (1.0f + sy * 0.4f);
+	return spinner_screen_x(x) * (1.0f + spinner_screen_y(y) * 0.4f);
+}
+
+/* a steady random number for a place, 0 to 1 */
+static float spinner_hash(int x, int y, int k)
+{
+	float v = sinf((float)x * 12.9898f + (float)y * 78.233f + (float)k * 37.719f) * 43758.5453f;
+	return v - floorf(v);
+}
+
+/* the stars, placed once: thinning out from the middle of the corner towards its edges, unevenly, so they end in no
+straight line */
+static unsigned char spinner_stars[SPIN_HIGH][SPIN_WIDE];
+
+static void spinner_place_stars(void)
+{
+	int x, y;
+	for (y = 0; y < SPIN_HIGH; y++)
+	{
+		for (x = 0; x < SPIN_WIDE; x++)
+		{
+			float dx = ((float)x + 0.5f - SPIN_WIDE / 2.0f) / (SPIN_WIDE / 2.0f);
+			float dy = ((float)y + 0.5f - SPIN_HIGH / 2.0f) / (SPIN_HIGH / 2.0f);
+			float r = sqrtf(dx * dx + dy * dy) + (spinner_hash(x, y, 1) - 0.5f) * 0.35f;
+			float fade = (r - 0.55f) / 0.5f, density, v = spinner_hash(x, y, 0);
+			fade = fade < 0.0f ? 0.0f : fade > 1.0f ? 1.0f : fade;
+			density = 1.0f - fade * fade * (3.0f - 2.0f * fade);
+			spinner_stars[y][x] = v > 1.0f - 0.05f * density ? '.' : v < 0.02f * density ? '+' : ' ';
+		}
+	}
 }
 
 static void spinner_cell(struct cell *cell, int x, int y, float t)
 {
-	float sy = ((float)SPIN_HIGH / 2.0f - (float)y - 0.5f) / ((float)SPIN_HIGH * 0.6f);
 	float phi = spinner_phi(x, y), theta, value;
 	cell->background = COLOUR_BLACK;
 	cell->c = ' ';
 	cell->colour = SPIN_METAL;
 	if (fabsf(phi) >= SPIN_BAND)
+	{
+		cell->c = spinner_stars[y][x];
+		cell->colour = cell->c == '+' ? SPIN_BRIGHT_STAR : SPIN_STAR;
 		return;
-	/* (its rims: the ring's edge characters on each row) */
-	if (x == 0 || x == SPIN_WIDE - 1 || fabsf(spinner_phi(x - 1, y)) >= SPIN_BAND ||
+	}
+	/* (its rims: the ring's edge on each row) */
+	if (fabsf(phi) > SPIN_BAND * 0.9f || x == 0 || x == SPIN_WIDE - 1 || fabsf(spinner_phi(x - 1, y)) >= SPIN_BAND ||
 		fabsf(spinner_phi(x + 1, y)) >= SPIN_BAND)
 	{
 		cell->c = y >= SPIN_HIGH / 2 ? '|' : '^';
 		return;
 	}
-	theta = atan2f(sy, 1.0f) + t;
+	theta = atan2f(spinner_screen_y(y), 1.0f) + t;
+	/* (clouds drifting over the ground, at their own speed) */
+	if (sinf(theta * 8.0f + t * 0.4f) * cosf(phi * 5.0f) > 0.65f)
+	{
+		cell->c = '~', cell->colour = SPIN_SNOW;
+		return;
+	}
 	value = sinf(theta * 6.0f) * cosf(phi * 4.0f) + sinf(theta * 12.0f + phi * 3.0f) * 0.4f + cosf(theta * 3.0f) * 0.7f;
 	if (value > 0.8f) cell->c = '@', cell->colour = SPIN_SNOW;
 	else if (value > 0.3f) cell->c = '#', cell->colour = SPIN_STONE;
 	else if (value > -0.1f) cell->c = '*', cell->colour = SPIN_GREEN;
 	else if (value > -0.6f) cell->c = '.', cell->colour = SPIN_CYAN;
-	else cell->c = '~', cell->colour = SPIN_BLUE;
+	else cell->c = ' ', cell->colour = SPIN_BLUE;   /* (deep water) */
 }
 
-/* a half-size character at (x, y) of the corner: each pixel any of the 2 x 2 of the font's it stands for */
+/* a small character at (x, y) of the corner: the font's character (its rows 2 to 13, where its strokes are) in the
+top 5 of its 6 rows, each pixel lit if any of the font's pixels it stands for is, and the last row left empty, as a
+line's spacing (without it the rows ran together into bars) */
 static void draw_small_cell(unsigned char *fb, int x, int y, struct cell const *cell)
 {
 	unsigned char const *glyph = font + cell->c * 16;
-	unsigned long *p = (unsigned long *)fb + (TOP + SPIN_TOP * 16 + y * 8) * 640 + left + SPIN_LEFT * cell_width +
-		x * 4;
-	int row, column;
-	for (row = 0; row < 8; row++, p += 640)
+	unsigned long *p = (unsigned long *)fb + (TOP + SPIN_TOP * 16 + y * SPIN_GLYPH_HIGH) * 640 + left +
+		SPIN_LEFT * cell_width + x * SPIN_GLYPH_WIDE;
+	int row, column, k;
+	for (row = 0; row < SPIN_GLYPH_HIGH; row++, p += 640)
 	{
-		unsigned char bits = glyph[row * 2] | glyph[row * 2 + 1];
-		for (column = 0; column < 4; column++)
-			p[column] = bits & (0xC0 >> (column * 2)) ? cell->colour : cell->background;
+		unsigned char bits = 0;
+		for (k = 2 + row * 12 / (SPIN_GLYPH_HIGH - 1);
+			row < SPIN_GLYPH_HIGH - 1 && k < 2 + ((row + 1) * 12 + SPIN_GLYPH_HIGH - 2) / (SPIN_GLYPH_HIGH - 1) && k < 16; k++)
+			bits |= glyph[k];
+		for (column = 0; column < SPIN_GLYPH_WIDE; column++)
+		{
+			int on = 0;
+			for (k = column * 8 / SPIN_GLYPH_WIDE; k < ((column + 1) * 8 + SPIN_GLYPH_WIDE - 1) / SPIN_GLYPH_WIDE && k < 8; k++)
+				on |= bits & (0x80 >> k);
+			p[column] = on ? cell->colour : cell->background;
+		}
 	}
 }
 
 static DWORD WINAPI spinner_main(LPVOID parameter)
 {
 	static struct cell drawn[SPIN_HIGH][SPIN_WIDE];
-	float t = 0.0f;
+	static int stars_placed;
+	static float t;
 	(void)parameter;
+	if (!stars_placed)
+	{
+		spinner_place_stars();
+		stars_placed = 1;
+	}
 	memset(drawn, 0, sizeof(drawn));
+	/* (the whole corner cleared first: its characters leave a pixel or two at its edges, which kept what was there) */
+	{
+		unsigned long *p = (unsigned long *)XVideoGetFB() + (TOP + SPIN_TOP * 16) * 640 + left + SPIN_LEFT * cell_width;
+		int x, y;
+		for (y = 0; y < SPIN_ROWS * 16; y++, p += 640)
+			for (x = 0; x < SPIN_COLUMNS * cell_width; x++)
+				p[x] = COLOUR_BLACK;
+	}
 	while (spinner_wanted)
 	{
 		unsigned char *fb = XVideoGetFB();
@@ -245,7 +324,7 @@ static DWORD WINAPI spinner_main(LPVOID parameter)
 			}
 		}
 		XVideoFlushFB();
-		t -= 0.05f;
+		t -= SPIN_STEP;
 		Sleep(60);
 	}
 	return 0;

@@ -42,7 +42,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 21
+#define INSTALLER_VERSION 22
 #endif
 __attribute__((used)) static struct
 {
@@ -97,6 +97,7 @@ static unsigned long u32(unsigned char const *p)
 
 #define LOG_TOP 5
 #define LOG_ROWS (SCREEN_ROWS - LOG_TOP)
+#define LOG_COLUMNS (SCREEN_COLUMNS - SCREEN_SPINNER_COLUMNS - 1) /* (beside the spinner's corner) */
 static char log_lines[LOG_ROWS][SCREEN_COLUMNS + 1];
 static unsigned long log_colours[LOG_ROWS];
 static int log_count;
@@ -141,18 +142,18 @@ static void say_in(unsigned long colour, char const *format, ...)
 	/* (a long line wrapped at a space, the rest indented as it was) */
 	while (text[indent] == ' ')
 		indent++;
-	for (at = text; (int)strlen(at) > SCREEN_COLUMNS;)
+	for (at = text; (int)strlen(at) > LOG_COLUMNS;)
 	{
-		int cut = SCREEN_COLUMNS;
-		while (cut > SCREEN_COLUMNS / 2 && at[cut] != ' ')
+		int cut = LOG_COLUMNS;
+		while (cut > LOG_COLUMNS / 2 && at[cut] != ' ')
 			cut--;
 		if (at[cut] != ' ')
-			cut = SCREEN_COLUMNS;
+			cut = LOG_COLUMNS;
 		say_line(colour, at, cut);
 		at += cut;
 		while (*at == ' ')
 			at++;
-		if (indent + 2 < SCREEN_COLUMNS / 2)
+		if (indent + 2 < LOG_COLUMNS / 2)
 		{
 			at -= indent + 2;
 			memset(at, ' ', (size_t)(indent + 2));
