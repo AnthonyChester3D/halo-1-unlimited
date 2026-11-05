@@ -93,6 +93,7 @@ struct hmp_map
 	char pinned;                                 /* map sharing chose this copy for the session */
 	char problem;                                /* the map checks': 0 not checked, 1 fine, else a reason's + 2 */
 	char linked;                                 /* map_file is a map.link's path (a pack's .map, played in place) */
+	char solo;                                   /* a campaign map (its header's scenario type): CUSTOM SINGLEPLAYER's */
 };
 
 struct hmp_info
@@ -471,6 +472,19 @@ static boolean link_read(char const *path, char *target)
 		ends_with(target, ".map") && !strstr(target, "..");
 }
 
+/* whether a .map is a campaign one: its header's scenario type (0 solo) */
+static char map_is_solo(char const *path)
+{
+	unsigned char header[0x64];
+	unsigned long got = 0;
+	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_FILE) return 0;
+	if (!ReadFile(file, header, sizeof(header), &got, NULL)) got = 0;
+	CloseHandle(file);
+	if (got < sizeof(header) || header[0] != 'd' || header[1] != 'a' || header[2] != 'e' || header[3] != 'h') return 0;
+	return header[0x60] == 0 && header[0x61] == 0;
+}
+
 /* what's in a map's folder (in maps folder map->root): its .map, .txt, preview.bin and the .map's time. TRUE = a .map */
 static boolean list_folder(struct hmp_map *map)
 {
@@ -481,6 +495,7 @@ static boolean list_folder(struct hmp_map *map)
 	HANDLE handle;
 	map->picture = 0;
 	map->linked = 0;
+	map->solo = 0;
 	map->map_time_low = map->map_time_high = 0;
 	key_path(hmp_maps_globals.path, map->root, map_string(map->key), "*.*");
 	handle = FindFirstFileA(hmp_maps_globals.path, find);
@@ -521,9 +536,12 @@ static boolean list_folder(struct hmp_map *map)
 		map->map_file = names_add(target);
 		map->info_file = info_file[0] ? names_add(info_file) : NONE;
 		map->linked = 1;
+		map->solo = map_is_solo(target);
 		return map->map_file != NONE;
 	}
 	if (!map_file[0]) return FALSE;
+	key_path(hmp_maps_globals.path, map->root, map_string(map->key), map_file);
+	map->solo = map_is_solo(hmp_maps_globals.path);
 	map->map_file = names_add(map_file);
 	map->info_file = info_file[0] ? names_add(info_file) : NONE;
 	return map->map_file != NONE;
@@ -1852,12 +1870,49 @@ short custom_edition_maps_display_index(char const *level_name)
 	return missing_name_index(level_name);
 }
 
-boolean custom_edition_maps_campaign(short display_index) { return FALSE; }
+/* The folder maps that are campaign maps (their header's scenario type), for the menus' CUSTOM SINGLEPLAYER list
+(menu_functions.c): the n-th of them (in the folder maps' order), and whether a display index or level name is one.
+Halo Map Porter's campaign levels and their split-off cutscenes are these; multiplayer folder maps stay the
+browser's. */
+static long solo_map(long n)
+{
+	long i;
+	if (!hmp_maps_globals.scanned) hmp_maps_scan();
+	for (i = 0; i < hmp_maps_globals.map_count; i++)
+		if (hmp_maps_globals.maps[i].solo && !hmp_maps_globals.maps[i].hidden && n-- == 0) return i;
+	return NONE;
+}
+static long solo_display(short display_index)
+{
+	long i = (long)display_index - HMP_NAME_BASE;
+	return i >= 0 && i < hmp_maps_globals.map_count && hmp_maps_globals.maps[i].solo ? i : NONE;
+}
+boolean custom_edition_maps_campaign(short display_index) { return solo_display(display_index) != NONE; }
 short custom_edition_maps_campaign_level(short display_index) { return NONE; }
-boolean custom_edition_maps_level_campaign(char const *level_name) { return FALSE; }
-short custom_edition_maps_count(boolean campaign) { return 0; }
-short custom_edition_maps_display_index_of(boolean campaign, short index) { return NONE; }
-char const *custom_edition_maps_level_name(short display_index) { return NULL; }
+boolean custom_edition_maps_level_campaign(char const *level_name)
+{
+	long i = hmp_maps_find(level_name);
+	return i != NONE && hmp_maps_globals.maps[i].solo;
+}
+short custom_edition_maps_count(boolean campaign)
+{
+	long i, n = 0;
+	if (!campaign) return 0;
+	if (!hmp_maps_globals.scanned) hmp_maps_scan();
+	for (i = 0; i < hmp_maps_globals.map_count; i++)
+		if (hmp_maps_globals.maps[i].solo && !hmp_maps_globals.maps[i].hidden) n++;
+	return (short)MIN(n, 0x1000);
+}
+short custom_edition_maps_display_index_of(boolean campaign, short index)
+{
+	long i = campaign ? solo_map(index) : NONE;
+	return i == NONE ? NONE : (short)(HMP_NAME_BASE + i);
+}
+char const *custom_edition_maps_level_name(short display_index)
+{
+	long i = solo_display(display_index);
+	return i == NONE ? NULL : MAP_KEY(i);
+}
 wchar_t *custom_edition_maps_name(short display_index) { return hmp_string(NONE, display_index); }
 wchar_t *custom_edition_maps_description(short display_index) { return hmp_string(NONE, display_index); }
 
