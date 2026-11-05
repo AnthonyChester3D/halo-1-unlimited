@@ -359,10 +359,11 @@ static u32 file_size(const char *path) {
     return n;
 }
 
-/* a folder map's identity: file size + the checksum in its header (Halo Map Porter stamps a CRC there).
-   path = the .map; 0 = none */
+/* a folder map's identity: file size + the checksum in its header (Halo Map Porter stamps a CRC there). A map that
+   draws on a shared file (docs/shared_maps.md) has the identity of the map built without it, which its header keeps:
+   the two builds of a map play together. path = the .map; 0 = none */
 static int map_identity(const char *path, u32 *size, u32 *chk) {
-    u8 hdr[0x68];
+    u8 hdr[0x800];
     u32 got = 0;
     HANDLE h;
     if (!path) return 0;
@@ -374,6 +375,10 @@ static int map_identity(const char *path, u32 *size, u32 *chk) {
     CloseHandle(h);
     if (got != sizeof hdr) return 0;
     *chk = *(u32 *)(hdr + 0x64);
+    if (*(u32 *)(hdr + 0x700) == 'shrd' && *(u32 *)(hdr + 0x704) == 1) {   /* (the shared reference: its last two) */
+        *size = *(u32 *)(hdr + 0x700 + 0x30);
+        *chk = *(u32 *)(hdr + 0x700 + 0x34);
+    }
     return 1;
 }
 

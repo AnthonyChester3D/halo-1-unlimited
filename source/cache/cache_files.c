@@ -1319,8 +1319,17 @@ boolean cache_files_give_time_to_precache(
 	}
 	else
 	{
+		/* oxbox: a map that draws on a shared file not cached yet: that's precached first (docs/shared_maps.md) */
+		char const *wanted_name = map_name;
+#ifdef HALO_XBOX_TARGET
+		char shared_key[32];
+		extern boolean cache_files_shared_wanted(const char *map_name, char *key);
+
+		if (cache_files_shared_wanted(map_name, shared_key))
+			wanted_name = shared_key;
+#endif
 		if (cache_files_precache_in_progress() &&
-			!cache_files_precache_is_copying_map(map_name))
+			!cache_files_precache_is_copying_map(wanted_name))
 		{
 			cache_files_precache_map_end();
 		}
@@ -1362,7 +1371,7 @@ boolean cache_files_give_time_to_precache(
 		else
 		{
 			cache_files_precache_set_priority(0);
-			if (!cache_files_precache_map_begin(map_name, FALSE))
+			if (!cache_files_precache_map_begin(wanted_name, FALSE))
 			{
 #ifdef HALO_XBOX_TARGET
 				/* oxbox: a folder map that couldn't be started (deleted, renamed, not a map, too big for a cache
