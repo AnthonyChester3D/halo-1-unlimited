@@ -181,7 +181,7 @@ struct showcase_shot
 };
 
 /* the map's showcase.txt, read */
-static struct
+struct showcase_file_data
 {
 	float fade;
 	short shot_count;
@@ -189,7 +189,20 @@ static struct
 	boolean full;                   /* more shots or keys than we keep: the first ones */
 	struct showcase_shot shots[SHOWCASE_MAXIMUM_SHOTS];
 	struct showcase_key keys[SHOWCASE_MAXIMUM_KEYS];
-} showcase_file;
+};
+
+/* the showcase's big parts, the map's showcase.txt read and the maps to show (45 KB): taken when a showcase starts
+(showcase_memory_take) and given back when the main menu is back (showcase_set_state(_showcase_off)), so they're the
+heap's the rest of the time, a campaign level's or a match's */
+struct showcase_memory
+{
+	struct showcase_file_data file;
+	char maps[SHOWCASE_MAXIMUM_MAPS][SHOWCASE_KEY_LENGTH];
+	unsigned long weights[SHOWCASE_MAXIMUM_MAPS];   /* (showcase_find_maps') */
+};
+static struct showcase_memory *showcase_memory;
+#define showcase_file (showcase_memory->file)
+#define showcase_maps (showcase_memory->maps)
 
 static struct
 {
@@ -224,7 +237,6 @@ static struct
 	/* the maps to show, in order, and the next */
 	short map_count;
 	short map_next;
-	char maps[SHOWCASE_MAXIMUM_MAPS][SHOWCASE_KEY_LENGTH];
 	unsigned long random;
 	/* the map's name for its title card (read in the menus: the map browser's names are let go in a game) */
 	wchar_t title[64];
@@ -676,9 +688,9 @@ static void showcase_swap_maps(
 
 	if (a == b)
 		return;
-	strcpy(swap, showcase.maps[a]);
-	strcpy(showcase.maps[a], showcase.maps[b]);
-	strcpy(showcase.maps[b], swap);
+	strcpy(swap, showcase_maps[a]);
+	strcpy(showcase_maps[a], showcase_maps[b]);
+	strcpy(showcase_maps[b], swap);
 }
 
 /* the cycle counter: the random numbers' seed (a fresh boot reaches the showcase at the same millisecond nearly
@@ -1096,7 +1108,7 @@ maps left, by their weights) */
 static void showcase_find_maps(
 	void)
 {
-	static unsigned long weights[SHOWCASE_MAXIMUM_MAPS];
+	unsigned long *weights = showcase_memory->weights;
 	long count, index, place;
 	char last[SHOWCASE_KEY_LENGTH];
 
@@ -1123,7 +1135,7 @@ static void showcase_find_maps(
 		char const *key = index < count ? hmp_maps_key(index) : hmp_maps_stock_level(index - count);
 
 		if (showcase_listed(key, &weights[showcase.map_count]))
-			strcpy(showcase.maps[showcase.map_count++], key);
+			strcpy(showcase_maps[showcase.map_count++], key);
 	}
 	for (place = 0; place + 1 < showcase.map_count; place++)
 	{
@@ -1141,7 +1153,7 @@ static void showcase_find_maps(
 	}
 	showcase_playlist_free();
 	/* (not the map just shown first again) */
-	if (showcase.map_count > 1 && !strcmp(showcase.maps[0], last))
+	if (showcase.map_count > 1 && !strcmp(showcase_maps[0], last))
 		showcase_swap_maps(0, 1);
 }
 
@@ -1159,9 +1171,9 @@ static boolean showcase_next_map(
 			if (!showcase.map_count)
 				return FALSE;
 		}
-		if (showcase_load(showcase.maps[showcase.map_next]))
+		if (showcase_load(showcase_maps[showcase.map_next]))
 		{
-			strcpy(showcase.key, showcase.maps[showcase.map_next++]);
+			strcpy(showcase.key, showcase_maps[showcase.map_next++]);
 			return TRUE;
 		}
 		/* (a file that can't be read is left out until the maps are looked at again) */
@@ -1296,6 +1308,31 @@ static void showcase_set_state(
 {
 	showcase.state = state;
 	showcase.state_seconds = 0.0f;
+	if (state == _showcase_off && showcase_memory)
+	{
+		free(showcase_memory);
+		showcase_memory = NULL;
+		showcase.map_count = showcase.map_next = 0;
+		showcase.camera_valid = FALSE;
+	}
+}
+
+/* the showcase's memory (struct showcase_memory), for one starting: FALSE when the heap hasn't the room (the
+movies, then, as with no showcase) */
+static boolean showcase_memory_take(
+	void)
+{
+	if (!showcase_memory)
+	{
+		/* (malloc and free are the game's heap here, cseries.h's: not calloc, which isn't) */
+		showcase_memory = (struct showcase_memory *)malloc(sizeof(*showcase_memory));
+		if (showcase_memory)
+			memset(showcase_memory, 0, sizeof(*showcase_memory));
+		showcase.map_count = showcase.map_next = 0;
+		if (!showcase_memory)
+			platform_log("showcase: no room for it (%ld KB): the movies instead", (long)(sizeof(struct showcase_memory) / 1024));
+	}
+	return showcase_memory != NULL;
 }
 
 /* a game that didn't start: the next map, but after two in a row the movies for ten minutes */
@@ -1509,8 +1546,11 @@ boolean showcase_start(
 	if (showcase.retry_after && (long)(system_milliseconds() - showcase.retry_after) < 0)
 		return FALSE;
 	showcase.retry_after = 0;
-	if (!showcase_next_map())
+	if (!showcase_memory_take() || !showcase_next_map())
+	{
+		showcase_set_state(_showcase_off);
 		return FALSE;
+	}
 	showcase.user_ended = FALSE;
 	showcase.chain = FALSE;
 	showcase.input_time = event_manager_time_of_last_event();
@@ -1544,13 +1584,19 @@ boolean showcase_preview_request(
 static void showcase_preview_start(
 	void)
 {
+	if (!showcase_memory_take())
+	{
+		showcase.preview_key[0] = 0;
+		return;
+	}
 	showcase.map_count = 1;
 	showcase.map_next = 0;
-	strcpy(showcase.maps[0], showcase.preview_key);
+	strcpy(showcase_maps[0], showcase.preview_key);
 	showcase.preview_key[0] = 0;
 	if (!showcase_next_map())
 	{
 		platform_log("showcase: the preview's showcase.txt couldn't be read");
+		showcase_set_state(_showcase_off);
 		return;
 	}
 	showcase.preview = TRUE;
@@ -1560,7 +1606,7 @@ static void showcase_preview_start(
 	showcase.last_time = system_milliseconds();
 	showcase.alpha = 0.0f;
 	ui_stop_main_menu_music();
-	platform_log("showcase: the preview of %s", showcase.maps[0]);
+	platform_log("showcase: the preview of %s", showcase_maps[0]);
 	showcase_set_state(_showcase_menu_fade);
 }
 
