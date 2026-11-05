@@ -380,6 +380,7 @@ symbols in this file:
 #include "networking/network_game_manager.h"
 #include "networking/network_server_manager.h" /* port: a co-op game's level won */
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
+#include "coop_scripts.h" /* port: a PC map's cutscene played through in co-op */
 #include "network_voice.h" /* port: port/linux/game/network_voice.c */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
@@ -1446,7 +1447,8 @@ void compute_window_bounds(
 short main_get_window_count(
 	void)
 {
-	boolean single_window = game_engine_force_single_screen() || cinematic_in_progress();
+	/* (port: not a cutscene co-op plays through on a PC map: coop_scripts_cinematic_holds) */
+	boolean single_window = game_engine_force_single_screen() || coop_scripts_cinematic_holds();
 
 	return single_window ? 1 : PIN(local_player_count(), 1, MAXIMUM_WINDOWS);
 }
@@ -2192,7 +2194,7 @@ static void main_respawn_private(
 {
 	if (main_death_timer_expired(
 		&main_globals.respawn_timer, &main_respawn_last_tick,
-		!game_time_get_paused() && !cinematic_in_progress()) &&
+		!game_time_get_paused() && !coop_scripts_cinematic_holds()) &&
 		players_respawn_coop())
 	{
 		main_globals.respawn = FALSE;
@@ -3309,7 +3311,7 @@ static void main_game_render(
 
 	window_count = PIN(local_player_count(), 1, MAXIMUM_LOCAL_PLAYERS);
 	player_window_count = window_count;
-	if (force_single_screen || cinematic_in_progress())
+	if (force_single_screen || coop_scripts_cinematic_holds())
 	{
 		window_count = 1;
 		player_window_count = 1;

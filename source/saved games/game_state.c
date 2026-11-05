@@ -294,6 +294,12 @@ void game_state_initialize_for_new_map(
 	object_bounds_cache_invalidate();
 	game_state_note_event("map start");
 	game_state_data_arrays_new_map();
+	/* port: the new map's scripts looked at afresh for co-op (port/linux/game/coop_scripts.c) */
+	{
+		void coop_scripts_new_map(void);
+
+		coop_scripts_new_map();
+	}
 #if defined(HALO_XBOX_TARGET)
 	/* oxbox: the last map's limits said, and this map's pools counted afresh (port/oxbox/oxbox_diagnostics.c) */
 	{
