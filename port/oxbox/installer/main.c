@@ -8,6 +8,7 @@ The list shows every Halo it finds: the ones it can install to first, in green; 
 	X      put the retail Halo back (from default_retail.xbe)
 	Y      look online for a newer package (download.c: the project's latest release)
 	START  play what's in the folder (green ones only)
+	WHITE  import a map pack's maps into Halo 1 Unlimited (another Halo's folder: packs.c), or take them out
 	B      back to the dashboard
 	LT/RT  a page up or down
 A package signed by a key it trusts that carries a newer installer (tools/mkpackage.py --installer) offers to update
@@ -29,6 +30,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 
 #include "download.h"
 #include "package.h"
+#include "packs.h"
 #include "pictures.h"
 #include "screen.h"
 #include "sha256.h"
@@ -40,7 +42,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 20
+#define INSTALLER_VERSION 21
 #endif
 __attribute__((used)) static struct
 {
@@ -208,7 +210,7 @@ static void heading(char const *what)
 
 /* ---- the controllers: every pad, d-pad or left stick (held: repeats), triggers a page ---- */
 
-enum { NONE, UP, DOWN, PAGE_UP, PAGE_DOWN, A, B, X, Y, START };
+enum { NONE, UP, DOWN, PAGE_UP, PAGE_DOWN, A, B, X, Y, START, WHITE };
 
 static SDL_GameController *pads[4];
 static unsigned held_buttons = ~0u; /* (none counts as pressed until it's been seen up) */
@@ -254,6 +256,7 @@ static int poll_input(void)
 		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_X) << X;
 		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_Y) << Y;
 		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_START) << START;
+		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) << WHITE; /* (nxdk's White) */
 		y = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_LEFTY);
 		if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_UP) || y < -16000)
 			direction = UP;
@@ -266,7 +269,7 @@ static int poll_input(void)
 	}
 	pressed = buttons & ~held_buttons;
 	held_buttons = buttons;
-	for (i = A; i <= START; i++)
+	for (i = A; i <= WHITE; i++)
 	{
 		if (pressed & (1u << i))
 			return i;
@@ -1787,6 +1790,109 @@ back:
 
 /* ---- the list ---- */
 
+/* ---- map packs (packs.c): another Halo's maps imported into Halo 1 Unlimited ---- */
+
+/* a folder whose maps can be imported: not an install of the game (its maps are the game's own) */
+static int can_import(struct halo const *h)
+{
+	return h->state != INSTALLED && !is_last_install(h);
+}
+
+static void packs_say(int warning, char const *text)
+{
+	say_in(warning ? COLOUR_YELLOW : COLOUR_WHITE, "%s", text);
+}
+
+/* the maps folder of an install of the game (the last, else any): Halo's own maps, to tell a pack's from */
+static void stock_maps_folder(char *out, int size)
+{
+	int i, found = -1;
+	for (i = 0; i < halo_count && found < 0; i++)
+		found = is_last_install(&halos[i]) ? i : -1;
+	for (i = 0; i < halo_count && found < 0; i++)
+		found = halos[i].state == INSTALLED ? i : -1;
+	if (found < 0)
+		out[0] = 0;
+	else
+		text_print(out, size, "%s\\maps", halos[found].path);
+}
+
+static void map_pack(struct halo *h)
+{
+	enum { BOTH, MULTIPLAYER, CAMPAIGN, REMOVE, BACK };
+	static struct pack_scan scan;
+	char stock[200], error[256], line[SCREEN_COLUMNS + 8];
+	int choices[5], count = 0, chosen = 0, b, k;
+
+	text_print(line, sizeof(line), "Maps: %s", h->path);
+	heading(line);
+	log_clear();
+	say("Looking at the maps in %s\\maps...", h->path);
+	stock_maps_folder(stock, sizeof(stock));
+	packs_scan(h->path, stock, &scan);
+	say("Multiplayer: %d maps Halo 1 Unlimited doesn't have%s.", scan.multiplayer,
+		scan.multiplayer_imported ? " (imported)" : "");
+	if (scan.campaign)
+		say("Campaign: %d level%s, modded%s.", scan.campaign, scan.campaign == 1 ? "" : "s",
+			scan.campaign_imported ? " (imported)" : "");
+	else
+		say("Campaign: none that isn't Halo's own.");
+	say_in(COLOUR_GREY, "Nothing is copied: the game plays them from this folder, which is left as it is. They go in "
+		"the map list as the pack \"%s\", and the campaign under the folder's name.", scan.key);
+	if (scan.multiplayer && scan.campaign)
+		choices[count++] = BOTH;
+	if (scan.multiplayer)
+		choices[count++] = MULTIPLAYER;
+	if (scan.campaign)
+		choices[count++] = CAMPAIGN;
+	if (scan.multiplayer_imported || scan.campaign_imported)
+		choices[count++] = REMOVE;
+	choices[count++] = BACK;
+	for (;;)
+	{
+		static char const *const labels[] = {"Import multiplayer and campaign", "Import multiplayer maps only",
+			"Import the campaign only", "Take out what's imported", "Back"};
+		for (k = 0; k < count; k++)
+		{
+			int r = SCREEN_ROWS - 2 - count + k, at;
+			int again = (choices[k] == BOTH && scan.multiplayer_imported && scan.campaign_imported) ||
+				(choices[k] == MULTIPLAYER && scan.multiplayer_imported) ||
+				(choices[k] == CAMPAIGN && scan.campaign_imported);
+			screen_row(r, k == chosen ? COLOUR_BAR : COLOUR_BLACK);
+			at = screen_text(r, 2, choices[k] == BACK ? COLOUR_GREY : COLOUR_GREEN, "%s", labels[choices[k]]);
+			if (again)
+				screen_text(r, at, COLOUR_GREY, " (again: replaces what's imported)");
+		}
+		screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
+		screen_text(SCREEN_ROWS - 1, 0, COLOUR_YELLOW, "A: choose   B: back");
+		screen_show();
+		b = wait_input();
+		if (b == UP && chosen > 0)
+			chosen--;
+		else if (b == DOWN && chosen + 1 < count)
+			chosen++;
+		else if (b == B || (b == A && choices[chosen] == BACK))
+			return;
+		else if (b == A)
+			break;
+	}
+	heading(line);
+	log_clear();
+	if (choices[chosen] == REMOVE)
+	{
+		packs_remove(&scan, 1, 1, packs_say);
+		say_in(COLOUR_GREEN, "Done. The pack's own folder wasn't touched.");
+	}
+	else if (packs_import(&scan, choices[chosen] != CAMPAIGN, choices[chosen] != MULTIPLAYER, packs_say, error))
+		say_in(COLOUR_RED, "%s", error);
+	else
+		say_in(COLOUR_GREEN, "Done: they're in the game's storage (E:\\TDATA\\" OWN_TITLE_FOLDER ").");
+	flush_drive("E:\\");
+	say_in(COLOUR_YELLOW, "B: back");
+	while (wait_input() != B)
+		;
+}
+
 #define LIST_TOP 3
 #define LIST_ROWS 16
 static int selected, first_shown;
@@ -1852,6 +1958,8 @@ static void show_list(void)
 			at += text_print(actions + at, sizeof(actions) - at, "X: retail Halo back   ");
 		if (ready(h) && h->state != MISSING)
 			at += text_print(actions + at, sizeof(actions) - at, "START: play   ");
+		if (can_import(h))
+			at += text_print(actions + at, sizeof(actions) - at, "WHITE: maps   ");
 		text_print(actions + at, sizeof(actions) - at, "B: dashboard");
 		screen_text(24, 0, COLOUR_YELLOW, "%s", actions);
 	}
@@ -2028,6 +2136,8 @@ int main(void)
 		}
 		else if (h && b == START && ready(h) && h->state != MISSING)
 			launch_halo(h);
+		else if (h && b == WHITE && can_import(h))
+			map_pack(h);
 		else if (b == Y && check_updates())
 		{
 			offer_installer_update();

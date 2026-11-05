@@ -33,6 +33,15 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
 3. **A** installs (or updates), **X** puts the retail Halo back, **START** plays what's in the folder, **Y** looks
    online for a newer package, **B** goes back to the dashboard. The d-pad or the left stick moves; the triggers
    move a page.
+4. **White** on another Halo (a modded one, a map pack: any folder that isn't an install of the game) imports its
+   maps into Halo 1 Unlimited, if you want them: it says how many multiplayer maps it has that the game doesn't
+   (Halo's own are left out) and whether its campaign is modded, and offers *multiplayer and campaign*,
+   *multiplayer maps only* or *the campaign only*, and *take out what's imported* once there's something. Nothing
+   is copied and the pack's folder isn't changed: the game plays its maps where they are. The multiplayer maps go
+   in the game's map list as a pack named after the folder ("Halo 1 - NHE": "NHE"), with their names, descriptions
+   and pictures from the pack's own `ui.map`; map sharing sends them to Xboxes that haven't got them. What's written
+   goes in the game's storage (`E:\TDATA\4c4a4855`, a few small files per map: `packs.c`). (The campaign is imported
+   for the campaign picker that's coming; the game doesn't show it yet.)
 
 ### Updates
 
@@ -128,6 +137,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `screen.c`, `screen.h` | the text screen, in colour, and the screen blanked while the next XBE starts |
 | `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
+| `packs.c`, `packs.h` | importing another Halo's maps (White): its maps' headers, names and pictures from its ui.map, its XBE's multiplayer level order |
 | `sha256.c`, `sha256.h` | SHA-256 |
 | `keys.txt` | the public keys it trusts (`keys.h` is made from it when it's built) |
 | `THIRD_PARTY.txt` | the notices of the code in its XBE, which it writes beside itself (`notices.h`, by `tools/mkembed.py`) |

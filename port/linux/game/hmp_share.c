@@ -407,6 +407,7 @@ static char *pack_dir(char *buf, int r, const char *key1, const char *file) {
 /* where the host reads a map's file from: the folder (in maps folder r), except a pack's series.bin (in the pack's folder) */
 static char *src_path(char *buf, int r, const char *folder, const char *file) {
     if (ieq(file, "series.bin") == 0 && pack_dir(buf, r, folder, file)) return buf;
+    if (ends_with(file, ".map") && hmp_maps_link_path((short)r, folder, buf, 128)) return buf;   /* (an imported pack's) */
     return mpath(buf, r, folder, 0, file);
 }
 /* free space where a download goes, bytes (capped at 4 GB; test_free_mb in mapshare.txt pretends) */

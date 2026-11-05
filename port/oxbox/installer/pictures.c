@@ -51,15 +51,8 @@ static void z_free(voidpf opaque, voidpf address)
 	free(address);
 }
 
-/* the bytes of a decompressed map wanted: [offset, offset + size) of the whole file (its header included) */
-struct map_range
-{
-	unsigned long offset, size;
-	unsigned char *data;
-};
-
-/* reads the map once, copying each range wanted; 0 when done */
-static int map_read(char const *path, struct map_range *ranges, int count, unsigned long *file_size, char *error)
+/* reads the map once, copying each range wanted (pictures.h); 0 when done */
+int map_read(char const *path, struct map_range *ranges, int count, unsigned long *file_size, char *error)
 {
 	FILE *file = fopen(path, "rb");
 	unsigned char *in = NULL, *out = NULL;
@@ -126,7 +119,8 @@ static int map_read(char const *path, struct map_range *ranges, int count, unsig
 			at = end;
 		}
 	}
-	if (status != Z_STREAM_END || at != *file_size)
+	/* (a modded ui.map's header can say a little more than it holds: the ranges wanted are what counts, below) */
+	if (status != Z_STREAM_END || at > *file_size || at + 65536 < *file_size)
 	{
 		text_print(error, 256, "%s didn't decompress (%lu of %lu bytes)", path, at, *file_size);
 		goto done;

@@ -24,6 +24,17 @@ from LOAD LEVEL, SELECT PROFILE, CHOOSE DIFFICULTY and ITEM OPTIONS. */
 (header: HEADER_COUNT * HEADER_SIZE bytes); 0 when done, else an error's text (error[256]) */
 int pictures_make(char const *ui_map_path, unsigned char *pictures, unsigned char *header, char *error);
 
+/* the bytes of a decompressed map wanted: [offset, offset + size) of the whole file (its header included) */
+struct map_range
+{
+	unsigned long offset, size;
+	unsigned char *data;
+};
+
+/* reads an Xbox map (zlib after its first 2048 bytes) once, copying each range wanted into its data; its whole size in
+*file_size. 0 when done, else an error's text (error[256]). (packs.c reads a map pack's ui.map with it too) */
+int map_read(char const *path, struct map_range *ranges, int count, unsigned long *file_size, char *error);
+
 /* (for the tool and the installer's progress) */
 typedef void (*pictures_progress_t)(char const *step);
 extern pictures_progress_t pictures_progress;

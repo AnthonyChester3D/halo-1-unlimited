@@ -755,6 +755,14 @@ static void cache_copy_initialize_file_data(
 		OPEN_EXISTING,
 		FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED,
 		NULL);
+#if defined(HALO_XBOX_TARGET)
+	if (self->source_file == INVALID_HANDLE_VALUE)
+	{
+		extern void platform_log(char const *format, ...);
+
+		platform_log("cache copy: couldn't open %s (error %lu)", self->src_name, (unsigned long)GetLastError());
+	}
+#endif
 	self->read_bytes_left = GetFileSize(self->source_file, NULL);
 	self->read_file_size = self->read_bytes_left;
 	self->async_read_bytes_left = self->read_bytes_left;
@@ -1630,9 +1638,32 @@ static void cache_copy_run_decompression(
 
 		/* port: a stream that ends before the size the header gives the map
 		is a bad file: the rest of the cache file would be taken for it */
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: but a map pack's tools rounded the header's size up to a whole sector (2048 bytes) past what they
+		compressed (NHE's maps): what's short of that, in the buffer being written, is zeros, as the retail game
+		took it (the last write is the rest of the size, from the buffer being written) */
+		if (zlib_result == Z_STREAM_END &&
+			zlib_stream->total_out < (uLong)(self->header.size - sizeof(self->header)) &&
+			(uLong)(self->header.size - sizeof(self->header)) - zlib_stream->total_out < 2048 &&
+			(uLong)(self->header.size - sizeof(self->header)) - zlib_stream->total_out <= zlib_stream->avail_out)
+		{
+			csmemset(zlib_stream->next_out, 0,
+				(uLong)(self->header.size - sizeof(self->header)) - zlib_stream->total_out);
+		}
+		else
+#endif
 		if (zlib_result == Z_STREAM_END &&
 			zlib_stream->total_out != (uLong)(self->header.size - sizeof(self->header)))
 		{
+#if defined(HALO_XBOX_TARGET)
+			{
+				extern void platform_log(char const *format, ...);
+
+				platform_log("cache copy: %s's data ended after %lu of %ld bytes (%lu left in the buffer)", self->src_name,
+					(unsigned long)zlib_stream->total_out, self->header.size - (long)sizeof(self->header),
+					(unsigned long)zlib_stream->avail_out);
+			}
+#endif
 			match_vassert(
 				"c:\\halo\\SOURCE\\cache\\cache_files_decompress_windows.c",
 				1248,
@@ -1665,6 +1696,14 @@ static void cache_copy_run_decompression(
 			if (cache_copy_stop_requested())
 				break;
 
+#if defined(HALO_XBOX_TARGET)
+			{
+				extern void platform_log(char const *format, ...);
+
+				platform_log("cache copy: %s didn't decompress (zlib %d after %lu bytes)", self->src_name, zlib_result,
+					(unsigned long)zlib_stream->total_out);
+			}
+#endif
 			match_vassert(
 				"c:\\halo\\SOURCE\\cache\\cache_files_decompress_windows.c",
 				1248,
