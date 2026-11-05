@@ -2235,6 +2235,56 @@ void network_game_client_ponged(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the games list's selected game pinged, with the client's ping that Halo never used: a ping a second to the
+game's host while the list is up (network_game_client_idle_searching), its pongs averaged (network_game_client_ponged,
+the last 8 or so). The host answers as ever (network_server_message_handler.c). A game listed online and not reached
+yet isn't pinged (not one of the client's: it has no address yet). The average in milliseconds, or -1: none yet */
+long network_game_client_ping_game(
+	void const *server)
+{
+	struct network_game_client *client = global_network_game_client_get();
+	struct network_advertised_game const *game = (struct network_advertised_game const *)server;
+	static byte nonce[8];
+	IN_ADDR in_addr;
+
+	if (!client)
+		return -1;
+	if (!game || client->state != _network_game_client_state_searching ||
+		game < client->available_games || game >= client->available_games + MAXIMUM_NETWORK_ADVERTISED_GAMES)
+	{
+		client->pinging = FALSE;
+		return -1;
+	}
+	if (!client->pinging || !transport_nonce_is_equal((byte *)game->nonce, nonce))
+	{
+		in_addr.s_addr = 0;
+		XNetXnAddrToInAddr((XNADDR const *)&game->xnaddr, (XNKID const *)&game->key_id, &in_addr);
+		if (!in_addr.s_addr)
+		{
+			client->pinging = FALSE;
+			return -1;
+		}
+		csmemcpy(nonce, game->nonce, sizeof(nonce));
+		csmemset(&client->ping_address, 0, sizeof(client->ping_address));
+		/* (in the transport's order, as transport_client_start's) */
+		client->ping_address.address.long_words[0] = (long)(
+			(in_addr.s_addr >> 24 & 0xFF) | (in_addr.s_addr >> 8 & 0xFF00) |
+			(in_addr.s_addr << 8 & 0xFF0000) | (in_addr.s_addr << 24 & 0xFF000000));
+		client->ping_address.address_length = IPV4_ADDRESS_LENGTH;
+		client->ping_address.port = NETWORK_GAME_SERVER_PORT;
+		client->ping_sample_count = 0;
+		client->average_ping = 0;
+		client->last_ping_time = 0;
+		client->pinging = TRUE;
+	}
+	/* (a running average of the last few: the next pong counts for an eighth) */
+	if (client->ping_sample_count > 7)
+		client->ping_sample_count = 7;
+	return client->ping_sample_count ? (long)client->average_ping : -1;
+}
+#endif
+
 boolean network_game_client_address_matches_server(
 	struct network_game_client *client,
 	struct transport_address *address)

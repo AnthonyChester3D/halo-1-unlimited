@@ -923,6 +923,14 @@ int oxbox_entry(int argc, char **argv, char **envp)
 		if (oxbox_overlay_zero[i][1] > oxbox_overlay_zero[i][0])
 			memset(oxbox_overlay_zero[i][0], 0, oxbox_overlay_zero[i][1] - oxbox_overlay_zero[i][0]);
 	oxbox_stage = 1;
+	/* (the game state and the tag cache, at their fixed addresses, before anything else takes memory, the log's
+	writer thread's stack and the file system's buffers among them: cache/physical_memory_map.c. Its lines wait in
+	the log's ring until the writer starts) */
+	{
+		void physical_memory_reserve_fixed(void);
+
+		physical_memory_reserve_fixed();
+	}
 	log_start_writer();
 #if defined(OXBOX_MEMPROF)
 	{

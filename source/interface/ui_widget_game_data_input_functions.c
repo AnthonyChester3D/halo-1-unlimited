@@ -1336,6 +1336,16 @@ static void server_list_menu_update(
 
 				message_text->parameters.text_box.string_list_index = 2;
 				message_text->visible = FALSE;
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox: the selected game's ping, a line under the rest (oxbox_games_ping_text_drawn) */
+				{
+					extern void oxbox_games_ping_select(struct widget_instance *panel, struct widget_instance *anchor,
+						struct widget_instance *above, void const *server);
+
+					oxbox_games_ping_select(widget->parameters.list.extended_description, score_limit_text,
+						number_of_players_text, server);
+				}
+#endif
 
 				if (!widget->focused_child)
 				{
@@ -1345,6 +1355,14 @@ static void server_list_menu_update(
 			}
 			else
 			{
+#if defined(HALO_XBOX_TARGET)
+				{
+					extern void oxbox_games_ping_select(struct widget_instance *panel, struct widget_instance *anchor,
+						struct widget_instance *above, void const *server);
+
+					oxbox_games_ping_select(NULL, NULL, NULL, NULL);
+				}
+#endif
 				game_type_bitmap->animation.current_frame_index =
 					_multiplayer_game_bitmap_unknown;
 				map_bitmap->animation.current_frame_index = 13;
@@ -4522,3 +4540,104 @@ static ui_widget_game_data_function game_data_input_function_list[41] =
 	warn_if_difficulty_will_nuke_saved_game,
 	dim_if_no_system_link_cable,
 };
+
+#if defined(HALO_XBOX_TARGET)
+/* ---------- oxbox: the games list's selected game's ping */
+
+/* a line under the selected game's details, "Ping: 23 ms", drawn as the panel's text boxes are (ui_widget.c's text box
+hook): "Ping:" with the labels (the panel's own text box, its font and color), a line below its last, and the number
+with the values (the score limit's number, its font and color) just right of it. The line step is the values' (the
+number of players' to the score limit's). The ping is network_client_manager.c's (network_game_client_ping_game): none
+yet, or a game listed online and not reached yet, has no line */
+long network_game_client_ping_game(void const *server);
+void rasterizer_draw_unicode_string(rectangle2d const *bounds, rectangle2d const *clip, point2d *cursor_reference,
+	short height_adjust, wchar_t const *string);
+
+static struct
+{
+	struct widget_instance *panel, *anchor, *above;
+	long ping;
+	boolean pinged;
+	short step, value_y0, value_height, value_x;
+	unsigned long drawn_time;
+} oxbox_games_ping;
+
+void oxbox_games_ping_select(
+	struct widget_instance *panel,
+	struct widget_instance *anchor,
+	struct widget_instance *above,
+	void const *server)
+{
+	oxbox_games_ping.panel = panel;
+	oxbox_games_ping.anchor = anchor;
+	oxbox_games_ping.above = above;
+	oxbox_games_ping.ping = network_game_client_ping_game(server);
+	oxbox_games_ping.pinged = server && oxbox_games_ping.ping >= 0;
+}
+
+/* (a string drawn starting at x, whatever the font's justification) */
+static void oxbox_games_ping_draw(
+	wchar_t const *string,
+	short x,
+	short y0,
+	short height,
+	rectangle2d *drawn)
+{
+	rectangle2d line, cursor;
+
+	line.x0 = x;
+	line.x1 = (short)(x + 400);
+	line.y0 = y0;
+	line.y1 = (short)(y0 + height);
+	draw_unicode_string_compute_bounds(&line, string, drawn, &cursor);
+	line.x0 = (short)(line.x0 + x - drawn->x0);
+	line.x1 = (short)(line.x1 + x - drawn->x0);
+	rasterizer_draw_unicode_string(&line, NULL, NULL, 0, string);
+	drawn->x1 = (short)(drawn->x1 + x - drawn->x0);
+	drawn->x0 = x;
+}
+
+void oxbox_games_ping_text_drawn(
+	struct widget_instance *widget,
+	rectangle2d const *bounds)
+{
+	wchar_t text[16];
+	rectangle2d drawn;
+
+	if (!widget || !oxbox_games_ping.panel || !oxbox_games_ping.pinged)
+		return;
+	if (widget == oxbox_games_ping.above)
+	{
+		oxbox_games_ping.value_y0 = bounds->y0;
+		return;
+	}
+	if (widget == oxbox_games_ping.anchor)
+	{
+		oxbox_games_ping.step = (short)(bounds->y0 - oxbox_games_ping.value_y0);
+		oxbox_games_ping.value_y0 = (short)(bounds->y0 + oxbox_games_ping.step);
+		oxbox_games_ping.value_height = (short)(bounds->y1 - bounds->y0);
+		/* (the number: where the label's drawing put it last frame) */
+		if (oxbox_games_ping.step > 0 && oxbox_games_ping.value_x &&
+			system_milliseconds() - oxbox_games_ping.drawn_time < 250)
+		{
+			usnprintf(text, NUMBEROF(text) - 1, L"%ld ms", oxbox_games_ping.ping);
+			text[NUMBEROF(text) - 1] = 0;
+			oxbox_games_ping_draw(text, oxbox_games_ping.value_x, oxbox_games_ping.value_y0,
+				oxbox_games_ping.value_height, &drawn);
+		}
+		return;
+	}
+	/* the labels: the panel's own text box, drawn after the values */
+	if (widget->parent == oxbox_games_ping.panel && oxbox_games_ping.step > 0 &&
+		widget->parameters.text_box.text && widget->parameters.text_box.text[0])
+	{
+		rectangle2d labels, cursor;
+
+		/* (from where the labels' first letter starts) */
+		draw_unicode_string_compute_bounds(bounds, widget->parameters.text_box.text, &labels, &cursor);
+		oxbox_games_ping_draw(L"Ping:", labels.x0, oxbox_games_ping.value_y0, oxbox_games_ping.value_height, &drawn);
+		oxbox_games_ping.value_x = (short)(drawn.x1 + 6);
+		oxbox_games_ping.drawn_time = system_milliseconds();
+	}
+}
+#endif

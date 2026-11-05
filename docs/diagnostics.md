@@ -11,6 +11,7 @@ and oxbox_entry.c:
 | `checkpoint: ...` | each checkpoint saved, each revert, and maps that save none (they lend that memory to the textures) | none |
 | `crash: exception <code> at <address>`, registers, `crash: stack ...` | a crash (the exception handler around main) | none |
 | `halt: stack ...` | the game halting on an error | none |
+| `memory: the tag cache (...) couldn't be had: N blocks of 64 KB taken; trying again` | start-up: the game state's or tag cache's fixed memory was taken (seen once in xemu), with the taken blocks; tried again for up to 2 s | none |
 | `pools: <pool> used/max ...` | every 10 s of a map, with opence.ini `log_pools = 1` | off: one test a frame; on: 1.5 KB and a walk of the pools every 10 s |
 
 Memory: the code and its tables take about 5 KB of the image (measured in xemu on Precipice: 644 KB free in v1.89,
