@@ -93,8 +93,28 @@ is the reference: a pack built against stock.shared with `--stock <the stock map
   so in the log.
 - A stock map in the maps folder may draw on stock.shared too.
 - **Map sharing**: the map's identity is its standalone build's (the reference's 0x30 and 0x34), so a console with the
-  shared build and one with the standalone build play together without a download. Sending shared files isn't done
-  yet.
+  shared build and one with the standalone build play together without a download. A copy whose shared files aren't
+  all here has no identity: it can't load, so it's treated as missing.
+
+## Map sharing
+
+A console joining a game on a map it hasn't asks the host for it (TCP 5152, version 7), and a map drawing on shared files
+takes three steps:
+
+1. The host answers `REP_SHARED`: the shared files' names and versions (checksum and file_length) and the sizes of the
+   map's files. Nothing is sent yet.
+2. **A pack's file** the console lacks in that exact version comes first, as a download of its own: resumable, its blocks
+   CRC-checked like a map's, its header checked against the version named, then put in the folder above the map's. It
+   only ever sends the file the hosted map names, and never one called `stock`.
+3. **The map**, as for any other. A console whose copy lacked only the shared file is the same build now and gets no map.
+
+A pack's file is named for its version (`<pack>-<8 hex of its checksum>.shared`), so two versions of a pack sit side by
+side. **`stock.shared` is never sent**: every console builds its own from its own maps. One without it, or with another
+version, stays in the lobby with `No stock.shared: run the installer`, as one with no room for a map does.
+
+The room asked for, and what KEEP DOWNLOADS UNDER counts for the map that fetched it, include the pack's file. When a
+map is deleted, or replaced by a copy that doesn't use it, its pack's file goes too if no other map in the list draws on
+it. A replaced copy kept as `.hmp_prev` keeps its file while it stays, and that copy's deletion doesn't look for it.
 
 ## The installer
 
@@ -128,6 +148,5 @@ Tested in xemu (v1.94): Blood Gulch from stock.shared; CEX's Abyss from CEX.shar
 
 ## Not yet
 
-- Map sharing sending shared files.
 - Shared tag data (loaded into memory at a fixed address): much harder, and only safe when every map loading it uses
   all of it.
