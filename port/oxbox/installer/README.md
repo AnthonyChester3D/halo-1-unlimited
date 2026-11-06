@@ -34,10 +34,11 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
    online for a newer package, **B** goes back to the dashboard. The d-pad or the left stick moves; the triggers
    move a page.
 
-   After an install it offers to save about 190 MB: the 13 multiplayer maps can share one file, `stock.shared`, for
-   their textures and sounds. It takes a while, and needs about 205 MB free while it works. Retail Halo can't play
-   the maps that way, so **X** puts the exact originals back first (it needs about 300 MB free for that; without it
-   nothing changes). Only retail maps are swapped; a folder with other maps is left as it is.
+   After an install it offers to save about 850 MB: the 13 multiplayer maps and 10 campaign levels can share one file,
+   `stock.shared`, for their textures and sounds. It takes a while, and needs about 1.6 GB free while it works. Retail
+   Halo can't play the maps that way, so **X** puts the exact originals back first (it needs about 1 GB free for that;
+   without it nothing changes). Only retail maps are swapped, and all 23 must be there; a folder with other maps is left
+   as it is.
 4. **White** on another Halo (a modded one, a map pack: any folder that isn't an install of the game) imports its
    maps into Halo 1 Unlimited, if you want them: it says how many multiplayer maps it has that the game doesn't
    (Halo's own are left out) and whether its campaign is modded, and offers *multiplayer and campaign*,
@@ -88,7 +89,7 @@ What it changes in the Halo folder:
 | `default.xbe` | OpenCE, made from the retail XBE |
 | `default_retail.xbe` | the retail XBE, kept as it was (from `default.xbe` on the first install) |
 | `default_old.xbe` | an XBE that was there and that the installer didn't make (a modified Halo), kept |
-| `maps\<the 13 multiplayer maps>.map`, `maps\stock.shared`, `maps\stock.restore` | if you take the offer: the small maps, what they share, and how to put the originals back ([docs/shared_maps.md](../../../docs/shared_maps.md)) |
+| `maps\<the 23 retail maps>.map`, `maps\stock.shared`, `maps\stock.index`, `maps\stock.restore` | if you take the offer: the small maps, what they share, and how to put the originals back ([docs/shared_maps.md](../../../docs/shared_maps.md)) |
 
 And in its own folder: `installer_log.txt` (what it did), `installer_last.txt` (the last install's folder),
 `opence_old.oxpk` (the package a download replaced), `installer_old.xbe` (the installer an update replaced),
@@ -143,6 +144,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `screen.c`, `screen.h` | the text screen, in colour, and the screen blanked while the next XBE starts |
 | `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
+| `stockmaps_table.h` | the retail maps' sizes and CRCs and which levels' blocks go in stock.shared (made by `tools/gen_stock_table.py`) |
 | `stockmaps.c`, `stockmaps.h` | the stock maps swapped for small ones drawing on stock.shared, and put back exactly |
 | `packs.c`, `packs.h` | importing another Halo's maps (White): its maps' headers, names and pictures from its ui.map, its XBE's multiplayer level order |
 | `sha256.c`, `sha256.h` | SHA-256 |

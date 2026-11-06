@@ -43,7 +43,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 23
+#define INSTALLER_VERSION 24
 #endif
 __attribute__((used)) static struct
 {
@@ -1417,7 +1417,7 @@ static int install(struct halo *h)
 	return 0;
 }
 
-/* ---- the stock maps (stockmaps.c): a whole map is in memory, so the package is let go while it works ---- */
+/* ---- the stock maps (stockmaps.c): the package is let go while it works, for its 17 MB of a map's tags and more ---- */
 
 static void package_read(void);
 
@@ -1426,7 +1426,7 @@ static void stock_maps_say(int warning, char const *text)
 	say_in(warning ? COLOUR_YELLOW : COLOUR_WHITE, "%s", text);
 }
 
-/* (for the log: a map takes 46 MiB of the console's 64) */
+/* (for the log: what it has to work with) */
 static void log_memory(void)
 {
 	MM_STATISTICS statistics;
@@ -1443,7 +1443,7 @@ static int stock_maps_restore(struct halo *h)
 {
 	char error[256];
 	int failed, b;
-	say("This puts the retail stock maps back too: it takes a while, and needs room for them.");
+	say("This puts the retail maps back too: it takes a while, and needs room for them (about 1 GB more than now).");
 	say_in(COLOUR_GREY, "(A map pack that draws on stock.shared needs it: installing here again remakes it.)");
 	say_in(COLOUR_YELLOW, "A: go on   B: leave everything as it is");
 	while ((b = wait_input()) != A && b != B)
@@ -1464,7 +1464,7 @@ static int stock_maps_restore(struct halo *h)
 		say("The retail XBE wasn't put back: this folder still plays Halo 1 Unlimited.");
 		return 1;
 	}
-	say("  stock maps back, each checked against the original's size and CRC");
+	say("  maps back, each checked against the original's size and CRC");
 	return 0;
 }
 
@@ -1477,8 +1477,9 @@ static void offer_stock_maps(struct halo *h)
 	stockmaps_examine(h->path, &h->stock);
 	if (h->stock.small || h->stock.retail_sized != STOCK_MAPS)
 		return;
-	say("Save about 190 MB? The 13 multiplayer maps can share one file, stock.shared, for their textures and sounds.");
-	say("It takes a while: perhaps 15 minutes.");
+	say("Save about 850 MB? The 23 multiplayer and campaign maps can share one file, stock.shared, for their textures and "
+		"sounds.");
+	say("It takes a while: perhaps an hour. It needs about 1.6 GB free while it works.");
 	say("Retail Halo can't play them that way: X in this installer puts the exact originals back.");
 	say_in(COLOUR_YELLOW, "A: do it   B: not now");
 	while ((b = wait_input()) != A && b != B)
@@ -1491,7 +1492,7 @@ static void offer_stock_maps(struct halo *h)
 	if (stockmaps_convert(h->path, stock_maps_say, error))
 		say_in(COLOUR_YELLOW, "%s", error);
 	else
-		say_in(COLOUR_GREEN, "Done: the stock maps are small now (stock.shared holds their textures and sounds).");
+		say_in(COLOUR_GREEN, "Done: the maps are small now (stock.shared holds what they share).");
 	package_read();
 }
 

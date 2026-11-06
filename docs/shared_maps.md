@@ -1,7 +1,8 @@
 # Shared files: maps that store their textures and sounds once
 
 For Halo Map Porter (and anything else that writes maps for Halo 1 Unlimited on the Xbox). Format version 2, game
-build v1.94 (version 1 maps, from v1.93, still load).
+build v1.97 (version 1 maps, from v1.93, still load). **stock.shared changed in v1.97**: packs built against the earlier
+one (checksum `c028f8bf`) must be rebuilt.
 
 A map can keep its textures' and sounds' data in **shared files** instead of in itself, so maps that use the same data
 store it once. Only that data moves: the map keeps its tag data, BSPs and everything else, so shared files cost no
@@ -10,12 +11,13 @@ memory while playing (textures and sounds are read from them as they're needed, 
 A map draws on up to two:
 
 - **its pack's** `<name>.shared`: data two or more of the pack's maps use;
-- **`stock.shared`**: every texture and sound of the 13 stock multiplayer maps, built by the Halo 1 Unlimited
-  installer from the player's own disc (and by this repo's tool from the same maps: the layout is fixed, below). Every
-  player has it, so a pack never carries stock content.
+- **`stock.shared`**: every texture and sound of the 13 stock multiplayer maps, and those of the stock campaign that three
+  levels or more use, built by the Halo 1 Unlimited installer from the player's own disc (and by this repo's tool from the
+  same maps: the layout is fixed, below). Every player has it, so a pack never carries stock content.
 
-Measured: the stock maps go from 269 MB to 78 MB (each 2.7-4 MB, stock.shared 41 MB); 33-60 MB of each of HMP's packs
-is stock content.
+Measured on the retail maps: the 23 maps (13 multiplayer, 10 campaign) go from 1761 MiB to 926 MiB, with stock.shared 228 MiB
+of that (238.7 MB, within the 278 MiB limit). The levels draw 1137 MB from it. Data two levels use would make it 329 MB:
+too big, so it stays in the levels. 33-60 MB of each of HMP's packs is stock multiplayer content.
 
 ## A shared file
 
@@ -33,9 +35,14 @@ A cache file exactly like an Xbox map, with no tags:
 | checksum (0x064) | CRC32 of everything after the header, unpacked: the maps name the version they were built against with it |
 | footer (0x7FC) | `'foot'` (bytes `toof`) |
 
-After the 2048-byte header, the rest of the file compressed as a map's is (one zlib stream), the file padded with zeros
-to a whole 2048-byte sector. Give each block the same offset remainder modulo 512 as it had in its map (the game reads
-whole sectors).
+After the 2048-byte header, the rest of the file either as it is, or compressed as a map's is (one zlib stream); the file
+padded with zeros to a whole 2048-byte sector. Give each block the same offset remainder modulo 512 as it had in its map
+(the game reads whole sectors).
+
+**Unpacked is read where it is**: when the file's size is its file_length, the game reads it from the disk with no copy, no
+wait and no cache file. stock.shared is always this way. It's worth doing for a big pack's file too: the campaign's two
+big cache files are needed for the level being left and the next, so a packed shared file is only workable beside a level
+that fits a smaller one.
 
 **Where it goes**: beside the map, or in the folder above the map's folder (a pack's folder holding its maps' folders,
 or `maps\` itself); `stock.shared` may also be in the game's maps folder. The game looks in that order.
@@ -64,7 +71,7 @@ or `maps\` itself); `stock.shared` may also be in the game's maps folder. The ga
 
 3. **Leave the moved data out** of the map: lay the map out again without it, moving the offsets of what stays down
    (the header's tag_data_offset, each BSP's file offset in the scenario's structure_bsp_references, and the textures
-   and sounds that stay). A map must fit a multiplayer cache file unpacked (47 MiB). The tool drops every 2048-byte
+   and sounds that stay). A map drawing on a packed shared file must fit a multiplayer cache file unpacked (47 MiB). The tool drops every 2048-byte
    sector made wholly of moved data, so what stays keeps its alignment, and zeroes the rest of the moved bytes.
 
 **Rules for a pack's pass**: only data used by two or more of its maps goes into its shared file (data one map uses
@@ -73,25 +80,33 @@ stock.shared is taken from there, never put in the pack's file.
 
 ## stock.shared's layout
 
-Fixed, so every console and every PC building it from the same maps gets the same file (checksum `c028f8bf`, file_length
-78260224 from the retail maps): the 13 stock multiplayer maps (`beavercreek`, `bloodgulch`, `boardingaction`,
-`carousel`, `chillout`, `damnation`, `hangemhigh`, `longest`, `prisoner`, `putput`, `ratrace`, `sidewinder`, `wizard`)
-in the order of their file names, lower case; in each, the tags in tag index order; a bitmap's bitmap_datas in block order, a sound's pitch ranges'
-permutations in block order; each block's first copy (the same bytes and offset remainder modulo 512) placed after the
-last, padded with zeros up to its remainder modulo 512; the file padded to a whole sector. `port/oxbox/tools/shared_pass.py`
-is the reference: a pack built against stock.shared with `--stock <the stock maps' folder>` lays it out the same way.
+Fixed, so every console and every PC building it from the same maps gets the same file (checksum `a7fe2f70`, file_length
+238745600 from the retail maps, the same on the three NTSC discs): first the 13 stock multiplayer maps (`beavercreek`,
+`bloodgulch`, `boardingaction`, `carousel`, `chillout`, `damnation`, `hangemhigh`, `longest`, `prisoner`, `putput`,
+`ratrace`, `sidewinder`, `wizard`) in the order of their file names, lower case; then the 10 campaign levels (`a10`, `a30`,
+`a50`, `b30`, `b40`, `c10`, `c20`, `c40`, `d20`, `d40`), only their blocks that three levels or more use (the same bytes and
+offset remainder modulo 512, counted once per level). In each, the tags in tag index order; a bitmap's bitmap_datas in block
+order, a sound's pitch ranges' permutations in block order; each block's first copy placed after the last, padded with zeros
+up to its remainder modulo 512; the file padded to a whole sector. So a block's place from the 13 maps is what it was in
+v1.94-v1.96. `port/oxbox/tools/shared_pass.py` is the reference: a pack built against stock.shared with `--stock <the folder
+of those 23 maps>` lays it out the same way.
+
+**`maps\stock.index`** lists every block for matching a pack's against it without reading stock.shared: `OXSI`, a version (1),
+the count, stock.shared's checksum and file_length (each 4 bytes), then per block its SHA-256 (32 bytes), its place in
+stock.shared and its size (4 bytes each). A block matches when its bytes' hash is the same and its offset modulo 512 is
+the place's.
 
 ## What the game does
 
-- Loading a map with a reference: each shared file it draws on is copied into a campaign cache file first (once per
-  launch; the next map drawing on it finds it there), then the map. They stay cached while it plays. (The two
-  campaign cache files hold the two shared files; the map then goes in a multiplayer one.)
-- A shared file that's missing, or cached in another version (checksum or length different), is copied again; one
+- Loading a map with a reference: a shared file stored unpacked is opened where it is. A packed one is copied into a
+  campaign cache file first (once per launch; the next map drawing on it finds it there), then the map, and stays cached
+  while it plays.
+- A packed shared file that's missing, or cached in another version (checksum or length different), is copied again; one
   that can't be found fails the map's load with the log line `shared: <map> draws on <name>.shared, which is neither
   beside it nor in the folder above`.
 - A read past a shared file's end, or from one the map doesn't name, fails (the texture or sound doesn't load) and says
   so in the log.
-- A stock map in the maps folder may draw on stock.shared too.
+- A stock map or campaign level in the maps folder may draw on stock.shared too.
 - **Map sharing**: the map's identity is its standalone build's (the reference's 0x30 and 0x34), so a console with the
   shared build and one with the standalone build play together without a download. A copy whose shared files aren't
   all here has no identity: it can't load, so it's treated as missing.
@@ -124,15 +139,16 @@ unaffected: they get Custom Edition maps through `map_share.c`, and a PC game st
 
 ## The installer
 
-After an install (never in the game's own updates) the installer offers to swap a Halo folder's 13 stock maps for small
-ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 190 MB
-saved). Only the retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is
-the same file. All 24 maps are byte-identical on the three NTSC discs (the original, Rev 1 and Rev 2), and stock.shared and
+After an install (never in the game's own updates) the installer offers to swap a Halo folder's 23 stock maps for small
+ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 850 MB
+saved). It needs all 23: a folder without them isn't offered it, since stock.shared couldn't be the same file. Only the
+retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is the same file. All 24 maps are byte-identical on the three NTSC discs (the original, Rev 1 and Rev 2), and stock.shared and
 the small maps built from each compare equal: the three builds need no table of their own. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
 
 **X** (*retail Halo back*) puts them back, the exact files: `maps\stock.restore` holds each map's restore table (its
-header, each moved block's place and its place in stock.shared, its BSPs' offsets, and the original file's size and
-CRC), and retail maps recompress to their own bytes with zlib level 6, memLevel 8. The stock maps come back before the
+header, each block's place, and for a moved one its place in stock.shared, its BSPs' offsets, and the original file's size
+and CRC), and retail maps recompress to their own bytes with zlib level 6, memLevel 8. A level unpacks to as much as 280 MB
+and a console has 64: nothing here holds a whole map, it goes through a temporary file a piece at a time. The stock maps come back before the
 retail XBE does: if there's no room for them, nothing changes, and the folder still plays Halo 1 Unlimited. stock.shared
 goes with them, so a map pack drawing on it needs another install's offer to play again.
 
@@ -140,7 +156,7 @@ Nothing is touched until everything is built and proved on that console: each re
 bytes, each small map is restored from the files on the disk and checked against the original's CRC, and stock.shared
 and the table are read back. A power cut can't lose a map: before `stock.restore` goes in place the retail maps are
 untouched and the leftovers (`stock.unpacked`, `*.oxtmp`, `*.oxnew`) are deleted; after it, the next look at the folder
-finishes the swap. It needs about 205 MB free for a while; putting the maps back needs about 300 MB.
+finishes the swap. It needs about 1.6 GB free for a while; putting the maps back needs about 1 GB.
 
 ## Tools
 
@@ -148,8 +164,10 @@ finishes the swap. It needs about 205 MB free for a while; putting the maps back
 
 `port/oxbox/tools/shared_pass.py`:
 
-- `shared_pass.py stock OUT_DIR STOCK_MAP...`: stock.shared and the stock maps drawing on it.
+- `shared_pass.py stock OUT_DIR STOCK_MAP... [--levels LEVEL...]`: stock.shared and the stock maps drawing on it.
 - `shared_pass.py [--stock STOCK_MAPS_DIR] NAME OUT_DIR MAP...`: a pack's NAME.shared and its maps.
+
+`port/oxbox/tools/gen_stock_table.py RETAIL_MAPS_DIR OUT.h`: the installer's table.
 
 Tested in xemu (v1.94): Blood Gulch from stock.shared; CEX's Abyss from CEX.shared and stock.shared together.
 

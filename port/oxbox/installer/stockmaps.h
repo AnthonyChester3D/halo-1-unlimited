@@ -1,9 +1,9 @@
-/* stockmaps.h: Halo's 13 multiplayer maps in a Halo folder swapped for small maps drawing on stock.shared, built from
+/* stockmaps.h: Halo's 23 maps in a Halo folder (13 multiplayer, 10 campaign) swapped for small maps drawing on stock.shared, built from
 the player's own maps, and put back exactly (stockmaps.c; docs/shared_maps.md) */
 #ifndef OXBOX_STOCKMAPS_H
 #define OXBOX_STOCKMAPS_H
 
-#define STOCK_MAPS 13
+#define STOCK_MAPS 23
 
 /* what it's doing, for the installer's log */
 typedef void (*stockmaps_say_t)(int warning, char const *text);
@@ -13,7 +13,7 @@ extern void (*stockmaps_flush_drive)(char const *path);
 
 struct stockmaps_look
 {
-	int retail_sized;              /* of the 13, how many are there with a retail map's file size */
+	int retail_sized;              /* of the 23, how many are there with a retail map's file size */
 	int small;                     /* how many draw on stock.shared */
 	int restorable;                /* maps\stock.restore and maps\stock.shared are there */
 };
