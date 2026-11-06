@@ -33,6 +33,11 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
 3. **A** installs (or updates), **X** puts the retail Halo back, **START** plays what's in the folder, **Y** looks
    online for a newer package, **B** goes back to the dashboard. The d-pad or the left stick moves; the triggers
    move a page.
+
+   After an install it offers to save about 190 MB: the 13 multiplayer maps can share one file, `stock.shared`, for
+   their textures and sounds. It takes a while, and needs about 205 MB free while it works. Retail Halo can't play
+   the maps that way, so **X** puts the exact originals back first (it needs about 300 MB free for that; without it
+   nothing changes). Only retail maps are swapped; a folder with other maps is left as it is.
 4. **White** on another Halo (a modded one, a map pack: any folder that isn't an install of the game) imports its
    maps into Halo 1 Unlimited, if you want them: it says how many multiplayer maps it has that the game doesn't
    (Halo's own are left out) and whether its campaign is modded, and offers *multiplayer and campaign*,
@@ -83,6 +88,7 @@ What it changes in the Halo folder:
 | `default.xbe` | OpenCE, made from the retail XBE |
 | `default_retail.xbe` | the retail XBE, kept as it was (from `default.xbe` on the first install) |
 | `default_old.xbe` | an XBE that was there and that the installer didn't make (a modified Halo), kept |
+| `maps\<the 13 multiplayer maps>.map`, `maps\stock.shared`, `maps\stock.restore` | if you take the offer: the small maps, what they share, and how to put the originals back ([docs/shared_maps.md](../../../docs/shared_maps.md)) |
 
 And in its own folder: `installer_log.txt` (what it did), `installer_last.txt` (the last install's folder),
 `opence_old.oxpk` (the package a download replaced), `installer_old.xbe` (the installer an update replaced),
@@ -137,12 +143,13 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `screen.c`, `screen.h` | the text screen, in colour, and the screen blanked while the next XBE starts |
 | `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
+| `stockmaps.c`, `stockmaps.h` | the stock maps swapped for small ones drawing on stock.shared, and put back exactly |
 | `packs.c`, `packs.h` | importing another Halo's maps (White): its maps' headers, names and pictures from its ui.map, its XBE's multiplayer level order |
 | `sha256.c`, `sha256.h` | SHA-256 |
 | `keys.txt` | the public keys it trusts (`keys.h` is made from it when it's built) |
 | `THIRD_PARTY.txt` | the notices of the code in its XBE, which it writes beside itself (`notices.h`, by `tools/mkembed.py`) |
 | `text.h` | snprintf that always ends its text (nxdk's PDCLib doesn't when it cuts it short) |
-| `mkpictures.c`, `oxpatch.c` | the PC tools |
+| `mkpictures.c`, `oxpatch.c`, `stockmaps_test.c` (`stockmaps_host.h`) | the PC tools |
 
 ### Signing releases (the project's owner)
 

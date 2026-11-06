@@ -5,7 +5,7 @@ of Halo's art is in the installer or the package.
 
 The list shows every Halo it finds: the ones it can install to first, in green; the others in grey.
 	A      install (or update) OpenCE in the folder chosen
-	X      put the retail Halo back (from default_retail.xbe)
+	X      put the retail Halo back (from default_retail.xbe), and its stock maps (stockmaps.c)
 	Y      look online for a newer package (download.c: the project's latest release)
 	START  play what's in the folder (green ones only)
 	WHITE  import a map pack's maps into Halo 1 Unlimited (another Halo's folder: packs.c), or take them out
@@ -34,6 +34,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #include "pictures.h"
 #include "screen.h"
 #include "sha256.h"
+#include "stockmaps.h"
 #include "text.h"
 
 #include "keys.h"
@@ -42,7 +43,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 22
+#define INSTALLER_VERSION 23
 #endif
 __attribute__((used)) static struct
 {
@@ -489,6 +490,7 @@ struct halo
 	int patched;                      /* that retail XBE is a disc's patched for media or regions */
 	int backup_in_the_way;            /* default_retail.xbe is there and isn't a retail Halo it knows */
 	int opence, up_to_date;
+	struct stockmaps_look stock;      /* its 13 multiplayer maps: retail, or small ones drawing on stock.shared */
 	char note[40];
 	char detail[2][SCREEN_COLUMNS + 1];
 };
@@ -669,6 +671,18 @@ static int from_device(char const *device, char *path, size_t size)
 	return 0;
 }
 
+/* the folder's stock maps are small ones this can put back */
+static int stock_maps_back(struct halo const *h)
+{
+	return h->stock.small && h->stock.restorable;
+}
+
+/* X does something here: the retail XBE, the retail stock maps, or both */
+static int can_restore(struct halo const *h)
+{
+	return h->state == INSTALLED || h->state == OTHER || h->state == MISSING || stock_maps_back(h);
+}
+
 static void examine(struct halo *h)
 {
 	char main[200], backup[200];
@@ -691,6 +705,7 @@ static void examine(struct halo *h)
 		backup_retail = r.xbe, backup_patched = r.patch.patched;
 		retail_free(&r);
 	}
+	stockmaps_examine(h->path, &h->stock);
 	h->opence = main_head.opence;
 	h->up_to_date = 0;
 	h->backup_in_the_way = backup_head.present && !backup_retail;
@@ -724,6 +739,11 @@ static void examine(struct halo *h)
 		text_print(h->detail[0], sizeof(h->detail[0]), "default.xbe: retail %s%s.", h->retail->name,
 			h->patched ? ", region/media patched" : "");
 		text_print(h->detail[1], sizeof(h->detail[1]), "A installs OpenCE (keeping it as default_retail.xbe).");
+		if (stock_maps_back(h))
+		{
+			text_print(h->note, sizeof(h->note), "retail Halo, small stock maps");
+			text_print(h->detail[1], sizeof(h->detail[1]), "X puts the retail stock maps back: retail Halo needs them.");
+		}
 		break;
 	case INSTALLED:
 		text_print(h->note, sizeof(h->note), h->up_to_date ? "OpenCE (this package's)" : "OpenCE (another build)");
@@ -758,6 +778,8 @@ static void examine(struct halo *h)
 				"default.xbe isn't a retail Halo XBE this package knows (from a disc).");
 			text_print(h->detail[1], sizeof(h->detail[1]),
 				"To install here, copy your disc's default.xbe in as default_retail.xbe.");
+			if (stock_maps_back(h))
+				text_print(h->detail[1], sizeof(h->detail[1]), "X puts the retail stock maps back.");
 		}
 	}
 }
@@ -1395,6 +1417,84 @@ static int install(struct halo *h)
 	return 0;
 }
 
+/* ---- the stock maps (stockmaps.c): a whole map is in memory, so the package is let go while it works ---- */
+
+static void package_read(void);
+
+static void stock_maps_say(int warning, char const *text)
+{
+	say_in(warning ? COLOUR_YELLOW : COLOUR_WHITE, "%s", text);
+}
+
+/* (for the log: a map takes 46 MiB of the console's 64) */
+static void log_memory(void)
+{
+	MM_STATISTICS statistics;
+	char line[64];
+	statistics.Length = sizeof(statistics);
+	if (NT_SUCCESS(MmQueryStatistics(&statistics)))
+	{
+		text_print(line, sizeof(line), "(memory free: %lu KB)", statistics.AvailablePages * 4);
+		log_file(line);
+	}
+}
+
+static int stock_maps_restore(struct halo *h)
+{
+	char error[256];
+	int failed, b;
+	say("This puts the retail stock maps back too: it takes a while, and needs room for them.");
+	say_in(COLOUR_GREY, "(A map pack that draws on stock.shared needs it: installing here again remakes it.)");
+	say_in(COLOUR_YELLOW, "A: go on   B: leave everything as it is");
+	while ((b = wait_input()) != A && b != B)
+		;
+	if (b == B)
+	{
+		say("Nothing changed.");
+		return 1;
+	}
+	stockmaps_flush_drive = flush_drive;
+	package_free(&package);
+	log_memory();
+	failed = stockmaps_restore(h->path, stock_maps_say, error);
+	package_read();
+	if (failed)
+	{
+		say_in(COLOUR_RED, "%s", error);
+		say("The retail XBE wasn't put back: this folder still plays Halo 1 Unlimited.");
+		return 1;
+	}
+	say("  stock maps back, each checked against the original's size and CRC");
+	return 0;
+}
+
+/* after an install, by hand (the game's updater never asks): the retail stock maps swapped for small ones, if the
+player wants. A failure changes nothing: the retail maps play as they did */
+static void offer_stock_maps(struct halo *h)
+{
+	char error[256];
+	int b;
+	stockmaps_examine(h->path, &h->stock);
+	if (h->stock.small || h->stock.retail_sized != STOCK_MAPS)
+		return;
+	say("Save about 190 MB? The 13 multiplayer maps can share one file, stock.shared, for their textures and sounds.");
+	say("It takes a while: perhaps 15 minutes.");
+	say("Retail Halo can't play them that way: X in this installer puts the exact originals back.");
+	say_in(COLOUR_YELLOW, "A: do it   B: not now");
+	while ((b = wait_input()) != A && b != B)
+		;
+	if (b == B)
+		return;
+	stockmaps_flush_drive = flush_drive;
+	package_free(&package);
+	log_memory();
+	if (stockmaps_convert(h->path, stock_maps_say, error))
+		say_in(COLOUR_YELLOW, "%s", error);
+	else
+		say_in(COLOUR_GREEN, "Done: the stock maps are small now (stock.shared holds their textures and sounds).");
+	package_read();
+}
+
 static int restore(struct halo *h)
 {
 	char main[200], backup[200], line[SCREEN_COLUMNS + 8];
@@ -1405,6 +1505,16 @@ static int restore(struct halo *h)
 	heading(line);
 	log_clear();
 	say("Putting the retail Halo back in %s", h->path);
+	/* the stock maps first: if they can't come back, the game that plays them stays */
+	if (stock_maps_back(h) && stock_maps_restore(h))
+		return 1;
+	if (h->stock.small && !h->stock.restorable)
+		say_in(COLOUR_YELLOW, "(The stock maps draw on stock.shared, with no restore table: they stay as they are.)");
+	if (h->state != INSTALLED && h->state != OTHER && h->state != MISSING)
+	{
+		say_in(COLOUR_GREEN, "Done: the retail stock maps are back.");
+		return 0;
+	}
 	if (retail_read(backup, &r) || r.xbe != h->retail)
 	{
 		say_in(COLOUR_RED, "default_retail.xbe couldn't be read, or changed: look again.");
@@ -1955,8 +2065,9 @@ static void show_list(void)
 		if (ready(h))
 			at += text_print(actions + at, sizeof(actions) - at, "A: %s   ", h->state == INSTALLED ?
 				(h->up_to_date ? "install again" : "update") : "install");
-		if (h->state == INSTALLED || h->state == OTHER || h->state == MISSING)
-			at += text_print(actions + at, sizeof(actions) - at, "X: retail Halo back   ");
+		if (can_restore(h))
+			at += text_print(actions + at, sizeof(actions) - at, h->state == INSTALLED || h->state == OTHER ||
+				h->state == MISSING ? "X: retail Halo back   " : "X: maps back   ");
 		if (ready(h) && h->state != MISSING)
 			at += text_print(actions + at, sizeof(actions) - at, "START: play   ");
 		if (can_import(h))
@@ -2119,7 +2230,10 @@ int main(void)
 		{
 			int failed = install(h);
 			if (!failed)
+			{
 				last_install_write(h->path);
+				offer_stock_maps(h);
+			}
 			look_again(h);
 			say_in(COLOUR_YELLOW, failed ? "B: back" : "START: play it   B: back");
 			while ((b = wait_input()) != B && !(b == START && !failed))
@@ -2127,7 +2241,7 @@ int main(void)
 			if (b == START)
 				launch_halo(&halos[selected]);
 		}
-		else if (h && b == X && (h->state == INSTALLED || h->state == OTHER || h->state == MISSING))
+		else if (h && b == X && can_restore(h))
 		{
 			restore(h);
 			look_again(h);

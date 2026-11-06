@@ -213,6 +213,10 @@ static void new_key(char const *path, char *key)
 
 /* ---- the maps in the pack ---- */
 
+/* (a map drawing on shared files keeps its header's checksum, its length being its small file's: docs/shared_maps.md) */
+#define SHARED_REFERENCE_OFFSET 0x700
+#define SHARED_REFERENCE_SIGNATURE 0x73687264ul
+
 static int halos_own(struct pack_map const *map, char const *stock_folder)
 {
 	unsigned char header[MAP_HEADER];
@@ -224,7 +228,7 @@ static int halos_own(struct pack_map const *map, char const *stock_folder)
 	{
 		for (k = 0; k < 13; k++)
 		{
-			if (!_stricmp(map->name, halos_maps[k].name) && map->length == halos_maps[k].length &&
+			if (!_stricmp(map->name, halos_maps[k].name) && (map->small || map->length == halos_maps[k].length) &&
 				map->checksum == halos_maps[k].checksum)
 				return 1;
 		}
@@ -232,7 +236,9 @@ static int halos_own(struct pack_map const *map, char const *stock_folder)
 	if (!stock_folder || !stock_folder[0])
 		return 0;
 	text_print(path, sizeof(path), "%s\\%s.map", stock_folder, map->name);
-	return !map_header(path, header) && u32(header + 8) == map->length && u32(header + 0x64) == map->checksum;
+	if (map_header(path, header) || u32(header + 0x64) != map->checksum)
+		return 0;
+	return map->small || u32(header + SHARED_REFERENCE_OFFSET) == SHARED_REFERENCE_SIGNATURE || u32(header + 8) == map->length;
 }
 
 static int count_links(char const *key)
@@ -303,6 +309,7 @@ int packs_scan(char const *path, char const *stock_folder, struct pack_scan *sca
 			map->type = s16(header + 0x60);
 			map->length = u32(header + 8);
 			map->checksum = u32(header + 0x64);
+			map->small = u32(header + SHARED_REFERENCE_OFFSET) == SHARED_REFERENCE_SIGNATURE;
 			if (map->type != 0 && map->type != 1)
 				continue;
 			map->halos = halos_own(map, stock_folder);

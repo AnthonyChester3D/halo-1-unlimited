@@ -18,6 +18,14 @@ ISO C99 scanf names, struct tm), with MSVC's behaviour where the game relies on 
 #include <string.h>
 #include <time.h>
 
+/* (newer glibc headers make these macros; they're defined here) */
+#undef memchr
+#undef strchr
+#undef strrchr
+#undef strpbrk
+#undef strstr
+#undef bsearch
+
 /* ---------- memory: the XAPI heap (LocalAlloc and friends in the retail XBE) */
 
 void oxbox_log_allocation_failure(unsigned long size);

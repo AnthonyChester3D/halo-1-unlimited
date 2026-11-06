@@ -73,9 +73,10 @@ stock.shared is taken from there, never put in the pack's file.
 
 ## stock.shared's layout
 
-Fixed, so every console and every PC building it from the same maps gets the same file (and the same checksum):
-the stock multiplayer maps (all `.map` files of the maps folder but `ui.map`) in the order of their file names, lower
-case; in each, the tags in tag index order; a bitmap's bitmap_datas in block order, a sound's pitch ranges'
+Fixed, so every console and every PC building it from the same maps gets the same file (checksum `c028f8bf`, file_length
+78260224 from the retail maps): the 13 stock multiplayer maps (`beavercreek`, `bloodgulch`, `boardingaction`,
+`carousel`, `chillout`, `damnation`, `hangemhigh`, `longest`, `prisoner`, `putput`, `ratrace`, `sidewinder`, `wizard`)
+in the order of their file names, lower case; in each, the tags in tag index order; a bitmap's bitmap_datas in block order, a sound's pitch ranges'
 permutations in block order; each block's first copy (the same bytes and offset remainder modulo 512) placed after the
 last, padded with zeros up to its remainder modulo 512; the file padded to a whole sector. `port/oxbox/tools/shared_pass.py`
 is the reference: a pack built against stock.shared with `--stock <the stock maps' folder>` lays it out the same way.
@@ -95,7 +96,28 @@ is the reference: a pack built against stock.shared with `--stock <the stock map
   shared build and one with the standalone build play together without a download. Sending shared files isn't done
   yet.
 
+## The installer
+
+After an install (never in the game's own updates) the installer offers to swap a Halo folder's 13 stock maps for small
+ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 190 MB
+saved). Only the retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is
+the same file. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
+
+**X** (*retail Halo back*) puts them back, the exact files: `maps\stock.restore` holds each map's restore table (its
+header, each moved block's place and its place in stock.shared, its BSPs' offsets, and the original file's size and
+CRC), and retail maps recompress to their own bytes with zlib level 6, memLevel 8. The stock maps come back before the
+retail XBE does: if there's no room for them, nothing changes, and the folder still plays Halo 1 Unlimited. stock.shared
+goes with them, so a map pack drawing on it needs another install's offer to play again.
+
+Nothing is touched until everything is built and proved on that console: each retail map is recompressed to its own
+bytes, each small map is restored from the files on the disk and checked against the original's CRC, and stock.shared
+and the table are read back. A power cut can't lose a map: before `stock.restore` goes in place the retail maps are
+untouched and the leftovers (`stock.unpacked`, `*.oxtmp`, `*.oxnew`) are deleted; after it, the next look at the folder
+finishes the swap. It needs about 205 MB free for a while; putting the maps back needs about 300 MB.
+
 ## Tools
+
+`port/oxbox/installer/stockmaps_test.c`: the installer's own code on a PC, for testing a folder of stock maps.
 
 `port/oxbox/tools/shared_pass.py`:
 
@@ -106,7 +128,6 @@ Tested in xemu (v1.94): Blood Gulch from stock.shared; CEX's Abyss from CEX.shar
 
 ## Not yet
 
-- The installer building stock.shared (and what it does with the retail maps).
 - Map sharing sending shared files.
 - Shared tag data (loaded into memory at a fixed address): much harder, and only safe when every map loading it uses
   all of it.
