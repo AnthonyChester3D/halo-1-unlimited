@@ -422,11 +422,15 @@ static short cached_map_files_find_map(
 #if defined(HALO_XBOX_TARGET)
 static boolean shared_file_path(const char *key, char *path);
 boolean cache_files_shared_wanted(const char *map_name, char *key);
-static boolean cache_files_shared_open(const char *map_name, short map_file_indices[2]);
+static boolean cache_files_shared_open(const char *map_name);
 static boolean shared_slot_kept(short map_file_index);
 static void shared_lookup_forget(void);
-/* the cache files of the shared files the open map draws on: its pack's, the stock one's (docs/shared_maps.md) */
+/* the shared files the open map draws on: its pack's, the stock one's (docs/shared_maps.md). A packed one is in a cache
+file; one stored unpacked is read where it is, on its own handle, and has no cache file (NONE) */
 static short shared_open_map_file_index[2] = {NONE, NONE};
+static HANDLE shared_open_file[2] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+static long shared_open_length[2];
+static void shared_open_close(void);
 #endif
 
 /* ---------- globals */
@@ -854,7 +858,7 @@ void cache_file_close(
 		cache_file_globals.open_map_file_index = NONE;
 	}
 #if defined(HALO_XBOX_TARGET)
-	shared_open_map_file_index[0] = shared_open_map_file_index[1] = NONE;
+	shared_open_close();
 #endif
 
 	return;
@@ -892,7 +896,7 @@ boolean cache_file_open(
 	}
 #if defined(HALO_XBOX_TARGET)
 	/* oxbox: a map that draws on a shared file opens only with that file cached, the right version (docs/shared_maps.md) */
-	if (!cache_files_shared_open(scenario_name, shared_open_map_file_index))
+	if (!cache_files_shared_open(scenario_name))
 		return FALSE;
 #endif
 	memset(
@@ -936,14 +940,13 @@ short cache_file_read(
 	if (offset < 0)
 	{
 		short which = (offset & 0x40000000) ? 1 : 0;
-		short shared_index = shared_open_map_file_index[which];
-		long length = shared_index != NONE ? cached_map_file_get(shared_index)->header.file_length : 0;
+		long length = shared_open_file[which] != INVALID_HANDLE_VALUE ? shared_open_length[which] : 0;
 
 		offset &= 0x3FFFFFFF;
-		if (shared_index == NONE || size < 0 || offset > length || size > length - offset)
+		if (!length || size < 0 || offset > length || size > length - offset)
 		{
 			error(_error_silent, "shared file read of %08x bytes at %08x refused (%s)", size, offset,
-				shared_index == NONE ? "the map has no such shared file" : "past its end");
+				!length ? "the map has no such shared file" : "past its end");
 			*completion_flag_reference = _cache_file_read_failed;
 
 			return NONE;
@@ -1300,8 +1303,8 @@ static void cache_file_windows_thread_proc(
 			file = cached_map_file_get_handle(cache_file_globals.open_map_file_index);
 #if defined(HALO_XBOX_TARGET)
 			/* oxbox: a shared file's read (cache_file_read) */
-			if (best_request->shared && shared_open_map_file_index[best_request->shared - 1] != NONE)
-				file = cached_map_file_get_handle(shared_open_map_file_index[best_request->shared - 1]);
+			if (best_request->shared && shared_open_file[best_request->shared - 1] != INVALID_HANDLE_VALUE)
+				file = shared_open_file[best_request->shared - 1];
 #endif
 			match_assert(
 				"c:\\halo\\SOURCE\\cache\\cache_files_windows.c",
@@ -1899,11 +1902,12 @@ static short cached_map_files_find_map(
 
 A folder map can keep its textures' and sounds' data in shared files, named in its header, so maps that use the same
 data store it once: its pack's (beside it, or in the folder above it: a pack's or a campaign's) and the stock one
-(stock.shared: the stock multiplayer maps' data, which the installer builds from the player's own disc; beside it,
-above it, or in the game's maps folder). A shared file is a cache file like a map (a header, its data compressed
-after it) with no tags; it's copied into a campaign cache file (278 MiB) as a map is, and kept there while a map that
-draws on it is loaded or played. A texture's or sound's offset with its top bit set is in a shared file, the next bit
-saying which (cache_file_read). */
+(stock.shared: the stock maps' data, which the installer builds from the player's own disc; beside it, above it, or in
+the game's maps folder). A shared file is a cache file like a map (a header, its data after it) with no tags. Stored
+unpacked (stock.shared is, by the installer) it's read where it is, with no copy and no cache file: the campaign needs its
+two big cache files for the level being left and the next. Packed, it's copied into a campaign cache file (278 MiB) as a
+map is, and kept there while a map that draws on it is loaded or played. A texture's or sound's offset with its top bit
+set is in a shared file, the next bit saying which (cache_file_read). */
 
 #ifndef FILE_SHARE_READ
 #define FILE_SHARE_READ 0x00000001
@@ -1942,6 +1946,7 @@ static struct
 		char path[256];                 /* "" when it's nowhere */
 		unsigned long checksum;
 		long length;
+		boolean unpacked;               /* its file is the right version, stored unpacked: read where it is */
 	} files[SHARED_FILES];
 } shared_lookup;
 
@@ -2002,6 +2007,24 @@ static void shared_find(
 		}
 		found_path[0] = 0;
 	}
+}
+
+/* whether the file at path is that version of a shared file, stored unpacked (its size is its length) */
+static boolean shared_stored_unpacked(
+	char const *path,
+	unsigned long checksum,
+	long length)
+{
+	struct cache_file_header header;
+	unsigned long got = 0;
+	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+
+	if (file == INVALID_HANDLE_VALUE)
+		return FALSE;
+	if ((long)GetFileSize(file, NULL) != length || !ReadFile(file, &header, sizeof(header), &got, NULL))
+		got = 0;
+	CloseHandle(file);
+	return got == sizeof(header) && header.file_length == length && header.checksum == checksum;
 }
 
 /* a name a shared file may have: 1 to 30 characters, none a path's */
@@ -2083,6 +2106,11 @@ static boolean shared_reference_get(
 			platform_log("shared: %s draws on %s.shared, which is neither beside it nor in the folder above%s", map_name,
 				name, k ? " nor in the maps folder" : "");
 		}
+		else
+		{
+			shared_lookup.files[k].unpacked = shared_stored_unpacked(shared_lookup.files[k].path,
+				shared_lookup.files[k].checksum, shared_lookup.files[k].length);
+		}
 		shared_lookup.has = TRUE;
 	}
 	return shared_lookup.has;
@@ -2146,10 +2174,16 @@ boolean cache_files_shared_wanted(
 		return FALSE;
 	}
 	for (k = 0; k < SHARED_FILES; k++)
-		csstrncpy(shared_kept_keys[k], shared_lookup.files[k].key, sizeof(shared_kept_keys[k]) - 1);
+	{
+		/* (one read where it is needs no cache file kept for it) */
+		if (shared_lookup.files[k].unpacked)
+			shared_kept_keys[k][0] = 0;
+		else
+			csstrncpy(shared_kept_keys[k], shared_lookup.files[k].key, sizeof(shared_kept_keys[k]) - 1);
+	}
 	for (k = 0; k < SHARED_FILES; k++)
 	{
-		if (shared_lookup.files[k].key[0] && shared_cached(k) == NONE)
+		if (shared_lookup.files[k].key[0] && !shared_lookup.files[k].unpacked && shared_cached(k) == NONE)
 		{
 			if (key)
 				csstrncpy(key, shared_lookup.files[k].key, 31);
@@ -2159,32 +2193,63 @@ boolean cache_files_shared_wanted(
 	return FALSE;
 }
 
-/* a map opened: the cache files of the shared files it draws on (NONE: none). FALSE: it draws on one not cached */
-static boolean cache_files_shared_open(
-	const char *map_name,
-	short map_file_indices[2])
+/* what the last map opened drew on, let go (its own handles: a cache file's stays open) */
+static void shared_open_close(
+	void)
 {
 	short k;
 
-	map_file_indices[0] = map_file_indices[1] = NONE;
+	for (k = 0; k < SHARED_FILES; k++)
+	{
+		if (shared_open_file[k] != INVALID_HANDLE_VALUE && shared_open_map_file_index[k] == NONE)
+			CloseHandle(shared_open_file[k]);
+		shared_open_file[k] = INVALID_HANDLE_VALUE;
+		shared_open_map_file_index[k] = NONE;
+		shared_open_length[k] = 0;
+	}
+}
+
+/* a map opened: the shared files it draws on, each read where it is (stored unpacked) or from its cache file. FALSE: it
+draws on one that can't be read */
+static boolean cache_files_shared_open(
+	const char *map_name)
+{
+	short k;
+
+	shared_open_close();
 	if (!shared_reference_get(map_name))
 		return TRUE;
 	for (k = 0; k < SHARED_FILES; k++)
 	{
 		if (!shared_lookup.files[k].key[0])
 			continue;
-		map_file_indices[k] = shared_cached(k);
-		if (map_file_indices[k] == NONE)
+		if (shared_lookup.files[k].unpacked)
 		{
-			error(_error_silent, "the map '%s' draws on %s.shared, which isn't cached", map_name,
-				shared_lookup.files[k].key + 1);
-			platform_log("shared: %s draws on %s.shared, which isn't cached: not opened", map_name,
-				shared_lookup.files[k].key + 1);
-			map_file_indices[0] = map_file_indices[1] = NONE;
-			return FALSE;
+			shared_open_file[k] = CreateFileA(shared_lookup.files[k].path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+				FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED, NULL);
+			if (shared_open_file[k] != INVALID_HANDLE_VALUE)
+			{
+				shared_open_length[k] = shared_lookup.files[k].length;
+				platform_log("shared: %s opened with %s.shared (read where it is)", map_name, shared_lookup.files[k].key + 1);
+				continue;
+			}
 		}
-		platform_log("shared: %s opened with %s.shared (cache file %d)", map_name, shared_lookup.files[k].key + 1,
-			(int)map_file_indices[k]);
+		else
+		{
+			shared_open_map_file_index[k] = shared_cached(k);
+			if (shared_open_map_file_index[k] != NONE)
+			{
+				shared_open_file[k] = cached_map_file_get_handle(shared_open_map_file_index[k]);
+				shared_open_length[k] = cached_map_file_get(shared_open_map_file_index[k])->header.file_length;
+				platform_log("shared: %s opened with %s.shared (cache file %d)", map_name, shared_lookup.files[k].key + 1,
+					(int)shared_open_map_file_index[k]);
+				continue;
+			}
+		}
+		error(_error_silent, "the map '%s' draws on %s.shared, which can't be read", map_name, shared_lookup.files[k].key + 1);
+		platform_log("shared: %s draws on %s.shared, which can't be read: not opened", map_name, shared_lookup.files[k].key + 1);
+		shared_open_close();
+		return FALSE;
 	}
 	return TRUE;
 }

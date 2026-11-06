@@ -2,13 +2,14 @@
 """shared_pass.py: Xbox maps' texture and sound data moved into shared files (docs/shared_maps.md): the reference for
 Halo Map Porter's own pass, and the test maker for the game's side.
 
-  python3 port/oxbox/tools/shared_pass.py stock OUT_DIR STOCK_MAP...
+  python3 port/oxbox/tools/shared_pass.py stock OUT_DIR STOCK_MAP... [--levels CAMPAIGN_MAP...]
       stock.shared from the stock multiplayer maps (what the installer builds from the player's disc), and each map
-      drawing on it alone (OUT_DIR/<name>/<name>.map)
+      drawing on it alone (OUT_DIR/<name>/<name>.map). With --levels, the stock campaign's data too: what three levels
+      or more use goes in it, and each level draws on it (the rest stays in the level)
   python3 port/oxbox/tools/shared_pass.py [--stock STOCK_MAPS_DIR] NAME OUT_DIR MAP...
       a pack: NAME.shared and each MAP drawing on it (OUT_DIR/<the map's folder>/<file>, the folder's other files
-      copied beside it). With --stock, data in the stock maps is taken from stock.shared instead (laid out from the
-      stock maps in that folder, as `stock` lays it out).
+      copied beside it). With --stock, data in stock.shared is taken from there instead (laid out from the stock maps and
+      levels in that folder, as `stock` lays it out).
 
 A bitmap's pixels and a sound permutation's samples are each one block. A pack's shared file gets the blocks used by
 two maps or more (data one map uses stays in it); stock.shared gets every block of the stock maps. The same bytes are
@@ -18,9 +19,10 @@ without the moved data (whole 2048-byte sectors of it, so what stays keeps its a
 offsets and its own blocks' moved down, and its header gets the shared reference at 0x700 (its identity in map sharing
 kept: the size and checksum it had before the pass).
 
-stock.shared's layout is fixed: the stock maps in the order of their file names, each map's tags in tag index order, a
-bitmap's bitmaps then a sound's pitch ranges' permutations in block order; the first copy of each block placed after
-the last, padded with zeros to its remainder modulo 512. Every console building it from the same maps gets the same file.
+stock.shared's layout is fixed: the stock maps in the order of their file names, then the campaign's levels in the order of
+theirs (only their blocks that three levels or more use); each map's tags in tag index order, a bitmap's bitmaps then a
+sound's pitch ranges' permutations in block order; the first copy of each block placed after the last, padded with zeros to
+its remainder modulo 512. Every console building it from the same maps gets the same file.
 """
 import hashlib
 import os
@@ -40,6 +42,7 @@ PACK_BIT, STOCK_BIT = 0x80000000, 0xC0000000
 LEVEL = int(os.environ.get('SHARED_PASS_LEVEL', '9'))
 STOCK_NAMES = ('beavercreek', 'bloodgulch', 'boardingaction', 'carousel', 'chillout', 'damnation', 'hangemhigh',
                'longest', 'prisoner', 'putput', 'ratrace', 'sidewinder', 'wizard')
+LEVEL_NAMES = ('a10', 'a30', 'a50', 'b30', 'b40', 'c10', 'c20', 'c40', 'd20', 'd40')
 
 
 def u32(b, o):
@@ -127,19 +130,36 @@ class Shared:
         self.name = name
 
 
-def stock_layout(paths):
-    """stock.shared from the stock maps (in the order of their file names), and the maps"""
+LEVEL_SHARED_BY = 3        # stock.shared gets a campaign block that this many levels use, or more
+
+
+def by_name(paths):
+    return sorted(paths, key=lambda p: os.path.basename(p).lower())
+
+
+def stock_layout(paths, levels=()):
+    """stock.shared from the stock maps (in the order of their file names), then the campaign levels' blocks that three
+    levels or more use; and the stock maps (the levels are big: read again as they're needed)"""
     stock = Shared()
-    maps = [Map(p) for p in sorted(paths, key=lambda p: os.path.basename(p).lower())]
+    maps = [Map(p) for p in by_name(paths)]
     for m in maps:
         for (f, o, n), key in zip(m.blocks, m.keys()):
             stock.place(key, m.data[o:o + n])
+    used = {}
+    for p in by_name(levels):
+        for key in set(Map(p).keys()):
+            used[key] = used.get(key, 0) + 1
+    for p in by_name(levels):
+        m = Map(p)
+        for (f, o, n), key in zip(m.blocks, m.keys()):
+            if used[key] >= LEVEL_SHARED_BY:
+                stock.place(key, m.data[o:o + n])
     stock.finish('stock')
     return stock, maps
 
 
-def write_cache_file(path, data):
-    out = bytes(data[:HEADER]) + zlib.compress(bytes(data[HEADER:]), LEVEL)
+def write_cache_file(path, data, level=None):
+    out = bytes(data[:HEADER]) + zlib.compress(bytes(data[HEADER:]), level or LEVEL)
     out += bytes(-len(out) % SECTOR)     # (whole sectors, as Xbox maps are: the game copies them unbuffered)
     open(path, 'wb').write(out)
     return len(out)
@@ -216,8 +236,14 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     total_before = total_after = 0
     if name == 'stock':
-        stock, maps = stock_layout(paths)
-        size = write_cache_file(os.path.join(out_dir, 'stock.shared'), stock.data)
+        levels = []
+        if '--levels' in paths:
+            at = paths.index('--levels')
+            paths, levels = paths[:at], paths[at + 1:]
+        stock, maps = stock_layout(paths, levels)
+        # (stored unpacked, as the installer leaves it: the game reads it where it is)
+        size = len(stock.data)
+        open(os.path.join(out_dir, 'stock.shared'), 'wb').write(stock.data)
         for m in maps:
             where = [(STOCK_BIT, stock.placed[k]) for k in m.keys()]
             base = os.path.splitext(os.path.basename(m.path))[0]
@@ -227,14 +253,28 @@ def main():
             print('%s: %d KB -> %d KB (%d KB unpacked)' % (base, len(m.raw) >> 10, n >> 10, len(out) >> 10))
             total_before += len(m.raw)
             total_after += n
-        print('stock.shared: %d KB (%d KB unpacked)' % (size >> 10, len(stock.data) >> 10))
+        for p in by_name(levels):
+            m = Map(p)
+            where = [(STOCK_BIT, stock.placed[k]) if k in stock.placed else None for k in m.keys()]
+            base = os.path.splitext(os.path.basename(p))[0]
+            os.makedirs(os.path.join(out_dir, base), exist_ok=True)
+            out = rebuild(m, where, None, stock)
+            # (level 6, as the installer's: a level is big, and a console's time matters more than a few MB)
+            n = write_cache_file(os.path.join(out_dir, base, base + '.map'), out, 6)
+            print('%s: %d KB -> %d KB (%d KB unpacked)' % (base, len(m.raw) >> 10, n >> 10, len(out) >> 10))
+            total_before += len(m.raw)
+            total_after += n
+        print('stock.shared: %d KB, checksum %08x' % (size >> 10, stock.checksum))
         print('in all: %d KB -> %d KB' % (total_before >> 10, (total_after + size) >> 10))
         return
     stock = None
     if stock_dir:
-        stock_paths = [os.path.join(stock_dir, f) for f in os.listdir(stock_dir)
-                       if f.lower().endswith('.map') and f.lower()[:-4] in STOCK_NAMES]
-        stock, _ = stock_layout(stock_paths)
+        files = [f for f in os.listdir(stock_dir) if f.lower().endswith('.map')]
+        stock_paths = [os.path.join(stock_dir, f) for f in files if f.lower()[:-4] in STOCK_NAMES]
+        level_paths = [os.path.join(stock_dir, f) for f in files if f.lower()[:-4] in LEVEL_NAMES]
+        if len(stock_paths) != len(STOCK_NAMES) or len(level_paths) != len(LEVEL_NAMES):
+            sys.exit('--stock needs the 13 multiplayer maps and the 10 campaign levels in one folder')
+        stock, _ = stock_layout(stock_paths, level_paths)
     maps = [Map(p) for p in paths]
     keys = [m.keys() for m in maps]
     used = {}
