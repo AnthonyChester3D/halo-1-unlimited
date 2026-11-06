@@ -944,6 +944,12 @@ static enum cache_file_format file_format(char const *path)
 	}
 }
 
+/* (the tag validator asks: the game's, not this tool's) */
+int halo_server_mode(void)
+{
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	unsigned char *tag_cache;

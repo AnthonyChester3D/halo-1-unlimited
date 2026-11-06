@@ -16,15 +16,22 @@ Folder maps. The maps folder's folders, as an Xbox has them:
 A folder map's level name is "+" and its folder ("+Precipice"), or "+pack/folder" for a pack's map, found by that key
 on every machine (cache_files.c: hmp_map_file_path, hmp_maps_find). Its version, which the game's settings carry, is
 its .map's size and the checksum Halo Map Porter writes in its header (hmp_share_map_version), as the Xbox works it
-out: an Xbox plays its own copy of that build, or downloads the host's. The server's rotation names one by its key
-(server_rotation.c), and its web page lists them (server_maps_each), titled by their info .txt's first line.
+out: an Xbox plays its own copy of that build, or downloads the host's. A map converted to draw on shared files
+(docs/shared_maps.md) has the identity of its standalone build, which its header keeps, so the two builds play together.
+The server's rotation names one by its key (server_rotation.c), and its web page lists them (server_maps_each), titled by
+their info .txt's first line.
+
+A dedicated server loads a converted map as it is: it draws and plays nothing, so it needs neither the shared files nor
+stock.shared to host it (cache_file_read serves their sounds as silence). It does need the pack's shared file to send it.
 
 Sharing. An Xbox joining a game on a folder map it hasn't (or has another build of) asks the host for it over TCP port
 5152 (internet play's tunnel carries it as it carries the game's connections). This is the host's side of Halo
-Universal's protocol (hmp_share.c, version 6): the request names the key, the build the Xbox has and any partial
+Universal's protocol (hmp_share.c, version 7): the request names the key, the build the Xbox has and any partial
 download; the reply says the same build, or sends the folder's files (the .map, its info .txt, preview.bin, a pack's
 series.bin, showcase.txt), small ones first, then the map from where a partial download left off, in 16 KB blocks
-(where it goes, the data, its CRC32) over up to 3 connections. While an Xbox downloads, the host doesn't wait for it
+(its number, the data, its CRC32) over up to 3 connections. For a map drawing on shared files the first reply
+(REP_SHARED) only names them; the Xbox asks for the pack's file if it lacks that version, then for the map. stock.shared is
+never sent: an Xbox builds its own, with its installer. While an Xbox downloads, the host doesn't wait for it
 (map_share.c's map_share_machine_needs_map and map_share_machine_downloading ask map_share_xbox_machine_*): it joins
 the game in progress once it has the map. The data moves on the game's thread, every frame (map_share_update).
 
@@ -68,6 +75,8 @@ Lines go to the log ("hmp: ..."). Custom Edition maps go to PCs by OpenCE's own 
 #define MAXIMUM_FOLDER_NAME 30               /* a folder's name (a pack's and its map's together) */
 #define FOLDER_MAPS_RESCAN_MS 5000           /* a key not found looks again, this long after the last look */
 #define PREVIEW_SIZE 16384
+#define SHARED_MAXIMUM_SIZE 0x11800000UL     /* a shared file: 278 MiB unpacked at most, a little over if it didn't pack */
+#define SHARED_NAME_SIZE 32
 #define SERIES_MAXIMUM_SIZE (16 + 64 * 64 * 4)
 
 /* the protocol (hmp_share.c's) */
@@ -75,10 +84,11 @@ Lines go to the log ("hmp: ..."). Custom Edition maps go to PCs by OpenCE's own 
 #define REQ_MAGIC 0x71504d48                 /* "HMPq" */
 #define REP_MAGIC 0x72504d48                 /* "HMPr" */
 #define JOIN_MAGIC 0x6a504d48                /* "HMPj": another connection for a download under way */
-#define SHARE_VERSION 6
+#define SHARE_VERSION 7
 #define REP_SAME 0
 #define REP_SENDING 1
 #define REP_UNAVAILABLE 2
+#define REP_SHARED 3                         /* the map draws on shared files: named in the reply, nothing sent yet */
 #define WHY_NOT_HOSTED 1                     /* REP_UNAVAILABLE's reason (in .streams): not the map hosted now */
 #define NAME_LEN 44
 #define MAX_FILES 5                          /* the .map, info .txt, preview.bin, series.bin, showcase.txt */
@@ -110,21 +120,39 @@ struct share_request
 {
 	unsigned int magic, version;
 	char key[32];
-	unsigned int have_size, have_chk, resume_size, resume_chk, resume_offset, flags, rtt, token, stream, machine;
+	unsigned int have_size, have_chk, resume_size, resume_chk, resume_offset, flags, rtt, token, stream, machine, shared_ok;
+	char shared[SHARED_NAME_SIZE];           /* the pack's shared file it asks for ("": the map) */
 };
 struct share_file
 {
 	char name[NAME_LEN];
 	unsigned int size;
 };
+struct share_shared
+{
+	char name[SHARED_NAME_SIZE];
+	unsigned int checksum, length, size;     /* its header's checksum and file_length, its file's size */
+};
+/* map_size, map_chk: the map's identity; file_chk, with files[0].size: the file being sent, what a partial download is
+checked against. shared: the pack's, the stock one's ("" none) */
 struct share_reply
 {
-	unsigned int magic, version, status, nfiles, map_chk, start, streams, token, in_game, map_version;
+	unsigned int magic, version, status, nfiles, map_chk, start, streams, token, in_game, map_version, map_size, file_chk;
 	struct share_file files[MAX_FILES];
+	struct share_shared shared[2];
 };
 
-typedef char share_request_size_assert[sizeof(struct share_request) == 80 ? 1 : -1];
-typedef char share_reply_size_assert[sizeof(struct share_reply) == 280 ? 1 : -1];
+typedef char share_request_size_assert[sizeof(struct share_request) == 116 ? 1 : -1];
+typedef char share_reply_size_assert[sizeof(struct share_reply) == 376 ? 1 : -1];
+
+/* a map's header, as sharing needs it */
+struct map_head
+{
+	unsigned long size, checksum;            /* its identity */
+	unsigned long file_checksum;             /* this file's own */
+	char pack[SHARED_NAME_SIZE], stock[SHARED_NAME_SIZE];  /* the shared files it draws on ("" none) */
+	unsigned long pack_checksum, pack_length, stock_checksum, stock_length;
+};
 
 /* one connection of a transfer */
 struct share_stream
@@ -151,6 +179,7 @@ struct share_slot
 	char names[MAX_FILES][NAME_LEN];
 	unsigned long sizes[MAX_FILES];
 	char key[40];
+	char shared_path[300];                   /* sending a shared file: where it is ("": the folder's files) */
 	struct share_stream streams[MAXS];
 };
 
@@ -422,24 +451,108 @@ boolean hmp_map_file_path(char const *level_name, char *path, long size)
 	return TRUE;
 }
 
-/* a folder map's identity: its .map's size and the checksum in its header (Halo Map Porter's CRC); FALSE for none */
-static boolean map_identity(char const *path, unsigned long *size, unsigned long *checksum)
+static unsigned long header_long(byte const *at)
 {
-	byte header[0x68];
+	return (unsigned long)at[0] | (unsigned long)at[1] << 8 | (unsigned long)at[2] << 16 | (unsigned long)at[3] << 24;
+}
+
+/* a name in a map's header: its 32 bytes hold it, 1 to 30 characters, and it can make a path */
+static boolean shared_name_valid(char const *name)
+{
+	int length;
+
+	for (length = 0; length < SHARED_NAME_SIZE && name[length]; length++)
+	{
+		if ((unsigned char)name[length] < 32 || strchr("\\/:*?\"<>|", name[length]))
+			return FALSE;
+	}
+	return length >= 1 && length <= 30 && name[0] != '.' && name[0] != ' ' && !strstr(name, "..");
+}
+
+/* a map's header: its identity (a map drawing on shared files: its standalone build's, which the header keeps) and what it
+draws on; FALSE for none */
+static boolean map_head_read(char const *path, struct map_head *head)
+{
+	byte header[0x800];
 	unsigned long got = 0;
+	unsigned long version;
 	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 
 	if (file == INVALID_HANDLE_VALUE)
 		return FALSE;
-	*size = GetFileSize(file, NULL);
+	memset(head, 0, sizeof(*head));
+	head->size = GetFileSize(file, NULL);
 	if (!ReadFile(file, header, sizeof(header), &got, NULL))
 		got = 0;
 	CloseHandle(file);
 	if (got != sizeof(header))
 		return FALSE;
-	*checksum = (unsigned long)header[0x64] | (unsigned long)header[0x65] << 8 | (unsigned long)header[0x66] << 16 |
-		(unsigned long)header[0x67] << 24;
+	head->checksum = head->file_checksum = header_long(header + 0x64);
+	version = header_long(header + 0x704);
+	/* ('shrd', stored as 'head' is) */
+	if (!memcmp(header + 0x700, "drhs", 4) && (version == 1 || version == 2))
+	{
+		head->size = header_long(header + 0x730);
+		head->checksum = header_long(header + 0x734);
+		if (shared_name_valid((char const *)header + 0x708))
+		{
+			memcpy(head->pack, header + 0x708, SHARED_NAME_SIZE);
+			head->pack_checksum = header_long(header + 0x728);
+			head->pack_length = header_long(header + 0x72C);
+		}
+		if (version == 2 && shared_name_valid((char const *)header + 0x738))
+		{
+			memcpy(head->stock, header + 0x738, SHARED_NAME_SIZE);
+			head->stock_checksum = header_long(header + 0x758);
+			head->stock_length = header_long(header + 0x75C);
+		}
+	}
 	return TRUE;
+}
+
+/* a folder map's identity (map_head); FALSE for none */
+static boolean map_identity(char const *path, unsigned long *size, unsigned long *checksum)
+{
+	struct map_head head;
+
+	if (!map_head_read(path, &head))
+		return FALSE;
+	*size = head.size;
+	*checksum = head.checksum;
+	return TRUE;
+}
+
+/* where a pack's shared file is, as the Xbox looks: beside the map, then in the folder above it. It must be the version the
+map names (its header's checksum and file_length). FALSE: not here */
+static boolean shared_file_find(char const *map_path, struct map_head const *head, char *path, int size, unsigned long *file_size)
+{
+	char folder[300];
+	int step;
+
+	snprintf(folder, sizeof(folder), "%s", map_path);
+	for (step = 0; step < 2; step++)
+	{
+		char *slash = strrchr(folder, '\\');
+		byte header[0x68];
+		unsigned long got = 0;
+		HANDLE file;
+
+		if (!slash)
+			return FALSE;
+		*slash = 0;
+		snprintf(path, (size_t)size, "%s\\%s.shared", folder, head->pack);
+		file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+		if (file == INVALID_HANDLE_VALUE)
+			continue;
+		*file_size = GetFileSize(file, NULL);
+		if (!ReadFile(file, header, sizeof(header), &got, NULL))
+			got = 0;
+		CloseHandle(file);
+		/* (the first with the name is the one a console would use) */
+		return got == sizeof(header) && !memcmp(header, "daeh", 4) && header_long(header + 8) == head->pack_length &&
+			header_long(header + 0x64) == head->pack_checksum && *file_size <= SHARED_MAXIMUM_SIZE;
+	}
+	return FALSE;
 }
 
 /* the version of a folder map, as the Xbox works it out (hmp_share.c): 0 for none */
@@ -845,7 +958,7 @@ static int stream_fill(struct share_slot *slot, struct share_stream *stream)
 		stream->length = slot->sizes[stream->block_file] - stream->offset;
 		if (stream->length > CHUNK)
 			stream->length = CHUNK;
-		where = (unsigned int)stream->block_file << 28 | (unsigned int)stream->offset;
+		where = (unsigned int)stream->block_file << 28 | (unsigned int)(stream->offset / CHUNK);
 		memcpy(stream->buffer, &where, 4);
 		stream->crc = crc_update(0xFFFFFFFFU, stream->buffer, 4);
 		stream->done = 0;
@@ -862,7 +975,10 @@ static int stream_fill(struct share_slot *slot, struct share_stream *stream)
 			fclose(stream->file);
 		stream->file = NULL;
 		stream->open_file = 0;
-		slot_file_path(slot, slot->names[stream->block_file], path, sizeof(path));
+		if (slot->shared_path[0])
+			snprintf(path, sizeof(path), "%s", slot->shared_path);
+		else
+			slot_file_path(slot, slot->names[stream->block_file], path, sizeof(path));
 		/* (the game's fopen finds a "d:\" path where the platform keeps it) */
 		stream->file = fopen(path, "rb");
 		if (!stream->file)
@@ -1009,6 +1125,8 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 	int index = (int)(slot - share.slots);
 	int count = 0;
 	int which;
+	boolean sending = FALSE;
+	struct map_head head;
 
 	memset(slot, 0, sizeof(*slot));
 	slot->machine = request->machine < 16 ? (int)request->machine : NONE;
@@ -1023,6 +1141,7 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 	reply.status = REP_UNAVAILABLE;
 	reply.in_game = (unsigned int)host_in_game();
 	request->key[sizeof(request->key) - 1] = 0;
+	request->shared[sizeof(request->shared) - 1] = 0;
 	map_index = hmp_maps_find(request->key);
 	if (request->magic != REQ_MAGIC || request->version != SHARE_VERSION)
 		why = "different map sharing version";
@@ -1032,8 +1151,7 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 		/* (the map hosted, or a linked game's Xbox map: linked_maps.c) */
 		reply.streams = WHY_NOT_HOSTED;
 	}
-	else if (map_index == NONE || !hmp_map_file_path(request->key, path, sizeof(path)) ||
-		!map_identity(path, &size, &checksum))
+	else if (map_index == NONE || !hmp_map_file_path(request->key, path, sizeof(path)) || !map_head_read(path, &head))
 	{
 		why = "can't read its own copy";
 	}
@@ -1041,7 +1159,11 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 	{
 		struct folder_map const *map = &folder_maps.maps[map_index];
 
+		size = head.size;
+		checksum = head.checksum;
+		reply.map_size = (unsigned int)size;
 		reply.map_chk = (unsigned int)checksum;
+		reply.file_chk = (unsigned int)head.file_checksum;
 		reply.map_version = 0;
 		if (map->info_file[0])
 		{
@@ -1073,7 +1195,29 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 				}
 			}
 		}
-		if (request->have_size == size && request->have_chk == checksum)
+		snprintf(slot->key, sizeof(slot->key), "%s", map->key);
+		if (request->shared[0])
+		{
+			/* (the pack's shared file: only the one the map names, never stock.shared, which every Xbox builds its own of) */
+			unsigned long file_size = 0;
+
+			why = "not a shared file of this map, or this server hasn't it";
+			if (head.pack[0] && !ieq(request->shared, head.pack) && ieq(head.pack, "stock") &&
+				shared_file_find(path, &head, slot->shared_path, sizeof(slot->shared_path), &file_size))
+			{
+				snprintf(slot->names[0], NAME_LEN, "%s.shared", head.pack);
+				slot->sizes[0] = file_size;
+				snprintf(reply.files[0].name, NAME_LEN, "%s", slot->names[0]);
+				reply.files[0].size = (unsigned int)file_size;
+				reply.file_chk = (unsigned int)head.pack_checksum;
+				total = file_size;
+				count = 1;
+				sending = TRUE;
+			}
+			else
+				slot->shared_path[0] = 0;
+		}
+		else if (request->have_size == size && request->have_chk == checksum)
 		{
 			reply.status = REP_SAME;
 		}
@@ -1081,7 +1225,6 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 		{
 			char const *names[MAX_FILES];
 
-			snprintf(slot->key, sizeof(slot->key), "%s", map->key);
 			names[0] = map->map_file;
 			names[1] = map->info_file[0] ? map->info_file : NULL;
 			names[2] = map->picture ? "preview.bin" : NULL;
@@ -1110,27 +1253,66 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 			}
 			if (count && ends_with(slot->names[0], ".map"))
 			{
-				reply.status = REP_SENDING;
-				reply.nfiles = (unsigned int)count;
-				slot->nfiles = count;
-				if (request->resume_size == size && request->resume_chk == checksum && request->resume_offset &&
-					request->resume_offset < size && request->resume_offset % CHUNK == 0)
+				if ((head.pack[0] || head.stock[0]) && !request->shared_ok)
 				{
-					start = request->resume_offset;
+					/* (first what it draws on: the Xbox says what it lacks) */
+					unsigned long file_size = 0;
+					char shared_path[300];
+
+					reply.status = REP_SHARED;
+					reply.nfiles = (unsigned int)count;
+					if (head.pack[0])
+					{
+						if (!shared_file_find(path, &head, shared_path, sizeof(shared_path), &file_size))
+						{
+							/* (it can't send it: the Xbox has the file already, or is told it couldn't get it) */
+							share_log("host: %s draws on %s.shared, which isn't beside it or in the folder above, in that version",
+								request->key, head.pack);
+							file_size = 0;
+						}
+						snprintf(reply.shared[0].name, SHARED_NAME_SIZE, "%s", head.pack);
+						reply.shared[0].checksum = (unsigned int)head.pack_checksum;
+						reply.shared[0].length = (unsigned int)head.pack_length;
+						reply.shared[0].size = (unsigned int)file_size;
+					}
+					if (head.stock[0])
+					{
+						snprintf(reply.shared[1].name, SHARED_NAME_SIZE, "%s", head.stock);
+						reply.shared[1].checksum = (unsigned int)head.stock_checksum;
+						reply.shared[1].length = (unsigned int)head.stock_length;
+					}
 				}
-				slot->start = start;
-				reply.start = (unsigned int)start;
-				slot->total = total - start;
-				slot->cursor_offset = count == 1 ? start : 0;
-				slot->want = request->flags >= MAXS ? MAXS : request->flags ? (int)request->flags : 1;
-				slot->token = (now ^ (slot->address * 2654435761UL) ^ ((unsigned long)index << 24) ^ 0x5eed) & 0xFFFFFFFFUL;
-				reply.streams = (unsigned int)slot->want;
-				reply.token = (unsigned int)slot->token;
+				else
+					sending = TRUE;
 			}
+		}
+		if (sending)
+		{
+			reply.status = REP_SENDING;
+			reply.nfiles = (unsigned int)count;
+			slot->nfiles = count;
+			if (request->resume_size == slot->sizes[0] && request->resume_chk == reply.file_chk && request->resume_offset &&
+				request->resume_offset < slot->sizes[0] && request->resume_offset % CHUNK == 0)
+			{
+				start = request->resume_offset;
+			}
+			slot->start = start;
+			reply.start = (unsigned int)start;
+			slot->total = total - start;
+			slot->cursor_offset = count == 1 ? start : 0;
+			slot->want = request->flags >= MAXS ? MAXS : request->flags ? (int)request->flags : 1;
+			slot->token = (now ^ (slot->address * 2654435761UL) ^ ((unsigned long)index << 24) ^ 0x5eed) & 0xFFFFFFFFUL;
+			reply.streams = (unsigned int)slot->want;
+			reply.token = (unsigned int)slot->token;
 		}
 	}
 	if (reply.status == REP_SAME)
 		share_log("host: player %d asked for %s: has the same build", index, request->key);
+	else if (reply.status == REP_SHARED)
+	{
+		share_log("host: player %d asked for %s: it draws on shared files: %s %s", index, request->key,
+			reply.shared[0].name, reply.shared[1].name);
+	}
 	else if (reply.status == REP_SENDING)
 	{
 		share_log("host: player %d asked for %s: sending %d files, %lu bytes%s, over %d connection%s", index,
@@ -1283,6 +1465,9 @@ ready:
 		}
 		if (got > 0)
 			pending->length += got;
+		/* (another version's request is another size: answered as soon as it says which, so its Xbox can say why) */
+		if (pending->length >= 8 && pending->request.magic == REQ_MAGIC && pending->request.version != SHARE_VERSION)
+			pending->length = (int)sizeof(pending->request);
 		if (pending->length < (int)sizeof(pending->request))
 			continue;
 		if (pending->request.magic == JOIN_MAGIC)

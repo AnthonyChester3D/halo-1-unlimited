@@ -924,6 +924,22 @@ short cache_file_read(
 
 		return request_index;
 	}
+#if !defined(HALO_XBOX_TARGET)
+	/* oxbox: a dedicated server plays no sound and draws nothing, but its sound cache still loads what the game asks for: a
+	converted map's sound in a shared file (an offset with its top bit set: docs/shared_maps.md) is served at once as
+	silence, as it has neither the shared files nor anything to do with them */
+	{
+		extern int halo_server_mode(void);
+
+		if (offset < 0 && size >= 0 && halo_server_mode())
+		{
+			memset(buffer, 0, (size_t)size);
+			*completion_flag_reference = TRUE;
+
+			return request_index;
+		}
+	}
+#endif
 #if defined(HALO_XBOX_TARGET)
 	/* oxbox: an offset with its top bit set is in a shared file the open map draws on: the next bit says which, its
 	pack's (0) or the stock one (1) (docs/shared_maps.md) */
@@ -1375,13 +1391,16 @@ static void cache_file_get_map_path(
 
 		if (hmp_map_file_path(map_name, path, MAXIMUM_MAP_PATH_LENGTH))
 			return;
-		/* oxbox: a shared file ("*name": cache_files_shared_wanted found where it is) */
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: a shared file ("*name": cache_files_shared_wanted found where it is). The Xbox's: a dedicated server has no
+		use for them (docs/shared_maps.md) */
 		if (map_name[0] == '*')
 		{
 			if (!shared_file_path(map_name, path))
 				path[0] = 0;
 			return;
 		}
+#endif
 	}
 	length = snprintf(path, MAXIMUM_MAP_PATH_LENGTH, "%s%s.map", cache_files_map_directory(), map_name);
 

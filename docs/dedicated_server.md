@@ -803,6 +803,9 @@ a rotation that long is saved whole and read back after a restart.
   `custom_maps\<name>` (a Custom Edition map; `/` is taken for `\`), or a
   level's path (`levels\test\bloodgulch\bloodgulch`). A campaign level is
   played as co-op only: `<level>:coop`, at `server.coop_difficulty`.
+  A folder map is named by its key (`+Precipice`, `+CEX/Abyss`): Halo 1 Unlimited's Xboxes that haven't that build download
+  it from the server, with its pack's shared file (TCP 5152). A map converted to draw on shared files loads without them;
+  `docs/shared_maps.md` says what the server needs to send one.
 - The gametype (`slayer` when there is none) is a built-in's name
   (`slayer`, `team_slayer`, `slayer_pro`, `elimination`, `phantoms`,
   `endurance`, `rockets`, `snipers`, `stalker`, `ctf`, `ironctf`,

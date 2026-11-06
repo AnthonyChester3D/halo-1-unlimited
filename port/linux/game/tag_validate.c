@@ -49,6 +49,8 @@ data and which the game takes as models (tag_schema_custom_edition_groups).
 #include <stdio.h>
 #include <string.h>
 
+int halo_server_mode(void); /* (server_mode.c) */
+
 /* ---------- constants */
 
 enum
@@ -1813,6 +1815,10 @@ boolean tag_validate_file_contains(
 	short range_index;
 
 	(void)validation;
+	/* oxbox: a dedicated server draws and plays nothing, so a converted map's textures and sounds in its shared files
+	(an offset with its top bit set: docs/shared_maps.md) aren't needed: cache_file_read serves them as zeros */
+	if (offset < 0 && size >= 0 && halo_server_mode())
+		return TRUE;
 	if (offset < 0 || size < 0)
 		return FALSE;
 	for (range_index = 0; range_index < tag_validate_globals.file_range_count; range_index++)
