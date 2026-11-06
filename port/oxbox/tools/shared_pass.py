@@ -38,6 +38,8 @@ SOUND = 0x736E6421         # 'snd!'
 SCENARIO_BSPS = 0x5A4      # scenario's structure_bsp_references (0x20 each: file offset, size, ...)
 PACK_BIT, STOCK_BIT = 0x80000000, 0xC0000000
 LEVEL = int(os.environ.get('SHARED_PASS_LEVEL', '9'))
+STOCK_NAMES = ('beavercreek', 'bloodgulch', 'boardingaction', 'carousel', 'chillout', 'damnation', 'hangemhigh',
+               'longest', 'prisoner', 'putput', 'ratrace', 'sidewinder', 'wizard')
 
 
 def u32(b, o):
@@ -231,7 +233,7 @@ def main():
     stock = None
     if stock_dir:
         stock_paths = [os.path.join(stock_dir, f) for f in os.listdir(stock_dir)
-                       if f.lower().endswith('.map') and f.lower() != 'ui.map']
+                       if f.lower().endswith('.map') and f.lower()[:-4] in STOCK_NAMES]
         stock, _ = stock_layout(stock_paths)
     maps = [Map(p) for p in paths]
     keys = [m.keys() for m in maps]

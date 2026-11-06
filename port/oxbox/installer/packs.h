@@ -11,6 +11,7 @@ struct pack_map
 	char name[40];                /* the file's name, without .map */
 	int type;                     /* its header's scenario type: 0 campaign, 1 multiplayer, 2 the menus */
 	unsigned long length, checksum;
+	int small;                    /* it draws on shared files (docs/shared_maps.md) */
 	int halos;                    /* the same file as Halo's own (Halo's 13 multiplayer maps, or the install's) */
 };
 

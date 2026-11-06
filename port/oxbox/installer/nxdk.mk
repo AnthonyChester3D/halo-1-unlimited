@@ -6,6 +6,7 @@ XBE_TITLE = Halo\ 1\ Unlimited\ installer
 MONOCYPHER = $(CURDIR)/../../third_party/monocypher
 MBEDTLS = $(CURDIR)/../../third_party/mbedtls
 SRCS = $(CURDIR)/main.c $(CURDIR)/package.c $(CURDIR)/packs.c $(CURDIR)/pictures.c $(CURDIR)/screen.c $(CURDIR)/sha256.c \
+	$(CURDIR)/stockmaps.c \
 	$(CURDIR)/download.c $(MONOCYPHER)/monocypher.c $(MONOCYPHER)/monocypher-ed25519.c
 NXDK_SDL = y
 KEYS ?= $(CURDIR)/keys.txt
