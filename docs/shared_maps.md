@@ -116,12 +116,19 @@ The room asked for, and what KEEP DOWNLOADS UNDER counts for the map that fetche
 map is deleted, or replaced by a copy that doesn't use it, its pack's file goes too if no other map in the list draws on
 it. A replaced copy kept as `.hmp_prev` keeps its file while it stays, and that copy's deletion doesn't look for it.
 
+**A dedicated server** (the Linux build, `port/linux/game/map_share_xbox.c`) hosts a converted map and shares it the same
+way. It draws and plays nothing, so it loads the map without its shared files: it needs neither them nor `stock.shared` to
+host it (their sounds, which its sound cache still asks for, are served as silence), and only needs the pack's file to send
+it. Put `<pack>-<checksum>.shared` where a console would: beside the map or in the folder above. PCs playing the game are
+unaffected: they get Custom Edition maps through `map_share.c`, and a PC game still refuses a converted map.
+
 ## The installer
 
 After an install (never in the game's own updates) the installer offers to swap a Halo folder's 13 stock maps for small
 ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 190 MB
 saved). Only the retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is
-the same file. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
+the same file. All 24 maps are byte-identical on the three NTSC discs (the original, Rev 1 and Rev 2), and stock.shared and
+the small maps built from each compare equal: the three builds need no table of their own. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
 
 **X** (*retail Halo back*) puts them back, the exact files: `maps\stock.restore` holds each map's restore table (its
 header, each moved block's place and its place in stock.shared, its BSPs' offsets, and the original file's size and
