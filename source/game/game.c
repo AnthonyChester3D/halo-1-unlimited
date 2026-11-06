@@ -944,6 +944,19 @@ void game_precache_new_map(
 {
 	long map_status;
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the shared files a map draws on are copied before it (docs/shared_maps.md), here as when it's precached in
+	the lobby: a console joining a game under way comes straight here. They're the two at most */
+	if (blocking && map_name[0] != '*')
+	{
+		extern boolean cache_files_shared_wanted(const char *map_name, char *key);
+		char shared_key[32];
+		short shared_count;
+
+		for (shared_count = 0; shared_count < 2 && cache_files_shared_wanted(map_name, shared_key); shared_count++)
+			game_precache_new_map(shared_key, TRUE);
+	}
+#endif
 	if (!cache_files_precache_map_loaded(map_name))
 	{
 		if (cache_files_precache_in_progress() &&
@@ -1061,6 +1074,15 @@ void game_precache_new_map(
 		}
 	}
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a shared file is only copied (above): it's no map to remember */
+	if (blocking && map_name[0] == '*')
+	{
+		if (cache_files_precache_in_progress())
+			cache_files_precache_map_end();
+		return;
+	}
+#endif
 	if (blocking)
 	{
 		match_assert(

@@ -1779,13 +1779,17 @@ boolean network_game_client_game_has_started(
 		long hmp_maps_find(char const *name);
 		void display_error_text_when_main_menu_loaded(wchar_t const *text);
 		boolean hmp_share_fetching(char const *key);
+		boolean hmp_share_lacks_stock(char const *key);
 
 		if (client->game.map.name[0] == '+' &&
-			(hmp_maps_find(client->game.map.name) == NONE || hmp_share_fetching(client->game.map.name)))
+			(hmp_maps_find(client->game.map.name) == NONE || hmp_share_fetching(client->game.map.name) ||
+				hmp_share_lacks_stock(client->game.map.name)))
 		{
 			network_event("the game started on %s, which this console hasn't got (or is still downloading): leaving it",
 				client->game.map.name);
-			display_error_text_when_main_menu_loaded(
+			/* (no download finishes that: the installer makes stock.shared from the player's own maps) */
+			display_error_text_when_main_menu_loaded(hmp_share_lacks_stock(client->game.map.name) ?
+				L"This map needs stock.shared, and this Xbox hasn't got it. Run the installer and take its stock maps offer." :
 				L"The game started before this Xbox had the host's map. Join again: the download picks up where it stopped.");
 			network_game_client_all_local_players_have_quit();
 			return FALSE;

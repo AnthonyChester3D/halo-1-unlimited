@@ -101,6 +101,7 @@ long hmp_maps_entry(char const *entry);
 char const *hmp_browse_unsupported(char const *entry);
 boolean hmp_maps_note_gametypes(char const *level_name, char const *text);
 boolean hmp_maps_delete(char const *key);
+void hmp_maps_shared_release(char const *name, char const *key);
 char const *hmp_maps_problem(long map_index);
 boolean hmp_maps_is_good(char const *key);
 void hmp_maps_mark_good(char const *key);

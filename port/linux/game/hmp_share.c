@@ -5,13 +5,19 @@ Halo Universal's map sharing on OpenCE (hmp.h; Halo Universal's net.c, its trans
 LAN and XLink Kai, its lobby side written against OpenCE's netcode).
 
 A client joining a game on a folder map ("+key") that it hasn't, or whose build differs from the host's (the game's
-map version: cache_files_map_version, the .map's size and the checksum Halo Map Porter writes in its header), asks the
-host over TCP port 5152 (beside the game's 5150/5151, on the same secure system link association). The host sends the
+map version: cache_files_map_version, the .map's size and the checksum Halo Map Porter writes in its header; a copy
+whose shared files aren't all here has no version: docs/shared_maps.md), asks the host over TCP port 5152 (beside the game's 5150/5151, on the same secure system link association). The host sends the
 folder (the .map, its info .txt, preview.bin, and a pack's series.bin) in 16 KB blocks, each with its CRC32, over up to
 3 connections (by ping: 1 on a LAN, 2 up to 100 ms, 3 above), with a window of about 1 KB per ms of round trip from a
 128 KB budget for every download together. The client writes each block where it goes as it arrives, into
 maps\<folder>.hmp_dl (the map as .part until it's whole, resume.hmp naming the build), then swaps the folder in. A
 download that drops resumes from the last good block. Downloads go to T:\maps when d:\maps can't be written (a disc).
+
+A map drawing on shared files is three steps. The host's first answer (REP_SHARED) sends nothing but names them and
+their versions. The client then fetches the pack's file if it lacks that exact version, as a download of its own (in
+<name>.hmp_dl beside where it goes, the folder above the map's, resumable too), and asks for the map, which by then
+has what it draws on. stock.shared is never sent: every console builds its own, so one without it is told to run the
+installer (CL_NOSTOCK), and stays in the lobby, as one with no room does.
 
 OpenCE's netcode does the rest (map_share.h's hooks, which the PC version's map sharing answers there): while a client
 downloads, the consoles that have the map don't wait for it (cache_files.c gives the map no time to precache, the
@@ -104,6 +110,7 @@ void hmp_maps_missing_title(char const *key, wchar_t const *title);   /* (hmp_ma
 static void cl_title_start(void);
 static void cl_title(void);
 boolean cache_files_forget_cached_map(char const *map_name);
+unsigned long hmp_share_map_version(char const *level_name);
 void display_error_text_when_main_menu_loaded(wchar_t const *text);
 
 /* ---------- the maps (hmp_maps.c), as net.c called them */
@@ -127,19 +134,26 @@ static u32 host_rtt(void) { return 0; }   /* (the client's own measure: its conn
 #define REP_MAGIC 0x72504d48                /* "HMPr" */
 #define RES_MAGIC 0x73504d48                /* "HMPs": a partial download's resume.hmp */
 #define JOIN_MAGIC 0x6a504d48               /* "HMPj": another connection for a download already under way */
-#define VERSION 6                           /* 3: pack maps ("+pack/folder") and their series.bin; 4: several connections;
+#define VERSION 7                           /* 3: pack maps ("+pack/folder") and their series.bin; 4: several connections;
                                                5 (OpenCE): the request carries the machine, the reply whether the game is under way;
                                                6: a fifth file, the folder's showcase.txt (the showcase screensaver's shots),
-                                               and the reply carries the host's copy's "Version:" (its info .txt) */
+                                               and the reply carries the host's copy's "Version:" (its info .txt);
+                                               7: shared files (REP_SHARED, the request's shared and shared_ok), the reply
+                                               says the map's identity apart from its file's size and checksum, and a block
+                                               says its number, not its offset (a shared file can pass 256 MB) */
 #define REP_SAME 0
 #define REP_SENDING 1
 #define REP_UNAVAILABLE 2
+#define REP_SHARED 3                        /* the map draws on shared files: named in the reply, with the folder's files'
+                                               sizes; nothing is sent until the client asks again (shared_ok, or a shared
+                                               file by name) */
 #define WHY_NOT_HOSTED 1                    /* REP_UNAVAILABLE's reason (in .streams, build 20): not the map the host has up now */
 #define WHY_CHECKING 2                      /* ...the host's own copy hasn't loaded on it yet (hmp_maps.c's map checks): it
                                                sends only a map it knows loads, so a broken one reaches nobody */
 #define NAME_LEN 44
 #define MAX_FILES 5                         /* the .map, info .txt, preview.bin, series.bin, showcase.txt */
 #define MAX_MAP_SIZE (96u << 20)
+#define MAX_SHARED_SIZE 0x11800000u         /* a shared file: 278 MiB unpacked at most, and a little over if it didn't pack */
 #define MAX_TXT_SIZE (64u << 10)
 #define PREVIEW_SIZE 16384
 #define SERIES_MAX (16 + 64 * 64 * 4)       /* a pack's series.bin (see maplist.c) */
@@ -180,9 +194,12 @@ static u32 host_rtt(void) { return 0; }   /* (the client's own measure: its conn
 
 /* a request, or (magic JOIN_MAGIC) another connection for the download with this token. flags: the most
    connections the client will open; rtt: its ping to the host (ms), in case the host has none yet */
-struct req { u32 magic, version; char key[32]; u32 have_size, have_chk, resume_size, resume_chk, resume_offset, flags, rtt, token, stream, machine; };
+struct req { u32 magic, version; char key[32]; u32 have_size, have_chk, resume_size, resume_chk, resume_offset, flags, rtt, token, stream, machine, shared_ok; char shared[32]; };
 struct rfile { char name[NAME_LEN]; u32 size; };
-struct rep { u32 magic, version, status, nfiles, map_chk, start, streams, token, in_game, map_version; struct rfile f[MAX_FILES]; };
+struct rshared { char name[32]; u32 chk, length, size; };   /* a shared file: its header's checksum and file_length, its file's size */
+/* map_size, map_chk: the map's identity (a converted map's is its standalone build's); file_chk, with f[0].size: the
+file being sent, what a partial download is checked against. shared: the pack's, the stock one's ("" none; its size 0) */
+struct rep { u32 magic, version, status, nfiles, map_chk, start, streams, token, in_game, map_version, map_size, file_chk; struct rfile f[MAX_FILES]; struct rshared shared[2]; };
 struct resume { u32 magic, size, chk; char name[NAME_LEN]; u32 good; };   /* good: bytes of the .part flushed to disk */
 struct sin { short family; u16 port; u32 addr; char zero[8]; };
 struct fds { u32 count; int fd[1]; };
@@ -359,26 +376,127 @@ static u32 file_size(const char *path) {
     return n;
 }
 
-/* a folder map's identity: file size + the checksum in its header (Halo Map Porter stamps a CRC there). A map that
-   draws on a shared file (docs/shared_maps.md) has the identity of the map built without it, which its header keeps:
-   the two builds of a map play together. path = the .map; 0 = none */
-static int map_identity(const char *path, u32 *size, u32 *chk) {
+/* a name we're willing to create: plain characters, no path tricks */
+static int safe_name(const char *s, int max) {
+    int n = 0;
+    if (!s[0] || s[0] == '.' || s[0] == ' ') return 0;
+    for (; s[n]; n++) {
+        u8 c = (u8)s[n];
+        if (n >= max || c < 32 || c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' ||
+            c == '<' || c == '>' || c == '|') return 0;
+        if (c == '.' && s[n + 1] == '.') return 0;
+    }
+    return 1;
+}
+
+/* a map's header, as map sharing needs it. A map that draws on shared files (docs/shared_maps.md) has the identity of
+   the map built without them, which its header keeps: the two builds of a map play together */
+struct map_head {
+    u32 size, chk;                /* its identity */
+    u32 file_chk;                 /* this file's own checksum */
+    char pack[32], stock[32];     /* the shared files it draws on ("" none) */
+    u32 pack_chk, pack_len, stock_chk, stock_len;
+};
+/* a name in a header or a reply: its 32 bytes hold it, and it can make a path. 0: not one */
+static int shared_name_ok(char const *name) {
+    int k;
+    for (k = 0; k < 32 && name[k]; k++) ;
+    return k < 31 && k && safe_name(name, 30);
+}
+static int map_head_read(const char *path, struct map_head *m) {
     u8 hdr[0x800];
-    u32 got = 0;
+    u32 got = 0, version;
     HANDLE h;
     if (!path) return 0;
     h = CreateFileA(path, GENERIC_READ, 1, 0, OPEN_EXISTING, 0, 0);
     if (h == INVALID_HANDLE) return 0;
-    *size = SetFilePointer(h, 0, 0, 2);
+    memset(m, 0, sizeof *m);
+    m->size = SetFilePointer(h, 0, 0, 2);
     SetFilePointer(h, 0, 0, 0);
     if (!ReadFile(h, hdr, sizeof hdr, &got, 0)) got = 0;
     CloseHandle(h);
     if (got != sizeof hdr) return 0;
-    *chk = *(u32 *)(hdr + 0x64);
-    if (*(u32 *)(hdr + 0x700) == 'shrd' && (*(u32 *)(hdr + 0x704) == 1 || *(u32 *)(hdr + 0x704) == 2)) {   /* (the shared reference) */
-        *size = *(u32 *)(hdr + 0x700 + 0x30);
-        *chk = *(u32 *)(hdr + 0x700 + 0x34);
+    m->chk = m->file_chk = *(u32 *)(hdr + 0x64);
+    version = *(u32 *)(hdr + 0x704);
+    if (*(u32 *)(hdr + 0x700) == 'shrd' && (version == 1 || version == 2)) {   /* (the shared reference) */
+        m->size = *(u32 *)(hdr + 0x700 + 0x30);
+        m->chk = *(u32 *)(hdr + 0x700 + 0x34);
+        /* (a name that can't make a path: the game won't use it either, cache_files_windows.c) */
+        if (shared_name_ok((char *)hdr + 0x708)) {
+            memcpy(m->pack, hdr + 0x708, 32);
+            m->pack_chk = *(u32 *)(hdr + 0x728);
+            m->pack_len = *(u32 *)(hdr + 0x72c);
+        }
+        if (version == 2 && shared_name_ok((char *)hdr + 0x738)) {
+            memcpy(m->stock, hdr + 0x738, 32);
+            m->stock_chk = *(u32 *)(hdr + 0x758);
+            m->stock_len = *(u32 *)(hdr + 0x75c);
+        }
     }
+    return 1;
+}
+
+/* where the game finds a shared file for a map (cache_files_windows.c's shared_find): beside it, in the folder above it,
+   the stock one in the game's maps folder; the first with that name. 1 = found, its path in out[128] */
+char const *cache_files_map_directory(void);
+static int shared_find(const char *map_path, const char *name, int stock, char *out) {
+    char folder[128], *e;
+    int k;
+    HANDLE h;
+    if (slen(map_path) >= (int)sizeof folder) return 0;
+    scpy(folder, map_path);
+    for (k = 0; k < 3; k++) {
+        if (k < 2) {
+            for (e = folder + slen(folder); e > folder && e[-1] != '\\'; e--) ;
+            if (e == folder) continue;
+            e[-1] = 0;
+        } else {
+            const char *maps = cache_files_map_directory();
+            int n = slen(maps);
+            if (!stock || n < 2 || n >= (int)sizeof folder) return 0;
+            scpy(folder, maps);
+            if (folder[n - 1] == '\\') folder[n - 1] = 0;
+        }
+        if (slen(folder) + 1 + slen(name) + 7 >= 128) continue;
+        scpy(scpy(scpy(scpy(out, folder), "\\"), name), ".shared");
+        h = CreateFileA(out, GENERIC_READ, 1, 0, OPEN_EXISTING, 0, 0);
+        if (h != INVALID_HANDLE) { CloseHandle(h); return 1; }
+    }
+    return 0;
+}
+/* is this file that shared file, that exact version? (its header's checksum and file_length) */
+static int shared_is(const char *path, u32 chk, u32 length) {
+    u8 hdr[0x68];
+    u32 got = 0;
+    HANDLE h = CreateFileA(path, GENERIC_READ, 1, 0, OPEN_EXISTING, 0, 0);
+    if (h == INVALID_HANDLE) return 0;
+    if (!ReadFile(h, hdr, sizeof hdr, &got, 0)) got = 0;
+    CloseHandle(h);
+    return got == sizeof hdr && *(u32 *)hdr == 'head' && *(u32 *)(hdr + 8) == length && *(u32 *)(hdr + 0x64) == chk;
+}
+/* are the shared files this map draws on all here, the right versions? Looked at again 2 seconds on (the game asks a map's
+   version often, and map_identity had one file to open before there were shared files) */
+static struct { char path[128]; u32 t; int ok; } g_shared_seen;
+static int map_shared_all_here(const char *path, const struct map_head *m) {
+    char found[128];
+    u32 now;
+    if (!m->pack[0] && !m->stock[0]) return 1;
+    now = GetTickCount();
+    if (g_shared_seen.t && now - g_shared_seen.t < 2000 && !ieq(g_shared_seen.path, path)) return g_shared_seen.ok;
+    g_shared_seen.ok =
+        (!m->pack[0] || (shared_find(path, m->pack, 0, found) && shared_is(found, m->pack_chk, m->pack_len))) &&
+        (!m->stock[0] || (shared_find(path, m->stock, 1, found) && shared_is(found, m->stock_chk, m->stock_len)));
+    g_shared_seen.t = 0;
+    if (slen(path) < (int)sizeof g_shared_seen.path) { scpy(g_shared_seen.path, path); g_shared_seen.t = now | 1; }
+    return g_shared_seen.ok;
+}
+/* a folder map's identity (map_head); 0 = none, and none for a copy whose shared files aren't all here: it can't load, so
+   it's as good as missing, and map sharing gets what it lacks. path = the .map */
+static int map_identity(const char *path, u32 *size, u32 *chk) {
+    struct map_head m;
+    if (!map_head_read(path, &m) || !map_shared_all_here(path, &m)) return 0;
+    *size = m.size;
+    *chk = m.chk;
     return 1;
 }
 
@@ -422,19 +540,6 @@ static u32 free_bytes(int r) {
     if (!GetDiskFreeSpaceExA(r ? "T:\\" : "d:\\maps\\", &avail, &total, &tfree)) return 0xffffffff;   /* (can't tell: try) */
     return avail.HighPart ? 0xffffffff : avail.LowPart;
 }
-/* a name we're willing to create: plain characters, no path tricks */
-static int safe_name(const char *s, int max) {
-    int n = 0;
-    if (!s[0] || s[0] == '.' || s[0] == ' ') return 0;
-    for (; s[n]; n++) {
-        u8 c = (u8)s[n];
-        if (n >= max || c < 32 || c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' ||
-            c == '<' || c == '>' || c == '|') return 0;
-        if (c == '.' && s[n + 1] == '.') return 0;
-    }
-    return 1;
-}
-
 /* a map's folder: "folder" or "pack/folder", 30 characters at most */
 static int safe_key(const char *s) {
     char part[32];
@@ -578,6 +683,7 @@ struct slot {
     char names[MAX_FILES][NAME_LEN];
     u32 sizes[MAX_FILES];
     char folder[32];
+    char shared_path[128];        /* sending a shared file: where it is ("": the folder's files) */
     int root;                     /* the maps folder the hosted copy is in */
     int machine;                  /* its Halo machine index (-1: not known) */
 };
@@ -630,7 +736,7 @@ static int st_fill(struct slot *c, struct hst *t) {
         if (!next_block(c, &t->file, &t->off)) return 0;
         t->len = c->sizes[t->file] - t->off;
         if (t->len > CHUNK) t->len = CHUNK;
-        where = (u32)t->file << 28 | t->off;
+        where = (u32)t->file << 28 | t->off / CHUNK;
         memcpy(t->buf, &where, 4);
         t->crc = crc_upd(~0u, t->buf, 4); t->done = 0; t->phase = 1;
         t->bpos = 0; t->blen = 4;
@@ -639,7 +745,8 @@ static int st_fill(struct slot *c, struct hst *t) {
     if (t->hf != t->file + 1) {                          /* the next piece of its data */
         if (t->hf) CloseHandle(t->h);
         t->hf = 0;
-        t->h = CreateFileA(src_path(g_wpath, c->root, c->folder, c->names[t->file]), GENERIC_READ, 1, 0, OPEN_EXISTING, 0, 0);
+        t->h = CreateFileA(c->shared_path[0] ? c->shared_path : src_path(g_wpath, c->root, c->folder, c->names[t->file]),
+            GENERIC_READ, 1, 0, OPEN_EXISTING, 0, 0);
         if (t->h == INVALID_HANDLE) return -1;
         t->hf = t->file + 1; t->hpos = 0;
     }
@@ -740,8 +847,9 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
     struct hst *t = &c->st[0];
     const char *host_map = network_game_current_map_name();
     const char *why = "not the map being hosted";
-    int i, k, n = 0, kk = (int)(c - g_sl);
+    int i, k, n = 0, kk = (int)(c - g_sl), sending = 0, shared = 0;
     u32 size = 0, chk = 0, start = 0, total = 0;
+    struct map_head m;
     memset(c, 0, sizeof *c);
     c->machine = q->machine < 16 ? (int)q->machine : -1; c->ping = q->rtt;
     c->addr = p->addr; c->t = c->t0 = c->beat = now;
@@ -749,19 +857,33 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
     memset(&g_hrep, 0, sizeof g_hrep);
     g_hrep.magic = REP_MAGIC; g_hrep.version = VERSION; g_hrep.status = REP_UNAVAILABLE; g_hrep.in_game = host_in_game();
     q->key[31] = 0;
+    q->shared[31] = 0;
     i = hmp_find_key(q->key);
     if (q->magic != REQ_MAGIC || q->version != VERSION) why = "different map sharing version";
     else if (q->key[0] != '+' || !host_map || ieq(q->key, host_map) != 0) g_hrep.streams = WHY_NOT_HOSTED;   /* (changing maps: ask again) */
-    else if (i < 0 || !hmp_map_path_c(i, -1, g_p1) || !map_identity(g_p1, &size, &chk)) why = "can't read its own copy";
+    else if (i < 0 || !hmp_map_path_c(i, -1, g_p1) || !map_head_read(g_p1, &m) || !map_shared_all_here(g_p1, &m)) why = "can't read its own copy";
     else if (!hmp_maps_is_good(q->key)) g_hrep.streams = WHY_CHECKING;   /* (not yet loaded here: ask again) */
     else {
+        size = m.size; chk = m.chk;
+        g_hrep.map_size = size;
         g_hrep.map_chk = chk;
+        g_hrep.file_chk = m.file_chk;
         g_hrep.map_version = hmp_maps_version(i);
-        if (q->have_size == size && q->have_chk == chk) {
+        scpy(c->folder, q->key + 1);
+        c->root = hmp_root_c(i);
+        if (q->shared[0]) {                               /* the pack's shared file: only the one the map names, never stock.shared */
+            u32 sz;
+            why = "not a shared file of this map";
+            if (m.pack[0] && !ieq(q->shared, m.pack) && ieq(m.pack, "stock") && shared_find(g_p1, m.pack, 0, c->shared_path) &&
+                (sz = file_size(c->shared_path)) != 0xffffffff && sz <= MAX_SHARED_SIZE) {
+                scpy(scpy(c->names[0], m.pack), ".shared"); c->sizes[0] = sz;
+                scpy(g_hrep.f[0].name, c->names[0]); g_hrep.f[0].size = sz;
+                g_hrep.file_chk = m.pack_chk;
+                total = sz; n = 1; sending = 1; shared = 1;
+            } else c->shared_path[0] = 0;
+        } else if (q->have_size == size && q->have_chk == chk) {
             g_hrep.status = REP_SAME;
         } else {
-            scpy(c->folder, q->key + 1);
-            c->root = hmp_root_c(i);
             for (k = 0; k < MAX_FILES; k++) {
                 const char *f = hmp_maps_file_c(i, k);
                 u32 sz;
@@ -773,21 +895,40 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
                 total += sz; n++;
             }
             if (n && ends_with(c->names[0], ".map")) {
-                g_hrep.status = REP_SENDING; g_hrep.nfiles = n; c->nfiles = n;
-                if (q->resume_size == size && q->resume_chk == chk && q->resume_offset && q->resume_offset < size &&
-                    q->resume_offset % CHUNK == 0)
-                    start = q->resume_offset;
-                g_hrep.start = c->start = start;
-                c->total = total - start;
-                c->coff = n == 1 ? start : 0;
-                c->want = conn_count(c, q);
-                c->token = now ^ (c->addr * 2654435761u) ^ ((u32)kk << 24) ^ 0x5eed;
-                g_hrep.streams = (u32)c->want; g_hrep.token = c->token;
+                if ((m.pack[0] || m.stock[0]) && !q->shared_ok) {   /* first what it draws on: the client says what it lacks */
+                    g_hrep.status = REP_SHARED; g_hrep.nfiles = n;
+                    if (m.pack[0]) {
+                        scpy(g_hrep.shared[0].name, m.pack);
+                        g_hrep.shared[0].chk = m.pack_chk; g_hrep.shared[0].length = m.pack_len;
+                        if (shared_find(g_p1, m.pack, 0, g_p2)) g_hrep.shared[0].size = file_size(g_p2);
+                    }
+                    if (m.stock[0]) {
+                        scpy(g_hrep.shared[1].name, m.stock);
+                        g_hrep.shared[1].chk = m.stock_chk; g_hrep.shared[1].length = m.stock_len;
+                    }
+                } else sending = 1;
             }
+        }
+        if (sending) {
+            g_hrep.status = REP_SENDING; g_hrep.nfiles = n; c->nfiles = n;
+            if (q->resume_size == c->sizes[0] && q->resume_chk == g_hrep.file_chk && q->resume_offset &&
+                q->resume_offset < c->sizes[0] && q->resume_offset % CHUNK == 0)
+                start = q->resume_offset;
+            g_hrep.start = c->start = start;
+            c->total = total - start;
+            c->coff = n == 1 ? start : 0;
+            c->want = conn_count(c, q);
+            c->token = now ^ (c->addr * 2654435761u) ^ ((u32)kk << 24) ^ 0x5eed;
+            g_hrep.streams = (u32)c->want; g_hrep.token = c->token;
         }
     }
     if (g_hrep.status == REP_SAME) lg("host: player %d asked for %s: has the same build", kk, q->key);
-    else if (g_hrep.status == REP_SENDING) {
+    else if (g_hrep.status == REP_SHARED) lg("host: player %d asked for %s: it draws on shared files: %s%s%s", kk, q->key,
+        g_hrep.shared[0].name, g_hrep.shared[0].name[0] && g_hrep.shared[1].name[0] ? " and " : "", g_hrep.shared[1].name);
+    else if (g_hrep.status == REP_SENDING && shared) {
+        if (start) lg("host: player %d asked for %s: sending it, %u bytes, resuming at %u", kk, c->names[0], total, start);
+        else lg("host: player %d asked for %s: sending it, %u bytes", kk, c->names[0], total);
+    } else if (g_hrep.status == REP_SENDING) {
         const char *over = c->want == 3 ? " over 3 connections" : c->want == 2 ? " over 2 connections" : "";
         if (start) lg("host: player %d asked for %s: sending %d files, %u bytes, resuming at %u%s", kk, q->key, n, total, start, over);
         else lg("host: player %d asked for %s: sending %d files, %u bytes%s", kk, q->key, n, total, over);
@@ -873,6 +1014,8 @@ static void pend_tick(u32 now) {
         n = w_recv(p->s, (char *)&p->q + p->qlen, sizeof p->q - p->qlen, 0);
         if (n == 0 || (n < 0 && (r = w_error()) != WOULDBLOCK)) { pend_close(p); continue; }
         if (n > 0) p->qlen += n;
+        /* (another version's request is another size: answered as soon as it says which, so its console can say why) */
+        if (p->qlen >= 8 && p->q.magic == REQ_MAGIC && p->q.version != VERSION) p->qlen = (int)sizeof p->q;
         if (p->qlen < (int)sizeof p->q) continue;
         if (p->q.magic == JOIN_MAGIC) { slot_join(p, now); continue; }
         for (j = 0; j < SLOTS && (g_sl[j].state || g_sl[j].run != JOB_IDLE); j++) ;
@@ -1047,7 +1190,7 @@ ready:
 
 /* ================================================================ client ================ */
 
-enum { CL_IDLE, CL_START, CL_CONNECT, CL_REPLY, CL_RECV, CL_OK, CL_WAIT, CL_LEFT, CL_ASK, CL_NOROOM, CL_ROOM };
+enum { CL_IDLE, CL_START, CL_CONNECT, CL_REPLY, CL_RECV, CL_OK, CL_WAIT, CL_LEFT, CL_ASK, CL_NOROOM, CL_ROOM, CL_NOSTOCK };
 static struct {
     int state, s;
     char key[32];
@@ -1066,12 +1209,25 @@ static struct {
     u32 rate, rate_t, rate_done;  /* recent download speed (bytes/s), for the time left */
     u32 need_mb, free_mb;         /* CL_NOROOM: what the download needs and what's free (MB) */
     int room_asked;               /* the room prompt was answered for this download: not asked again (oxbox_menus.c) */
+    int shared_ok;                /* the map's shared files are seen to: the host may send the map */
+    char fetch[32];               /* the pack's shared file being fetched first ("": the map itself is what's asked for) */
+    char fetch_rel[64];           /* ... where it goes: "pack/name", "name" */
+    u32 fetch_chk, fetch_len;     /* ... the version the map names */
+    u32 fetched;                  /* ... its size, once here: counted with the map as a download */
 } g_cl = { .s = NO_SOCK, .xs = { NO_SOCK, NO_SOCK, NO_SOCK } };
+static const char *dl_rel(void) { return g_cl.fetch[0] ? g_cl.fetch_rel : g_cl.key + 1; }
 /* not enough room for the host's map: say so on the lobby's map and countdown lines (and in the heartbeats, so the
    host and the others can show who). It stays like this until the map changes; nothing is downloaded. */
 static void cl_noroom_text(void) {
     status("No room for this map", -1, 0);
     L_start("No room for this map: needs "); L_u(g_cl.need_mb); L_a(" MB, "); L_u(g_cl.free_mb); L_a(" MB free");
+}
+
+/* the map draws on a stock.shared this console hasn't: it builds its own, so nothing can be sent. It stays like this until
+   the map changes, as with no room */
+static void cl_nostock_text(void) {
+    status("No stock.shared", -1, 0);
+    L_start("No stock.shared: run the installer");
 }
 
 /* ---- the downloads' room (OPTIONS' KEEP DOWNLOADS UNDER: hmp_downloads_limit_mb). Each map map sharing downloads is
@@ -1133,7 +1289,7 @@ struct cst {
 static struct {
     volatile int run, stop, result, err;
     int orphan;                   /* the download was abandoned while the worker had it */
-    char key[32];
+    char key[64];                 /* (what it's a download of: dl_rel) */
     struct cst st[MAXS];
     HANDLE h[MAX_FILES]; u32 hpos[MAX_FILES];   /* every file of the download, open for writing (0 = none) */
     u32 size[MAX_FILES]; int nfiles;
@@ -1148,13 +1304,13 @@ static struct {
     char resume_path[128];
     struct resume rs;
 } g_job;
-static u8 g_have[MAX_MAP_SIZE / CHUNK / 8]; /* map blocks that are here (bits) */
+static u8 g_have[MAX_SHARED_SIZE / CHUNK / 8]; /* blocks of file 0 that are here (bits): a map's, or a shared file's */
 #define HAVE(b) (g_have[(b) >> 3] & (1 << ((b) & 7)))
 
 /* the partial download written since the console was switched on: its file is consistent (Halo's
    file cache never lost anything), so it can be continued from where its blocks stop being complete.
    One left over from before a restart is only trusted up to the last flush. */
-static char g_sess_key[32];
+static char g_sess_key[64];
 static u32 g_sess_part;
 static void cl_close(void) {
     int k;
@@ -1186,9 +1342,9 @@ static void job_release(void) {
 }
 
 /* the temporary folder a download goes into: "<folder>.hmp_dl" (the map saved as .part until it's done) */
-static char *tmp_dir(char *buf) { return mpath(buf, g_dl_root, g_cl.key + 1, ".hmp_dl", 0); }
+static char *tmp_dir(char *buf) { return mpath(buf, g_dl_root, dl_rel(), ".hmp_dl", 0); }
 static char *tmp_file(char *buf, const char *name, int part) {
-    mpath(buf, g_dl_root, g_cl.key + 1, ".hmp_dl", name);
+    mpath(buf, g_dl_root, dl_rel(), ".hmp_dl", name);
     if (part) scpy(buf + slen(buf), ".part");
     return buf;
 }
@@ -1204,7 +1360,8 @@ static void cl_give_up(u32 now, int failed, const char *why, int err) {
     cl_close();
     if (why) lg("client: %s: %s (error %d)", failed ? "download failed" : "couldn't check the map with the host", why, err);
     if (failed) { g_cl.tries++; g_cl.misses = 0; } else g_cl.misses++;
-    if ((!failed || g_cl.tries >= 5) && hmp_find_key(g_cl.key) >= 0) {
+    /* (a copy whose shared files aren't all here wouldn't load: hmp_share_map_version says none) */
+    if ((!failed || g_cl.tries >= 5) && hmp_find_key(g_cl.key) >= 0 && hmp_share_map_version(g_cl.key)) {
         lg("client: using the copy already in %s\\%s", k_root_name[hmp_root_c(hmp_find_key(g_cl.key)) & 1], g_cl.key + 1);
         g_cl.state = CL_OK; g_status_on = 0; return;
     }
@@ -1305,11 +1462,18 @@ static void keep_genres(const char *old_dir, const char *new_dir) {
 static void cl_finish(u32 now) {
     char *fin = mpath(g_p1, g_dl_root, g_cl.key + 1, 0, 0), *tmp = tmp_dir(g_p2);
     char *old = mpath(g_p3, g_dl_root, g_cl.key + 1, ".hmp_old", 0);
-    char part[128], whole[128];
-    int i, had;
+    char part[128], whole[128], old_shared[32];
+    int i, had, kept = 0;
     u32 ms = now - g_cl.t0;
     cl_close();
     lg("client: received %u bytes in %u ms (%u KB/s)", g_cl.got_now, ms, ms ? g_cl.got_now / ms : 0);
+    /* (the shared file the copy being replaced draws on: it goes if that copy was the last to use it) */
+    old_shared[0] = 0;
+    i = hmp_find_key(g_cl.key);
+    if (i >= 0 && hmp_root_c(i) == g_dl_root && hmp_map_path_c(i, g_dl_root, whole)) {
+        struct map_head m;
+        if (map_head_read(whole, &m)) scpy(old_shared, m.pack);
+    }
     DeleteFileA(tmp_file(part, "resume.hmp", 0));
     if (!MoveFileA(tmp_file(part, g_cl.r.f[0].name, 1), tmp_file(whole, g_cl.r.f[0].name, 0))) {
         cl_give_up(now, 1, "couldn't rename the finished map", 0); return;
@@ -1328,24 +1492,85 @@ static void cl_finish(u32 now) {
                <folder>.hmp_prev (one per map; the map list skips it), in case it was the newer one */
             char *prev = mpath(g_p2, g_dl_root, g_cl.key + 1, ".hmp_prev", 0);
             rm_folder(prev);
-            if (MoveFileA(old, prev)) lg("client: kept the replaced copy as %s.hmp_prev", g_cl.key + 1);
+            if (MoveFileA(old, prev)) { kept = 1; lg("client: kept the replaced copy as %s.hmp_prev", g_cl.key + 1); }
             else rm_folder(old);
         } else rm_folder(old);
     }
+    g_shared_seen.t = 0;
     if (cache_files_forget_cached_map(g_cl.key)) lg("client: dropped the old build from Halo's map cache");
     hmp_maps_scan();
+    if (had && !kept) hmp_maps_shared_release(old_shared, g_cl.key);
     if (!hmp_use_root_c(hmp_find_key(g_cl.key), g_dl_root)) lg("client: the new copy isn't in the map list!");   /* (this one, whatever the clock says) */
     g_sess_key[0] = 0;
     lg("client: installed %s\\%s%s", k_root_name[g_dl_root], g_cl.key + 1, had ? " (replacing the older copy)" : "");
-    hmp_stats_downloaded(g_cl.key, (g_cl.total + (1u << 20) - 1) >> 20);   /* (a download: KEEP DOWNLOADS UNDER counts it) */
+    hmp_stats_downloaded(g_cl.key, (g_cl.total + g_cl.fetched + (1u << 20) - 1) >> 20);   /* (a download: KEEP DOWNLOADS UNDER counts it) */
     g_cl.state = CL_OK;
     g_status_on = 0;
+}
+
+/* the pack's shared file is here, whole and checked by its blocks: into the folder above the map's, where the map finds
+   it, and the host is asked for the map */
+static void cl_finish_shared(u32 now) {
+    char part[128], whole[128];
+    u32 ms = now - g_cl.t0;
+    cl_close();
+    lg("client: received %s, %u bytes in %u ms (%u KB/s)", g_cl.fetch, g_cl.got_now, ms, ms ? g_cl.got_now / ms : 0);
+    tmp_file(part, g_cl.r.f[0].name, 1);
+    if (!shared_is(part, g_cl.fetch_chk, g_cl.fetch_len)) { cl_discard(now, "it isn't the version the map names"); return; }
+    DeleteFileA(tmp_file(whole, "resume.hmp", 0));
+    mpath(whole, g_dl_root, g_cl.fetch_rel, ".shared", 0);
+    DeleteFileA(whole);                               /* (another version under this name: shared_here turned it down) */
+    if (!MoveFileA(part, whole)) { cl_give_up(now, 1, "couldn't move the shared file into place", 0); return; }
+    rm_folder(tmp_dir(g_p2));
+    lg("client: installed %s", whole);
+    g_sess_key[0] = 0;
+    g_shared_seen.t = 0;
+    cache_files_forget_cached_map(g_cl.key);          /* (and what the game last read of the map's shared files) */
+    g_cl.fetched = g_cl.total;
+    g_cl.fetch[0] = 0;
+    g_cl.state = CL_START;
+}
+
+/* is this shared file where the map will find it, that exact version? (the folder above the map's; the stock one in the
+   game's maps folder too. Not beside the map: its folder is about to be replaced) */
+static int shared_here(const struct rshared *f, int stock) {
+    char rel[64], *e, path[128], folder[128];
+    const char *key = g_cl.key + 1;
+    int k;
+    for (k = 0; key[k] && key[k] != '/' && k < 31; k++) ;
+    if (key[k] == '/') {
+        memcpy(rel, key, (u32)k); rel[k] = '/';
+        scpy(rel + k + 1, f->name);
+    } else scpy(rel, f->name);
+    mpath(path, g_dl_root, rel, ".shared", 0);
+    /* (only the folder itself counts here: the first with the name is the one the game takes) */
+    if (GetFileAttributesA(path) != 0xffffffff) return shared_is(path, f->chk, f->length);
+    if (!stock) return 0;
+    scpy(folder, cache_files_map_directory());
+    e = folder + slen(folder);
+    if (slen(folder) + slen(f->name) + 7 >= (int)sizeof folder) return 0;
+    scpy(scpy(e, f->name), ".shared");
+    return shared_is(folder, f->chk, f->length);
 }
 
 static int cl_check_reply(void) {
     struct rep *r = &g_cl.r;
     u32 k, total = 0;
     if (r->magic != REP_MAGIC || r->version != VERSION || r->nfiles < 1 || r->nfiles > MAX_FILES) return 0;
+    if (g_cl.fetch[0]) {                              /* the shared file asked for, and nothing else */
+        char want[NAME_LEN];
+        r->f[0].name[NAME_LEN - 1] = 0;
+        scpy(scpy(want, g_cl.fetch), ".shared");
+        if (r->status != REP_SENDING || r->nfiles != 1 || ieq(r->f[0].name, want) || r->f[0].size < 0x800 || r->f[0].size > MAX_SHARED_SIZE ||
+            r->file_chk != g_cl.fetch_chk || r->start >= r->f[0].size || r->start % CHUNK) return 0;
+        g_cl.total = r->f[0].size;
+        return 1;
+    }
+    /* (the names a host gives: they make paths here. Never a pack's file called stock: that's never sent) */
+    if (r->status == REP_SHARED) {
+        for (k = 0; k < 2; k++) if (r->shared[k].name[0] && !shared_name_ok(r->shared[k].name)) return 0;
+        if ((r->shared[0].name[0] && !ieq(r->shared[0].name, "stock")) || r->shared[0].size > MAX_SHARED_SIZE) return 0;
+    }
     for (k = 0; k < r->nfiles; k++) {
         char *n = r->f[k].name;
         n[NAME_LEN - 1] = 0;
@@ -1407,7 +1632,7 @@ static void tidy_dir(const char *sub, const char *ours) {
 }
 static void cl_tidy(void) {
     char pk[32];
-    const char *k = g_cl.key + 1;
+    const char *k = dl_rel();
     int i = 0;
     for (; k[i] && k[i] != '/' && i < 31; i++) pk[i] = k[i];
     pk[i] = 0;
@@ -1470,6 +1695,8 @@ static void cl_connect(u32 now) {
     scpy(q.key, g_cl.key);
     q.flags = my_streams();
     q.machine = (u32)my_machine();
+    q.shared_ok = (u32)g_cl.shared_ok;
+    scpy(q.shared, g_cl.fetch);
     q.rtt = host_rtt();
     if (!q.rtt) q.rtt = g_cl.rtt;
     i = hmp_find_key(g_cl.key);
@@ -1481,7 +1708,7 @@ static void cl_connect(u32 now) {
         rs.name[NAME_LEN - 1] = 0;
         if (got == sizeof rs && rs.magic == RES_MAGIC && safe_name(rs.name, NAME_LEN - 6)) {
             u32 have = file_size(tmp_file(g_p2, rs.name, 1)), use;
-            int fresh = have != 0xffffffff && ieq(g_sess_key, g_cl.key) == 0 && have >= g_sess_part;
+            int fresh = have != 0xffffffff && ieq(g_sess_key, dl_rel()) == 0 && have >= g_sess_part;
             use = fresh ? g_sess_part : have < rs.good ? have : rs.good;   /* from before a restart: only what was flushed */
             if (have != 0xffffffff && use >= CHUNK) {
                 q.resume_size = rs.size; q.resume_chk = rs.chk; q.resume_offset = use - use % CHUNK;
@@ -1526,7 +1753,7 @@ static int cl_open_files(void) {
     g_job.first = g_job.prefix = g_cl.r.start / CHUNK;
     g_job.nblk = (g_cl.r.f[0].size + CHUNK - 1) / CHUNK;
     memset(&g_job.rs, 0, sizeof g_job.rs);
-    g_job.rs.magic = RES_MAGIC; g_job.rs.size = g_cl.r.f[0].size; g_job.rs.chk = g_cl.r.map_chk; scpy(g_job.rs.name, g_cl.r.f[0].name);
+    g_job.rs.magic = RES_MAGIC; g_job.rs.size = g_cl.r.f[0].size; g_job.rs.chk = g_cl.r.file_chk; scpy(g_job.rs.name, g_cl.r.f[0].name);
     tmp_file(g_job.resume_path, "resume.hmp", 0);
     if (!g_cl.r.start) put_resume(g_job.resume_path, &g_job.rs);   /* which build the partial map belongs to */
     return 1;
@@ -1553,15 +1780,16 @@ static void cl_reply(u32 now) {
         return;
     }
     g_cl.rlen += n; g_cl.t = now;
+    /* (another version's reply is another size: known as soon as it says which) */
+    if (g_cl.rlen >= 8 && g_cl.r.magic == REP_MAGIC && g_cl.r.version != VERSION) {
+        g_cl.mismatch = 1;
+        cl_give_up(now, 0, "the host is on a test build that shares maps differently", (int)g_cl.r.version);
+        return;
+    }
     if (g_cl.rlen < (int)sizeof g_cl.r) return;
     if (g_cl.r.magic == REP_MAGIC && g_cl.r.status == REP_SAME && hmp_find_key(g_cl.key) >= 0) {
         lg("client: same build as the host");
         cl_close(); rm_folder(tmp_dir(g_p1)); g_cl.state = CL_OK; g_status_on = 0; return;
-    }
-    if (g_cl.r.magic == REP_MAGIC && g_cl.r.version != VERSION) {
-        g_cl.mismatch = 1;
-        cl_give_up(now, 0, "the host is on a test build that shares maps differently", (int)g_cl.r.version);
-        return;
     }
     if (g_cl.r.magic == REP_MAGIC && g_cl.r.status == REP_UNAVAILABLE && g_cl.r.streams == WHY_CHECKING && g_cl.notyet < 60) {
         g_cl.notyet++;                                /* the host's copy is still loading on the host (up to 5 minutes) */
@@ -1579,12 +1807,12 @@ static void cl_reply(u32 now) {
         return;
     }
     if (g_cl.r.magic == REP_MAGIC && g_cl.r.status == REP_UNAVAILABLE) { cl_give_up(now, 0, "the host won't send this map", 0); return; }
-    if (g_cl.r.status != REP_SENDING || !cl_check_reply()) { cl_give_up(now, 0, "bad reply from the host", 0); return; }
-    k = hmp_find_key(g_cl.key);
+    if ((g_cl.r.status != REP_SENDING && g_cl.r.status != REP_SHARED) || !cl_check_reply()) { cl_give_up(now, 0, "bad reply from the host", 0); return; }
+    k = g_cl.fetch[0] ? -1 : hmp_find_key(g_cl.key);  /* (which copy to use and where this goes are settled before a shared file) */
     if (k >= 0 && hmp_both_c(k)) {                      /* in both maps folders: maybe the other copy is the host's build */
         u32 sz, ck;
         int r2 = !hmp_root_c(k);
-        if (hmp_map_path_c(k, r2, g_p1) && map_identity(g_p1, &sz, &ck) && sz == g_cl.r.f[0].size && ck == g_cl.r.map_chk &&
+        if (hmp_map_path_c(k, r2, g_p1) && map_identity(g_p1, &sz, &ck) && sz == g_cl.r.map_size && ck == g_cl.r.map_chk &&
             hmp_use_root_c(k, r2)) {
             lg("client: the copy in %s is the host's build; using that one", k_root_name[r2]);
             cl_close(); g_cl.state = CL_OK; g_status_on = 0; return;
@@ -1610,6 +1838,28 @@ static void cl_reply(u32 now) {
                    "keep it in: it replaces this console's", g_cl.key, g_cl.r.map_version, g_cl.mine);
         }
     }
+    if (g_cl.r.status == REP_SHARED) {                /* what the map draws on comes first */
+        const struct rshared *pack = &g_cl.r.shared[0], *stock = &g_cl.r.shared[1];
+        if (stock->name[0] && !shared_here(stock, 1)) {
+            lg("client: %s draws on %s.shared (%x), which this console hasn't: nothing can send it; run the installer", g_cl.key, stock->name, stock->chk);
+            cl_close();
+            g_cl.state = CL_NOSTOCK;
+            cl_nostock_text();
+            return;
+        }
+        g_cl.shared_ok = 1;
+        if (pack->name[0] && !shared_here(pack, 0)) {
+            int p = 0;
+            const char *key = g_cl.key + 1;
+            for (; key[p] && key[p] != '/' && p < 31; p++) ;
+            if (key[p] == '/') { memcpy(g_cl.fetch_rel, key, (u32)p); g_cl.fetch_rel[p] = '/'; scpy(g_cl.fetch_rel + p + 1, pack->name); }
+            else scpy(g_cl.fetch_rel, pack->name);
+            scpy(g_cl.fetch, pack->name);
+            g_cl.fetch_chk = pack->chk; g_cl.fetch_len = pack->length;
+            g_cl.total += pack->size;                 /* (the room both will take) */
+            lg("client: %s draws on %s.shared (%x), which isn't here: fetching it first, %u bytes", g_cl.key, pack->name, pack->chk, pack->size);
+        }
+    }
     {                                                 /* room for it? Older downloads only go when the player says (room_check) */
         u32 need = g_cl.total - g_cl.r.start + g_cl.r.nfiles * CHUNK + (256u << 10), have = free_bytes(g_dl_root);
         if (have < need) {                            /* other maps' partial downloads go first (build 20) */
@@ -1626,6 +1876,11 @@ static void cl_reply(u32 now) {
             cl_noroom_text();
             return;
         }
+    }
+    if (g_cl.r.status == REP_SHARED) {                /* asked again: for the shared file, or now the map */
+        cl_close();
+        g_cl.state = CL_START;
+        return;
     }
     streams = g_cl.r.streams < 1 ? 1 : g_cl.r.streams > my_streams() ? my_streams() : g_cl.r.streams;
     {
@@ -1745,7 +2000,7 @@ static void cl_take(void) {
 
 /* worker: a whole block arrived on connection t: check it, write it where it goes. 0 = fine, else R_* */
 static int cl_block(struct cst *t) {
-    u32 where = *(u32 *)t->buf, f = where >> 28, off = where & 0x0fffffff, b = off / CHUNK, m = t->need - 8, put = 0, t1, t2;
+    u32 where = *(u32 *)t->buf, f = where >> 28, b = where & 0x0fffffff, off = b * CHUNK, m = t->need - 8, put = 0, t1, t2;
     u8 *data = t->buf + 4;
     if (~crc_upd(~0u, t->buf, m + 4) != *(u32 *)(data + m)) return R_CRC;
     if (f ? g_job.small[f] & (1 << b) : HAVE(b)) return 0;   /* (already here) */
@@ -1802,10 +2057,11 @@ static int cl_pump(u32 now) {
             g_job.t_last = now; got = 1; t->got = 1;
             t->blen += n; t->ack += n; rd += (u32)n;
             if (t->blen == 4 && !t->need) {               /* a block's header: which file, where */
-                u32 where = *(u32 *)t->buf, f = where >> 28, off = where & 0x0fffffff, len;
-                if ((int)f >= g_job.nfiles || off % CHUNK || off >= g_job.size[f] || (!f && off < g_job.first * CHUNK)) {
+                u32 where = *(u32 *)t->buf, f = where >> 28, b = where & 0x0fffffff, off, len;
+                if ((int)f >= g_job.nfiles || b >= (g_job.size[f] + CHUNK - 1) / CHUNK || (!f && b < g_job.first)) {
                     JOB_END(g_job, R_CRC);
                 }
+                off = b * CHUNK;
                 len = g_job.size[f] - off;
                 t->need = 8 + (len < CHUNK ? len : CHUNK);
             } else if (t->need && t->blen == (int)t->need) {
@@ -1855,7 +2111,8 @@ static void cl_recv(u32 now) {
             rate_upd(&g_cl.rate, &g_cl.rate_t, &g_cl.rate_done, done, now);
             cl_title();
             status(g_title[0] ? g_title_a : "Downloading map ", pct, 0);
-            if (g_title[0]) { L_start("Downloading "); L_a(g_title_a); }
+            if (g_cl.fetch[0]) L_start("Downloading shared file: ");
+            else if (g_title[0]) { L_start("Downloading "); L_a(g_title_a); }
             else L_start("Downloading map: ");
             L_pct(pct, g_cl.rate ? (g_cl.total - done) / g_cl.rate + 1 : 0);
         }
@@ -1867,7 +2124,10 @@ static void cl_recv(u32 now) {
     if (res == R_CRC) lg("client: a block of %s arrived damaged (the first one missing is at %u)", g_cl.r.f[0].name, g_job.prefix * CHUNK);
     cl_take();
     switch (res) {
-    case R_FINISHED: cl_finish(now); return;
+    case R_FINISHED:
+        if (g_cl.fetch[0]) cl_finish_shared(now);
+        else cl_finish(now);
+        return;
     case R_CRC: cl_give_up(now, 1, "checksum mismatch", 0); return;
     case R_WRITE: cl_discard(now, "couldn't write (disk full?)"); return;
     case R_HUNGUP: cl_give_up(now, 1, "host hung up", 0); return;
@@ -2134,7 +2394,7 @@ boolean map_share_holds_players(void) {
        the map) */
     if (client && !global_network_game_server_get() && !network_game_client_get_game(client)->map.name[0]) return TRUE;
     switch (g_cl.state) {
-    case CL_START: case CL_CONNECT: case CL_ASK: case CL_REPLY: case CL_WAIT: case CL_LEFT: case CL_NOROOM: case CL_ROOM:
+    case CL_START: case CL_CONNECT: case CL_ASK: case CL_REPLY: case CL_WAIT: case CL_LEFT: case CL_NOROOM: case CL_ROOM: case CL_NOSTOCK:
         return TRUE;
     case CL_RECV: return g_cl.r.in_game != 0;
     default: return FALSE;
@@ -2267,8 +2527,11 @@ boolean hmp_worker_running(void) { return g_worker != 0; }
 isn't loaded (network_client_manager.c) */
 boolean hmp_share_fetching(char const *key) {
     return key && g_cl.state && g_cl.state != CL_OK && g_cl.state != CL_LEFT && g_cl.state != CL_NOROOM &&
-        !ieq(g_cl.key, key);
+        g_cl.state != CL_NOSTOCK && !ieq(g_cl.key, key);
 }
+
+/* whether this map draws on a stock.shared this console hasn't got, so nothing can fetch it (network_client_manager.c) */
+boolean hmp_share_lacks_stock(char const *key) { return key && g_cl.state == CL_NOSTOCK && !ieq(g_cl.key, key); }
 
 /* oxbox: whether the lobby's countdown bar shows a download's status (bots.c draws its label there otherwise) */
 boolean map_share_status_showing(void) { return g_status_on && g_label[0]; }

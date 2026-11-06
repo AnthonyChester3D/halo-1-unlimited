@@ -1465,6 +1465,52 @@ static boolean has_folder(char const *path)
 	return found;
 }
 
+/* the pack's shared file a .map draws on (docs/shared_maps.md): its name in name[32]; "" for none */
+static void map_pack_shared(char const *path, char *name)
+{
+	unsigned char header[0x728];
+	unsigned long got = 0;
+	HANDLE file = CreateFileA(path, GENERIC_READ, 1 /* FILE_SHARE_READ */, NULL, OPEN_EXISTING, 0, NULL);
+	name[0] = 0;
+	if (file == INVALID_HANDLE_VALUE) return;
+	if (!ReadFile(file, header, sizeof header, &got, NULL)) got = 0;
+	CloseHandle(file);
+	if (got == sizeof header && *(unsigned long *)(header + 0x700) == 'shrd' && memchr(header + 0x708, 0, 32))
+		strcpy(name, (char const *)header + 0x708);
+}
+
+/* a map that drew on the pack's shared file `name` has gone (key: where it was): the file goes too once no map in the list
+draws on it, from the folder above that map's in either maps folder. Never the stock one: the installer's, for every map.
+The list is as it is now: hmp_maps_scan first */
+void hmp_maps_shared_release(char const *name, char const *key)
+{
+	char path[310], other[32];
+	char const *k;
+	long i;
+	short root;
+	if (!name || !name[0] || !ieq(name, "stock") || !key || key[0] != '+' || strchr(name, '\\') || strchr(name, '/') || strstr(name, "..")) return;
+	for (i = 0; i < hmp_maps_globals.map_count; i++)
+	{
+		map_path(path, &hmp_maps_globals.maps[i]);
+		map_pack_shared(path, other);
+		if (!ieq(other, name)) return;
+	}
+	k = strchr(key, '/');
+	for (root = 0; root < 2; root++)
+	{
+		char *q = scpy(path, maps_roots[root]);
+		if (k)
+		{
+			memcpy(q, key + 1, k - key - 1);
+			q += k - key - 1;
+			*q++ = '\\';
+		}
+		scpy(scpy(q, name), ".shared");
+		if (GetFileAttributesA(path) != NO_FILE_ATTRIBUTES && DeleteFileA(path))
+			hmp_log("maps: deleted %s (no map draws on it now)", path);
+	}
+}
+
 /* oxbox: the map browser's Delete (hmp_browse.c): folder map key ("+folder", "+pack/folder") gone from both maps
 folders, with its .hmp_prev copy (map sharing's), out of Halo's map cache; a pack with no map left goes too.
 hmp_maps_scan after. TRUE when no copy is left */
@@ -1476,6 +1522,7 @@ boolean hmp_maps_delete(char const *key)
 	short root;
 	boolean gone = TRUE;
 	size_t length = key ? strlen(key) : 0;
+	char shared_names[2][32];
 	/* (a map's own folder, never a maps folder itself or a pack: "+x" at least, no empty part, no "..") */
 	if (length < 2 || length > 200 || key[0] != '+' || key[1] == '/' || key[length - 1] == '/' || strstr(key, "//") ||
 		strstr(key, "..") || strchr(key, '\\') || hmp_maps_find(key) == NONE)
@@ -1484,6 +1531,13 @@ boolean hmp_maps_delete(char const *key)
 		return FALSE;
 	}
 	cache_files_forget_cached_map(key);              /* (first: a precache may hold the map open) */
+	/* (what its copies draw on, before they go) */
+	for (root = 0; root < 2; root++)
+	{
+		shared_names[root][0] = 0;
+		if (hmp_maps_map_path(hmp_maps_find(key), root, folder, sizeof folder))
+			map_pack_shared(folder, shared_names[root]);
+	}
 	for (root = 0; root < 2; root++)
 	{
 		char *p = key_path(folder, root, key, "");
@@ -1505,6 +1559,12 @@ boolean hmp_maps_delete(char const *key)
 		}
 	}
 	cache_files_forget_cached_map(key);
+	if (shared_names[0][0] || shared_names[1][0])
+	{
+		hmp_maps_scan();
+		for (root = 0; root < 2; root++)
+			hmp_maps_shared_release(shared_names[root], key);
+	}
 	return gone;
 }
 

@@ -424,6 +424,7 @@ static boolean shared_file_path(const char *key, char *path);
 boolean cache_files_shared_wanted(const char *map_name, char *key);
 static boolean cache_files_shared_open(const char *map_name, short map_file_indices[2]);
 static boolean shared_slot_kept(short map_file_index);
+static void shared_lookup_forget(void);
 /* the cache files of the shared files the open map draws on: its pack's, the stock one's (docs/shared_maps.md) */
 static short shared_open_map_file_index[2] = {NONE, NONE};
 #endif
@@ -575,6 +576,8 @@ boolean cache_files_forget_cached_map(
 {
 	short map_file_index = cached_map_files_find_map(map_name);
 
+	/* (what was last read of its shared files: a copy just installed draws on what the one before didn't) */
+	shared_lookup_forget();
 	if (map_file_index == NONE || map_file_index == cache_file_globals.open_map_file_index ||
 		map_file_index == cache_file_globals.copying_to_map_file_index || shared_slot_kept(map_file_index))
 	{
@@ -1941,6 +1944,11 @@ static struct
 		long length;
 	} files[SHARED_FILES];
 } shared_lookup;
+
+static void shared_lookup_forget(void)
+{
+	shared_lookup.map_name[0] = 0;
+}
 
 /* the shared files of the map being loaded: their cache files are kept for it */
 static char shared_kept_keys[SHARED_FILES][32];
