@@ -375,7 +375,7 @@ static int map_identity(const char *path, u32 *size, u32 *chk) {
     CloseHandle(h);
     if (got != sizeof hdr) return 0;
     *chk = *(u32 *)(hdr + 0x64);
-    if (*(u32 *)(hdr + 0x700) == 'shrd' && *(u32 *)(hdr + 0x704) == 1) {   /* (the shared reference: its last two) */
+    if (*(u32 *)(hdr + 0x700) == 'shrd' && (*(u32 *)(hdr + 0x704) == 1 || *(u32 *)(hdr + 0x704) == 2)) {   /* (the shared reference) */
         *size = *(u32 *)(hdr + 0x700 + 0x30);
         *chk = *(u32 *)(hdr + 0x700 + 0x34);
     }
