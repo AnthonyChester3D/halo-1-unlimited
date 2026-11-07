@@ -120,6 +120,8 @@ boolean hmp_maps_same_pack(char const *entry0, char const *entry1);
 wchar_t const *hmp_maps_title(char const *level_name);
 /* the .map of a folder map (a "+key"): the path, TRUE; FALSE for any other level name */
 boolean hmp_map_file_path(char const *level_name, char *path, long size);
+/* a file in a folder map's own folder (its bots.txt, showcase.txt, info.txt), for a pack's map too */
+boolean hmp_map_folder_file(char const *level_name, char const *file, char *path, long size);
 /* a level name a script asks for (map_name: "+./folder" beside the current map, or a plain map name a folder map
 has) as a folder map's key in `out` (TRUE); FALSE when it names none */
 boolean hmp_maps_resolve(char const *name, char const *current, char *out, long size);

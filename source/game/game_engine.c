@@ -597,8 +597,8 @@ struct network_game *network_game_server_get_game(struct network_game_server *se
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
 #include "units/vehicle_definitions.h"
 
-/* port: a folder map's .map (port/linux/game/hmp_maps.c, map_share_xbox.c) */
-boolean hmp_map_file_path(char const *level_name, char *path, long size);
+/* port: a file in a folder map's own folder (port/linux/game/hmp_maps.c, map_share_xbox.c) */
+boolean hmp_map_folder_file(char const *level_name, char const *file, char *path, long size);
 #ifndef FILE_SHARE_READ
 #define FILE_SHARE_READ 0x00000001
 #endif
@@ -8206,19 +8206,15 @@ static void game_engine_vehicle_category_lines_read(
 	void)
 {
 	char const *map_name = game_loaded_map_name();
-	char path[300], line[160], block[512], *slash;
+	char path[300], line[160], block[512];
 	unsigned long got;
 	long n = 0, k, start = 0;
 	boolean in_section = FALSE, utf16 = FALSE, first = TRUE;
 	HANDLE file;
 
 	game_engine_vehicle_categories.line_count = 0;
-	if (!map_name || map_name[0] != '+' || !hmp_map_file_path(map_name, path, sizeof(path)))
+	if (!map_name || map_name[0] != '+' || !hmp_map_folder_file(map_name, "info.txt", path, sizeof(path)))
 		return;
-	slash = strrchr(path, '\\');
-	if (!slash || (long)(slash - path) + 10 >= (long)sizeof(path))
-		return;
-	strcpy(slash + 1, "info.txt");
 	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 	if (file == INVALID_HANDLE_VALUE)
 		return;

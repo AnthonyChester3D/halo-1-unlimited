@@ -1572,7 +1572,7 @@ static void bots_route_build(
 A host's bots learn the map's links as they walk them: which work (good), which don't (bad), which are gaps to jump
 (and which jumps failed), and which a kind of vehicle doesn't fit. That's saved when the map changes or a new game
 starts, and loaded when the map is next played, so they don't start from nothing each time:
-- a folder map's: bots_learned.txt in its folder (on the drive the map is on);
+- a folder map's: bots_learned.txt in its folder (on the drive the map is on; an imported pack's map's: beside its map.link);
 - a stock map's: T:\bots_<map>.txt (a few KB each, 13 at most).
 A map can also come with what's known to work: bots.txt in a folder map's folder (d:\maps\bots\<map>.txt for a stock
 one), the same lines, read first and never written (Halo Map Porter can bake it from what testers' bots learned).
@@ -1589,7 +1589,7 @@ static void bots_gap_failed(short from, short link);
 #if defined(HALO_XBOX_TARGET)
 long oxbox_read_data_file(const char *path, void *data, unsigned long size);
 int oxbox_write_data_file(const char *path, const void *data, unsigned long size);
-boolean hmp_map_file_path(char const *level_name, char *path, long size);
+boolean hmp_map_folder_file(char const *level_name, char const *file, char *path, long size);
 
 /* the file for the current map: learned (TRUE) or baked (FALSE); FALSE when there's none */
 static boolean bots_learned_path(
@@ -1598,24 +1598,12 @@ static boolean bots_learned_path(
 	long size)
 {
 	char const *leaf = bots_route.map;
-	long index, slash = NONE;
+	long index;
 
 	if (!bots_route.map[0])
 		return FALSE;
 	if (bots_route.map[0] == '+')
-	{
-		if (!hmp_map_file_path(bots_route.map, path, size))
-			return FALSE;
-		for (index = 0; path[index]; index++)
-		{
-			if (path[index] == '\\')
-				slash = index;
-		}
-		if (slash == NONE || slash + 20 >= size)
-			return FALSE;
-		csstrcpy(path + slash + 1, learned ? "bots_learned.txt" : "bots.txt");
-		return TRUE;
-	}
+		return hmp_map_folder_file(bots_route.map, learned ? "bots_learned.txt" : "bots.txt", path, size);
 	for (index = 0; bots_route.map[index]; index++)
 	{
 		if (bots_route.map[index] == '\\')

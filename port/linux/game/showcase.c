@@ -425,8 +425,6 @@ static boolean showcase_path(
 	char *path,
 	long size)
 {
-	char *slash;
-
 	if (key && key[0] != '+' && hmp_browse_stock_title(key))
 	{
 		char const *name = strrchr(key, '\\');
@@ -439,13 +437,7 @@ static boolean showcase_path(
 		strcat(path, ".txt");
 		return TRUE;
 	}
-	if (size < 16 || !hmp_map_file_path(key, path, size - 16))
-		return FALSE;
-	slash = strrchr(path, '\\');
-	if (!slash)
-		return FALSE;
-	strcpy(slash + 1, "showcase.txt");
-	return TRUE;
+	return hmp_map_folder_file(key, "showcase.txt", path, size);
 }
 
 static HANDLE showcase_open(
