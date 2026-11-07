@@ -451,6 +451,21 @@ boolean hmp_map_file_path(char const *level_name, char *path, long size)
 	return TRUE;
 }
 
+/* file in folder map level_name's folder (hmp_maps.c's on the Xbox: there a pack's map can be a map.link's) */
+boolean hmp_map_folder_file(char const *level_name, char const *file, char *path, long size)
+{
+	long index;
+	char buffer[300];
+
+	if (!level_name || level_name[0] != '+' || (index = hmp_maps_find(level_name)) == NONE)
+		return FALSE;
+	key_path(buffer, sizeof(buffer), folder_maps.maps[index].key, file);
+	if (!buffer[0] || (long)strlen(buffer) >= size)
+		return FALSE;
+	snprintf(path, (size_t)size, "%s", buffer);
+	return TRUE;
+}
+
 static unsigned long header_long(byte const *at)
 {
 	return (unsigned long)at[0] | (unsigned long)at[1] << 8 | (unsigned long)at[2] << 16 | (unsigned long)at[3] << 24;
