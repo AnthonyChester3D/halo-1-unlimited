@@ -159,6 +159,13 @@ and the table are read back. A power cut can't lose a map: before `stock.restore
 untouched and the leftovers (`stock.unpacked`, `*.oxtmp`, `*.oxnew`) are deleted; after it, the next look at the folder
 finishes the swap. It needs about 1.6 GB free for a while; putting the maps back needs about 1 GB.
 
+## Consolidate packs
+
+The installer's **White**, *See what consolidating would save*, measures a Halo folder's packs against `maps\stock.index`: it
+only reads, and says each pack's size now and about what it would be (`port/oxbox/installer/consolidate.c`). A map's real
+unpacked length can be a little under its header's file_length, which a pass may round up to a sector: read to the end of the
+stream. Moving the maps isn't done yet.
+
 ## Tools
 
 `port/oxbox/installer/stockmaps_test.c`: the installer's own code on a PC, for testing a folder of stock maps.

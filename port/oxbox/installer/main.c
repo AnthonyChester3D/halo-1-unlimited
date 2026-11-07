@@ -35,6 +35,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #include "screen.h"
 #include "sha256.h"
 #include "stockmaps.h"
+#include "consolidate.h"
 #include "text.h"
 
 #include "keys.h"
@@ -43,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 24
+#define INSTALLER_VERSION 25
 #endif
 __attribute__((used)) static struct
 {
@@ -1929,12 +1930,154 @@ static void stock_maps_folder(char *out, int size)
 		text_print(out, size, "%s\\maps", halos[found].path);
 }
 
+/* ---- Consolidate packs: what it would save (consolidate.c: it only reads) ---- */
+
+#define CONSOLIDATE_MAPS 256
+static char consolidate_paths[CONSOLIDATE_MAPS][220];
+static char const *consolidate_list[CONSOLIDATE_MAPS];
+
+/* the first .map in a folder, as the game takes it: its path in out[220]; 0 when it has one */
+static int folder_map(char const *folder, char *out)
+{
+	WIN32_FIND_DATAA found;
+	char pattern[220];
+	HANDLE find;
+	text_print(pattern, sizeof(pattern), "%s\\*.map", folder);
+	find = FindFirstFileA(pattern, &found);
+	if (find == INVALID_HANDLE_VALUE)
+		return 1;
+	text_print(out, 220, "%s\\%s", folder, found.cFileName);
+	FindClose(find);
+	return 0;
+}
+
+/* where the measuring is, on the bottom row (a big pack takes minutes) */
+static void consolidate_progress(int warning, char const *text)
+{
+	(void)warning;
+	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
+	screen_text(SCREEN_ROWS - 1, 0, COLOUR_GREY, "%.70s", text);
+	screen_show();
+}
+
+/* one group of maps measured and said */
+static void consolidate_say_group(char const *stock_index, char const *name, int count, unsigned long long *before,
+	unsigned long long *after)
+{
+	struct consolidate_measure m;
+	char error[256];
+	int k;
+	for (k = 0; k < count; k++)
+		consolidate_list[k] = consolidate_paths[k];
+	consolidate_progress(0, name);
+	if (consolidate_measure(stock_index, consolidate_list, count, consolidate_progress, &m, error))
+	{
+		say_in(COLOUR_RED, "%s: %s", name, error);
+		return;
+	}
+	if (m.maps)
+		say_in(COLOUR_GREEN, "%s: %lu MB, about %lu MB consolidated", name, (unsigned long)(m.before >> 20), (unsigned long)(m.after >> 20));
+	else
+		say("%s: nothing to measure", name);
+	if (m.already)
+		say_in(COLOUR_GREY, "  %d already on shared files: left as they are", m.already);
+	if (m.unreadable)
+		say_in(COLOUR_YELLOW, "  %d can't be read: left as they are", m.unreadable);
+	*before += m.before;
+	*after += m.after;
+}
+
+/* every pack in this Halo's maps folder: a folder without a .map, whose folders each hold one; then the maps loose in it (a
+modded Halo's) and its own folder maps, Halo's own left out. It writes and changes nothing */
+static void consolidate_show(struct halo *h, struct pack_scan const *scan, char const *stock_folder)
+{
+	WIN32_FIND_DATAA found;
+	char stock_index[220], pattern[220], folder[220];
+	unsigned long long before = 0, after = 0;
+	HANDLE find;
+	int count = 0, k;
+
+	text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock_folder);
+	package_free(&package);
+	log_memory();
+	/* the packs */
+	text_print(pattern, sizeof(pattern), "%s\\maps\\*", h->path);
+	find = FindFirstFileA(pattern, &found);
+	if (find != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			WIN32_FIND_DATAA inner;
+			char inner_pattern[220];
+			HANDLE find_inner;
+			char pack_name[64];
+			if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.' ||
+				strstr(found.cFileName, ".hmp_") || !_stricmp(found.cFileName, "showcase"))
+				continue;
+			text_print(folder, sizeof(folder), "%s\\maps\\%s", h->path, found.cFileName);
+			/* (a folder map on its own: with the loose ones, below) */
+			if (!folder_map(folder, consolidate_paths[0]))
+				continue;
+			count = 0;
+			text_print(pack_name, sizeof(pack_name), "%.60s", found.cFileName);
+			text_print(inner_pattern, sizeof(inner_pattern), "%s\\*", folder);
+			find_inner = FindFirstFileA(inner_pattern, &inner);
+			if (find_inner == INVALID_HANDLE_VALUE)
+				continue;
+			do
+			{
+				char map_folder[220];
+				if (!(inner.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || inner.cFileName[0] == '.' ||
+					strstr(inner.cFileName, ".hmp_") || count == CONSOLIDATE_MAPS)
+					continue;
+				text_print(map_folder, sizeof(map_folder), "%s\\%s", folder, inner.cFileName);
+				if (!folder_map(map_folder, consolidate_paths[count]))
+					count++;
+			} while (FindNextFileA(find_inner, &inner));
+			FindClose(find_inner);
+			if (count)
+				consolidate_say_group(stock_index, pack_name, count, &before, &after);
+		} while (FindNextFileA(find, &found));
+		FindClose(find);
+	}
+	/* the rest: loose maps that aren't Halo's own, and folder maps */
+	count = 0;
+	for (k = 0; k < scan->count && count < CONSOLIDATE_MAPS; k++)
+	{
+		if (!scan->maps[k].halos && !scan->maps[k].small)
+			text_print(consolidate_paths[count++], 220, "%s\\maps\\%s.map", h->path, scan->maps[k].name);
+	}
+	find = FindFirstFileA(pattern, &found);
+	if (find != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.' ||
+				strstr(found.cFileName, ".hmp_") || !_stricmp(found.cFileName, "showcase") || count == CONSOLIDATE_MAPS)
+				continue;
+			text_print(folder, sizeof(folder), "%s\\maps\\%s", h->path, found.cFileName);
+			if (!folder_map(folder, consolidate_paths[count]))
+				count++;
+		} while (FindNextFileA(find, &found));
+		FindClose(find);
+	}
+	if (count)
+		consolidate_say_group(stock_index, "Other maps", count, &before, &after);
+	if (before)
+		say_in(COLOUR_GREEN, "In all: %lu MB now, about %lu MB consolidated. Nothing was changed.", (unsigned long)(before >> 20),
+			(unsigned long)(after >> 20));
+	else
+		say("Nothing here to consolidate. Nothing was changed.");
+	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
+	package_read();
+}
+
 static void map_pack(struct halo *h)
 {
-	enum { BOTH, MULTIPLAYER, CAMPAIGN, REMOVE, BACK };
+	enum { BOTH, MULTIPLAYER, CAMPAIGN, REMOVE, MEASURE, BACK };
 	static struct pack_scan scan;
 	char stock[200], error[256], line[SCREEN_COLUMNS + 8];
-	int choices[5], count = 0, chosen = 0, b, k;
+	int choices[6], count = 0, chosen = 0, b, k;
 
 	text_print(line, sizeof(line), "Maps: %s", h->path);
 	heading(line);
@@ -1942,15 +2085,24 @@ static void map_pack(struct halo *h)
 	say("Looking at the maps in %s\\maps...", h->path);
 	stock_maps_folder(stock, sizeof(stock));
 	packs_scan(h->path, stock, &scan);
-	say("Multiplayer: %d maps Halo 1 Unlimited doesn't have%s.", scan.multiplayer,
-		scan.multiplayer_imported ? " (imported)" : "");
-	if (scan.campaign)
-		say("Campaign: %d level%s, modded%s.", scan.campaign, scan.campaign == 1 ? "" : "s",
-			scan.campaign_imported ? " (imported)" : "");
+	if (can_import(h))
+	{
+		say("Multiplayer: %d maps Halo 1 Unlimited doesn't have%s.", scan.multiplayer,
+			scan.multiplayer_imported ? " (imported)" : "");
+		if (scan.campaign)
+			say("Campaign: %d level%s, modded%s.", scan.campaign, scan.campaign == 1 ? "" : "s",
+				scan.campaign_imported ? " (imported)" : "");
+		else
+			say("Campaign: none that isn't Halo's own.");
+		say_in(COLOUR_GREY, "Nothing is copied: the game plays them from this folder, which is left as it is. They go in "
+			"the map list as the pack \"%s\", and the campaign under the folder's name.", scan.key);
+	}
 	else
-		say("Campaign: none that isn't Halo's own.");
-	say_in(COLOUR_GREY, "Nothing is copied: the game plays them from this folder, which is left as it is. They go in "
-		"the map list as the pack \"%s\", and the campaign under the folder's name.", scan.key);
+	{
+		/* (an install of the game: its maps are the game's own, nothing to import) */
+		say("This is an install of the game: the packs in its maps folder can be measured.");
+		scan.multiplayer = scan.campaign = scan.multiplayer_imported = scan.campaign_imported = 0;
+	}
 	if (scan.multiplayer && scan.campaign)
 		choices[count++] = BOTH;
 	if (scan.multiplayer)
@@ -1959,11 +2111,14 @@ static void map_pack(struct halo *h)
 		choices[count++] = CAMPAIGN;
 	if (scan.multiplayer_imported || scan.campaign_imported)
 		choices[count++] = REMOVE;
+	/* (with the install's stock.shared to measure against) */
+	if (stock[0])
+		choices[count++] = MEASURE;
 	choices[count++] = BACK;
 	for (;;)
 	{
 		static char const *const labels[] = {"Import multiplayer and campaign", "Import multiplayer maps only",
-			"Import the campaign only", "Take out what's imported", "Back"};
+			"Import the campaign only", "Take out what's imported", "See what consolidating would save", "Back"};
 		for (k = 0; k < count; k++)
 		{
 			int r = SCREEN_ROWS - 2 - count + k, at;
@@ -1990,7 +2145,9 @@ static void map_pack(struct halo *h)
 	}
 	heading(line);
 	log_clear();
-	if (choices[chosen] == REMOVE)
+	if (choices[chosen] == MEASURE)
+		consolidate_show(h, &scan, stock);
+	else if (choices[chosen] == REMOVE)
 	{
 		packs_remove(&scan, 1, 1, packs_say);
 		say_in(COLOUR_GREEN, "Done. The pack's own folder wasn't touched.");
@@ -2071,8 +2228,7 @@ static void show_list(void)
 				h->state == MISSING ? "X: retail Halo back   " : "X: maps back   ");
 		if (ready(h) && h->state != MISSING)
 			at += text_print(actions + at, sizeof(actions) - at, "START: play   ");
-		if (can_import(h))
-			at += text_print(actions + at, sizeof(actions) - at, "WHITE: maps   ");
+		at += text_print(actions + at, sizeof(actions) - at, "WHITE: maps   ");
 		text_print(actions + at, sizeof(actions) - at, "B: dashboard");
 		screen_text(24, 0, COLOUR_YELLOW, "%s", actions);
 	}
@@ -2252,7 +2408,7 @@ int main(void)
 		}
 		else if (h && b == START && ready(h) && h->state != MISSING)
 			launch_halo(h);
-		else if (h && b == WHITE && can_import(h))
+		else if (h && b == WHITE)
 			map_pack(h);
 		else if (b == Y && check_updates())
 		{
