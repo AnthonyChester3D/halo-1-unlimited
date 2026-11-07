@@ -192,6 +192,13 @@ def rebuild(m, where, pack, stock):
         for c in range((a + SECTOR - 1) // SECTOR, b // SECTOR):
             covered[c] = 1
     covered[0] = 0
+    # (a sector something else needs stays: a block that stays or a BSP can share one with moved data, or lie inside it)
+    keep = [(o, n) for (f, o, n), w in zip(m.blocks, where) if not w]
+    keep += [(u32(m.data, field), u32(m.data, field + 4)) for field in m.bsp_fields]
+    for o, n in keep:
+        for c in range(o // SECTOR, (o + max(n, 1) - 1) // SECTOR + 1):
+            if c < len(covered):
+                covered[c] = 0
     shift = [0] * len(covered)
     gone = 0
     for c in range(len(covered)):
