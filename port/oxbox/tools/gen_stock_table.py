@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """gen_stock_table.py RETAIL_MAPS_DIR OUT.h: the installer's table of the retail maps (installer/stockmaps_table.h): each file's
-size and CRC, and unpacked, as shared_pass.py reads them; for each campaign level, which of its blocks go in stock.shared
-(what three levels or more use: docs/shared_maps.md), so a console needn't count them over 2.4 GB of levels; and what
-stock.shared comes out as. It holds no data of the maps' but those figures."""
+size and CRC, and unpacked, as shared_pass.py reads them; where each of its blocks is in stock.shared (a level's blocks that
+fewer than three levels use stay in it); and which it's the first copy of, by offset: all a console needs to build stock.shared
+in one pass through the maps, with no hashing and no counting. It holds no data of the maps' but those figures."""
 import os
 import sys
 import zlib
@@ -18,6 +18,7 @@ def main():
     lines = ['/* stockmaps_table.h: made by tools/gen_stock_table.py from the retail maps (the same on the three NTSC discs) */',
              '#define STOCK_LENGTH %uu' % len(stock.data), '#define STOCK_CHECKSUM 0x%08xu' % stock.checksum, '']
     rows, most_blocks, most_block, most_tags, most_length = [], 0, 0, 0, 0
+    written = set()
     for n in sp.STOCK_NAMES + sp.LEVEL_NAMES:
         m = sp.Map(path(n))
         keys = m.keys()
@@ -25,19 +26,26 @@ def main():
         most_block = max([most_block] + [b[2] for b in m.blocks])
         most_tags = max(most_tags, m.tag_size)
         most_length = max(most_length, len(m.data))
-        mask = 'NULL'
-        if n in sp.LEVEL_NAMES:
-            bits = bytearray((len(keys) + 7) // 8)
-            for k, key in enumerate(keys):
-                if key in stock.placed:
-                    bits[k >> 3] |= 1 << (k & 7)
-            mask = 'level_%s' % n
-            lines.append('static unsigned char const %s[%d] = {' % (mask, len(bits)))
-            for at in range(0, len(bits), 32):
-                lines.append('\t' + ','.join(str(b) for b in bits[at:at + 32]) + ',')
-            lines.append('};')
-        rows.append('\t{"%s", %uu, 0x%08xu, %uu, 0x%08xu, %d, %s},' % (n, len(m.raw), zlib.crc32(m.raw) & 0xFFFFFFFF, len(m.data),
-                     sp.u32(m.data, 0x64), len(m.blocks), mask))
+        places = [stock.placed.get(k, 0xFFFFFFFF) for k in keys]
+        firsts = []
+        for (f, o, s), k in zip(m.blocks, keys):
+            if k in stock.placed and k not in written:
+                written.add(k)
+                firsts.append((o, s, stock.placed[k]))
+        firsts.sort()
+        lines.append('static uint32_t const places_%s[%d] = {' % (n, len(places)))
+        for at in range(0, len(places), 12):
+            lines.append('\t' + ','.join('%uu' % p for p in places[at:at + 12]) + ',')
+        lines.append('};')
+        lines.append('static struct first_copy const firsts_%s[%d] = {' % (n, max(len(firsts), 1)))
+        for f in firsts:
+            lines.append('\t{%uu,%uu,%uu},' % f)
+        if not firsts:
+            lines.append('\t{0,0,0},')
+        lines.append('};')
+        rows.append('\t{"%s", %uu, 0x%08xu, %uu, 0x%08xu, %d, places_%s, firsts_%s, %d},' % (n, len(m.raw),
+                    zlib.crc32(m.raw) & 0xFFFFFFFF, len(m.data), sp.u32(m.data, 0x64), len(m.blocks), n, n, len(firsts)))
+    assert len(written) == len(stock.placed)
     lines += ['', '#define MOST_MAP_BLOCKS %d' % most_blocks, '#define MOST_BLOCK_SIZE %uu' % most_block,
               '#define MOST_TAG_SIZE %uu' % most_tags, '#define MOST_MAP_LENGTH %uu' % most_length,
               '#define STOCK_BLOCKS %d' % len(stock.placed), '#define STOCK_LEVELS %d' % len(sp.LEVEL_NAMES), '',

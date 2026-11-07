@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 25
+#define INSTALLER_VERSION 26
 #endif
 __attribute__((used)) static struct
 {
@@ -1444,7 +1444,7 @@ static int stock_maps_restore(struct halo *h)
 {
 	char error[256];
 	int failed, b;
-	say("This puts the retail maps back too: it takes a while, and needs room for them (about 1 GB more than now).");
+	say("This puts the retail maps back too: it takes about an hour, and needs room for them (about 1.2 GB free).");
 	say_in(COLOUR_GREY, "(A map pack that draws on stock.shared needs it: installing here again remakes it.)");
 	say_in(COLOUR_YELLOW, "A: go on   B: leave everything as it is");
 	while ((b = wait_input()) != A && b != B)
@@ -1476,11 +1476,18 @@ static void offer_stock_maps(struct halo *h)
 	char error[256];
 	int b;
 	stockmaps_examine(h->path, &h->stock);
-	if (h->stock.small || h->stock.retail_sized != STOCK_MAPS)
+	/* (all 23 there, each retail or small: some small is a swap that stopped, to go on with) */
+	if (h->stock.small == STOCK_MAPS || h->stock.small + h->stock.retail_sized != STOCK_MAPS)
 		return;
-	say("Save about 850 MB? The 23 multiplayer and campaign maps can share one file, stock.shared, for their textures and "
-		"sounds.");
-	say("It takes a while: perhaps an hour. It needs about 1.6 GB free while it works.");
+	if (h->stock.small)
+		say("The maps here were being made small: %d of %d are done. Finish it? It saves more room as it goes.", h->stock.small,
+			STOCK_MAPS);
+	else
+	{
+		say("Save about 800 MB? The 23 multiplayer and campaign maps can share one file, stock.shared, for their textures and "
+			"sounds.");
+		say("It takes perhaps half an hour, and needs about 350 MB free while it works.");
+	}
 	say("Retail Halo can't play them that way: X in this installer puts the exact originals back.");
 	say_in(COLOUR_YELLOW, "A: do it   B: not now");
 	while ((b = wait_input()) != A && b != B)

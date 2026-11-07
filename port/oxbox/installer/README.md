@@ -34,11 +34,11 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
    online for a newer package, **B** goes back to the dashboard. The d-pad or the left stick moves; the triggers
    move a page.
 
-   After an install it offers to save about 850 MB: the 13 multiplayer maps and 10 campaign levels can share one file,
-   `stock.shared`, for their textures and sounds. It takes a while, and needs about 1.6 GB free while it works. Retail
-   Halo can't play the maps that way, so **X** puts the exact originals back first (it needs about 1 GB free for that;
-   without it nothing changes). Only retail maps are swapped, and all 23 must be there; a folder with other maps is left
-   as it is.
+   After an install it offers to save about 800 MB: the 13 multiplayer maps and 10 campaign levels can share one file,
+   `stock.shared`, for their textures and sounds. It needs about 350 MB free while it works. Retail Halo can't play the
+   maps that way, so **X** puts the exact originals back first (it needs about 1.2 GB free for that; without it nothing
+   changes). Only retail maps are swapped, and all 23 must be there; a folder with other maps is left as it is. If it stops
+   partway, the maps done are small and the rest retail, and all of them play; installing again offers to finish.
 4. **White** on another Halo (a modded one, a map pack: any folder that isn't an install of the game) imports its
    maps into Halo 1 Unlimited, if you want them: it says how many multiplayer maps it has that the game doesn't
    (Halo's own are left out) and whether its campaign is modded, and offers *multiplayer and campaign*,

@@ -91,6 +91,8 @@ int reader_open(struct reader *r, char const *path, unsigned char *header)
 		reader_close(r);
 		return 1;
 	}
+	r->raw_crc = (uint32_t)crc32(crc32(0, NULL, 0), header, HEADER);
+	r->raw_size = HEADER;
 	r->z.zalloc = z_alloc;
 	r->z.zfree = z_free;
 	if (inflateInit(&r->z) != Z_OK)
@@ -120,6 +122,8 @@ int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
 			DWORD got = 0;
 			if (!ReadFile(r->file, io_in, sizeof(io_in), &got, NULL) || !got)
 				return 1;
+			r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, got);
+			r->raw_size += got;
 			r->z.next_in = io_in;
 			r->z.avail_in = got;
 		}
@@ -145,6 +149,8 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 			DWORD part = 0;
 			if (!ReadFile(r->file, io_in, sizeof(io_in), &part, NULL) || !part)
 				return 1;
+			r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, part);
+			r->raw_size += part;
 			r->z.next_in = io_in;
 			r->z.avail_in = part;
 		}
@@ -155,6 +161,19 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 			return 1;
 	}
 	*got = size - r->z.avail_out;
+	return 0;
+}
+
+int reader_raw(struct reader *r, uint32_t *size, uint32_t *crc)
+{
+	DWORD got;
+	while (ReadFile(r->file, io_in, sizeof(io_in), &got, NULL) && got)
+	{
+		r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, got);
+		r->raw_size += got;
+	}
+	*size = r->raw_size;
+	*crc = r->raw_crc;
 	return 0;
 }
 
