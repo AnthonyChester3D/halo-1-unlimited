@@ -33,6 +33,7 @@ struct reader
 	HANDLE file;
 	z_stream z;
 	int started, ended;
+	uint32_t raw_crc, raw_size;     /* of the file as it is on the disk, so far */
 };
 /* a cache file opened, its header read */
 int reader_open(struct reader *r, char const *path, unsigned char *header);
@@ -41,6 +42,8 @@ int reader_pull(struct reader *r, unsigned char *to, uint32_t size);
 /* up to size bytes: what there is before the stream ends (a pack's map can end short of its header's length, which is
 rounded up to a sector). 0 when read, the count in *got */
 int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *got);
+/* the rest of the file read (what's after the stream: its padding): its whole size and CRC, 0 when read */
+int reader_raw(struct reader *r, uint32_t *size, uint32_t *crc);
 void reader_close(struct reader *r);
 
 struct writer

@@ -256,7 +256,8 @@ def main():
             base = os.path.splitext(os.path.basename(m.path))[0]
             os.makedirs(os.path.join(out_dir, base), exist_ok=True)
             out = rebuild(m, where, None, stock)
-            n = write_cache_file(os.path.join(out_dir, base, base + '.map'), out)
+            # (level 1, as the installer's: on a console it's far quicker, and only 3% bigger than level 6)
+            n = write_cache_file(os.path.join(out_dir, base, base + '.map'), out, 1)
             print('%s: %d KB -> %d KB (%d KB unpacked)' % (base, len(m.raw) >> 10, n >> 10, len(out) >> 10))
             total_before += len(m.raw)
             total_after += n
@@ -266,8 +267,7 @@ def main():
             base = os.path.splitext(os.path.basename(p))[0]
             os.makedirs(os.path.join(out_dir, base), exist_ok=True)
             out = rebuild(m, where, None, stock)
-            # (level 6, as the installer's: a level is big, and a console's time matters more than a few MB)
-            n = write_cache_file(os.path.join(out_dir, base, base + '.map'), out, 6)
+            n = write_cache_file(os.path.join(out_dir, base, base + '.map'), out, 1)
             print('%s: %d KB -> %d KB (%d KB unpacked)' % (base, len(m.raw) >> 10, n >> 10, len(out) >> 10))
             total_before += len(m.raw)
             total_after += n

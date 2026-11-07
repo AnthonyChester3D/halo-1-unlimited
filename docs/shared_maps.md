@@ -15,7 +15,7 @@ A map draws on up to two:
   levels or more use, built by the Halo 1 Unlimited installer from the player's own disc (and by this repo's tool from the
   same maps: the layout is fixed, below). Every player has it, so a pack never carries stock content.
 
-Measured on the retail maps: the 23 maps (13 multiplayer, 10 campaign) go from 1761 MiB to 926 MiB, with stock.shared 228 MiB
+Measured on the retail maps: the 23 maps (13 multiplayer, 10 campaign) go from 1761 MiB to 950 MiB, with stock.shared 228 MiB
 of that (238.7 MB, within the 278 MiB limit). The levels draw 1137 MB from it. Data two levels use would make it 329 MB:
 too big, so it stays in the levels. 33-60 MB of each of HMP's packs is stock multiplayer content.
 
@@ -141,8 +141,8 @@ unaffected: they get Custom Edition maps through `map_share.c`, and a PC game st
 ## The installer
 
 After an install (never in the game's own updates) the installer offers to swap a Halo folder's 23 stock maps for small
-ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 850 MB
-saved). It needs all 23: a folder without them isn't offered it, since stock.shared couldn't be the same file. Only the
+ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 800 MB
+saved). The small maps are packed at zlib level 1: only 3% bigger than level 6, and far quicker on a console. It needs all 23: a folder without them isn't offered it, since stock.shared couldn't be the same file. Only the
 retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is the same file. All 24 maps are byte-identical on the three NTSC discs (the original, Rev 1 and Rev 2), and stock.shared and
 the small maps built from each compare equal: the three builds need no table of their own. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
 
@@ -153,11 +153,15 @@ and a console has 64: nothing here holds a whole map, it goes through a temporar
 retail XBE does: if there's no room for them, nothing changes, and the folder still plays Halo 1 Unlimited. stock.shared
 goes with them, so a map pack drawing on it needs another install's offer to play again.
 
-Nothing is touched until everything is built and proved on that console: each retail map is recompressed to its own
-bytes, each small map is restored from the files on the disk and checked against the original's CRC, and stock.shared
-and the table are read back. A power cut can't lose a map: before `stock.restore` goes in place the retail maps are
-untouched and the leftovers (`stock.unpacked`, `*.oxtmp`, `*.oxnew`) are deleted; after it, the next look at the folder
-finishes the swap. It needs about 1.6 GB free for a while; putting the maps back needs about 1 GB.
+It's built to take as little time and room as it can. A table in the installer says where every block goes, so `stock.shared`
+is built in one pass through the maps, with no hashing and no temporary maps, and read back against its checksum. Each retail
+map is checked against its size and CRC as it's read. One map is recompressed, to prove on that console that retail maps come
+back exact. Then each map is made small on its own: built, its restore tried against the original's CRC, swapped in, and its
+room given back. So about 350 MB free is enough, for `stock.shared` and the biggest small map beside its retail one.
+
+A power cut can't lose a map. Before `stock.restore` goes in place the maps are untouched and the leftovers are deleted. After
+it, the next look at the folder finishes any swap under way, and what's done stays small while the rest stay retail: both
+play, the installer offers to finish, and **X** puts the small ones back. Putting them back needs about 1.2 GB.
 
 ## Consolidate packs
 
