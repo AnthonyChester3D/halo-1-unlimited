@@ -71,7 +71,8 @@ or `maps\` itself); `stock.shared` may also be in the game's maps folder. The ga
 
 3. **Leave the moved data out** of the map: lay the map out again without it, moving the offsets of what stays down
    (the header's tag_data_offset, each BSP's file offset in the scenario's structure_bsp_references, and the textures
-   and sounds that stay). A map drawing on a packed shared file must fit a multiplayer cache file unpacked (47 MiB). The tool drops every 2048-byte
+   and sounds that stay). A sector something that stays needs is kept, even if it's otherwise moved data: some
+   maps have a block that stays, or a BSP, sharing a sector with one that moves. A map drawing on a packed shared file must fit a multiplayer cache file unpacked (47 MiB). The tool drops every 2048-byte
    sector made wholly of moved data, so what stays keeps its alignment, and zeroes the rest of the moved bytes.
 
 **Rules for a pack's pass**: only data used by two or more of its maps goes into its shared file (data one map uses
@@ -168,6 +169,10 @@ finishes the swap. It needs about 1.6 GB free for a while; putting the maps back
 - `shared_pass.py [--stock STOCK_MAPS_DIR] NAME OUT_DIR MAP...`: a pack's NAME.shared and its maps.
 
 `port/oxbox/tools/gen_stock_table.py RETAIL_MAPS_DIR OUT.h`: the installer's table.
+
+`port/oxbox/tools/verify_shared.py ORIGINAL_MAP CONVERTED_MAP PACK_SHARED STOCK_SHARED`: a converted map checked against its
+original, every block and BSP read back through its new offsets. Run it on anything a pass makes: a wrong one can load and
+play with no error. Measured on 14 of the old packs: 211 maps, all clean, 5080 MB down to 1427 MB.
 
 Tested in xemu (v1.94): Blood Gulch from stock.shared; CEX's Abyss from CEX.shared and stock.shared together.
 
