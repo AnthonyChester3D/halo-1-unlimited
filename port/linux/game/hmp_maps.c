@@ -1664,6 +1664,19 @@ boolean hmp_map_file_path(char const *level_name, char *path, long size)
 	return TRUE;
 }
 
+/* file in folder map level_name's own folder: beside its .map, or beside its map.link for a pack's map played in place
+(never the pack's maps folder: it's left as it is, and all its maps would share the one file). FALSE for no such map */
+boolean hmp_map_folder_file(char const *level_name, char const *file, char *path, long size)
+{
+	long i;
+	char buffer[300];
+	if (!level_name || level_name[0] != '+' || (i = hmp_maps_find(level_name)) == NONE) return FALSE;
+	folder_path(buffer, i, file);
+	if ((long)strlen(buffer) >= size) return FALSE;
+	strcpy(path, buffer);
+	return TRUE;
+}
+
 char const *hmp_maps_file(long i, short which)
 {
 	struct hmp_map *map;
