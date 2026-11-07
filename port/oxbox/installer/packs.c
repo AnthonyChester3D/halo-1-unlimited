@@ -7,7 +7,7 @@ What's written goes in the game's own storage (E:\TDATA\4c4a4855, the game's T:)
 		order.txt                 the pack's maps in its own menu's order
 		<map>\map.link            the .map's path ("F:\Games\Halo NHE\maps\atlas.map")
 		<map>\info.txt            its name and description, from the pack's ui.map
-		<map>\preview.bin         its picture, from the pack's ui.map (256x128 DXT1, as Halo's own)
+		<map>\preview.bin         its picture, from the pack's ui.map (256x128 DXT1, as Halo's own; a 128x128 one goes top left)
 	campaigns\<pack>\campaign.txt "Name:", "From:", then for each level "Level:" (its file), "Title:", "Text:"
 	campaigns\<pack>\<level>.bin  its picture
 
@@ -512,7 +512,7 @@ static void ui_string(struct ui_tags const *ui, unsigned long data, unsigned lon
 	out[n] = 0;
 }
 
-/* a bitmap's picture (256x128 DXT1, as Halo's map pictures): where it is in the map, or 0 */
+/* a bitmap's picture (256x128 DXT1, as Halo's map pictures, or 128x128 as some packs'): where it is in the map, or 0 */
 static int ui_picture(struct ui_tags const *ui, unsigned long data, unsigned long index, struct map_range *range)
 {
 	unsigned long count, list;
@@ -525,12 +525,29 @@ static int ui_picture(struct ui_tags const *ui, unsigned long data, unsigned lon
 	if (index >= count || count > 1024 || !UI_IN(ui, list, count * 48))
 		return 0;
 	bitmap = ui->tags + UI_AT(list) + index * 48;
-	if (s16(bitmap + 4) != 256 || s16(bitmap + 6) != 128 || s16(bitmap + 0xc) != 14 ||
-		u32(bitmap + 0x1c) != PICTURE_SIZE)
+	if (s16(bitmap + 0xc) != 14 || s16(bitmap + 6) != 128)
+		return 0;
+	if (s16(bitmap + 4) == 256 && u32(bitmap + 0x1c) == PICTURE_SIZE)
+		range->size = PICTURE_SIZE;
+	else if (s16(bitmap + 4) == 128 && u32(bitmap + 0x1c) >= PICTURE_SIZE / 2)
+		range->size = PICTURE_SIZE / 2; /* (its first level; put top left in 256x128 after reading) */
+	else
 		return 0;
 	range->offset = u32(bitmap + 0x18);
-	range->size = PICTURE_SIZE;
 	return 1;
+}
+
+/* a 128x128 DXT1 picture (its first PICTURE_SIZE / 2 bytes) made 256x128 in place: at the top left, where the map list
+shows (its top-left 140x114, as Halo's own pictures and as the pack's own menu showed it), black to the right (an all-zero
+DXT1 block is black). A row of 32 blocks moves to the start of a row of 64, the last row first */
+static void picture_widen(unsigned char *p)
+{
+	int row;
+	for (row = 31; row >= 0; row--)
+	{
+		memmove(p + row * 64 * 8, p + row * 32 * 8, 32 * 8);
+		memset(p + (row * 64 + 32) * 8, 0, 32 * 8);
+	}
 }
 
 #undef UI_IN
@@ -833,6 +850,9 @@ int packs_import(struct pack_scan *scan, int multiplayer, int campaign, packs_sa
 			for (k = 0; k < n; k++)
 				entries[k].picture.size = 0;
 		}
+		for (k = 0; k < n; k++)
+			if (entries[k].picture.size == PICTURE_SIZE / 2)
+				picture_widen(entries[k].picture.data);
 	}
 	free(ui.tags);
 	ui.tags = NULL;
