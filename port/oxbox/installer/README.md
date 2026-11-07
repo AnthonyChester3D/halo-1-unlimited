@@ -144,6 +144,8 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `screen.c`, `screen.h` | the text screen, in colour, and the screen blanked while the next XBE starts |
 | `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
+| `consolidate.c`, `consolidate.h` | what consolidating a pack would save (it only reads): **White**, *See what consolidating would save* |
+| `mapstream.c`, `mapstream.h` | a cache file read and written a piece at a time, and a map's blocks found |
 | `stockmaps_table.h` | the retail maps' sizes and CRCs and which levels' blocks go in stock.shared (made by `tools/gen_stock_table.py`) |
 | `stockmaps.c`, `stockmaps.h` | the stock maps swapped for small ones drawing on stock.shared, and put back exactly |
 | `packs.c`, `packs.h` | importing another Halo's maps (White): its maps' headers, names and pictures from its ui.map, its XBE's multiplayer level order |
@@ -151,7 +153,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `keys.txt` | the public keys it trusts (`keys.h` is made from it when it's built) |
 | `THIRD_PARTY.txt` | the notices of the code in its XBE, which it writes beside itself (`notices.h`, by `tools/mkembed.py`) |
 | `text.h` | snprintf that always ends its text (nxdk's PDCLib doesn't when it cuts it short) |
-| `mkpictures.c`, `oxpatch.c`, `stockmaps_test.c` (`stockmaps_host.h`) | the PC tools |
+| `mkpictures.c`, `oxpatch.c`, `stockmaps_test.c` (`stockmaps_host.h`), `consolidate_test.c` | the PC tools |
 
 ### Signing releases (the project's owner)
 

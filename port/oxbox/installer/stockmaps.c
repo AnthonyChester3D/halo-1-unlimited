@@ -21,6 +21,7 @@ The order, so a power cut can't lose a map (each file written whole and read bac
 Putting them back is the same: <map>.map.oxtmp, the retail map, is checked against the size and CRC before it's renamed
 .oxnew and swapped in the same way. stock.shared, stock.index and stock.restore go last. */
 #include "stockmaps.h"
+#include "mapstream.h"
 #include "sha256.h"
 #include "text.h"
 
@@ -30,24 +31,9 @@ Putting them back is the same: <map>.map.oxtmp, the retail map, is checked again
 #include <string.h>
 #include <zlib.h>
 
-#ifdef STOCKMAPS_HOST
-#include "stockmaps_host.h"
-#else
-#undef FAR /* (zlib's, and windows.h's own) */
-#include <windows.h>
-#include <xboxkrnl/xboxkrnl.h>
-#endif
-
-#define HEADER 2048u
-#define SECTOR 2048u
-#define TAG_BASE 0x803A6000u
-#define BITMAP 0x6269746Du          /* 'bitm' */
-#define SOUND 0x736E6421u           /* 'snd!' */
-#define SCENARIO_BSPS 0x5A4u        /* a scenario's structure_bsp_references (0x20 each: file offset, size, ...) */
 #define STOCK_BIT 0xC0000000u
 #define REFERENCE_OFFSET 0x700u
 #define REFERENCE_SIGNATURE 0x73687264u /* 'shrd' */
-#define MOST_BSPS 16
 #define MB (1024u * 1024u)
 #define CHUNK (256u * 1024u)        /* a whole number of sectors: what's worked on at a time */
 #define STAYS 0xFFFFFFFFu           /* a restore_block's stock: the block stays in the map */
@@ -85,10 +71,6 @@ struct restore_map
 	uint32_t bsps, blocks;
 	unsigned char header[HEADER];   /* the original's */
 };
-struct restore_bsp
-{
-	uint32_t field, offset;
-};
 struct restore_block
 {
 	uint32_t field, offset, size, stock; /* the original's field and block, and where the block is in stock.shared (STAYS) */
@@ -107,45 +89,14 @@ struct index_block
 	uint32_t at, size;              /* where it is in stock.shared (at % 512 is the remainder it matches), how big */
 };
 
-static uint32_t u32(unsigned char const *p)
-{
-	return p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static void put32(unsigned char *p, uint32_t value)
-{
-	p[0] = (unsigned char)value;
-	p[1] = (unsigned char)(value >> 8);
-	p[2] = (unsigned char)(value >> 16);
-	p[3] = (unsigned char)(value >> 24);
-}
-
-/* (zlib built without its own allocator on the Xbox: nxdk's Z_SOLO) */
-static voidpf z_alloc(voidpf opaque, uInt items, uInt size)
-{
-	(void)opaque;
-	return calloc(items, size);
-}
-
-static void z_free(voidpf opaque, voidpf address)
-{
-	(void)opaque;
-	free(address);
-}
-
 /* ---- files ---- */
 
-static unsigned char io_in[65536], io_out[65536];
+static unsigned char io_in[65536];
 static unsigned char const zeros[SECTOR];
 
 static int exists(char const *path)
 {
 	return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
-}
-
-static HANDLE open_read(char const *path)
-{
-	return CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 }
 
 static HANDLE create(char const *path)
@@ -160,34 +111,6 @@ static int finish(HANDLE file)
 	IO_STATUS_BLOCK status;
 	int ok = NT_SUCCESS(NtFlushBuffersFile(file, &status));
 	return CloseHandle(file) && ok;
-}
-
-static int write_all(HANDLE file, void const *from, uint32_t size)
-{
-	unsigned char const *at = from;
-	while (size)
-	{
-		DWORD put = 0, part = size > MB ? MB : size;
-		if (!WriteFile(file, at, part, &put, NULL) || put != part)
-			return 1;
-		at += part;
-		size -= part;
-	}
-	return 0;
-}
-
-static int read_all(HANDLE file, void *to, uint32_t size)
-{
-	unsigned char *at = to;
-	while (size)
-	{
-		DWORD got = 0, part = size > MB ? MB : size;
-		if (!ReadFile(file, at, part, &got, NULL) || got != part)
-			return 1;
-		at += part;
-		size -= part;
-	}
-	return 0;
 }
 
 static void map_path(char *path, int size, char const *halo, char const *name, char const *extension)
@@ -225,131 +148,6 @@ static int file_crc(char const *path, uint32_t *size, uint32_t *crc)
 }
 
 /* ---- cache files: a header, the rest one zlib stream, read and written a piece at a time ---- */
-
-struct reader
-{
-	HANDLE file;
-	z_stream z;
-	int started, ended;
-};
-
-static void reader_close(struct reader *r)
-{
-	if (r->started)
-		inflateEnd(&r->z);
-	if (r->file != INVALID_HANDLE_VALUE)
-		CloseHandle(r->file);
-	r->started = 0;
-	r->file = INVALID_HANDLE_VALUE;
-}
-
-/* a cache file opened, its header read */
-static int reader_open(struct reader *r, char const *path, unsigned char *header)
-{
-	memset(r, 0, sizeof(*r));
-	r->file = open_read(path);
-	if (r->file == INVALID_HANDLE_VALUE)
-		return 1;
-	if (read_all(r->file, header, HEADER) || memcmp(header, "daeh", 4) || u32(header + 4) != 5)
-	{
-		reader_close(r);
-		return 1;
-	}
-	r->z.zalloc = z_alloc;
-	r->z.zfree = z_free;
-	if (inflateInit(&r->z) != Z_OK)
-	{
-		reader_close(r);
-		return 1;
-	}
-	r->started = 1;
-	return 0;
-}
-
-/* exactly size bytes of what's unpacked; with size 0, 0 only if the stream ends here */
-static int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
-{
-	unsigned char spare;
-	int checking = !size;
-
-	r->z.next_out = checking ? &spare : to;
-	r->z.avail_out = checking ? 1 : size;
-	while (r->z.avail_out)
-	{
-		int status;
-		if (r->ended)
-			return !checking;
-		if (!r->z.avail_in)
-		{
-			DWORD got = 0;
-			if (!ReadFile(r->file, io_in, sizeof(io_in), &got, NULL) || !got)
-				return 1;
-			r->z.next_in = io_in;
-			r->z.avail_in = got;
-		}
-		status = inflate(&r->z, Z_NO_FLUSH);
-		if (status == Z_STREAM_END)
-			r->ended = 1;
-		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->z.avail_in))
-			return 1;
-	}
-	return checking; /* (a byte more came: it doesn't end here) */
-}
-
-struct writer
-{
-	z_stream z;
-	HANDLE to;
-	uint32_t written, crc;          /* what's gone out so far, and the running CRC of it */
-};
-
-/* one zlib stream (memLevel 8) to a file, or only measured; the CRC goes on from crc */
-static int writer_open(struct writer *w, int level, HANDLE to, uint32_t crc)
-{
-	memset(w, 0, sizeof(*w));
-	w->z.zalloc = z_alloc;
-	w->z.zfree = z_free;
-	w->to = to;
-	w->crc = crc;
-	return deflateInit2(&w->z, level, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY) != Z_OK;
-}
-
-static int writer_run(struct writer *w, int flush)
-{
-	int status;
-	do
-	{
-		uint32_t n;
-		w->z.next_out = io_out;
-		w->z.avail_out = sizeof(io_out);
-		status = deflate(&w->z, flush);
-		if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END)
-			return 1;
-		n = (uint32_t)sizeof(io_out) - w->z.avail_out;
-		w->crc = (uint32_t)crc32(w->crc, io_out, n);
-		w->written += n;
-		if (w->to != INVALID_HANDLE_VALUE && write_all(w->to, io_out, n))
-			return 1;
-	} while (flush == Z_FINISH ? status != Z_STREAM_END : !w->z.avail_out);
-	return 0;
-}
-
-static int writer_put(struct writer *w, unsigned char const *from, uint32_t size)
-{
-	w->z.next_in = (Bytef *)from;
-	w->z.avail_in = size;
-	return writer_run(w, Z_NO_FLUSH);
-}
-
-static int writer_finish(struct writer *w)
-{
-	int failed;
-	w->z.next_in = (Bytef *)zeros;
-	w->z.avail_in = 0;
-	failed = writer_run(w, Z_FINISH);
-	deflateEnd(&w->z);
-	return failed;
-}
 
 /* zeros after a retail map's stream, up to its file's size */
 static int retail_padding(struct writer const *w, uint32_t raw_size, HANDLE to, uint32_t *crc)
@@ -419,122 +217,6 @@ static int retail_proof(HANDLE unpacked, uint32_t length, uint32_t raw_size, uin
 		left -= part;
 	}
 	return writer_finish(&w) || retail_padding(&w, raw_size, INVALID_HANDLE_VALUE, crc);
-}
-
-/* ---- a map's blocks: a bitmap's pixels, a sound permutation's samples (as tools/shared_pass.py's Map) ---- */
-
-/* a map's tag data in memory: everything read here is in it */
-struct map_view
-{
-	unsigned char *tags;
-	uint32_t length, tag_offset, tag_size;
-};
-
-/* a place in the map (in the tag data) */
-static uint32_t tag32(struct map_view const *m, uint32_t offset)
-{
-	if (offset < m->tag_offset || offset - m->tag_offset > m->tag_size - 4)
-		return 0;
-	return u32(m->tags + (offset - m->tag_offset));
-}
-
-/* an address in the tag data, as an offset in the map, or 0 */
-static uint32_t tag_at(struct map_view const *m, uint32_t address)
-{
-	uint32_t o = address - TAG_BASE;
-	if (address < TAG_BASE || o >= m->tag_size)
-		return 0;
-	return m->tag_offset + o;
-}
-
-struct block
-{
-	uint32_t field, offset, size;
-};
-
-static int find_blocks(struct map_view const *m, struct block *blocks, int *count, struct restore_bsp *bsps, uint32_t *bsp_count)
-{
-	uint32_t instances, scenario, tags, k, table, s;
-	int n = 0;
-
-	instances = tag32(m, m->tag_offset);
-	scenario = tag32(m, m->tag_offset + 4);
-	tags = tag32(m, m->tag_offset + 12);
-	table = tag_at(m, instances);
-	if (!table)
-		return 1;
-	for (k = 0; k < tags; k++)
-	{
-		uint32_t instance = table + k * 0x20, group = tag32(m, instance), base = tag32(m, instance + 0x14), b, i;
-		if (!base || (group != BITMAP && group != SOUND))
-			continue;
-		if (!(b = tag_at(m, base)))
-			return 1;
-		if (group == BITMAP)
-		{
-			/* (each bitmap's own pixels: its pixels_offset is the file's) */
-			uint32_t bitmaps = tag_at(m, tag32(m, b + 0x64)), bitmap_count = tag32(m, b + 0x60);
-			for (i = 0; i < bitmap_count; i++)
-			{
-				uint32_t e = bitmaps + i * 0x30;
-				if (!bitmaps || n == MOST_BLOCKS)
-					return 1;
-				blocks[n].field = e + 0x18;
-				blocks[n].offset = tag32(m, e + 0x18);
-				blocks[n].size = tag32(m, e + 0x1C);
-				n++;
-			}
-		}
-		else
-		{
-			uint32_t ranges = tag_at(m, tag32(m, b + 0x9C)), range_count = tag32(m, b + 0x98);
-			for (i = 0; i < range_count; i++)
-			{
-				uint32_t range = ranges + i * 0x48, q, permutation_count, permutations;
-				if (!ranges)
-					return 1;
-				permutation_count = tag32(m, range + 0x3C);
-				permutations = tag_at(m, tag32(m, range + 0x40));
-				for (q = 0; q < permutation_count; q++)
-				{
-					uint32_t p = permutations + q * 0x7C;
-					if (!permutations || n == MOST_BLOCKS)
-						return 1;
-					blocks[n].field = p + 0x48;
-					blocks[n].offset = tag32(m, p + 0x48);
-					blocks[n].size = tag32(m, p + 0x40);
-					n++;
-				}
-			}
-		}
-	}
-	/* the ones in the map's own data, outside the tag data */
-	for (k = 0, *count = 0; k < (uint32_t)n; k++)
-	{
-		struct block const *e = &blocks[k];
-		if (e->size && e->offset >= HEADER && e->size <= m->length && e->offset <= m->length - e->size &&
-			!(e->offset & 0x80000000u) &&
-			!(m->tag_offset < e->offset + e->size && e->offset < m->tag_offset + m->tag_size))
-			blocks[(*count)++] = *e;
-	}
-	/* the BSPs' offset fields */
-	if (!(s = tag_at(m, tag32(m, table + (scenario & 0xFFFF) * 0x20 + 0x14))))
-		return 1;
-	*bsp_count = tag32(m, s + SCENARIO_BSPS);
-	if (*bsp_count > MOST_BSPS)
-		return 1;
-	if (*bsp_count)
-	{
-		uint32_t references = tag_at(m, tag32(m, s + SCENARIO_BSPS + 4));
-		if (!references)
-			return 1;
-		for (k = 0; k < *bsp_count; k++)
-		{
-			bsps[k].field = references + k * 0x20;
-			bsps[k].offset = tag32(m, bsps[k].field);
-		}
-	}
-	return 0;
 }
 
 /* ---- the sectors wholly of moved data ---- */
@@ -625,7 +307,7 @@ static int overlap(uint32_t from, uint32_t to, uint32_t at, uint32_t size, uint3
 /* from the map unpacked (a file) and its tag data: the small map's file, its header in small_header. Its tag data's fields
 are changed here (it's not needed as it was after) */
 static int write_small(HANDLE unpacked, struct map_view *m, unsigned char const *header, struct restore_map const *map,
-	struct restore_bsp const *bsps, struct restore_block const *blocks, int level, char const *path)
+	struct map_bsp const *bsps, struct restore_block const *blocks, int level, char const *path)
 {
 	unsigned char small_header[HEADER];
 	struct writer w;
@@ -748,7 +430,7 @@ static int field_order(void const *a, void const *b)
 
 /* the original's unpacked bytes, every step undoing one of write_small's: checked against its CRC, and given to w if it's
 there (the retail file's stream). small_path: the small map; stock: stock.shared */
-static int make_original(char const *small_path, struct restore_map const *map, struct restore_bsp const *bsps,
+static int make_original(char const *small_path, struct restore_map const *map, struct map_bsp const *bsps,
 	struct restore_block const *blocks, HANDLE stock, struct writer *w)
 {
 	unsigned char header[HEADER];
@@ -1102,7 +784,7 @@ static int index_write(char const *path, struct stock_build const *s)
 
 /* the table walked: the next map's parts, from the map at *at; 1 past what's there */
 static int table_next(unsigned char *table, uint32_t size, uint32_t *at, struct restore_map **map,
-	struct restore_bsp **bsps, struct restore_block **blocks)
+	struct map_bsp **bsps, struct restore_block **blocks)
 {
 	uint32_t need;
 	if (*at > size || size - *at < sizeof(struct restore_map))
@@ -1110,12 +792,12 @@ static int table_next(unsigned char *table, uint32_t size, uint32_t *at, struct 
 	*map = (struct restore_map *)(table + *at);
 	if ((*map)->bsps > MOST_BSPS || (*map)->blocks > MOST_BLOCKS)
 		return 1;
-	need = (uint32_t)sizeof(struct restore_map) + (*map)->bsps * (uint32_t)sizeof(struct restore_bsp) +
+	need = (uint32_t)sizeof(struct restore_map) + (*map)->bsps * (uint32_t)sizeof(struct map_bsp) +
 		(*map)->blocks * (uint32_t)sizeof(struct restore_block);
 	if (size - *at < need)
 		return 1;
-	*bsps = (struct restore_bsp *)(table + *at + sizeof(struct restore_map));
-	*blocks = (struct restore_block *)((unsigned char *)*bsps + (*map)->bsps * sizeof(struct restore_bsp));
+	*bsps = (struct map_bsp *)(table + *at + sizeof(struct restore_map));
+	*blocks = (struct restore_block *)((unsigned char *)*bsps + (*map)->bsps * sizeof(struct map_bsp));
 	*at += need;
 	return 0;
 }
@@ -1200,7 +882,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			text_print(error, 256, "%s.map isn't the retail map this knows: nothing changed.", retail_maps[k].name);
 			return 1;
 		}
-		table_room += (uint32_t)(sizeof(struct restore_map) + MOST_BSPS * sizeof(struct restore_bsp) +
+		table_room += (uint32_t)(sizeof(struct restore_map) + MOST_BSPS * sizeof(struct map_bsp) +
 			retail_maps[k].blocks * sizeof(struct restore_block));
 	}
 	view.tags = malloc(MOST_TAG_SIZE);
@@ -1234,7 +916,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 	{
 		struct retail_map const *retail = &retail_maps[k];
 		struct restore_map *map = (struct restore_map *)(table + table_size);
-		struct restore_bsp *bsps = (struct restore_bsp *)(map + 1);
+		struct map_bsp *bsps = (struct map_bsp *)(map + 1);
 		struct restore_block *blocks;
 		uint32_t length, whole_crc, b;
 		int count, unpack_failed, finished;
@@ -1280,7 +962,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 		if (view.tag_offset < HEADER || view.tag_size > MOST_TAG_SIZE || view.tag_size > length ||
 			view.tag_offset > length - view.tag_size ||
 			SetFilePointer(file, (LONG)view.tag_offset, NULL, FILE_BEGIN) != view.tag_offset ||
-			read_all(file, view.tags, view.tag_size) || find_blocks(&view, found, &count, bsps, &map->bsps) ||
+			read_all(file, view.tags, view.tag_size) || find_blocks(&view, found, MOST_BLOCKS, &count, bsps, &map->bsps) ||
 			count != retail->blocks)
 		{
 			text_print(error, 256, "%s.map's tags don't read: nothing changed.", retail->name);
@@ -1352,7 +1034,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
 		struct restore_map *map;
-		struct restore_bsp *bsps;
+		struct map_bsp *bsps;
 		struct restore_block *blocks;
 		say_text(say, 0, "%s (%d of %d): trying its restore...", retail_maps[k].name, k + 1, STOCK_MAPS);
 		map_path(path, sizeof(path), halo, retail_maps[k].name, ".oxtmp");
@@ -1538,7 +1220,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 		for (k = 0; k < STOCK_MAPS; k++)
 		{
 			struct restore_map *map;
-			struct restore_bsp *bsps;
+			struct map_bsp *bsps;
 			struct restore_block *blocks;
 			unsigned char header[HEADER];
 			if (table_next(table, table_size, &at, &map, &bsps, &blocks))
@@ -1593,7 +1275,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
 		struct restore_map *map;
-		struct restore_bsp *bsps;
+		struct map_bsp *bsps;
 		struct restore_block *blocks;
 		struct writer w;
 		unsigned char header[HEADER];

@@ -1,6 +1,6 @@
 /* stockmaps_test HALO_FOLDER look|convert|restore: what the installer does to a Halo folder's stock maps, on a PC, for
-testing (the folder holds maps\, with the 13 retail multiplayer maps). Built (in this folder) with
-	cc -O2 -DSTOCKMAPS_HOST -o stockmaps_test stockmaps_test.c stockmaps.c sha256.c -lz */
+testing (the folder holds maps\, with the 13 retail multiplayer maps and 10 levels). Built (in this folder) with
+	cc -O2 -DSTOCKMAPS_HOST -o stockmaps_test stockmaps_test.c stockmaps.c mapstream.c sha256.c -lz */
 #include <stdio.h>
 #include <string.h>
 
