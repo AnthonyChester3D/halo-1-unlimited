@@ -46,9 +46,12 @@ static inline HANDLE CreateFileA(char const *path, int access, int share, void *
 	void *other)
 {
 	char p[512];
-	(void)share, (void)security, (void)disposition, (void)flags, (void)other;
+	(void)share, (void)security, (void)flags, (void)other;
 	host_path(path, p);
-	return fopen(p, access == GENERIC_WRITE ? "wb" : "rb");
+	if (!(access & GENERIC_WRITE))
+		return fopen(p, "rb");
+	/* (read and write: an existing file as it is, else a new one) */
+	return fopen(p, disposition == OPEN_EXISTING ? "r+b" : access & GENERIC_READ ? "w+b" : "wb");
 }
 
 static inline int ReadFile(HANDLE file, void *to, DWORD size, DWORD *got, void *overlapped)

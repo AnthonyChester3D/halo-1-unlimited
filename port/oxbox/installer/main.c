@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 27
+#define INSTALLER_VERSION 28
 #endif
 __attribute__((used)) static struct
 {
@@ -2079,12 +2079,73 @@ static void consolidate_show(struct halo *h, struct pack_scan const *scan, char 
 	package_read();
 }
 
+/* a pack's multiplayer maps imported, then made small against the install's stock.shared (consolidate.c): their small maps
+beside their links in the game's storage, the blocks two or more use in the pack's shared file. The pack's own folder is
+left as it is */
+static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder)
+{
+	static char folders[CONSOLIDATE_MAPS][220];
+	static char const *folder_list[CONSOLIDATE_MAPS];
+	struct consolidate_result r;
+	char error[256], pack_folder[220], link[240];
+	int k, count = 0;
+
+	say("Importing its multiplayer maps (names and pictures)...");
+	if (packs_import(scan, 1, 0, packs_say, error))
+	{
+		say_in(COLOUR_RED, "%s", error);
+		return;
+	}
+	text_print(pack_folder, sizeof(pack_folder), "E:\\TDATA\\" OWN_TITLE_FOLDER "\\maps\\%s", scan->key);
+	for (k = 0; k < scan->count && count < CONSOLIDATE_MAPS; k++)
+	{
+		struct pack_map const *m = &scan->maps[k];
+		if (m->type != 1 || m->halos || m->small)
+			continue;
+		text_print(folders[count], 220, "%s\\%s", pack_folder, m->name);
+		text_print(link, sizeof(link), "%s\\map.link", folders[count]);
+		/* (one the import skipped isn't in the list) */
+		if (GetFileAttributesA(link) == INVALID_FILE_ATTRIBUTES)
+			continue;
+		text_print(consolidate_paths[count], 220, "%s\\maps\\%s.map", h->path, m->name);
+		consolidate_list[count] = consolidate_paths[count];
+		folder_list[count] = folders[count];
+		count++;
+	}
+	say("Making %d maps small: it reads each one three times, so it takes some minutes...", count);
+	package_free(&package);
+	log_memory();
+	if (consolidate_convert(stock_folder, pack_folder, scan->key, consolidate_list, folder_list, count, consolidate_progress,
+		&r, error))
+		say_in(COLOUR_RED, "%s", error);
+	else
+	{
+		if (r.converted)
+			say_in(COLOUR_GREEN, "Done: %d maps, %lu MB as they were, %lu MB small%s%s%s.", r.converted,
+				(unsigned long)(r.before >> 20), (unsigned long)((r.after + (1 << 20) - 1) >> 20),
+				r.shared[0] ? " (with " : "", r.shared, r.shared[0] ? ".shared)" : "");
+		else
+			say("No map was made small.");
+		if (r.already)
+			say_in(COLOUR_GREY, "  %d already draw on shared files: left as they are.", r.already);
+		if (r.unreadable)
+			say_in(COLOUR_YELLOW, "  %d can't be read: left as they are.", r.unreadable);
+		if (r.too_big)
+			say_in(COLOUR_YELLOW, "  %d would be too big to play: left as they are.", r.too_big);
+		if (r.failed)
+			say_in(COLOUR_YELLOW, "  %d didn't read back right: left as they are.", r.failed);
+		say_in(COLOUR_GREY, "The game plays the small ones. %s\\maps is left as it is.", h->path);
+	}
+	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
+	package_read();
+}
+
 static void map_pack(struct halo *h)
 {
-	enum { BOTH, MULTIPLAYER, CAMPAIGN, REMOVE, MEASURE, BACK };
+	enum { BOTH, MULTIPLAYER, CAMPAIGN, REMOVE, MEASURE, CONSOLIDATE, BACK };
 	static struct pack_scan scan;
-	char stock[200], error[256], line[SCREEN_COLUMNS + 8];
-	int choices[6], count = 0, chosen = 0, b, k;
+	char stock[200], error[256], line[SCREEN_COLUMNS + 8], stock_index[220];
+	int choices[7], count = 0, chosen = 0, b, k;
 
 	text_print(line, sizeof(line), "Maps: %s", h->path);
 	heading(line);
@@ -2121,11 +2182,15 @@ static void map_pack(struct halo *h)
 	/* (with the install's stock.shared to measure against) */
 	if (stock[0])
 		choices[count++] = MEASURE;
+	text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
+	if (stock[0] && scan.multiplayer && GetFileAttributesA(stock_index) != INVALID_FILE_ATTRIBUTES)
+		choices[count++] = CONSOLIDATE;
 	choices[count++] = BACK;
 	for (;;)
 	{
 		static char const *const labels[] = {"Import multiplayer and campaign", "Import multiplayer maps only",
-			"Import the campaign only", "Take out what's imported", "See what consolidating would save", "Back"};
+			"Import the campaign only", "Take out what's imported", "See what consolidating would save",
+			"Make its multiplayer maps small (consolidate)", "Back"};
 		for (k = 0; k < count; k++)
 		{
 			int r = SCREEN_ROWS - 2 - count + k, at;
@@ -2154,6 +2219,8 @@ static void map_pack(struct halo *h)
 	log_clear();
 	if (choices[chosen] == MEASURE)
 		consolidate_show(h, &scan, stock);
+	else if (choices[chosen] == CONSOLIDATE)
+		consolidate_pack(h, &scan, stock);
 	else if (choices[chosen] == REMOVE)
 	{
 		packs_remove(&scan, 1, 1, packs_say);

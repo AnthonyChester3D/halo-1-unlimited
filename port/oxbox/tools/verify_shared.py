@@ -36,6 +36,9 @@ def check(orig_path, conv_path, pack, stock):
     bad = []; moved = stayed = 0; invalid = [0]
     fields = set()
     for kind, k, f, o, n in raw_blocks(a):
+        # (an entry whose field isn't in the tag data, a broken tag's list running past its end: nothing to check)
+        if not (a.tag_offset <= f and f + 8 <= a.tag_offset + a.tag_size):
+            continue
         fields.add(f)
         v = u32(c, f + dt)
         # (an entry that was never valid in the original, nothing the game could read: left as it was)

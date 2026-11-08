@@ -168,11 +168,33 @@ play, the installer offers to finish, and **X** puts the small ones back. Puttin
 The installer's **White**, *See what consolidating would save*, measures a Halo folder's packs against `maps\stock.index`: it
 only reads, and says each pack's size now and about what it would be (`port/oxbox/installer/consolidate.c`). A map's real
 unpacked length can be a little under its header's file_length, which a pass may round up to a sector: read to the end of the
-stream. Moving the maps isn't done yet.
+stream.
+
+*Make its multiplayer maps small (consolidate)*, on a pack's own Halo folder (one the installer imports from), does it: the
+pack's multiplayer maps are imported (names, pictures and links, as an import's), then each is converted against the install's
+`stock.index` and `stock.shared`, by the rules above and with shared_pass.py's layout (the same maps in the same order give
+byte-identical files, unpacked). Each small map goes in its imported folder in the game's storage beside its `map.link` (the
+game plays a folder's `.map` before its link; the link marks the folder as the import's), and the blocks two or more of the
+maps use in `<pack>-<checksum>.shared` in the pack's folder there. The pack's own folder is left as it is: nothing is
+deleted yet.
+
+Each map is read three times: measured (its tag data, then its blocks' hashes), converted (its small map written, and its
+part of the pack's file into a temporary unpacked copy, which is packed at the end and named), and read back before it's
+used: every block it takes from stock.shared or the pack's file read there, and every block it keeps, every BSP and its tag
+data (the fields aside) against the original's hashes, every field against what was laid out. A map that doesn't read back
+right, or that would unpack to more than a multiplayer map may (47 MiB), keeps its link. If anything else goes wrong, what
+was made is deleted and nothing changes. HMP7's 13 maps (272 MB to 56 MB) took about 4 minutes in xemu, the import included.
+It needs room for the pack's file twice and the small maps, by the measure's estimate. *Take out what's imported* deletes
+the small maps and the pack's file too; importing again puts the links back alone.
+
+Some packs' maps share one list of bitmaps or sounds between two tags, so a block's field can be there twice: both are
+written and checked the same.
 
 ## Tools
 
 `port/oxbox/installer/stockmaps_test.c`: the installer's own code on a PC, for testing a folder of stock maps.
+
+`port/oxbox/installer/consolidate_test.c`: the installer's consolidating on a PC: `--convert STOCK_FOLDER PACK_FOLDER PREFIX MAP...` converts as the installer does.
 
 `port/oxbox/tools/shared_pass.py`:
 
