@@ -87,8 +87,11 @@ class Map:
                     for q in range(u32(data, pr + 0x3C)):
                         pm = self.at(u32(data, pr + 0x40)) + q * 0x7C
                         blocks.append((pm + 0x48, u32(data, pm + 0x48), u32(data, pm + 0x40)))
+        # (an entry whose field lies past the tag data, a broken tag's list running past its end, isn't one: the game
+        # never sees it, as it fills what follows the tag data before a BSP loads)
         self.blocks = [(f, o, n) for f, o, n in blocks if n and HEADER <= o and o + n <= len(data) and
-                       not o & 0x80000000 and not (self.tag_offset < o + n and o < self.tag_offset + self.tag_size)]
+                       not o & 0x80000000 and not (self.tag_offset < o + n and o < self.tag_offset + self.tag_size) and
+                       f + 4 <= self.tag_offset + self.tag_size]
         s = self.at(u32(data, self.at(instances) + (scenario & 0xFFFF) * 0x20 + 0x14))
         self.bsp_fields = [self.at(u32(data, s + SCENARIO_BSPS + 4)) + k * 0x20 for k in range(u32(data, s + SCENARIO_BSPS))]
 

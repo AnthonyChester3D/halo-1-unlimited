@@ -570,11 +570,31 @@ static int entry_compare(void const *a, void const *b)
 	return x->order != y->order ? x->order - y->order : x->map - y->map;
 }
 
+/* the files in folder matching pattern ("*.map") deleted */
+static void delete_matching(char const *folder, char const *pattern)
+{
+	WIN32_FIND_DATAA found;
+	char path[260];
+	HANDLE find;
+	text_print(path, sizeof(path), "%s\\%s", folder, pattern);
+	find = FindFirstFileA(path, &found);
+	if (find == INVALID_HANDLE_VALUE)
+		return;
+	do
+	{
+		if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			continue;
+		text_print(path, sizeof(path), "%s\\%s", folder, found.cFileName);
+		DeleteFileA(path);
+	} while (FindNextFileA(find, &found));
+	FindClose(find);
+}
+
 static void remove_multiplayer(char const *key)
 {
 	WIN32_FIND_DATAA found;
 	char pattern[200], folder[200], file[240];
-	static char const *const files[] = {"map.link", "info.txt", "preview.bin"};
+	static char const *const files[] = {"map.link", "info.txt", "preview.bin", "bots.txt", "bots_learned.txt", "showcase.txt"};
 	HANDLE find;
 	unsigned k;
 	text_print(pattern, sizeof(pattern), STORAGE "\\maps\\%s\\*", key);
@@ -594,10 +614,15 @@ static void remove_multiplayer(char const *key)
 				text_print(file, sizeof(file), "%s\\%s", folder, files[k]);
 				DeleteFileA(file);
 			}
+			/* (a consolidated map's small map, beside its link) */
+			delete_matching(folder, "*.map");
 			RemoveDirectoryA(folder);
 		} while (FindNextFileA(find, &found));
 		FindClose(find);
 	}
+	/* (the pack's shared file, a consolidated pack's) */
+	text_print(folder, sizeof(folder), STORAGE "\\maps\\%s", key);
+	delete_matching(folder, "*.shared");
 	text_print(file, sizeof(file), STORAGE "\\maps\\%s\\imported.txt", key);
 	DeleteFileA(file);
 	text_print(file, sizeof(file), STORAGE "\\maps\\%s\\order.txt", key);

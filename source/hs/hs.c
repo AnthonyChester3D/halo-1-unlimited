@@ -12857,26 +12857,32 @@ boolean hs_scenario_merge(
 data array too (which hs_scenario_postprocess and the data array code go by,
 the nodes' count above all): inside the tag cache, and the data array of
 script nodes it has room for. The shipped maps' all are, of 19001 nodes
-(their names differ: a30's is "static script node"). */
+(their names differ: a30's is "static script node"). A map may carry a
+trimmed one (Halo Map Porter's: docs/maps.md): the nodes it uses and some
+spare for the console's expressions, its maximum_count anything from its
+count up to 19001 and its size that many nodes' */
 static boolean hs_scenario_syntax_data_valid(
 	struct scenario const *scenario)
 {
-	long const syntax_data_size =
-		sizeof(struct data_array)+MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO*sizeof(struct hs_syntax_node);
 	byte const *address = (byte const *)scenario->hs_syntax_data.address;
 	struct data_array const *data = (struct data_array const *)address;
 
 	/* (in the loaded map's tag cache: this build's, or a Custom Edition
-	map's, cache_file_tag_cache_contains) */
-	if (scenario->hs_syntax_data.size != syntax_data_size ||
-		!cache_file_tag_cache_contains(address, syntax_data_size) ||
-		((unsigned long)address & 3))
+	map's, cache_file_tag_cache_contains: the header first, then all the
+	nodes it says there's room for) */
+	if (scenario->hs_syntax_data.size < (long)sizeof(struct data_array) ||
+		!cache_file_tag_cache_contains(address, sizeof(struct data_array)) ||
+		((unsigned long)address & 3) ||
+		data->maximum_count < 0 ||
+		data->maximum_count > MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO ||
+		scenario->hs_syntax_data.size !=
+			(long)(sizeof(struct data_array)+data->maximum_count*sizeof(struct hs_syntax_node)) ||
+		!cache_file_tag_cache_contains(address, scenario->hs_syntax_data.size))
 	{
 		return FALSE;
 	}
 
 	return data->signature == 'd@t@' &&
-		data->maximum_count == MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO &&
 		data->size == sizeof(struct hs_syntax_node) &&
 		data->valid &&
 		data->count >= 0 &&
@@ -13413,10 +13419,9 @@ static void hs_allocate(
 	struct scenario *scenario;
 
 	scenario = global_scenario_index != NONE ? global_scenario_get() : NULL;
-	/* port: as the map holds it only when it is sound */
+	/* port: as the map holds it only when it is sound (of any size up to
+	19001 nodes: hs_scenario_syntax_data_valid) */
 	if (scenario &&
-		scenario->hs_syntax_data.size ==
-			sizeof(struct data_array)+MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO*sizeof(struct hs_syntax_node) &&
 		hs_scenario_syntax_data_valid(scenario))
 	{
 		return;
