@@ -473,9 +473,13 @@ static boolean scenario_check_scripts(
 
 	/* (hs.c finds a header that is not its own damaged, and runs no
 	scripts) */
-	if (scenario->hs_syntax_data.size != HS_SYNTAX_DATA_SIZE ||
+	/* (a trimmed table, Halo Map Porter's, has room for fewer nodes: any
+	number up to 19001, its size that many's, as hs.c takes it) */
+	if (scenario->hs_syntax_data.size < 0x38 ||
+		nodes->maximum_count < 0 ||
+		nodes->maximum_count > MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO ||
+		scenario->hs_syntax_data.size != 0x38 + nodes->maximum_count * 0x14 ||
 		nodes->signature != HS_SYNTAX_DATA_SIGNATURE ||
-		nodes->maximum_count != MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO ||
 		nodes->size != sizeof(struct hs_syntax_node) ||
 		nodes->count < 0 || nodes->count > nodes->maximum_count)
 	{
