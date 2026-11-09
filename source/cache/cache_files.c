@@ -470,6 +470,15 @@ static boolean cache_file_tag_header_verify(
 		{
 			void const *base_address = tag_header->tag_instances[absolute_index].base_address;
 
+			/* port: a structure bsp's is the bsp's own, set as it loads (stock
+			maps leave 0, which scenario_structure_bsp_load asserts; retail
+			wrote over whatever was there). Old modding tools left other values
+			(HM1's maps: a size or offset): it is cleared, as stock */
+			if (tag_header->tag_instances[absolute_index].group_tag == STRUCTURE_BSP_TAG)
+			{
+				tag_header->tag_instances[absolute_index].base_address = NULL;
+				continue;
+			}
 			if (base_address &&
 				!cache_file_region_contains(tag_header, TAG_CACHE_SIZE, base_address, 1, 1))
 			{

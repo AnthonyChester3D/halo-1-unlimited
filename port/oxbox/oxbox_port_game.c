@@ -44,7 +44,59 @@ boolean custom_edition_vehicles_by_placement(void) { return 0; }
 /* ---------- the tag validator: an Xbox map's tags as the Xbox takes them */
 
 boolean tag_validate_structure_bsp(long tag_index, void *base, long size) { return 1; }
-boolean tag_validate_tags(void *tag_header, long tag_data_size, long file_length, char const *map_name) { return 1; }
+
+/* What the Xbox does keep of it: each tag's parent groups, the group's own (as the validator sets them). The game
+asks for a tag by a parent's group (tag_get('obje', a scenery's index)), and the port gives a tag whose groups don't
+match the empty tag's data. Old modding tools' injected tags have none (HMP Collection v2's Spiral: its panels and
+ramps, which are the map's floors, were never made); retail's release build never checked. */
+static struct { unsigned long group, parents[2]; } const tag_group_parents[] =
+{
+	{ 'unit', { 'obje', ~0ul } }, { 'bipd', { 'unit', 'obje' } }, { 'vehi', { 'unit', 'obje' } },
+	{ 'item', { 'obje', ~0ul } }, { 'weap', { 'item', 'obje' } }, { 'eqip', { 'item', 'obje' } },
+	{ 'garb', { 'item', 'obje' } }, { 'proj', { 'obje', ~0ul } }, { 'scen', { 'obje', ~0ul } },
+	{ 'ssce', { 'obje', ~0ul } }, { 'plac', { 'obje', ~0ul } }, { 'devi', { 'obje', ~0ul } },
+	{ 'mach', { 'devi', 'obje' } }, { 'ctrl', { 'devi', 'obje' } }, { 'lifi', { 'devi', 'obje' } },
+	{ 'schi', { 'shdr', ~0ul } }, { 'scex', { 'shdr', ~0ul } }, { 'senv', { 'shdr', ~0ul } },
+	{ 'sgla', { 'shdr', ~0ul } }, { 'smet', { 'shdr', ~0ul } }, { 'soso', { 'shdr', ~0ul } },
+	{ 'sotr', { 'shdr', ~0ul } }, { 'spla', { 'shdr', ~0ul } }, { 'swat', { 'shdr', ~0ul } },
+};
+
+boolean tag_validate_tags(void *tag_header, long tag_data_size, long file_length, char const *map_name)
+{
+	/* (the header's table, whose place and count cache_file_tag_header_verify checked: 8 words a tag, its group
+	then its two parents' first) */
+	unsigned long *instance = *(unsigned long **)tag_header;
+	long count = ((long *)tag_header)[3];
+	long index, repaired = 0;
+
+	for (index = 0; index < count; index++, instance += 8)
+	{
+		unsigned long parents[2] = { ~0ul, ~0ul };
+		int k;
+
+		for (k = 0; k < (int)(sizeof(tag_group_parents) / sizeof(tag_group_parents[0])); k++)
+		{
+			if (tag_group_parents[k].group == instance[0])
+			{
+				parents[0] = tag_group_parents[k].parents[0];
+				parents[1] = tag_group_parents[k].parents[1];
+				break;
+			}
+		}
+		/* (counted only when one the game asks by was missing: many old maps write "none" as '????') */
+		if ((parents[0] != ~0ul && instance[1] != parents[0] && instance[2] != parents[0]) ||
+			(parents[1] != ~0ul && instance[1] != parents[1] && instance[2] != parents[1]))
+		{
+			repaired++;
+		}
+		instance[1] = parents[0];
+		instance[2] = parents[1];
+	}
+	if (repaired)
+		platform_log("tags: %ld of %s's tags were missing a parent group: set", repaired, map_name);
+
+	return 1;
+}
 
 /* (the menus' maps and map sharing: port/linux/game/hmp_maps.c and hmp_share.c, Halo Universal's) */
 
