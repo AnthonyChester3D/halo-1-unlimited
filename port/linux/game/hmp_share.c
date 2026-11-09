@@ -2543,7 +2543,7 @@ void map_share_update(void) {
     /* (a full-size copy: the host's small one, asked for in the lobby; the game starting stops it, to go on in the next) */
     {
         int lobby = loaded && !ieq(loaded, "ui");     /* (the menus' map: the lobby, not a match) */
-        if (g_cl.upgrade && !lobby) {
+        if (g_cl.upgrade && g_cl.state != CL_OK && !lobby) {
             lg("client: the game started: the small copy of %s waits for the next lobby", g_cl.key);
             g_upgrade_key[0] = 0;
             client_reset();
