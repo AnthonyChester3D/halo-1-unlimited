@@ -3,7 +3,9 @@
 consolidate_test STOCK_INDEX MAP...: what consolidating these maps would save.
 consolidate_test --convert STOCK_FOLDER PACK_FOLDER PREFIX MAP...: converts them, as the installer does, each into
 PACK_FOLDER/<its name>/ (made, with a map.link, as an import makes it), the pack's file in PACK_FOLDER. STOCK_FOLDER holds
-stock.index and stock.shared. */
+stock.index and stock.shared.
+consolidate_test --shrink STOCK_FOLDER PACK_FILE MAP...: the full-size maps (the pack file's list names them) made small
+against it in place, as the installer's Shrink maps does. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +55,22 @@ int main(int argc, char **argv)
 		}
 		printf("converted %d already %d unreadable %d too_big %d failed %d before %llu after %llu shared %s\n", r.converted,
 			r.already, r.unreadable, r.too_big, r.failed, r.before, r.after, r.shared);
+		return 0;
+	}
+	if (argc >= 5 && !strcmp(argv[1], "--shrink"))
+	{
+		struct consolidate_result r;
+		int count = argc - 4, k;
+		char const **paths = calloc((size_t)count, sizeof(*paths));
+		for (k = 0; k < count; k++)
+			paths[k] = backslashes(argv[4 + k]);
+		if (consolidate_shrink(backslashes(argv[2]), backslashes(argv[3]), paths, count, say, &r, error))
+		{
+			printf("FAILED: %s\n", error);
+			return 1;
+		}
+		printf("shrunk %d already %d unreadable %d failed %d before %llu after %llu\n", r.converted, r.already, r.unreadable,
+			r.failed, r.before, r.after);
 		return 0;
 	}
 	if (argc < 3)

@@ -1,8 +1,11 @@
 # Shared files: maps that store their textures and sounds once
 
-For Halo Map Porter (and anything else that writes maps for Halo 1 Unlimited on the Xbox). Format version 2, game
-build v1.97 (version 1 maps, from v1.93, still load). **stock.shared changed in v1.97**: packs built against the earlier
-one (checksum `c028f8bf`) must be rebuilt.
+For Halo Map Porter (and anything else that writes maps for Halo 1 Unlimited on the Xbox). Format version 3, game
+build v1.102 (installer 29): a pack's shared file carries its list (the maps it was made from, and its blocks), its maps are
+laid out in the order of their identities, a small map is a whole number of sectors long, and its reference names its
+original. Version 2 files still load (the game reads none of what's new), but only version 3 packs can be shrunk into and
+shared as small copies. **stock.shared changed in v1.97**: packs built against the earlier one (checksum `c028f8bf`) must
+be rebuilt.
 
 A map can keep its textures' and sounds' data in **shared files** instead of in itself, so maps that use the same data
 store it once. Only that data moves: the map keeps its tag data, BSPs and everything else, so shared files cost no
@@ -29,15 +32,32 @@ A cache file exactly like an Xbox map, with no tags:
 | version (0x004) | 5 |
 | file_length (0x008) | the whole file's length unpacked, header included (at most 0x11600000: 278 MiB) |
 | tag_data_offset, tag_data_size (0x010, 0x014) | 0, 0 |
+| list_length (0x018) | a pack's file: its list's length, after the header (a whole number of sectors); 0 for none (stock.shared) |
 | name (0x020) | the file's name without `.shared` (1 to 30 characters, none of `\ / : * ? " < > \|`) |
 | build (0x040) | anything (`shared`) |
 | scenario_type (0x060) | 0 (campaign: it goes in a campaign cache file, the only ones big enough) |
-| checksum (0x064) | CRC32 of everything after the header, unpacked: the maps name the version they were built against with it |
+| checksum (0x064) | CRC32 of everything after the header and the list, unpacked: the maps name the version they were built against with it (the list isn't in it: the list names each small map's CRC, and each small map names this) |
 | footer (0x7FC) | `'foot'` (bytes `toof`) |
 
 After the 2048-byte header, the rest of the file either as it is, or compressed as a map's is (one zlib stream); the file
 padded with zeros to a whole 2048-byte sector. Give each block the same offset remainder modulo 512 as it had in its map
 (the game reads whole sectors).
+
+**A pack's file's list**, right after its header (list_length bytes, zeros after it), says what the file was made from, so a
+console can tell which full-size maps it serves and shrink them into it (the installer's *Shrink maps*), and anything can tell
+an official pack's file from another (a library of known packs, by these identities):
+
+| Offset | Size | Value |
+|---|---|---|
+| 0x00 | 4 | `OXPL` |
+| 0x04 | 4 | 1 (its version) |
+| 0x08 | 4 | maps: how many it was made from |
+| 0x0C | 4 | blocks: how many it holds |
+| 0x10 | 20 a map | each map, in the order they're laid out in: its **identity** (the full-size map's file's size, the CRC32 of its first 64 KiB, the CRC32 of its last 64 KiB: all of it when it's smaller), then its small map's length and CRC32, unpacked |
+| then | 40 a block | each block, in the order it's in the file: its SHA-256, its place in the file, its size |
+
+**A map's identity** is its file as it's stored: size and the two CRC32s. It's unique across the 467 distinct maps of 28 old
+packs, and quick to take (128 KB read); a map's header checksum isn't (many modded maps have 0).
 
 **Unpacked is read where it is**: when the file's size is its file_length, the game reads it from the disk with no copy, no
 wait and no cache file. stock.shared is always this way. It's worth doing for a big pack's file too: the campaign's two
@@ -68,16 +88,28 @@ or `maps\` itself); `stock.shared` may also be in the game's maps folder. The ga
 | 0x38 | 32 | the stock shared file's name: `stock` (all zeros: none) |
 | 0x58 | 4 | its checksum |
 | 0x5C | 4 | its file_length |
+| 0x60 | 4 | a pack's map: its original's identity's CRC32 of the first 64 KiB (with 0x30, its size; 0 when not known) |
+| 0x64 | 4 | and of the last 64 KiB |
+
+(The reference keeps version 2: what's at 0x60 is new in format 3, and nothing that reads a reference reads past 0x60.)
 
 3. **Leave the moved data out** of the map: lay the map out again without it, moving the offsets of what stays down
    (the header's tag_data_offset, each BSP's file offset in the scenario's structure_bsp_references, and the textures
    and sounds that stay). A sector something that stays needs is kept, even if it's otherwise moved data: some
    maps have a block that stays, or a BSP, sharing a sector with one that moves. A map drawing on a packed shared file must fit a multiplayer cache file unpacked (47 MiB). The tool drops every 2048-byte
    sector made wholly of moved data, so what stays keeps its alignment, and zeroes the rest of the moved bytes.
+4. **A whole number of sectors**: the small map's length (its header's file_length and its stream) padded with zeros to a
+   multiple of 2048. A map's stream can end short of a sector (its header's file_length rounded up): 249 of 627 multiplayer
+   maps in the old packs do. A small map whose length isn't a whole number of sectors doesn't load (the game copies a map to
+   its cache in whole sectors): format 2's tools, and installer 28, made such maps.
 
 **Rules for a pack's pass**: only data used by two or more of its maps goes into its shared file (data one map uses
 stays in that map: shared files stay under 278 MiB, and a deleted map takes its own data with it); data in
-stock.shared is taken from there, never put in the pack's file.
+stock.shared is taken from there, never put in the pack's file. **The maps are laid out in the order of their identities**
+(size, then the first CRC, then the last), whatever their names or folders: the same maps make the same files, byte for byte
+unpacked, whoever makes them (the installer, Halo Map Porter, shared_pass.py). The pack's file: its header, its list, then
+each map's blocks in that order, each map's in its tags' order, each placed after the last at its remainder modulo 512, the
+file padded to a whole sector. Its name: `<pack>-<8 lowercase hex of its checksum>`.
 
 ## stock.shared's layout
 
@@ -123,6 +155,14 @@ takes three steps:
    CRC-checked like a map's, its header checked against the version named, then put in the folder above the map's. It
    only ever sends the file the hosted map names, and never one called `stock`.
 3. **The map**, as for any other. A console whose copy lacked only the shared file is the same build now and gets no map.
+
+**The small copy** (version 8): a console in the lobby whose copy of the host's map is full size, with a pack's shared file
+beside it or in the folder above, asks once whether the host's copy is the small one (the request's `small`). If it is the
+same map (the same identity) drawing on a pack's file this console has in that exact version (and the same stock.shared), the
+host sends the small map, which takes the full-size one's place once the lobby has copied that one to the cache. It never
+holds the lobby, never fetches a pack's file for it, and never says the map is missing: a game starting, no room or anything
+else, and the console keeps the copy it has (the game starting puts it off to the next lobby). A full-size copy and a small
+one are the same map in a game either way.
 
 A pack's file is named for its version (`<pack>-<8 hex of its checksum>.shared`), so two versions of a pack sit side by
 side. **`stock.shared` is never sent**: every console builds its own from its own maps. One without it, or with another
@@ -190,11 +230,23 @@ the small maps and the pack's file too; importing again puts the links back alon
 Some packs' maps share one list of bitmaps or sounds between two tags, so a block's field can be there twice: both are
 written and checked the same.
 
+## Shrink maps
+
+On the game's own install, **White** looks in its maps folder and the game's storage (E:\TDATA\4c4a4855\maps) for packs'
+files with full-size maps they were made from where the game would find them (beside the map or in the folder above): maps
+downloaded from a console that hadn't consolidated, or copied there. It says *You have N maps that can be shrunk to save
+space* and offers *Shrink maps (saves about N MB)*. Each map is made small against stock.shared and that pack's file by its
+list (consolidate_shrink): it must come out exactly as the list says (its small map's length and CRC32), which makes it the
+same map, byte for byte unpacked, as the console that consolidated the pack has; it's read back as consolidating reads one,
+then takes the full-size file's place (through `<name>.map.big`: a power cut leaves one of the two, which the next look puts
+right). A map that doesn't come out as the list says stays as it is. Imported maps (links) aren't offered: their originals
+stay where they are, so shrinking them saves nothing until deleting is in.
+
 ## Tools
 
 `port/oxbox/installer/stockmaps_test.c`: the installer's own code on a PC, for testing a folder of stock maps.
 
-`port/oxbox/installer/consolidate_test.c`: the installer's consolidating on a PC: `--convert STOCK_FOLDER PACK_FOLDER PREFIX MAP...` converts as the installer does.
+`port/oxbox/installer/consolidate_test.c`: the installer's consolidating on a PC: `--convert STOCK_FOLDER PACK_FOLDER PREFIX MAP...` converts as the installer does; `--shrink STOCK_FOLDER PACK_FILE MAP...` shrinks full-size maps in place against a pack's file, as *Shrink maps* does.
 
 `port/oxbox/tools/shared_pass.py`:
 

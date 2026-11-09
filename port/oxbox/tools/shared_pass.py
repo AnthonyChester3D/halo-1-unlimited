@@ -19,6 +19,10 @@ without the moved data (whole 2048-byte sectors of it, so what stays keeps its a
 offsets and its own blocks' moved down, and its header gets the shared reference at 0x700 (its identity in map sharing
 kept: the size and checksum it had before the pass).
 
+A pack's shared file starts with its list (docs/shared_maps.md): the maps it was made from, each with the small map it
+makes, then its blocks; its maps are laid out in the order of their identities (size, then the CRC32s of their first and
+last 64 KiB), whatever their names, so the same maps make the same files.
+
 stock.shared's layout is fixed: the stock maps in the order of their file names, then the campaign's levels in the order of
 theirs (only their blocks that three levels or more use); each map's tags in tag index order, a bitmap's bitmaps then a
 sound's pitch ranges' permutations in block order; the first copy of each block placed after the last, padded with zeros to
@@ -42,6 +46,8 @@ PACK_BIT, STOCK_BIT = 0x80000000, 0xC0000000
 LEVEL = int(os.environ.get('SHARED_PASS_LEVEL', '9'))
 STOCK_NAMES = ('beavercreek', 'bloodgulch', 'boardingaction', 'carousel', 'chillout', 'damnation', 'hangemhigh',
                'longest', 'prisoner', 'putput', 'ratrace', 'sidewinder', 'wizard')
+LIST_SIGNATURE = b'OXPL'
+EDGE = 65536               # (a map's identity: its size and the CRC32s of this much at its start and its end)
 LEVEL_NAMES = ('a10', 'a30', 'a50', 'b30', 'b40', 'c10', 'c20', 'c40', 'd20', 'd40')
 
 
@@ -106,25 +112,52 @@ class Map:
         return [(hashlib.sha1(bytes(self.data[o:o + n])).digest(), o % 512) for f, o, n in self.blocks]
 
 
-class Shared:
-    """a shared file being laid out"""
+def identity(raw):
+    """a map's file's identity: its size and the CRC32s of its first and last 64 KiB (all of it when it's smaller)"""
+    return len(raw), zlib.crc32(raw[:EDGE]) & 0xFFFFFFFF, zlib.crc32(raw[-EDGE:]) & 0xFFFFFFFF
 
-    def __init__(self):
-        self.data = bytearray(HEADER)
+
+def list_length(maps, blocks):
+    """a pack's file's list: its header, 20 bytes a map and 40 a block, to a whole sector"""
+    n = 16 + 20 * maps + 40 * blocks
+    return n + -n % SECTOR
+
+
+class Shared:
+    """a shared file being laid out (a pack's with room for its list after its header)"""
+
+    def __init__(self, list_room=0):
+        self.list_room = list_room
+        self.data = bytearray(HEADER + list_room)
         self.placed = {}
+        self.sizes = {}
 
     def place(self, key, block):
         if key not in self.placed:
             self.data += bytes((key[1] - len(self.data) % 512) % 512)
             self.placed[key] = len(self.data)
+            self.sizes[key] = len(block)
             self.data += block
         return self.placed[key]
 
+    def write_list(self, members):
+        """members: each map's (identity, its small map's length and CRC32 unpacked); its blocks in the order they're in it"""
+        out = bytearray(LIST_SIGNATURE + struct.pack('<III', 1, len(members), len(self.placed)))
+        for (size, head, tail), small_length, small_crc in members:
+            out += struct.pack('<5I', size, head, tail, small_length, small_crc)
+        for key in sorted(self.placed, key=self.placed.get):
+            at, n = self.placed[key], self.sizes[key]
+            out += hashlib.sha256(bytes(self.data[at:at + n])).digest() + struct.pack('<II', at, n)
+        assert len(out) <= self.list_room
+        self.data[HEADER:HEADER + len(out)] = out
+
     def finish(self, name):
         self.data += bytes(-len(self.data) % SECTOR)
-        self.checksum = zlib.crc32(bytes(self.data[HEADER:])) & 0xFFFFFFFF
+        # (the checksum leaves the list out: the list names each small map's CRC, and a small map names this checksum)
+        self.checksum = zlib.crc32(bytes(self.data[HEADER + self.list_room:])) & 0xFFFFFFFF
         header = bytearray(HEADER)
         struct.pack_into('<4sII', header, 0, b'daeh', 5, len(self.data))
+        struct.pack_into('<I', header, 0x18, self.list_room)
         header[0x20:0x20 + len(name)] = name.encode()
         header[0x40:0x46] = b'shared'
         struct.pack_into('<hhI', header, 0x60, 0, 0, self.checksum)
@@ -168,8 +201,9 @@ def write_cache_file(path, data, level=None):
     return len(out)
 
 
-def rebuild(m, where, pack, stock):
-    """the map drawing on the shared files: where[i] = (bit, offset) for a block that moved, None for one that stays"""
+def rebuild(m, where, pack, stock, original=False):
+    """the map drawing on the shared files: where[i] = (bit, offset) for a block that moved, None for one that stays; with
+    original, its reference names the original's identity's CRCs too (a pack's map)"""
     data = bytearray(m.data)
     moved = []
     for (f, o, n), w in zip(m.blocks, where):
@@ -223,12 +257,16 @@ def rebuild(m, where, pack, stock):
     for c in range(1, len(data) // SECTOR + (1 if len(data) % SECTOR else 0)):
         if not covered[c]:
             out += data[c * SECTOR:(c + 1) * SECTOR]
+    # (to a whole sector: a map's stream can end short of one, and the game copies a map to its cache in whole sectors)
+    out += bytes(-len(out) % SECTOR)
     struct.pack_into('<I', out, 8, len(out))
     reference = struct.pack('<Il32sIlII32sIl', 0x73687264, 2,
                             pack.name.encode() if pack else b'', pack.checksum if pack else 0,
                             len(pack.data) if pack else 0, len(m.raw), u32(m.raw, 0x64),
                             stock.name.encode() if stock else b'', stock.checksum if stock else 0,
                             len(stock.data) if stock else 0)
+    if original:
+        reference += struct.pack('<II', *identity(m.raw)[1:])
     out[SHARED_REFERENCE_OFFSET:SHARED_REFERENCE_OFFSET + len(reference)] = reference
     return out
 
@@ -285,13 +323,14 @@ def main():
         if len(stock_paths) != len(STOCK_NAMES) or len(level_paths) != len(LEVEL_NAMES):
             sys.exit('--stock needs the 13 multiplayer maps and the 10 campaign levels in one folder')
         stock, _ = stock_layout(stock_paths, level_paths)
-    maps = [Map(p) for p in paths]
+    maps = sorted((Map(p) for p in paths), key=lambda m: identity(m.raw))
     keys = [m.keys() for m in maps]
     used = {}
     for ks in keys:
         for k in set(ks):
             used[k] = used.get(k, 0) + 1
-    pack = Shared()
+    blocks = len({k for k, n in used.items() if n >= 2 and not (stock and k in stock.placed)})
+    pack = Shared(list_length(len(maps), blocks) if blocks else 0)
     wheres = []
     for m, ks in zip(maps, keys):
         where = []
@@ -303,14 +342,15 @@ def main():
             else:
                 where.append(None)
         wheres.append(where)
-    has_pack = len(pack.data) > HEADER
+    has_pack = blocks > 0
     pack.finish(name)
-    size = write_cache_file(os.path.join(out_dir, name + '.shared'), pack.data) if has_pack else 0
+    members = []
     for m, where in zip(maps, wheres):
+        out = rebuild(m, where, pack if has_pack else None, stock, True)
+        members.append((identity(m.raw), len(out), zlib.crc32(bytes(out)) & 0xFFFFFFFF))
         folder = os.path.basename(os.path.dirname(os.path.abspath(m.path)))
         dest = os.path.join(out_dir, folder)
         os.makedirs(dest, exist_ok=True)
-        out = rebuild(m, where, pack if has_pack else None, stock)
         n = write_cache_file(os.path.join(dest, os.path.basename(m.path)), out)
         for other in os.listdir(os.path.dirname(os.path.abspath(m.path))):
             if not other.lower().endswith('.map'):
@@ -320,6 +360,9 @@ def main():
             folder, os.path.basename(m.path), len(m.raw) >> 10, n >> 10, len(out) >> 10, kept >> 10))
         total_before += len(m.raw)
         total_after += n
+    if has_pack:
+        pack.write_list(members)
+    size = write_cache_file(os.path.join(out_dir, name + '.shared'), pack.data) if has_pack else 0
     if has_pack:
         print('%s.shared: %d KB (%d KB unpacked)' % (name, size >> 10, len(pack.data) >> 10))
     print('in all: %d KB -> %d KB%s' % (total_before >> 10, (total_after + size) >> 10,
