@@ -19,7 +19,7 @@ part of the pack's file with it), one to pack the pack's file, and one to read e
 #define CHUNK (256u * 1024u)
 #define TABLE_SIZE (1u << 17)           /* a pack's distinct blocks, and stock.shared's: 8946 of them */
 #define REFERENCE_OFFSET 0x700u
-#define REFERENCE_SIZE 0x60u
+#define REFERENCE_SIZE 0x68u           /* (a pack's map's: the original's identity's CRCs at 0x60) */
 #define REFERENCE_SIGNATURE 0x73687264u /* 'shrd' */
 #define PACK_BIT 0x80000000u
 #define STOCK_BIT 0xC0000000u
@@ -27,6 +27,11 @@ part of the pack's file with it), one to pack the pack's file, and one to read e
 #define MP_SLOT (47u * 1024u * 1024u)   /* what a multiplayer map may unpack to (the game's cache file for one) */
 #define MAP_LEVEL 1                     /* (as the stock maps': far quicker on a console, and only 3% bigger than 6) */
 #define SHARED_LEVEL 6
+#define EDGE 65536u                     /* a map's identity: its size and the CRC32s of this much at its start and its end */
+#define LIST_SIGNATURE "OXPL"           /* a pack's file's list, after its header */
+#define LIST_HEAD 16u
+#define LIST_MAP 20u
+#define LIST_BLOCK 40u
 /* how a map's other data packs, and a pack's shared file, on the 14 old packs (shared_pass.py at level 6). An estimate */
 #define MAP_PACKED_PERCENT 39
 #define SHARED_PACKED_PERCENT 47
@@ -63,6 +68,8 @@ struct cmap
 	uint32_t length;                /* what it really unpacks to */
 	uint32_t raw_size;              /* its file */
 	uint32_t tag_offset, tag_size, out_length;
+	uint32_t head, tail;            /* its identity's CRCs (with raw_size) */
+	uint32_t body_crc, small_crc;   /* the small map's unpacked: after its header, and all of it */
 	int count;
 	struct cblock *blocks;
 	uint32_t bsp_count;
@@ -367,6 +374,39 @@ static void measuring_end(struct measuring *m)
 	free(m->order);
 }
 
+/* a map's identity: its file's size and the CRC32s of its first and last 64 KiB (all of it when it's smaller), read with
+buffer (EDGE bytes). 0 when read */
+static int identity(char const *path, unsigned char *buffer, uint32_t *size, uint32_t *head, uint32_t *tail)
+{
+	HANDLE file = open_read(path);
+	uint32_t n, at;
+	int failed = 1;
+	if (file == INVALID_HANDLE_VALUE)
+		return 1;
+	*size = GetFileSize(file, NULL);
+	n = *size < EDGE ? *size : EDGE;
+	at = *size - n;
+	if (*size != 0xFFFFFFFFu && !read_all(file, buffer, n))
+	{
+		*head = (uint32_t)crc32(crc32(0, NULL, 0), buffer, n);
+		if (SetFilePointer(file, (LONG)at, NULL, FILE_BEGIN) == at && !read_all(file, buffer, n))
+		{
+			*tail = (uint32_t)crc32(crc32(0, NULL, 0), buffer, n);
+			failed = 0;
+		}
+	}
+	CloseHandle(file);
+	return failed;
+}
+
+int consolidate_identity(char const *path, uint32_t *size, uint32_t *head, uint32_t *tail)
+{
+	unsigned char *buffer = malloc(EDGE);
+	int failed = !buffer || identity(path, buffer, size, head, tail);
+	free(buffer);
+	return failed;
+}
+
 /* every map measured (keeps: NULL, or each one's to convert); 0 when done, else error[256] */
 static int measure_all(struct measuring *m, char const *const *paths, int count, consolidate_say_t say,
 	struct consolidate_measure *result, struct cmap *keeps, char *error)
@@ -379,13 +419,19 @@ static int measure_all(struct measuring *m, char const *const *paths, int count,
 	for (i = 0; i < count; i++)
 	{
 		uint64_t length = 0;
-		uint32_t size = 0;
+		uint32_t size = 0, head = 0, tail = 0;
 		HANDLE file = open_read(paths[i]);
 		int r;
 		if (file != INVALID_HANDLE_VALUE)
 		{
 			size = GetFileSize(file, NULL);
 			CloseHandle(file);
+		}
+		/* (a map to convert: its identity first, which orders the pack's file) */
+		if (keeps && identity(paths[i], m->piece, &size, &head, &tail))
+		{
+			result->unreadable++;
+			continue;
 		}
 		if (say)
 		{
@@ -406,6 +452,8 @@ static int measure_all(struct measuring *m, char const *const *paths, int count,
 		{
 			keeps[i].state = CONVERTING;
 			keeps[i].raw_size = size;
+			keeps[i].head = head;
+			keeps[i].tail = tail;
 		}
 		result->maps++;
 		result->before += size;
@@ -594,6 +642,9 @@ static int lay_out(struct cmap *c, struct layout *l)
 		if (!l->covered[k])
 			c->out_length += c->length - k * SECTOR < SECTOR ? c->length - k * SECTOR : SECTOR;
 	}
+	/* (to a whole sector, zeros after: a map's stream can end short of one, and the game copies a map to its cache in whole
+	sectors) */
+	c->out_length += (SECTOR - c->out_length % SECTOR) % SECTOR;
 	/* the fields */
 	for (i = 0; i < c->count; i++)
 	{
@@ -644,6 +695,15 @@ static void set_reference(struct cmap *c, struct measuring const *m, char const 
 	memcpy(r + 0x38, "stock", 5);
 	put32(r + 0x58, m->stock_checksum);
 	put32(r + 0x5C, m->stock_length);
+	put32(r + 0x60, c->head);
+	put32(r + 0x64, c->tail);
+}
+
+/* the small map's CRC32 unpacked, now its header is made */
+static void small_crc(struct cmap *c)
+{
+	c->small_crc = (uint32_t)crc32_combine(crc32(crc32(0, NULL, 0), c->header, HEADER), c->body_crc,
+		(z_off_t)(c->out_length - HEADER));
 }
 
 /* the overlap of [from, to) with the piece at [at, at + size): 1 and its place in the piece and how much */
@@ -684,7 +744,7 @@ static int convert_map(struct converting *v, int index, char const *path, char c
 	struct reader r;
 	struct writer w;
 	HANDLE file = INVALID_HANDLE_VALUE;
-	uint32_t at, out = HEADER, tail;
+	uint32_t at, out = HEADER, tail, crc = (uint32_t)crc32(0, NULL, 0);
 	int i, writes = 0, first_moved = 0, first_stay = 0, first_field = 0, first_write = 0, failed = 1, writing = 0;
 
 	if (lay_out(c, &l))
@@ -762,13 +822,22 @@ static int convert_map(struct converting *v, int index, char const *path, char c
 				continue;
 			if (writer_put(&w, chunk + s * SECTOR, part))
 				goto stop_reading;
+			crc = (uint32_t)crc32(crc, chunk + s * SECTOR, part);
 			out += part;
 		}
 	}
 	reader_close(&r);
+	if (out < c->out_length && out + SECTOR > c->out_length)
+	{
+		if (writer_put(&w, zeros, c->out_length - out))
+			goto stop;
+		crc = (uint32_t)crc32(crc, zeros, c->out_length - out);
+		out = c->out_length;
+	}
 	writing = 0;
 	if (out != c->out_length || writer_finish(&w))
 		goto stop;
+	c->body_crc = crc;
 	/* (padded to a whole sector: the game copies maps unbuffered) */
 	tail = (SECTOR - (HEADER + w.written) % SECTOR) % SECTOR;
 	if (write_all(file, zeros, tail))
@@ -787,15 +856,93 @@ stop:
 	return failed;
 }
 
-/* the pack's file from its unpacked layout (temporary, length bytes): packed to path, its header made. Its checksum (a CRC
-of all after the header, as a map's) in *checksum. 0 when written */
-static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, char const *path, char const *prefix,
-	char *name, uint32_t *checksum)
+/* a block of the pack's file, in the order they're in it, with its whole SHA-256 for the file's list */
+struct pblock
+{
+	struct entry *e;
+	unsigned char digest[32];
+};
+
+/* the pack's file's data read back from its unpacked layout (temporary, from its list's end to length): its checksum (a
+CRC32 of all of it) and each block's SHA-256, checked against the hash it was laid out by. 0 when read */
+static int pack_data(struct converting *v, HANDLE temporary, uint32_t from, uint32_t length, struct pblock *pblocks,
+	int count, uint32_t *checksum)
+{
+	struct sha256 h;
+	uint32_t at, crc = (uint32_t)crc32(0, NULL, 0);
+	int k = 0;
+	if (SetFilePointer(temporary, (LONG)from, NULL, FILE_BEGIN) != from)
+		return 1;
+	for (at = from; at < length; at += CHUNK)
+	{
+		uint32_t size = length - at > CHUNK ? CHUNK : length - at;
+		if (read_all(temporary, v->m.piece, size))
+			return 1;
+		crc = (uint32_t)crc32(crc, v->m.piece, size);
+		/* (its blocks follow each other, none overlapping) */
+		while (k < count && pblocks[k].e->at < at + size)
+		{
+			struct entry const *e = pblocks[k].e;
+			uint32_t start = e->at > at ? e->at : at, end = e->at + e->size < at + size ? e->at + e->size : at + size;
+			if (e->at >= at)
+				sha256_start(&h);
+			sha256_add(&h, v->m.piece + (start - at), end - start);
+			if (e->at + e->size > at + size)
+				break;
+			sha256_end(&h, pblocks[k].digest);
+			if (memcmp(pblocks[k].digest, e->digest, sizeof(e->digest)))
+				return 1;
+			k++;
+		}
+	}
+	*checksum = crc;
+	return k != count;
+}
+
+/* the pack's file's list (docs/shared_maps.md), list_room bytes, written into its unpacked layout after its header: the maps
+it was made from (order, members of them) with their small maps, then its blocks. 0 when written */
+static int write_list(struct converting *v, HANDLE temporary, uint32_t list_room, int const *order, int members,
+	struct pblock const *pblocks, int count)
+{
+	unsigned char *list = calloc(list_room, 1), *p;
+	int k, failed;
+	if (!list)
+		return 1;
+	memcpy(list, LIST_SIGNATURE, 4);
+	put32(list + 4, 1);
+	put32(list + 8, (uint32_t)members);
+	put32(list + 12, (uint32_t)count);
+	p = list + LIST_HEAD;
+	for (k = 0; k < members; k++, p += LIST_MAP)
+	{
+		struct cmap const *c = &v->maps[order[k]];
+		put32(p, c->raw_size);
+		put32(p + 4, c->head);
+		put32(p + 8, c->tail);
+		put32(p + 12, c->out_length);
+		put32(p + 16, c->small_crc);
+	}
+	for (k = 0; k < count; k++, p += LIST_BLOCK)
+	{
+		memcpy(p, pblocks[k].digest, 32);
+		put32(p + 32, pblocks[k].e->at);
+		put32(p + 36, pblocks[k].e->size);
+	}
+	failed = write_at(temporary, HEADER, list, list_room);
+	free(list);
+	return failed;
+}
+
+/* the pack's file from its unpacked layout (temporary, length bytes, its list in the list_room after its header): packed to
+path with its header, as shared_pass.py's: its name, "shared" as its build, its checksum (a CRC32 of all after the list,
+checked again as it's packed) and its list's length at 0x18. 0 when written */
+static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, uint32_t list_room, char const *path,
+	char const *name, uint32_t checksum)
 {
 	unsigned char header[HEADER];
 	struct writer w;
 	HANDLE file = create(path, 0);
-	uint32_t at, crc = (uint32_t)crc32(0, NULL, 0), tail;
+	uint32_t at, crc = (uint32_t)crc32(0, NULL, 0), tail, data = HEADER + list_room;
 	int failed = 1, writing = 0;
 	if (file == INVALID_HANDLE_VALUE || write_all(file, zeros, HEADER) || writer_open(&w, SHARED_LEVEL, file, 0))
 		goto stop;
@@ -807,29 +954,31 @@ static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, 
 		uint32_t size = length - at > CHUNK ? CHUNK : length - at;
 		if (read_all(temporary, v->m.piece, size))
 			goto stop;
-		crc = (uint32_t)crc32(crc, v->m.piece, size);
+		if (at + size > data)
+		{
+			uint32_t skip = data > at ? data - at : 0;
+			crc = (uint32_t)crc32(crc, v->m.piece + skip, size - skip);
+		}
 		if (writer_put(&w, v->m.piece, size))
 			goto stop;
 	}
 	writing = 0;
-	if (writer_finish(&w))
+	if (writer_finish(&w) || crc != checksum)
 		goto stop;
 	tail = (SECTOR - (HEADER + w.written) % SECTOR) % SECTOR;
 	if (write_all(file, zeros, tail))
 		goto stop;
-	/* the header, as shared_pass.py's: the name it goes by (the pack's, and the checksum), "shared" as its build */
-	text_print(name, 32, "%s-%08lx", prefix, (unsigned long)crc);
 	memset(header, 0, HEADER);
 	memcpy(header, "daeh", 4);
 	put32(header + 4, 5);
 	put32(header + 8, length);
+	put32(header + 0x18, list_room);
 	memcpy(header + 0x20, name, strlen(name));
 	memcpy(header + 0x40, "shared", 6);
-	put32(header + 0x64, crc);
+	put32(header + 0x64, checksum);
 	memcpy(header + 0x7FC, "toof", 4);
 	if (write_at(file, 0, header, HEADER))
 		goto stop;
-	*checksum = crc;
 	failed = !finish(file);
 	file = INVALID_HANDLE_VALUE;
 stop:
@@ -844,6 +993,52 @@ static int entry_by_at(void const *a, void const *b)
 {
 	uint32_t x = (*(struct entry *const *)a)->at, y = (*(struct entry *const *)b)->at;
 	return x < y ? -1 : x > y;
+}
+
+/* is this shared file stored unpacked (its file's size is its file_length, as the game tells)? */
+static int stored_unpacked(char const *path)
+{
+	unsigned char header[HEADER];
+	HANDLE file = open_read(path);
+	int unpacked = 0;
+	if (file == INVALID_HANDLE_VALUE)
+		return 0;
+	if (!read_all(file, header, HEADER))
+		unpacked = GetFileSize(file, NULL) == u32(header + 8);
+	CloseHandle(file);
+	return unpacked;
+}
+
+/* the blocks in list (n of them, in the order they're in the file) read where they are in an unpacked shared file and
+checked against their hashes. 0 when all are */
+static int check_where_they_are(struct converting *v, char const *path, struct entry *const *list, int n)
+{
+	HANDLE file = open_read(path);
+	int k;
+	if (file == INVALID_HANDLE_VALUE)
+		return 1;
+	for (k = 0; k < n; k++)
+	{
+		struct sha256 h;
+		unsigned char digest[32];
+		uint32_t left = list[k]->size, at = list[k]->at;
+		sha256_start(&h);
+		if (SetFilePointer(file, (LONG)at, NULL, FILE_BEGIN) != at)
+			break;
+		while (left)
+		{
+			uint32_t part = left > CHUNK ? CHUNK : left;
+			if (read_all(file, v->m.piece, part))
+				break;
+			sha256_add(&h, v->m.piece, part);
+			left -= part;
+		}
+		sha256_end(&h, digest);
+		if (left || memcmp(digest, list[k]->digest, sizeof(list[k]->digest)))
+			break;
+	}
+	CloseHandle(file);
+	return k < n;
 }
 
 /* every block a converted map takes from stock.shared and the pack's file read back from there and checked against the
@@ -877,34 +1072,10 @@ static int check_shared(struct converting *v, char const *stock_path, char const
 				list[n++] = e;
 		}
 		qsort(list, (size_t)n, sizeof(list[0]), entry_by_at);
-		if (!from_pack)
+		/* stock.shared is unpacked, and a pack's file may be: each block read where it is */
+		if (!from_pack || (n && stored_unpacked(pack_path)))
 		{
-			/* stock.shared is unpacked: each block read where it is */
-			HANDLE stock = open_read(stock_path);
-			if (stock == INVALID_HANDLE_VALUE)
-				goto done;
-			for (k = 0; k < n; k++)
-			{
-				struct sha256 h;
-				unsigned char digest[32];
-				uint32_t left = list[k]->size, at = list[k]->at;
-				sha256_start(&h);
-				if (SetFilePointer(stock, (LONG)at, NULL, FILE_BEGIN) != at)
-					break;
-				while (left)
-				{
-					uint32_t part = left > CHUNK ? CHUNK : left;
-					if (read_all(stock, v->m.piece, part))
-						break;
-					sha256_add(&h, v->m.piece, part);
-					left -= part;
-				}
-				sha256_end(&h, digest);
-				if (left || memcmp(digest, list[k]->digest, sizeof(list[k]->digest)))
-					break;
-			}
-			CloseHandle(stock);
-			if (k < n)
+			if (check_where_they_are(v, from_pack ? pack_path : stock_path, list, n))
 				goto done;
 		}
 		else if (n)
@@ -1033,6 +1204,26 @@ static char const *last_part(char const *path)
 	return slash ? slash + 1 : path;
 }
 
+/* (the maps' order in a pack's file: by their identities, whatever their names) */
+static struct cmap const *ordering;
+
+static int identity_order(void const *a, void const *b)
+{
+	struct cmap const *x = &ordering[*(int const *)a], *y = &ordering[*(int const *)b];
+	if (x->raw_size != y->raw_size)
+		return x->raw_size < y->raw_size ? -1 : 1;
+	if (x->head != y->head)
+		return x->head < y->head ? -1 : 1;
+	if (x->tail != y->tail)
+		return x->tail < y->tail ? -1 : 1;
+	return *(int const *)a - *(int const *)b;
+}
+
+static uint32_t to_sector(uint32_t n)
+{
+	return n + (SECTOR - n % SECTOR) % SECTOR;
+}
+
 int consolidate_convert(char const *stock_folder, char const *pack_folder, char const *pack_prefix, char const *const *paths,
 	char const *const *folders, int count, consolidate_say_t say, struct consolidate_result *result, char *error)
 {
@@ -1040,8 +1231,10 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 	struct consolidate_measure measured;
 	char path[260], out_path[260], temporary_path[260], shared_path[260], name[32], line[200];
 	HANDLE temporary = INVALID_HANDLE_VALUE;
-	uint32_t pack_length = HEADER, checksum = 0;
-	int i, k, status = 1, has_pack, changed;
+	uint32_t pack_length = HEADER, checksum = 0, list_room = 0;
+	int i, k, status = 1, has_pack, changed, members = 0, blocks = 0, placed = 0;
+	int *order = NULL;
+	struct pblock *pblocks = NULL;
 	ULARGE_INTEGER available, total, free_total;
 	char root[4] = {'E', ':', '\\', 0};
 
@@ -1098,13 +1291,39 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 				say(1, line);
 		}
 	}
-	/* the pack's file laid out as shared_pass.py lays it out: in the maps' order, each one's blocks in its tags' order, each
-	at its remainder modulo 512 */
+	/* the pack's file laid out as shared_pass.py lays it out: its list (the maps in the order of their identities, then its
+	blocks), then each map's blocks in that order, in its tags' order, each at its remainder modulo 512 */
+	order = malloc((size_t)(count > 0 ? count : 1) * sizeof(*order));
+	if (!order)
+	{
+		text_print(error, 256, "Not enough memory.");
+		goto done;
+	}
 	for (i = 0; i < count; i++)
 	{
-		struct cmap *c = &v.maps[i];
-		if (c->state != CONVERTING)
-			continue;
+		if (v.maps[i].state == CONVERTING)
+			order[members++] = i;
+	}
+	ordering = v.maps;
+	qsort(order, (size_t)members, sizeof(order[0]), identity_order);
+	for (k = 0; k < (int)TABLE_SIZE; k++)
+	{
+		struct entry const *e = &v.m.table[k];
+		if (e->used && !e->in_stock && e->maps >= 2)
+			blocks++;
+	}
+	pblocks = malloc((size_t)(blocks ? blocks : 1) * sizeof(*pblocks));
+	if (!pblocks)
+	{
+		text_print(error, 256, "Not enough memory.");
+		goto done;
+	}
+	if (blocks)
+		list_room = to_sector(LIST_HEAD + LIST_MAP * (uint32_t)members + LIST_BLOCK * (uint32_t)blocks);
+	pack_length = HEADER + list_room;
+	for (i = 0; i < members; i++)
+	{
+		struct cmap *c = &v.maps[order[i]];
 		for (k = 0; k < c->count; k++)
 		{
 			struct entry *e = c->blocks[k].e;
@@ -1113,12 +1332,20 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			pack_length += (e->remainder + 512 - pack_length % 512) % 512;
 			e->at = pack_length;
 			e->in_pack = 1;
-			e->writer = (int16_t)i;
+			e->writer = (int16_t)order[i];
+			if (placed < blocks)
+				pblocks[placed].e = e;
+			placed++;
 			pack_length += e->size;
 		}
 	}
-	pack_length += (SECTOR - pack_length % SECTOR) % SECTOR;
-	has_pack = pack_length > HEADER;
+	pack_length = to_sector(pack_length);
+	if (placed != blocks)
+	{
+		text_print(error, 256, "The pack's shared file couldn't be laid out.");
+		goto done;
+	}
+	has_pack = blocks > 0;
 	/* room: the pack's file twice (as it's made, and packed) and the maps, by the measure's estimate, and some to spare */
 	root[0] = pack_folder[0];
 	if (GetDiskFreeSpaceExA(root, &available, &total, &free_total) &&
@@ -1163,13 +1390,47 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			goto done;
 		}
 	}
-	/* the pack's file, packed and named */
+	/* the pack's file read back from its layout: its checksum, which names it, and its blocks' hashes, for its list */
+	if (has_pack)
+	{
+		if (say)
+			say(0, "Reading the pack's shared file back...");
+		if (pack_data(&v, temporary, HEADER + list_room, pack_length, pblocks, blocks, &checksum))
+		{
+			text_print(error, 256, "The pack's shared file didn't read back right: nothing was changed.");
+			goto done;
+		}
+		text_print(name, 32, "%s-%08lx", pack_prefix, (unsigned long)checksum);
+	}
+	/* the small maps' headers name it */
+	for (i = 0; i < count; i++)
+	{
+		HANDLE file;
+		struct cmap *c = &v.maps[i];
+		int ok;
+		if (c->state != CONVERTING)
+			continue;
+		set_reference(c, &v.m, has_pack ? name : NULL, checksum, pack_length);
+		small_crc(c);
+		text_print(out_path, sizeof(out_path), "%s\\%s.new", folders[i], last_part(paths[i]));
+		file = CreateFileA(out_path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		ok = file != INVALID_HANDLE_VALUE && !write_at(file, 0, c->header, HEADER);
+		if (file != INVALID_HANDLE_VALUE && !finish(file))
+			ok = 0;
+		if (!ok)
+		{
+			text_print(error, 256, "%s couldn't be written.", out_path);
+			goto done;
+		}
+	}
+	/* then its list, and it's packed and named */
 	if (has_pack)
 	{
 		if (say)
 			say(0, "Packing the pack's shared file...");
 		text_print(shared_path, sizeof(shared_path), "%s\\consolidating.shared", pack_folder);
-		if (pack_shared(&v, temporary, pack_length, shared_path, pack_prefix, name, &checksum))
+		if (write_list(&v, temporary, list_room, order, members, pblocks, blocks) ||
+			pack_shared(&v, temporary, pack_length, list_room, shared_path, name, checksum))
 		{
 			text_print(error, 256, "The pack's shared file couldn't be written.");
 			goto done;
@@ -1185,26 +1446,6 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			goto done;
 		}
 		text_print(shared_path, sizeof(shared_path), "%s", path);
-	}
-	/* the small maps' headers name it */
-	for (i = 0; i < count; i++)
-	{
-		HANDLE file;
-		struct cmap *c = &v.maps[i];
-		int ok;
-		if (c->state != CONVERTING)
-			continue;
-		set_reference(c, &v.m, has_pack ? name : NULL, checksum, pack_length);
-		text_print(out_path, sizeof(out_path), "%s\\%s.new", folders[i], last_part(paths[i]));
-		file = CreateFileA(out_path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-		ok = file != INVALID_HANDLE_VALUE && !write_at(file, 0, c->header, HEADER);
-		if (file != INVALID_HANDLE_VALUE && !finish(file))
-			ok = 0;
-		if (!ok)
-		{
-			text_print(error, 256, "%s couldn't be written.", out_path);
-			goto done;
-		}
 	}
 	/* then read back: what's in the shared files, and each map; a map that reads back right takes its link's place */
 	if (say)
@@ -1288,6 +1529,301 @@ done:
 	free(v.maps);
 	free(v.before);
 	free(v.writes);
+	free(order);
+	free(pblocks);
+	measuring_end(&v.m);
+	return status;
+}
+
+/* ---- shrinking: full-size maps a pack's file was made from, made small against it ---- */
+
+/* a pack's file's header and its list (malloc'd, *room bytes, checked as one), packed or stored unpacked. 0 when read */
+static int list_read(char const *path, unsigned char *header, unsigned char **list, uint32_t *room)
+{
+	HANDLE file = open_read(path);
+	uint32_t size, maps, blocks;
+	int failed = 1;
+	*list = NULL;
+	if (file == INVALID_HANDLE_VALUE)
+		return 1;
+	size = GetFileSize(file, NULL);
+	if (read_all(file, header, HEADER) || memcmp(header, "daeh", 4) || u32(header + 4) != 5 ||
+		!memchr(header + 0x20, 0, 32) || !header[0x20])
+	{
+		CloseHandle(file);
+		return 1;
+	}
+	*room = u32(header + 0x18);
+	if (*room < LIST_HEAD || *room % SECTOR || *room > (16u << 20) || u32(header + 8) < HEADER ||
+		*room > u32(header + 8) - HEADER || !(*list = malloc(*room)))
+	{
+		CloseHandle(file);
+		return 1;
+	}
+	if (size == u32(header + 8))
+	{
+		/* (stored unpacked: read where it is) */
+		failed = read_all(file, *list, *room);
+		CloseHandle(file);
+	}
+	else
+	{
+		struct reader r;
+		CloseHandle(file);
+		failed = reader_open(&r, path, header) || reader_pull(&r, *list, *room);
+		reader_close(&r);
+	}
+	if (!failed)
+	{
+		maps = u32(*list + 8);
+		blocks = u32(*list + 12);
+		failed = memcmp(*list, LIST_SIGNATURE, 4) || u32(*list + 4) != 1 || maps > *room / LIST_MAP ||
+			blocks > *room / LIST_BLOCK || LIST_HEAD + maps * LIST_MAP + blocks * LIST_BLOCK > *room;
+	}
+	if (failed)
+	{
+		free(*list);
+		*list = NULL;
+	}
+	return failed;
+}
+
+int consolidate_members(char const *pack_path, struct consolidate_member *members, int most, int *count, char *name)
+{
+	unsigned char header[HEADER], *list, *p;
+	uint32_t room;
+	int k;
+	*count = 0;
+	if (list_read(pack_path, header, &list, &room))
+		return 1;
+	memcpy(name, header + 0x20, 32);
+	for (k = 0, p = list + LIST_HEAD; k < (int)u32(list + 8) && k < most; k++, p += LIST_MAP)
+	{
+		members[k].size = u32(p);
+		members[k].head = u32(p + 4);
+		members[k].tail = u32(p + 8);
+		members[k].small_length = u32(p + 12);
+		members[k].small_crc = u32(p + 16);
+	}
+	*count = k;
+	free(list);
+	return 0;
+}
+
+int consolidate_shrink(char const *stock_folder, char const *pack_path, char const *const *paths, int count,
+	consolidate_say_t say, struct consolidate_result *result, char *error)
+{
+	struct converting v;
+	struct consolidate_measure measured;
+	unsigned char header[HEADER], *list = NULL, *p;
+	char path[260], out_path[260], old_path[260], name[32], line[200];
+	uint32_t room = 0, maps = 0, blocks, checksum, length, k;
+	unsigned long long need = 16ull << 20;
+	int i, status = 1, *member = NULL;
+	ULARGE_INTEGER available, total, free_total;
+	char root[4] = {'E', ':', '\\', 0};
+
+	memset(result, 0, sizeof(*result));
+	memset(&v, 0, sizeof(v));
+	text_print(path, sizeof(path), "%s\\stock.index", stock_folder);
+	if (measuring_start(&v.m, path, error))
+		goto done;
+	if (list_read(pack_path, header, &list, &room))
+	{
+		text_print(error, 256, "%s has no list of its maps.", last_part(pack_path));
+		goto done;
+	}
+	memcpy(name, header + 0x20, 32);
+	checksum = u32(header + 0x64);
+	length = u32(header + 8);
+	maps = u32(list + 8);
+	blocks = u32(list + 12);
+	/* its blocks, as two of its maps' blocks in it (what stock.shared has is taken from there, as when it was made) */
+	for (k = 0, p = list + LIST_HEAD + maps * LIST_MAP; k < blocks; k++, p += LIST_BLOCK)
+	{
+		struct entry *e = find_entry(&v.m, p, u32(p + 36), u32(p + 32) % 512);
+		if (!e)
+		{
+			text_print(error, 256, "Too many different textures and sounds to count.");
+			goto done;
+		}
+		if (!e->in_stock)
+		{
+			e->in_pack = 1;
+			e->at = u32(p + 32);
+		}
+	}
+	v.count = count;
+	v.maps = calloc((size_t)(count > 0 ? count : 1), sizeof(*v.maps));
+	member = calloc((size_t)(count > 0 ? count : 1), sizeof(*member));
+	v.before = malloc(CHUNK);
+	v.writes = malloc((MOST_BLOCKS + 1) * sizeof(*v.writes));
+	if (!v.maps || !member || !v.before || !v.writes)
+	{
+		text_print(error, 256, "Not enough memory.");
+		goto done;
+	}
+	memset(&measured, 0, sizeof(measured));
+	if (measure_all(&v.m, paths, count, say, &measured, v.maps, error))
+		goto done;
+	result->already = measured.already;
+	result->unreadable = measured.unreadable;
+	/* (what's in the pack's file moves there, the rest stays: nothing is added to it) */
+	for (k = 0; k < TABLE_SIZE; k++)
+	{
+		struct entry *e = &v.m.table[k];
+		if (!e->used)
+			continue;
+		e->writer = -1;
+		if (!e->in_stock)
+			e->maps = e->in_pack ? 2 : e->maps ? 1 : 0;
+	}
+	/* each map: one the list names, and whose small map comes out the length it says */
+	for (i = 0; i < count; i++)
+	{
+		struct cmap *c = &v.maps[i];
+		struct layout l;
+		int laid;
+		if (c->state != CONVERTING)
+			continue;
+		member[i] = -1;
+		memset(&l, 0, sizeof(l));
+		for (k = 0, p = list + LIST_HEAD; k < maps; k++, p += LIST_MAP)
+		{
+			if (u32(p) == c->raw_size && u32(p + 4) == c->head && u32(p + 8) == c->tail)
+				member[i] = (int)k;
+		}
+		laid = member[i] >= 0 && !lay_out(c, &l) &&
+			c->out_length == u32(list + LIST_HEAD + (uint32_t)member[i] * LIST_MAP + 12);
+		layout_free(&l);
+		if (!laid)
+		{
+			c->state = LEFT;
+			result->failed++;
+			text_print(line, sizeof(line), member[i] < 0 ? "%s isn't one of %s's maps: left as it is" :
+				"%s comes out another length than %s says: left as it is", last_part(paths[i]), name);
+			if (say)
+				say(1, line);
+			continue;
+		}
+		/* (its small map packed about as well as it does) */
+		need += c->length ? (unsigned long long)c->out_length * c->raw_size / c->length : c->out_length;
+	}
+	root[0] = count ? paths[0][0] : 'E';
+	if (count && GetDiskFreeSpaceExA(root, &available, &total, &free_total) && available.QuadPart < need)
+	{
+		text_print(error, 256, "Not enough room: it needs about %lu MB free on the drive.", (unsigned long)(need >> 20));
+		goto done;
+	}
+	/* each small map beside its map as <name>.map.new, its header naming the pack's file, its CRC the list's */
+	for (i = 0; i < count; i++)
+	{
+		struct cmap *c = &v.maps[i];
+		HANDLE file;
+		int ok;
+		if (c->state != CONVERTING)
+			continue;
+		text_print(line, sizeof(line), "Shrinking %d of %d: %s", i + 1, count, last_part(paths[i]));
+		if (say)
+			say(0, line);
+		text_print(out_path, sizeof(out_path), "%s.new", paths[i]);
+		if (convert_map(&v, i, paths[i], out_path, INVALID_HANDLE_VALUE))
+		{
+			text_print(error, 256, "%s couldn't be shrunk (written beside it).", last_part(paths[i]));
+			goto done;
+		}
+		set_reference(c, &v.m, name, checksum, length);
+		small_crc(c);
+		if (c->small_crc != u32(list + LIST_HEAD + (uint32_t)member[i] * LIST_MAP + 16))
+		{
+			c->state = LEFT;
+			result->failed++;
+			DeleteFileA(out_path);
+			text_print(line, sizeof(line), "%s doesn't come out as %s says: left as it is", last_part(paths[i]), name);
+			if (say)
+				say(1, line);
+			continue;
+		}
+		file = CreateFileA(out_path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		ok = file != INVALID_HANDLE_VALUE && !write_at(file, 0, c->header, HEADER);
+		if (file != INVALID_HANDLE_VALUE && !finish(file))
+			ok = 0;
+		if (!ok)
+		{
+			text_print(error, 256, "%s couldn't be written.", out_path);
+			goto done;
+		}
+	}
+	/* read back: what's in the shared files, then each map, which then takes its full-size one's place */
+	if (say)
+		say(0, "Checking what's in the shared files...");
+	text_print(path, sizeof(path), "%s\\stock.shared", stock_folder);
+	if (check_shared(&v, path, pack_path))
+	{
+		text_print(error, 256, "The shared files didn't read back right: nothing was changed.");
+		goto done;
+	}
+	for (i = 0; i < count; i++)
+	{
+		struct cmap *c = &v.maps[i];
+		if (c->state != CONVERTING)
+			continue;
+		text_print(line, sizeof(line), "Checking %d of %d: %s", i + 1, count, last_part(paths[i]));
+		if (say)
+			say(0, line);
+		text_print(out_path, sizeof(out_path), "%s.new", paths[i]);
+		text_print(old_path, sizeof(old_path), "%s.big", paths[i]);
+		if (check_map(&v, i, out_path))
+		{
+			c->state = LEFT;
+			result->failed++;
+			DeleteFileA(out_path);
+			text_print(line, sizeof(line), "%s didn't read back right: left as it is", last_part(paths[i]));
+			if (say)
+				say(1, line);
+			continue;
+		}
+		/* (through <name>.map.big: a power cut leaves one of the two, which the next look puts right) */
+		DeleteFileA(old_path);
+		if (!MoveFileA(paths[i], old_path) || !MoveFileA(out_path, paths[i]))
+		{
+			if (GetFileAttributesA(paths[i]) == INVALID_FILE_ATTRIBUTES)
+				MoveFileA(old_path, paths[i]);
+			c->state = LEFT;
+			result->failed++;
+			DeleteFileA(out_path);
+			text_print(line, sizeof(line), "%s couldn't be swapped for its small map: left as it is", last_part(paths[i]));
+			if (say)
+				say(1, line);
+			continue;
+		}
+		DeleteFileA(old_path);
+		c->state = CONVERTED;
+		result->converted++;
+		result->before += c->raw_size;
+		result->after += file_size(paths[i]);
+	}
+	text_print(result->shared, sizeof(result->shared), "%s", name);
+	status = 0;
+done:
+	if (status && v.maps)
+	{
+		for (i = 0; i < count; i++)
+		{
+			text_print(out_path, sizeof(out_path), "%s.new", paths[i]);
+			DeleteFileA(out_path);
+		}
+	}
+	if (v.maps)
+	{
+		for (i = 0; i < count; i++)
+			free(v.maps[i].blocks);
+	}
+	free(v.maps);
+	free(v.before);
+	free(v.writes);
+	free(member);
+	free(list);
 	measuring_end(&v.m);
 	return status;
 }

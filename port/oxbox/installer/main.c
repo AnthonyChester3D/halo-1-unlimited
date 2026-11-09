@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 28
+#define INSTALLER_VERSION 29
 #endif
 __attribute__((used)) static struct
 {
@@ -2140,12 +2140,227 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	package_read();
 }
 
+/* ---- Shrink maps: full-size maps that a pack's file here was made from (its list names them: consolidate_shrink) ---- */
+
+#define SHRINK_PACKS 32
+static struct shrink_pack
+{
+	char path[220];                 /* the pack's file */
+	char name[32];
+	int first, count;               /* its maps, in consolidate_paths */
+} shrink_packs[SHRINK_PACKS];
+static int shrink_pack_count, shrink_count;
+#define MAP_HEADER 2048
+static unsigned long long shrink_before, shrink_after;
+static struct consolidate_member shrink_members[CONSOLIDATE_MAPS];
+
+/* a file's first size bytes: 1 when read */
+static int read_head_bytes(char const *path, unsigned char *to, unsigned long size)
+{
+	HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	DWORD got = 0;
+	int ok;
+	if (file == INVALID_HANDLE_VALUE)
+		return 0;
+	ok = ReadFile(file, to, size, &got, NULL) && got == size;
+	CloseHandle(file);
+	return ok;
+}
+
+/* a shrink cut short put right: a <name>.map.big with no <name>.map goes back; one beside it, and a .map.new, go */
+static void shrink_tidy(char const *folder)
+{
+	static char const *const kinds[] = {"*.map.big", "*.map.new"};
+	WIN32_FIND_DATAA found;
+	char pattern[240], path[240], map[240];
+	HANDLE find;
+	int k;
+	for (k = 0; k < 2; k++)
+	{
+		text_print(pattern, sizeof(pattern), "%s\\%s", folder, kinds[k]);
+		find = FindFirstFileA(pattern, &found);
+		if (find == INVALID_HANDLE_VALUE)
+			continue;
+		do
+		{
+			text_print(path, sizeof(path), "%s\\%s", folder, found.cFileName);
+			text_print(map, sizeof(map), "%s", path);
+			map[strlen(map) - 4] = 0;
+			if (!k && GetFileAttributesA(map) == INVALID_FILE_ATTRIBUTES)
+				MoveFileA(path, map);
+			else
+				DeleteFileA(path);
+		} while (FindNextFileA(find, &found));
+		FindClose(find);
+	}
+}
+
+/* a folder's map, if it's full size and one of the members (count of them): added to the pack's */
+static void shrink_consider(char const *folder, struct shrink_pack *p, int members)
+{
+	unsigned char head[MAP_HEADER];
+	char path[220];
+	uint32_t size, crc_head, crc_tail;
+	unsigned long length;
+	int k;
+	shrink_tidy(folder);
+	if (folder_map(folder, path) || shrink_count >= CONSOLIDATE_MAPS)
+		return;
+	for (k = 0; k < shrink_count; k++)
+	{
+		if (!_stricmp(consolidate_paths[k], path))
+			return;
+	}
+	if (!read_head_bytes(path, head, sizeof(head)) || u32(head + 0x700) == 0x73687264ul || !u32(head + 8))
+		return;
+	if (consolidate_identity(path, &size, &crc_head, &crc_tail))
+		return;
+	for (k = 0; k < members; k++)
+	{
+		struct consolidate_member const *m = &shrink_members[k];
+		if (m->size != size || m->head != crc_head || m->tail != crc_tail)
+			continue;
+		length = u32(head + 8);
+		text_print(consolidate_paths[shrink_count++], 220, "%s", path);
+		p->count++;
+		shrink_before += size;
+		/* (its small map packed about as well as it does) */
+		shrink_after += (unsigned long long)m->small_length * size / length;
+		return;
+	}
+}
+
+/* the packs' files in a maps folder (in it and in its folders), each with the full-size maps it was made from where the game
+would find it for them: in its folder, and in that folder's folders */
+static void shrink_scan(char const *root)
+{
+	WIN32_FIND_DATAA found, file;
+	char folder[220], pattern[240], inner[240];
+	HANDLE find, files;
+	int level;
+	for (level = 0; level < 2; level++)
+	{
+		text_print(pattern, sizeof(pattern), "%s\\*", root);
+		find = level ? FindFirstFileA(pattern, &found) : INVALID_HANDLE_VALUE;
+		if (level && find == INVALID_HANDLE_VALUE)
+			return;
+		do
+		{
+			if (level)
+			{
+				if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.' ||
+					strstr(found.cFileName, ".hmp_"))
+					continue;
+				text_print(folder, sizeof(folder), "%s\\%s", root, found.cFileName);
+			}
+			else
+				text_print(folder, sizeof(folder), "%s", root);
+			text_print(pattern, sizeof(pattern), "%s\\*.shared", folder);
+			files = FindFirstFileA(pattern, &file);
+			if (files == INVALID_HANDLE_VALUE)
+				continue;
+			do
+			{
+				struct shrink_pack *p;
+				int members;
+				if (!_stricmp(file.cFileName, "stock.shared") || shrink_pack_count == SHRINK_PACKS)
+					continue;
+				p = &shrink_packs[shrink_pack_count];
+				text_print(p->path, sizeof(p->path), "%s\\%s", folder, file.cFileName);
+				if (consolidate_members(p->path, shrink_members, CONSOLIDATE_MAPS, &members, p->name))
+					continue;
+				p->first = shrink_count;
+				p->count = 0;
+				shrink_consider(folder, p, members);
+				text_print(inner, sizeof(inner), "%s\\*", folder);
+				{
+					WIN32_FIND_DATAA sub;
+					HANDLE subs = FindFirstFileA(inner, &sub);
+					if (subs != INVALID_HANDLE_VALUE)
+					{
+						do
+						{
+							char map_folder[220];
+							if (!(sub.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || sub.cFileName[0] == '.' ||
+								strstr(sub.cFileName, ".hmp_"))
+								continue;
+							text_print(map_folder, sizeof(map_folder), "%s\\%s", folder, sub.cFileName);
+							shrink_consider(map_folder, p, members);
+						} while (FindNextFileA(subs, &sub));
+						FindClose(subs);
+					}
+				}
+				if (p->count)
+					shrink_pack_count++;
+			} while (FindNextFileA(files, &file));
+			FindClose(files);
+		} while (level && FindNextFileA(find, &found));
+		if (level)
+			FindClose(find);
+	}
+}
+
+/* this install's maps folder and the game's storage's looked at for maps to shrink */
+static void shrink_look(struct halo const *h)
+{
+	char root[200];
+	shrink_pack_count = shrink_count = 0;
+	shrink_before = shrink_after = 0;
+	text_print(root, sizeof(root), "%s\\maps", h->path);
+	shrink_scan(root);
+	shrink_scan("E:\\TDATA\\" OWN_TITLE_FOLDER "\\maps");
+}
+
+/* shrinking: where it is on the bottom row, and why a map was left in the log */
+static void shrink_say(int warning, char const *text)
+{
+	if (warning)
+		say_in(COLOUR_YELLOW, "  %s", text);
+	else
+		consolidate_progress(0, text);
+}
+
+/* each pack's file's full-size maps made small against it */
+static void shrink_maps(char const *stock_folder)
+{
+	struct consolidate_result r;
+	char error[256];
+	unsigned long long before = 0, after = 0;
+	int k, i, done = 0, left = 0;
+	package_free(&package);
+	log_memory();
+	for (k = 0; k < shrink_pack_count; k++)
+	{
+		struct shrink_pack const *p = &shrink_packs[k];
+		for (i = 0; i < p->count; i++)
+			consolidate_list[i] = consolidate_paths[p->first + i];
+		say("%s: %d map%s...", p->name, p->count, p->count == 1 ? "" : "s");
+		if (consolidate_shrink(stock_folder, p->path, consolidate_list, p->count, shrink_say, &r, error))
+		{
+			say_in(COLOUR_RED, "  %s", error);
+			left += p->count;
+			continue;
+		}
+		done += r.converted;
+		left += p->count - r.converted;
+		before += r.before;
+		after += r.after;
+	}
+	if (done)
+		say_in(COLOUR_GREEN, "Done: %d map%s shrunk, %lu MB as they were, %lu MB now.", done, done == 1 ? "" : "s",
+			(unsigned long)(before >> 20), (unsigned long)((after + (1 << 20) - 1) >> 20));
+	if (left)
+		say_in(COLOUR_YELLOW, "%d didn't come out as their pack's file says: left as they were.", left);
+	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
+	package_read();
+}
+
 static void map_pack(struct halo *h)
 {
-	enum { BOTH, MULTIPLAYER, CAMPAIGN, REMOVE, MEASURE, CONSOLIDATE, BACK };
+	enum { BOTH, MULTIPLAYER, CAMPAIGN, REMOVE, MEASURE, CONSOLIDATE, SHRINK, BACK };
 	static struct pack_scan scan;
-	char stock[200], error[256], line[SCREEN_COLUMNS + 8], stock_index[220];
-	int choices[7], count = 0, chosen = 0, b, k;
+	char stock[200], error[256], line[SCREEN_COLUMNS + 8], stock_index[220], shrink_label[64];
+	int choices[8], count = 0, chosen = 0, b, k;
 
 	text_print(line, sizeof(line), "Maps: %s", h->path);
 	heading(line);
@@ -2171,6 +2386,18 @@ static void map_pack(struct halo *h)
 		say("This is an install of the game: the packs in its maps folder can be measured.");
 		scan.multiplayer = scan.campaign = scan.multiplayer_imported = scan.campaign_imported = 0;
 	}
+	text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
+	/* (an install's full-size maps, downloaded or put there, that a pack's file beside them was made from) */
+	shrink_pack_count = shrink_count = 0;
+	if (!can_import(h) && stock[0] && GetFileAttributesA(stock_index) != INVALID_FILE_ATTRIBUTES)
+	{
+		shrink_look(h);
+		if (shrink_count)
+			say_in(COLOUR_GREEN, "You have %d map%s that can be shrunk to save space.", shrink_count,
+				shrink_count == 1 ? "" : "s");
+	}
+	text_print(shrink_label, sizeof(shrink_label), "Shrink maps (saves about %lu MB)",
+		(unsigned long)((shrink_before - (shrink_after < shrink_before ? shrink_after : shrink_before)) >> 20));
 	if (scan.multiplayer && scan.campaign)
 		choices[count++] = BOTH;
 	if (scan.multiplayer)
@@ -2179,18 +2406,19 @@ static void map_pack(struct halo *h)
 		choices[count++] = CAMPAIGN;
 	if (scan.multiplayer_imported || scan.campaign_imported)
 		choices[count++] = REMOVE;
+	if (shrink_count)
+		choices[count++] = SHRINK;
 	/* (with the install's stock.shared to measure against) */
 	if (stock[0])
 		choices[count++] = MEASURE;
-	text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
 	if (stock[0] && scan.multiplayer && GetFileAttributesA(stock_index) != INVALID_FILE_ATTRIBUTES)
 		choices[count++] = CONSOLIDATE;
 	choices[count++] = BACK;
 	for (;;)
 	{
-		static char const *const labels[] = {"Import multiplayer and campaign", "Import multiplayer maps only",
+		char const *const labels[] = {"Import multiplayer and campaign", "Import multiplayer maps only",
 			"Import the campaign only", "Take out what's imported", "See what consolidating would save",
-			"Make its multiplayer maps small (consolidate)", "Back"};
+			"Make its multiplayer maps small (consolidate)", shrink_label, "Back"};
 		for (k = 0; k < count; k++)
 		{
 			int r = SCREEN_ROWS - 2 - count + k, at;
@@ -2221,6 +2449,8 @@ static void map_pack(struct halo *h)
 		consolidate_show(h, &scan, stock);
 	else if (choices[chosen] == CONSOLIDATE)
 		consolidate_pack(h, &scan, stock);
+	else if (choices[chosen] == SHRINK)
+		shrink_maps(stock);
 	else if (choices[chosen] == REMOVE)
 	{
 		packs_remove(&scan, 1, 1, packs_say);
