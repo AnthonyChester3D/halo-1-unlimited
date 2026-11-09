@@ -84,7 +84,7 @@ Lines go to the log ("hmp: ..."). Custom Edition maps go to PCs by OpenCE's own 
 #define REQ_MAGIC 0x71504d48                 /* "HMPq" */
 #define REP_MAGIC 0x72504d48                 /* "HMPr" */
 #define JOIN_MAGIC 0x6a504d48                /* "HMPj": another connection for a download under way */
-#define SHARE_VERSION 7
+#define SHARE_VERSION 8                      /* 8: the request's small (a full-size copy asking for the small one) */
 #define REP_SAME 0
 #define REP_SENDING 1
 #define REP_UNAVAILABLE 2
@@ -122,6 +122,7 @@ struct share_request
 	char key[32];
 	unsigned int have_size, have_chk, resume_size, resume_chk, resume_offset, flags, rtt, token, stream, machine, shared_ok;
 	char shared[SHARED_NAME_SIZE];           /* the pack's shared file it asks for ("": the map) */
+	unsigned int small;                      /* its copy is full size: the small one if this one is (docs/shared_maps.md) */
 };
 struct share_file
 {
@@ -142,7 +143,7 @@ struct share_reply
 	struct share_shared shared[2];
 };
 
-typedef char share_request_size_assert[sizeof(struct share_request) == 116 ? 1 : -1];
+typedef char share_request_size_assert[sizeof(struct share_request) == 120 ? 1 : -1];
 typedef char share_reply_size_assert[sizeof(struct share_reply) == 376 ? 1 : -1];
 
 /* a map's header, as sharing needs it */
@@ -1232,8 +1233,9 @@ static void slot_request(struct share_slot *slot, struct share_pending *pending,
 			else
 				slot->shared_path[0] = 0;
 		}
-		else if (request->have_size == size && request->have_chk == checksum)
+		else if (request->have_size == size && request->have_chk == checksum && !(request->small && head.pack[0]))
 		{
+			/* (the same map; a console asking for the small copy gets it when this one draws on a pack's file) */
 			reply.status = REP_SAME;
 		}
 		else
