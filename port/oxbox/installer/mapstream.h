@@ -28,6 +28,21 @@ HANDLE open_read(char const *path);
 int write_all(HANDLE file, void const *from, uint32_t size);
 int read_all(HANDLE file, void *to, uint32_t size);
 
+/* where the time goes, for the log (stockmaps.c's "time:" lines): the disk's reads and writes (a flush is a write), and
+zlib's unpacking and packing; the rest is the CPU's own work (CRCs, hashes, copying) */
+struct stream_times
+{
+	uint64_t read, write, unzip, zip;          /* microseconds */
+	uint64_t read_bytes, write_bytes, unzipped, zipped; /* (unzipped: what came out; zipped: what went in) */
+};
+extern struct stream_times stream_times;
+uint64_t stream_now(void);                      /* microseconds */
+int timed_read(HANDLE file, void *to, DWORD size, DWORD *got);
+int timed_write(HANDLE file, void const *from, DWORD size, DWORD *put);
+int timed_flush(HANDLE file);                   /* 0 when flushed */
+/* the time since then (stream_now) and how it went, from the times then: "12.3 s: read 4.1 s (61 MB), ..." */
+void stream_times_text(char *text, int size, uint64_t since, struct stream_times const *then);
+
 struct reader
 {
 	HANDLE file;

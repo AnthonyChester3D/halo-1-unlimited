@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 29
+#define INSTALLER_VERSION 30
 #endif
 __attribute__((used)) static struct
 {
@@ -1455,6 +1455,7 @@ static int stock_maps_restore(struct halo *h)
 		return 1;
 	}
 	stockmaps_flush_drive = flush_drive;
+	stockmaps_log = log_file;
 	package_free(&package);
 	log_memory();
 	failed = stockmaps_restore(h->path, stock_maps_say, error);
@@ -1495,6 +1496,7 @@ static void offer_stock_maps(struct halo *h)
 	if (b == B)
 		return;
 	stockmaps_flush_drive = flush_drive;
+	stockmaps_log = log_file;
 	package_free(&package);
 	log_memory();
 	if (stockmaps_convert(h->path, stock_maps_say, error))

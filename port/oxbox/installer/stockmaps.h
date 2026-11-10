@@ -11,6 +11,9 @@ typedef void (*stockmaps_say_t)(int warning, char const *text);
 /* the drive written out (set by the installer): what's been done lasts through a power cut */
 extern void (*stockmaps_flush_drive)(char const *path);
 
+/* the log file only (set by the installer): "time:" lines, how long each step took and where the time went */
+extern void (*stockmaps_log)(char const *text);
+
 struct stockmaps_look
 {
 	int retail_sized;              /* of the 23, how many are there with a retail map's file size */

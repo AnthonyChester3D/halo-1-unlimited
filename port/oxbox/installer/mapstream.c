@@ -1,8 +1,13 @@
 /* mapstream.c: a cache file read and written a piece at a time, and a map's blocks found (mapstream.h) */
 #include "mapstream.h"
 
+#include "text.h"
+
 #include <stdlib.h>
 #include <string.h>
+#ifdef STOCKMAPS_HOST
+#include <time.h>
+#endif
 
 #define MB (1024u * 1024u)
 
@@ -20,6 +25,73 @@ static void z_free(voidpf opaque, voidpf address)
 {
 	(void)opaque;
 	free(address);
+}
+
+struct stream_times stream_times;
+
+uint64_t stream_now(void)
+{
+#ifdef STOCKMAPS_HOST
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (uint64_t)t.tv_sec * 1000000u + (uint64_t)t.tv_nsec / 1000u;
+#else
+	static uint64_t frequency;
+	uint64_t now = KeQueryPerformanceCounter();
+	if (!frequency)
+		frequency = KeQueryPerformanceFrequency();
+	return now / frequency * 1000000u + now % frequency * 1000000u / frequency;
+#endif
+}
+
+int timed_read(HANDLE file, void *to, DWORD size, DWORD *got)
+{
+	uint64_t start = stream_now();
+	int ok = ReadFile(file, to, size, got, NULL);
+	stream_times.read += stream_now() - start;
+	stream_times.read_bytes += *got;
+	return ok;
+}
+
+int timed_write(HANDLE file, void const *from, DWORD size, DWORD *put)
+{
+	uint64_t start = stream_now();
+	int ok = WriteFile(file, from, size, put, NULL);
+	stream_times.write += stream_now() - start;
+	stream_times.write_bytes += *put;
+	return ok;
+}
+
+int timed_flush(HANDLE file)
+{
+	IO_STATUS_BLOCK status;
+	uint64_t start = stream_now();
+	int ok = NT_SUCCESS(NtFlushBuffersFile(file, &status));
+	stream_times.write += stream_now() - start;
+	return !ok;
+}
+
+static void tenths(char *to, int size, uint64_t us)
+{
+	text_print(to, (size_t)size, "%lu.%lu s", (unsigned long)(us / 1000000u), (unsigned long)(us / 100000u % 10u));
+}
+
+void stream_times_text(char *text, int size, uint64_t since, struct stream_times const *then)
+{
+	struct stream_times const *now = &stream_times;
+	uint64_t all = stream_now() - since, read = now->read - then->read, write = now->write - then->write,
+		unzip = now->unzip - then->unzip, zip = now->zip - then->zip, busy = read + write + unzip + zip;
+	char t[5][24];
+	tenths(t[0], 24, all);
+	tenths(t[1], 24, read);
+	tenths(t[2], 24, write);
+	tenths(t[3], 24, unzip);
+	tenths(t[4], 24, zip);
+	text_print(text, (size_t)size, "%s: read %s (%lu MB), write %s (%lu MB), unzip %s (%lu MB), zip %s (%lu MB), other %lu.%lu s",
+		t[0], t[1], (unsigned long)((now->read_bytes - then->read_bytes) >> 20), t[2],
+		(unsigned long)((now->write_bytes - then->write_bytes) >> 20), t[3], (unsigned long)((now->unzipped - then->unzipped) >> 20),
+		t[4], (unsigned long)((now->zipped - then->zipped) >> 20), (unsigned long)((all > busy ? all - busy : 0) / 1000000u),
+		(unsigned long)((all > busy ? all - busy : 0) / 100000u % 10u));
 }
 
 uint32_t u32(unsigned char const *p)
@@ -46,7 +118,7 @@ int write_all(HANDLE file, void const *from, uint32_t size)
 	while (size)
 	{
 		DWORD put = 0, part = size > MB ? MB : size;
-		if (!WriteFile(file, at, part, &put, NULL) || put != part)
+		if (!timed_write(file, at, part, &put) || put != part)
 			return 1;
 		at += part;
 		size -= part;
@@ -60,7 +132,7 @@ int read_all(HANDLE file, void *to, uint32_t size)
 	while (size)
 	{
 		DWORD got = 0, part = size > MB ? MB : size;
-		if (!ReadFile(file, at, part, &got, NULL) || got != part)
+		if (!timed_read(file, at, part, &got) || got != part)
 			return 1;
 		at += part;
 		size -= part;
@@ -68,6 +140,16 @@ int read_all(HANDLE file, void *to, uint32_t size)
 	return 0;
 }
 
+
+static int timed_inflate(z_stream *z)
+{
+	uint64_t start = stream_now();
+	uInt before = z->avail_out;
+	int status = inflate(z, Z_NO_FLUSH);
+	stream_times.unzip += stream_now() - start;
+	stream_times.unzipped += before - z->avail_out;
+	return status;
+}
 
 void reader_close(struct reader *r)
 {
@@ -120,14 +202,14 @@ int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
 		if (!r->z.avail_in)
 		{
 			DWORD got = 0;
-			if (!ReadFile(r->file, io_in, sizeof(io_in), &got, NULL) || !got)
+			if (!timed_read(r->file, io_in, sizeof(io_in), &got) || !got)
 				return 1;
 			r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, got);
 			r->raw_size += got;
 			r->z.next_in = io_in;
 			r->z.avail_in = got;
 		}
-		status = inflate(&r->z, Z_NO_FLUSH);
+		status = timed_inflate(&r->z);
 		if (status == Z_STREAM_END)
 			r->ended = 1;
 		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->z.avail_in))
@@ -147,14 +229,14 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 		if (!r->z.avail_in)
 		{
 			DWORD part = 0;
-			if (!ReadFile(r->file, io_in, sizeof(io_in), &part, NULL) || !part)
+			if (!timed_read(r->file, io_in, sizeof(io_in), &part) || !part)
 				return 1;
 			r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, part);
 			r->raw_size += part;
 			r->z.next_in = io_in;
 			r->z.avail_in = part;
 		}
-		status = inflate(&r->z, Z_NO_FLUSH);
+		status = timed_inflate(&r->z);
 		if (status == Z_STREAM_END)
 			r->ended = 1;
 		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->z.avail_in))
@@ -167,7 +249,7 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 int reader_raw(struct reader *r, uint32_t *size, uint32_t *crc)
 {
 	DWORD got;
-	while (ReadFile(r->file, io_in, sizeof(io_in), &got, NULL) && got)
+	while (timed_read(r->file, io_in, sizeof(io_in), &got) && got)
 	{
 		r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, got);
 		r->raw_size += got;
@@ -196,7 +278,13 @@ static int writer_run(struct writer *w, int flush)
 		uint32_t n;
 		w->z.next_out = io_out;
 		w->z.avail_out = sizeof(io_out);
-		status = deflate(&w->z, flush);
+		{
+			uint64_t start = stream_now();
+			uInt before = w->z.avail_in;
+			status = deflate(&w->z, flush);
+			stream_times.zip += stream_now() - start;
+			stream_times.zipped += before - w->z.avail_in;
+		}
 		if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END)
 			return 1;
 		n = (uint32_t)sizeof(io_out) - w->z.avail_out;
