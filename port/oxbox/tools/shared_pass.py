@@ -201,9 +201,10 @@ def write_cache_file(path, data, level=None):
     return len(out)
 
 
-def rebuild(m, where, pack, stock, original=False):
+def rebuild(m, where, pack, stock, original=False, pad=True):
     """the map drawing on the shared files: where[i] = (bit, offset) for a block that moved, None for one that stays; with
-    original, its reference names the original's identity's CRCs too (a pack's map)"""
+    original, its reference names the original's identity's CRCs too (a pack's map). pad=False: not padded to a whole sector
+    (the installer's small stock maps, as v1.97 made them: gen_stock_table.py)"""
     data = bytearray(m.data)
     moved = []
     for (f, o, n), w in zip(m.blocks, where):
@@ -258,7 +259,8 @@ def rebuild(m, where, pack, stock, original=False):
         if not covered[c]:
             out += data[c * SECTOR:(c + 1) * SECTOR]
     # (to a whole sector: a map's stream can end short of one, and the game copies a map to its cache in whole sectors)
-    out += bytes(-len(out) % SECTOR)
+    if pad:
+        out += bytes(-len(out) % SECTOR)
     struct.pack_into('<I', out, 8, len(out))
     reference = struct.pack('<Il32sIlII32sIl', 0x73687264, 2,
                             pack.name.encode() if pack else b'', pack.checksum if pack else 0,
