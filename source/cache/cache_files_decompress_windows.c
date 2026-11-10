@@ -1638,10 +1638,10 @@ static void cache_copy_run_decompression(
 
 		/* port: a stream that ends before the size the header gives the map
 		is a bad file: the rest of the cache file would be taken for it */
-#if defined(HALO_XBOX_TARGET)
-		/* oxbox: but a map pack's tools rounded the header's size up to a whole sector (2048 bytes) past what they
-		compressed (NHE's maps): what's short of that, in the buffer being written, is zeros, as the retail game
-		took it (the last write is the rest of the size, from the buffer being written) */
+		/* port: but a map pack's tools rounded the header's size up to a whole sector (2048 bytes) past what they
+		compressed (NHE's maps, Halo 1 Maps Collection's): what's short of that, in the buffer being written, is
+		zeros, as the retail game took it (the last write is the rest of the size, from the buffer being written).
+		The dedicated server too */
 		if (zlib_result == Z_STREAM_END &&
 			zlib_stream->total_out < (uLong)(self->header.size - sizeof(self->header)) &&
 			(uLong)(self->header.size - sizeof(self->header)) - zlib_stream->total_out < 2048 &&
@@ -1650,9 +1650,7 @@ static void cache_copy_run_decompression(
 			csmemset(zlib_stream->next_out, 0,
 				(uLong)(self->header.size - sizeof(self->header)) - zlib_stream->total_out);
 		}
-		else
-#endif
-		if (zlib_result == Z_STREAM_END &&
+		else if (zlib_result == Z_STREAM_END &&
 			zlib_stream->total_out != (uLong)(self->header.size - sizeof(self->header)))
 		{
 #if defined(HALO_XBOX_TARGET)

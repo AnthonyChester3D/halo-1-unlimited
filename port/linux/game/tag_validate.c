@@ -44,6 +44,8 @@ data and which the game takes as models (tag_schema_custom_edition_groups).
 #include "cseries.h"
 #include "cache/physical_memory_map.h"
 #include "tag_schema.h"
+#include "memory/data.h"
+#include "hs/hs_scenario_definitions.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -217,6 +219,23 @@ static struct
 /* a bit for each byte of the tag cache that a tag's root, block or data
 holds */
 static unsigned long tag_validate_claims[CLAIM_WORDS];
+
+/* each root and block claimed (its first byte's offset, its size and its definition), so another of the very same
+bytes, read as the same definition, can be taken as the same one: old modding tools pointed two tags at one copy
+(HMP Collection v2's Spiral: two effects' roots; T.L.B: two bitmaps' sequences), which retail only read. Any other
+overlap is still refused. When the table is full, nothing more is taken so */
+enum
+{
+	CLAIMED_EXTENT_COUNT = 1 << 17,
+	CLAIMED_EXTENT_MASK = CLAIMED_EXTENT_COUNT - 1,
+};
+static struct claimed_extent
+{
+	unsigned long first;
+	unsigned long size;
+	void const *definition;
+} tag_validate_claimed_extents[CLAIMED_EXTENT_COUNT];
+static long tag_validate_claimed_extent_count;
 
 static char const tag_validate_empty_name[] = "";
 
@@ -401,6 +420,61 @@ static boolean claim(
 	}
 
 	return TRUE;
+}
+
+/* whether size bytes at address were claimed as one root or block of definition (claim_extent's) */
+static boolean same_extent(
+	void const *address,
+	unsigned long size,
+	void const *definition)
+{
+	unsigned long first = (unsigned long)((byte const *)address - (byte const *)tag_validate_globals.header);
+	unsigned long slot = (first / 4 * 2654435761UL) & CLAIMED_EXTENT_MASK;
+
+	for (; tag_validate_claimed_extents[slot].size; slot = (slot + 1) & CLAIMED_EXTENT_MASK)
+	{
+		if (tag_validate_claimed_extents[slot].first == first)
+		{
+			return tag_validate_claimed_extents[slot].size == size &&
+				tag_validate_claimed_extents[slot].definition == definition;
+		}
+	}
+
+	return FALSE;
+}
+
+/* claims as claim does, a root's or block's of definition; or, where the very same bytes were claimed as the same
+definition (an earlier root's or block's), takes them as that one */
+static boolean claim_extent(
+	void const *address,
+	unsigned long size,
+	void const *definition)
+{
+	unsigned long first = (unsigned long)((byte const *)address - (byte const *)tag_validate_globals.header);
+	unsigned long slot = (first / 4 * 2654435761UL) & CLAIMED_EXTENT_MASK;
+	struct claimed_extent *extent;
+
+	if (!size)
+		return TRUE;
+	if (claim(address, size))
+	{
+		if (tag_validate_claimed_extent_count < CLAIMED_EXTENT_COUNT / 4 * 3)
+		{
+			while (tag_validate_claimed_extents[slot].size && tag_validate_claimed_extents[slot].first != first)
+				slot = (slot + 1) & CLAIMED_EXTENT_MASK;
+			extent = &tag_validate_claimed_extents[slot];
+			if (!extent->size)
+			{
+				extent->first = first;
+				extent->size = size;
+				extent->definition = definition;
+				tag_validate_claimed_extent_count++;
+			}
+		}
+		return TRUE;
+	}
+
+	return same_extent(address, size, definition);
 }
 
 /* unclaims the size bytes at the tag cache's offset first (a bsp's, as
@@ -611,11 +685,21 @@ static void validate_block_extent(
 			block->count, definition->size, (unsigned long)block->address);
 		return;
 	}
-	if (!claim(block->address, (unsigned long)block->count * definition->size))
+	/* (one that overlaps another's bytes otherwise: none, so nothing reads what another's checks and corrections
+	are of. Old modding tools pointed blocks into other tags: T.L.B's decal bitmap's sequences, into another
+	bitmap's root, which retail read as they were) */
+	if (block->count && tag_validate_any_claimed(block->address, (unsigned long)block->count * definition->size))
 	{
-		tag_validate_refuse(validation, "has %ld elements of %ld bytes at %08lx, which overlap another's",
-			block->count, definition->size, (unsigned long)block->address);
-		return;
+		if (!same_extent(block->address, (unsigned long)block->count * definition->size, definition))
+		{
+			tag_validate_correct(validation, "has %ld elements of %ld bytes at %08lx, which overlap another's: none",
+				block->count, definition->size, (unsigned long)block->address);
+			block->count = 0;
+		}
+	}
+	else
+	{
+		claim_extent(block->address, (unsigned long)block->count * definition->size, definition);
 	}
 	if (!block->count)
 		block->address = NULL;
@@ -648,6 +732,42 @@ static void validate_data_extent(
 				data->size, (unsigned long)data->file_offset);
 		}
 		return;
+	}
+	/* a scenario's script node table: one the game can't take (hs.c's hs_scenario_syntax_data_valid: its header
+	and size) runs no scripts, and is none here, so nothing claims what old modding tools put over it (Halo 1
+	Maps Collection's Hang 'Em: at an odd address; many old maps: a header of zeros, under other tags' blocks).
+	One whose room past its nodes in use holds other tags' roots is cut to the nodes in use (a trimmed table, as
+	Halo Map Porter's are): tools put injected tags there (HMP Collection v2's Spiral: its sky), which retail never
+	wrote over (only the console's expressions take nodes from that room) */
+	if (data->size > 0 && !strcmp(field->name, "hs_syntax_data") &&
+		region_contains(validation, data->address, data->size))
+	{
+		struct data_array *nodes = data->address;
+
+		if (data->size < (long)sizeof(struct data_array) || ((unsigned long)nodes & 3) ||
+			nodes->signature != 'd@t@' || nodes->size != sizeof(struct hs_syntax_node) || !nodes->valid ||
+			nodes->maximum_count < 0 ||
+			data->size != (long)sizeof(struct data_array) + nodes->maximum_count * (long)sizeof(struct hs_syntax_node) ||
+			nodes->count < 0 || nodes->count > nodes->maximum_count)
+		{
+			tag_validate_correct(validation, "has a script node table at %08lx the game can't read: none (no script"
+				" runs)", (unsigned long)nodes);
+			data->size = 0;
+		}
+		else if (tag_validate_any_claimed(data->address, data->size))
+		{
+			long used = (long)sizeof(struct data_array) + nodes->count * (long)sizeof(struct hs_syntax_node);
+
+			if (used < data->size && !tag_validate_any_claimed(data->address, (unsigned long)used))
+			{
+				tag_validate_correct(validation, "has room for %d script nodes, past its %d in use over other tags:"
+					" cut to %d", nodes->maximum_count, nodes->count, nodes->count);
+				nodes->maximum_count = nodes->count;
+				if (nodes->first_free_absolute_index > nodes->count)
+					nodes->first_free_absolute_index = nodes->count;
+				data->size = used;
+			}
+		}
 	}
 	if (data->size &&
 		(!region_contains(validation, data->address, data->size) || !claim(data->address, data->size)))
@@ -1094,11 +1214,13 @@ static boolean validate_buffers(
 		/* (the buffer's Data, its bytes' address before it is registered) */
 		void *data = *(void **)(buffer + 4);
 
+		/* (one outside: none. A model part that draws it is checked as it is read, and draws nothing; old modding
+		tools left unused ones with any value: HMP Collection v2's Spiral) */
 		if (!region_contains(validation, data, 1))
 		{
-			tag_validate_refuse(validation, "has a vertex or index buffer's data at %08lx, outside the tags",
+			tag_validate_correct(validation, "has a vertex or index buffer's data at %08lx, outside the tags: none",
 				(unsigned long)data);
-			return FALSE;
+			*(void **)(buffer + 4) = NULL;
 		}
 	}
 
@@ -1499,7 +1621,7 @@ static boolean validate_tag_table(
 		}
 		if (group && group->definition &&
 			(!region_contains(validation, instance->base_address, group->definition->size) ||
-				!claim(instance->base_address, group->definition->size)))
+				!claim_extent(instance->base_address, group->definition->size, group->definition)))
 		{
 			tag_validate_refuse(validation, "has its data at %08lx, outside the tags or overlapping another's",
 				(unsigned long)instance->base_address);
@@ -1556,6 +1678,8 @@ static void validation_begin(
 	tag_validate_globals.custom_edition = custom_edition;
 	snprintf(tag_validate_globals.map_name, sizeof(tag_validate_globals.map_name), "%s", map_name);
 	memset(tag_validate_claims, 0, sizeof(tag_validate_claims));
+	memset(tag_validate_claimed_extents, 0, sizeof(tag_validate_claimed_extents));
+	tag_validate_claimed_extent_count = 0;
 	validation_new(validation, tag_header, (unsigned long)tag_data_size);
 
 	return;
