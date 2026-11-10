@@ -11,6 +11,9 @@ typedef void (*stockmaps_say_t)(int warning, char const *text);
 /* the drive written out (set by the installer): what's been done lasts through a power cut */
 extern void (*stockmaps_flush_drive)(char const *path);
 
+/* the log file only (set by the installer): "time:" lines, how long each step took and where the time went */
+extern void (*stockmaps_log)(char const *text);
+
 struct stockmaps_look
 {
 	int retail_sized;              /* of the 23, how many are there with a retail map's file size */
@@ -21,8 +24,8 @@ struct stockmaps_look
 /* looks at the folder's maps (their sizes and headers); first finishes or undoes a swap a power cut stopped */
 void stockmaps_examine(char const *halo, struct stockmaps_look *look);
 
-/* the swap: 0 when it's done. Nothing is changed until everything is built and proved: every map's restore is tried
-first, and the retail map isn't touched until the restore makes its exact bytes. Else error[256] */
+/* the swap: 0 when it's done. Nothing is changed until stock.shared and its tables are built and read back; then a retail
+map isn't touched until its small map is the one it must be (the table's CRC) and reads back from the disk. Else error[256] */
 int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error);
 
 /* puts the retail maps back, each checked against its original's size and CRC, then takes out what the swap added;

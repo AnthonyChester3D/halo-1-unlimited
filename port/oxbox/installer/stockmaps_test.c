@@ -12,6 +12,12 @@ static void say(int warning, char const *text)
 	fflush(stdout);
 }
 
+static void log_line(char const *text)
+{
+	printf("  %s\n", text);
+	fflush(stdout);
+}
+
 int main(int argc, char **argv)
 {
 	struct stockmaps_look look;
@@ -22,6 +28,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage: stockmaps_test HALO_FOLDER look|convert|restore\n");
 		return 2;
 	}
+	stockmaps_log = log_line;
 	if (!strcmp(argv[2], "convert"))
 		failed = stockmaps_convert(argv[1], say, error);
 	else if (!strcmp(argv[2], "restore"))

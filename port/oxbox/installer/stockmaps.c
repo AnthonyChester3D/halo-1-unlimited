@@ -12,13 +12,13 @@ The order, so a power cut can't lose a map, and as little room as can be is need
 has 64 MB: nothing holds a whole map or writes one out unpacked):
 	1. stock.shared.oxtmp built, in one pass through the retail maps, each checked against its size and CRC, and the
 	   restore table from their tags. If that fails, the leftovers go and nothing has changed
-	2. stock.shared.oxtmp read back; stock.index.oxtmp and stock.restore.oxtmp written and read back; stock.index and
-	   stock.shared put in place, then stock.restore
-	3. one retail map recompressed, to prove it comes back exact on this console
-	4. then each map on its own: <map>.map.oxtmp, the small map, built, its restore tried against the original's CRC, renamed
-	   .oxnew, and swapped in (<map>.map to .oxold, .oxnew to <map>.map, .oxold deleted). Each map's room comes back as it's
-	   done. If it stops here, for any reason, what's done stays small and the rest stay retail: both play, X puts the small
-	   ones back, and the next swap finishes the job
+	2. stock.shared.oxtmp read back (its CRC); stock.index.oxtmp (from the table: every console's is the same) and
+	   stock.restore.oxtmp written and read back; stock.index and stock.shared put in place, then stock.restore
+	3. then each map on its own: <map>.map.oxtmp, the small map, built and checked against the small map it must be (the
+	   table's length and CRC unpacked: tools/shared_pass.py's, whose restore the lab proves exact), then read back from the
+	   disk against the bytes written; renamed .oxnew, and swapped in (<map>.map to .oxold, .oxnew to <map>.map, .oxold
+	   deleted). Each map's room comes back as it's done. If it stops here, for any reason, what's done stays small and the
+	   rest stay retail: both play, X puts the small ones back, and the next swap finishes the job
 Putting them back is the same: <map>.map.oxtmp, the retail map, is checked against the size and CRC before it's renamed
 .oxnew and swapped in the same way. stock.shared, stock.index and stock.restore go last. */
 #include "stockmaps.h"
@@ -26,6 +26,7 @@ Putting them back is the same: <map>.map.oxtmp, the retail map, is checked again
 #include "sha256.h"
 #include "text.h"
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +55,19 @@ struct retail_map
 	uint32_t const *places;         /* each block's place in stock.shared, in the map's tags' order (STAYS: it stays) */
 	struct first_copy const *firsts;/* the blocks this map is the first to give stock.shared, by offset */
 	int first_count;
+	uint32_t small_length, small_crc; /* its small map unpacked, as tools/shared_pass.py makes it: what this one must be */
+};
+
+/* maps\stock.index: this, then each block of stock.shared's in its order (the table has them: the same on every console) */
+struct index_file
+{
+	char magic[4];                  /* "OXSI" */
+	uint32_t version, count, stock_checksum, stock_length;
+};
+struct index_block
+{
+	unsigned char digest[32];       /* its bytes' SHA-256 */
+	uint32_t at, size;              /* where it is in stock.shared (at % 512 is the remainder it matches), how big */
 };
 #include "stockmaps_table.h"
 #define MOST_BLOCKS (MOST_MAP_BLOCKS + 512) /* (before the ones outside the map's data are left out) */
@@ -61,6 +75,50 @@ struct retail_map
 #define RESTORE_VERSION 2            /* (1, v1.95's: 13 maps and stock.shared packed: installer 23 puts those back) */
 
 void (*stockmaps_flush_drive)(char const *path);
+void (*stockmaps_log)(char const *text);
+
+/* ---- the "time:" lines: each step, from when it began ---- */
+
+static uint64_t step_began, whole_began;
+static struct stream_times step_then, whole_then;
+
+static void step_begin(void)
+{
+	step_began = stream_now();
+	step_then = stream_times;
+}
+
+static void step_end(char const *format, ...)
+{
+	char what[64], how[200], line[280];
+	va_list list;
+	if (!stockmaps_log)
+		return;
+	va_start(list, format);
+	text_vprint(what, sizeof(what), format, list);
+	va_end(list);
+	stream_times_text(how, sizeof(how), step_began, &step_then);
+	text_print(line, sizeof(line), "time: %s: %s", what, how);
+	stockmaps_log(line);
+	step_begin();
+}
+
+static void whole_begin(void)
+{
+	whole_began = stream_now();
+	whole_then = stream_times;
+	step_begin();
+}
+
+static void whole_end(char const *what)
+{
+	char how[200], line[280];
+	if (!stockmaps_log)
+		return;
+	stream_times_text(how, sizeof(how), whole_began, &whole_then);
+	text_print(line, sizeof(line), "time: %s, all of it: %s", what, how);
+	stockmaps_log(line);
+}
 
 /* the restore table, one file: this, then each map's restore_map, its BSP fields, its blocks */
 struct restore_file
@@ -85,17 +143,6 @@ struct restore_block
 
 /* maps\stock.index: every block in stock.shared, for matching a pack's against it without reading the file (docs): this,
 then each index_block */
-struct index_file
-{
-	char magic[4];                  /* "OXSI" */
-	uint32_t version, count, stock_checksum, stock_length;
-};
-struct index_block
-{
-	unsigned char digest[32];       /* its bytes' SHA-256 */
-	uint32_t at, size;              /* where it is in stock.shared (at % 512 is the remainder it matches), how big */
-};
-
 /* ---- files ---- */
 
 static unsigned char io_in[65536];
@@ -115,8 +162,7 @@ static HANDLE create(char const *path)
 /* (written to the disk before it's closed) */
 static int finish(HANDLE file)
 {
-	IO_STATUS_BLOCK status;
-	int ok = NT_SUCCESS(NtFlushBuffersFile(file, &status));
+	int ok = !timed_flush(file);
 	return CloseHandle(file) && ok;
 }
 
@@ -145,7 +191,7 @@ static int file_crc(char const *path, uint32_t *size, uint32_t *crc)
 		return 1;
 	*size = 0;
 	*crc = (uint32_t)crc32(0, NULL, 0);
-	while (ReadFile(file, io_in, sizeof(io_in), &got, NULL) && got)
+	while (timed_read(file, io_in, sizeof(io_in), &got) && got)
 	{
 		*crc = (uint32_t)crc32(*crc, io_in, got);
 		*size += got;
@@ -175,37 +221,6 @@ static int retail_padding(struct writer const *w, uint32_t raw_size, HANDLE to, 
 }
 
 static unsigned char chunk[CHUNK], chunk_before[CHUNK];
-
-/* a retail map recompressed: 0 when it makes its own exact bytes (the proof it comes back exact, on this console) */
-static int retail_proof(char const *path, struct retail_map const *retail)
-{
-	unsigned char header[HEADER];
-	struct reader r;
-	struct writer w;
-	uint32_t left, crc = 0;
-	int failed = 1;
-	if (reader_open(&r, path, header))
-		return 1;
-	if (writer_open(&w, 6, INVALID_HANDLE_VALUE, (uint32_t)crc32(crc32(0, NULL, 0), header, HEADER)))
-	{
-		reader_close(&r);
-		return 1;
-	}
-	for (left = retail->length - HEADER; left;)
-	{
-		uint32_t part = left > CHUNK ? CHUNK : left;
-		if (reader_pull(&r, chunk, part) || writer_put(&w, chunk, part))
-		{
-			deflateEnd(&w.z);
-			goto done;
-		}
-		left -= part;
-	}
-	failed = writer_finish(&w) || retail_padding(&w, retail->raw_size, INVALID_HANDLE_VALUE, &crc) || crc != retail->raw_crc;
-done:
-	reader_close(&r);
-	return failed;
-}
 
 /* ---- the sectors wholly of moved data ---- */
 
@@ -322,8 +337,11 @@ static int overlap(uint32_t from, uint32_t to, uint32_t at, uint32_t size, uint3
 }
 
 /* a retail map's small map's file at path, from the retail map as it unpacks: checked against the file's size and CRC */
+/* the small map written to path, from the retail map as it unpacks (checked against its size and CRC): 0 when written, with
+what it unpacks to (its length and CRC32, header and all) and the file as it should be on the disk (its size and CRC32) */
 static int write_small(char const *retail_path, struct retail_map const *retail, struct restore_map const *map,
-	struct map_bsp const *bsps, struct restore_block const *blocks, int level, char const *path)
+	struct map_bsp const *bsps, struct restore_block const *blocks, int level, char const *path, uint32_t *small_length,
+	uint32_t *small_crc, uint32_t *file_size, uint32_t *file_crc)
 {
 	unsigned char header[HEADER], small_header[HEADER];
 	struct reader r;
@@ -372,7 +390,8 @@ static int write_small(char const *retail_path, struct retail_map const *retail,
 		reader_close(&r);
 		return 1;
 	}
-	if (write_all(file, small_header, HEADER) || writer_open(&w, level, file, 0))
+	*small_crc = (uint32_t)crc32(crc32(0, NULL, 0), small_header, HEADER);
+	if (write_all(file, small_header, HEADER) || writer_open(&w, level, file, *small_crc))
 	{
 		reader_close(&r);
 		CloseHandle(file);
@@ -415,6 +434,7 @@ static int write_small(char const *retail_path, struct retail_map const *retail,
 				continue;
 			if (writer_put(&w, chunk + s * SECTOR, part))
 				goto stop;
+			*small_crc = (uint32_t)crc32(*small_crc, chunk + s * SECTOR, part);
 			out += part;
 		}
 	}
@@ -426,6 +446,9 @@ static int write_small(char const *retail_path, struct retail_map const *retail,
 	tail = (SECTOR - w.written % SECTOR) % SECTOR;
 	if (!failed)
 		failed = write_all(file, zeros, tail);
+	*small_length = out;
+	*file_size = HEADER + w.written + tail;
+	*file_crc = (uint32_t)crc32(w.crc, zeros, tail);
 	if (!finish(file))
 		failed = 1;
 	reader_close(&r);
@@ -660,7 +683,7 @@ static int stock_check(char const *path)
 		return 1;
 	}
 	size = HEADER;
-	while (ReadFile(file, io_in, sizeof(io_in), &got, NULL) && got)
+	while (timed_read(file, io_in, sizeof(io_in), &got) && got)
 	{
 		crc = (uint32_t)crc32(crc, io_in, got);
 		size += got;
@@ -669,70 +692,31 @@ static int stock_check(char const *path)
 	return size != STOCK_LENGTH || crc != STOCK_CHECKSUM || u32(header + 8) != STOCK_LENGTH || u32(header + 0x64) != STOCK_CHECKSUM;
 }
 
-static int first_by_place(void const *a, void const *b)
-{
-	struct first_copy const *x = a, *y = b;
-	return x->at < y->at ? -1 : x->at > y->at;
-}
-
-/* maps\stock.index's temporary file, from stock.shared as it is on the disk, in its order; read back: 0 when it's right */
-static int index_write(char const *path, char const *stock_path, unsigned char *block_memory)
+/* maps\stock.index's temporary file, from the table (stock.shared is checked against its CRC first, so its blocks are these);
+read back: 0 when it's right */
+static int index_write(char const *path)
 {
 	struct index_file head;
-	struct first_copy *all = malloc(STOCK_BLOCKS * sizeof(*all));
-	HANDLE file = INVALID_HANDLE_VALUE, stock = INVALID_HANDLE_VALUE;
-	uint32_t crc = (uint32_t)crc32(0, NULL, 0), size, read_size = 0, read_crc = 0;
-	int k, n = 0, failed = 1;
-	if (!all)
+	HANDLE file = create(path);
+	uint32_t crc, size = (uint32_t)(sizeof(head) + sizeof(stock_index)), read_size = 0, read_crc = 0;
+	if (file == INVALID_HANDLE_VALUE)
 		return 1;
-	for (k = 0; k < STOCK_MAPS; k++)
-	{
-		int i;
-		for (i = 0; i < retail_maps[k].first_count && n < STOCK_BLOCKS; i++)
-			all[n++] = retail_maps[k].firsts[i];
-	}
-	qsort(all, (size_t)n, sizeof(all[0]), first_by_place);
-	stock = open_read(stock_path);
-	file = create(path);
-	if (n != STOCK_BLOCKS || stock == INVALID_HANDLE_VALUE || file == INVALID_HANDLE_VALUE)
-		goto done;
 	memset(&head, 0, sizeof(head));
 	memcpy(head.magic, "OXSI", 4);
 	head.version = 1;
-	head.count = (uint32_t)n;
+	head.count = STOCK_BLOCKS;
 	head.stock_checksum = STOCK_CHECKSUM;
 	head.stock_length = STOCK_LENGTH;
-	crc = (uint32_t)crc32(crc, (unsigned char const *)&head, sizeof(head));
-	if (write_all(file, &head, sizeof(head)))
-		goto done;
-	for (k = 0; k < n; k++)
+	crc = (uint32_t)crc32(crc32(crc32(0, NULL, 0), (unsigned char const *)&head, sizeof(head)),
+		(unsigned char const *)stock_index, sizeof(stock_index));
+	if (write_all(file, &head, sizeof(head)) || write_all(file, stock_index, sizeof(stock_index)))
 	{
-		struct index_block entry;
-		if (all[k].size > MOST_BLOCK_SIZE || SetFilePointer(stock, (LONG)all[k].at, NULL, FILE_BEGIN) != all[k].at ||
-			read_all(stock, block_memory, all[k].size))
-			goto done;
-		sha256(block_memory, all[k].size, entry.digest);
-		entry.at = all[k].at;
-		entry.size = all[k].size;
-		crc = (uint32_t)crc32(crc, (unsigned char const *)&entry, sizeof(entry));
-		if (write_all(file, &entry, sizeof(entry)))
-			goto done;
-	}
-	{
-		int finished = finish(file);
-		file = INVALID_HANDLE_VALUE;
-		if (!finished)
-			goto done;
-	}
-	size = (uint32_t)(sizeof(head) + n * sizeof(struct index_block));
-	failed = file_crc(path, &read_size, &read_crc) || read_size != size || read_crc != crc;
-done:
-	if (file != INVALID_HANDLE_VALUE)
 		CloseHandle(file);
-	if (stock != INVALID_HANDLE_VALUE)
-		CloseHandle(stock);
-	free(all);
-	return failed;
+		return 1;
+	}
+	if (!finish(file))
+		return 1;
+	return file_crc(path, &read_size, &read_crc) || read_size != size || read_crc != crc;
 }
 
 /* the table walked: the next map's parts, from the map at *at; 1 past what's there */
@@ -775,13 +759,6 @@ static void clear_temporary(char const *halo)
 	DeleteFileA(path);
 }
 
-/* (for the power cut test: quicker, with no proof) */
-#ifdef STOCKMAPS_HOST
-#define TEST_FAST (getenv("STOCKMAPS_TEST_FAST") != NULL)
-#else
-#define TEST_FAST 0
-#endif
-
 /* the room while it works: stock.shared, the two tables, and the biggest small map beside its retail one */
 #define SWAP_ROOM ((unsigned long long)STOCK_LENGTH + SMALL_LEVEL_ROOM + 8u * MB)
 
@@ -813,6 +790,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 		}
 		left -= part;
 	}
+	step_end("stock.shared filled with zeros");
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
 		struct retail_map const *retail = &retail_maps[k];
@@ -900,6 +878,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			blocks[b].stock = retail->places[b];
 		}
 		*table_size += (uint32_t)(sizeof(*map) + map->bsps * sizeof(*bsps) + map->blocks * sizeof(*blocks));
+		step_end("%s read into stock.shared", retail->name);
 		continue;
 bad_map:
 		reader_close(&r);
@@ -985,12 +964,12 @@ static int map_is_small(char const *path)
 int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 {
 	char path[240], other[240], building_path[240], shared_path[240], table_path[240], temp_table[240], index_path[240], temp_index[240];
-	unsigned char *table = NULL, *tags = NULL, *block_memory = NULL;
+	unsigned char *table = NULL, *tags = NULL;
 	struct block *found = NULL;
 	struct stockmaps_look look;
-	HANDLE stock = INVALID_HANDLE_VALUE;
 	uint32_t table_size = sizeof(struct restore_file), table_room, at, size = 0, crc = 0;
-	int k, result = 1, committed = 0, done_maps;
+	uint32_t small_length, small_crc, disk_size, disk_crc;
+	int k, result = 1, committed = 0, done_maps, failed;
 
 	stockmaps_examine(halo, &look);
 	maps_file(table_path, sizeof(table_path), halo, "stock.restore");
@@ -999,6 +978,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 	maps_file(building_path, sizeof(building_path), halo, "stock.shared.oxtmp");
 	maps_file(temp_table, sizeof(temp_table), halo, "stock.restore.oxtmp");
 	maps_file(temp_index, sizeof(temp_index), halo, "stock.index.oxtmp");
+	whole_begin();
 	if (look.small == STOCK_MAPS)
 	{
 		text_print(error, 256, "%d of the stock maps already draw on stock.shared.", look.small);
@@ -1040,12 +1020,6 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 		table_room += (uint32_t)(sizeof(struct restore_map) + MOST_BSPS * sizeof(struct map_bsp) +
 			retail_maps[k].blocks * sizeof(struct restore_block));
 	}
-	block_memory = malloc(MOST_BLOCK_SIZE);
-	if (!block_memory)
-	{
-		text_print(error, 256, "Not enough memory: nothing changed.");
-		goto done;
-	}
 	if (committed)
 	{
 		/* (a swap that stopped: on with it) */
@@ -1066,6 +1040,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			goto done;
 		}
 		/* 1. the shared file and the restore table */
+		step_begin();
 		if (build_stock(halo, building_path, table, &table_size, found, tags, say, error))
 			goto done;
 		free(tags);
@@ -1079,11 +1054,13 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			text_print(error, 256, "stock.shared didn't read back right: nothing changed.");
 			goto done;
 		}
-		if (index_write(temp_index, building_path, block_memory))
+		step_end("stock.shared read back");
+		if (index_write(temp_index))
 		{
 			text_print(error, 256, "Couldn't write stock.index: nothing changed.");
 			goto done;
 		}
+		step_end("stock.index written");
 		file_head = (struct restore_file *)table;
 		memset(file_head, 0, sizeof(*file_head));
 		memcpy(file_head->magic, "OXSR", 4);
@@ -1127,38 +1104,11 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			goto done;
 		}
 		flush(halo);
+		step_end("stock.restore written, files put in place");
 		committed = 1;
 	}
-	/* 3. the proof that one comes back exact, on this console: the smallest retail map there */
-	if (!TEST_FAST)
-	{
-		int smallest = -1;
-		for (k = 0; k < STOCK_MAPS; k++)
-		{
-			map_path(path, sizeof(path), halo, retail_maps[k].name, "");
-			if (!map_is_small(path) && (smallest < 0 || retail_maps[k].raw_size < retail_maps[smallest].raw_size))
-				smallest = k;
-		}
-		if (smallest >= 0)
-		{
-			say_text(say, 0, "Proving a map comes back exact (%s)...", retail_maps[smallest].name);
-			map_path(path, sizeof(path), halo, retail_maps[smallest].name, "");
-			if (retail_proof(path, &retail_maps[smallest]))
-			{
-				text_print(error, 256, "%s.map doesn't pack back to its own bytes: stopped, with nothing swapped.", retail_maps[smallest].name);
-				result = 2;
-				goto done;
-			}
-		}
-	}
-	/* 4. each map on its own */
-	stock = open_read(shared_path);
-	if (stock == INVALID_HANDLE_VALUE)
-	{
-		text_print(error, 256, "Couldn't read stock.shared.");
-		result = 2;
-		goto done;
-	}
+	/* 3. each map on its own: written, checked against the small map it must be (its length and CRC unpacked), and read back
+	from the disk as it was written (its size and CRC) */
 	at = sizeof(struct restore_file);
 	done_maps = 0;
 	for (k = 0; k < STOCK_MAPS; k++)
@@ -1181,7 +1131,19 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 		}
 		say_text(say, 0, "%s (%d of %d): making it small...", retail->name, k + 1, STOCK_MAPS);
 		map_path(other, sizeof(other), halo, retail->name, ".oxtmp");
-		if (write_small(path, retail, map, bsps, blocks, 1, other) || make_original(other, map, bsps, blocks, stock, NULL))
+		step_begin();
+		failed = write_small(path, retail, map, bsps, blocks, 1, other, &small_length, &small_crc, &disk_size, &disk_crc);
+		if (!failed)
+		{
+			step_end("%s made small", retail->name);
+			failed = small_length != retail->small_length || small_crc != retail->small_crc ||
+				file_crc(other, &size, &crc) || size != disk_size || crc != disk_crc;
+			if (failed)
+				say_text(say, 1, "(%s: small map %lu bytes, CRC %08lx; file %lu of %lu bytes, CRC %08lx of %08lx)", retail->name,
+					(unsigned long)small_length, (unsigned long)small_crc, (unsigned long)size, (unsigned long)disk_size,
+					(unsigned long)crc, (unsigned long)disk_crc);
+		}
+		if (failed)
 		{
 			DeleteFileA(other);
 			text_print(error, 256, "%s.map couldn't be made small. %d of %d are done: the rest stay as they are, and all of them "
@@ -1201,14 +1163,13 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			}
 		}
 		flush(halo);
+		step_end("%s checked and swapped in", retail->name);
 		done_maps++;
 	}
 	result = 0;
+	whole_end("the swap");
 done:
-	if (stock != INVALID_HANDLE_VALUE)
-		CloseHandle(stock);
 	free(tags);
-	free(block_memory);
 	free(table);
 	free(found);
 	if (result == 1 && !committed)
@@ -1236,6 +1197,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 	stockmaps_examine(halo, &look);
 	if (!look.small)
 		return 0;
+	whole_begin();
 	if (!look.restorable)
 	{
 		text_print(error, 256, "The stock maps draw on stock.shared, but stock.shared or stock.restore isn't there: "
@@ -1333,6 +1295,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 		if (u32(header + REFERENCE_OFFSET) != REFERENCE_SIGNATURE)
 			continue;                  /* (already back: a restore a power cut stopped) */
 		say_text(say, 0, "%s (%d of %d): putting it back...", map->name, k + 1, STOCK_MAPS);
+		step_begin();
 		map_path(other, sizeof(other), halo, map->name, ".oxtmp");
 		out = create(other);
 		failed = out == INVALID_HANDLE_VALUE || write_all(out, map->header, HEADER) ||
@@ -1370,6 +1333,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 			goto done;
 		}
 		flush(halo);
+		step_end("%s put back", map->name);
 	}
 	CloseHandle(file);
 	file = INVALID_HANDLE_VALUE;
@@ -1380,6 +1344,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 	DeleteFileA(table_path);
 	flush(halo);
 	result = 0;
+	whole_end("putting them back");
 done:
 	if (file != INVALID_HANDLE_VALUE)
 		CloseHandle(file);
