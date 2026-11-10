@@ -1502,16 +1502,19 @@ static short cached_map_files_find_free_map(
 		}
 	}
 
-#if defined(OXBOX_STRIP)
 	/* oxbox (Halo Universal 2): a multiplayer or menu map too big for its own cache files goes into one of the
-	campaign's (278 MiB), which keep their stock size */
+	campaign's (278 MiB), which keep their stock size. The dedicated server too (its multiplayer cache files are the
+	Xbox's size: Halo 1 Maps Collection's 57-66 MB maps) */
 	if (best_map_file_index == NONE && first_map_file_index != 0)
 	{
 		for (map_file_index = 0; map_file_index <= 1; map_file_index++)
 		{
 			struct cached_map_file *map_file = cached_map_file_get(map_file_index);
 
-			if (cache_file_globals.open_map_file_index != map_file_index && !shared_slot_kept(map_file_index) &&
+			if (cache_file_globals.open_map_file_index != map_file_index &&
+#if defined(HALO_XBOX_TARGET)
+				!shared_slot_kept(map_file_index) &&
+#endif
 				cached_map_file_get_size(map_file_index) > file_length &&
 				(best_map_file_index == NONE ||
 					CompareFileTime(&best_map_file->last_modification_date, &map_file->last_modification_date) > 0))
@@ -1521,6 +1524,7 @@ static short cached_map_files_find_free_map(
 			}
 		}
 	}
+#if defined(OXBOX_STRIP)
 	/* oxbox: a campaign map too busy for the campaign's two (one holding the shared file it draws on, the other
 	the map being played) goes into a multiplayer one if it fits: a map drawing on a shared file is small */
 	if (best_map_file_index == NONE && first_map_file_index == 0)

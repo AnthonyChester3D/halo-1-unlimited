@@ -1506,6 +1506,20 @@ long scenario_tags_load(
 		tag_cache_base_address = physical_memory_get_tag_cache_base_address();
 		if (cache_file_header_verify(&cache_file_globals.header, scenario_name, TRUE))
 		{
+			/* port: tags that end the file (within its last sector) are read to its end. Old modding tools wrote a
+			tag data size a little short of their last tags (Halo 1 Maps Collection's maps: 2 to ~400 bytes), and
+			those bytes were never read (retail's were whatever the memory held) */
+			{
+				long rest = cache_file_globals.header.file_length -
+					(cache_file_globals.header.tag_data_offset + cache_file_globals.header.tag_data_size);
+
+				if (rest > 0 && rest < 0x800)
+				{
+					cache_file_globals.header.tag_data_size += rest;
+					if (cache_file_globals.header.tag_data_size > TAG_CACHE_SIZE)
+						cache_file_globals.header.tag_data_size = TAG_CACHE_SIZE;
+				}
+			}
 			csmemset(tag_cache_base_address, 0xCD, 0x01600000);
 			cache_file_read(
 				NONE,

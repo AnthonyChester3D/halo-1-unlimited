@@ -231,11 +231,18 @@ static unsigned char *map_read(char const *path, struct cache_file_header *heade
 		{
 			uLongf inflated = header->file_length - CACHE_FILE_HEADER_SIZE;
 
+			/* (one that unpacks short of its size by less than a sector is zeros to it, as the Xbox takes it:
+			old map packs' tools rounded the size up) */
 			if (uncompress(bytes + CACHE_FILE_HEADER_SIZE, &inflated, compressed, size - CACHE_FILE_HEADER_SIZE) != Z_OK ||
-				inflated != (uLongf)(header->file_length - CACHE_FILE_HEADER_SIZE))
+				(header->file_length - CACHE_FILE_HEADER_SIZE) - (long)inflated >= 0x800)
 			{
 				free(bytes);
 				bytes = NULL;
+			}
+			else
+			{
+				memset(bytes + CACHE_FILE_HEADER_SIZE + inflated, 0,
+					(size_t)((header->file_length - CACHE_FILE_HEADER_SIZE) - (long)inflated));
 			}
 		}
 	}
@@ -353,6 +360,14 @@ static int map_validate(char const *path, unsigned char *tag_cache, long *correc
 		printf("%s: its tag data is outside it\n", name);
 		free(bytes);
 		return 1;
+	}
+	/* (tags that end the file, within its last sector, read to its end, as the game reads them: cache_files.c) */
+	if (header.file_length - (header.tag_data_offset + header.tag_data_size) > 0 &&
+		header.file_length - (header.tag_data_offset + header.tag_data_size) < 0x800)
+	{
+		header.tag_data_size = header.file_length - header.tag_data_offset;
+		if (header.tag_data_size > TAG_CACHE_SIZE)
+			header.tag_data_size = TAG_CACHE_SIZE;
 	}
 	refused = map_check(&header, bytes, tag_cache, name, corrections);
 	free(bytes);
