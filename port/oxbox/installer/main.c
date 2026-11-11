@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 37
+#define INSTALLER_VERSION 39
 #endif
 __attribute__((used)) static struct
 {
@@ -1509,11 +1509,16 @@ static void delete_tree(char const *folder, int depth)
 
 /* room on the cache drives for the swap's small maps: if they haven't enough between them, they're emptied, the fullest
 first, until they have (without it the swap reads each retail map twice: it takes longer, but works the same) */
-static void cache_make_room(void)
+static void cache_make_room(char const *halo)
 {
-	unsigned long long need = stockmaps_cache_need(), have = 0;
+	unsigned long long need = stockmaps_cache_need(halo), have = 0;
 	int i, emptied[STOCKMAPS_CACHES] = {0};
 	char line[160];
+	if (!need)
+	{
+		log_file("cache drives: not needed (the small maps are made in the maps folder: its drive has the room)");
+		return;
+	}
 	for (;;)
 	{
 		unsigned long long least = ~0ull;
@@ -1602,7 +1607,7 @@ static void offer_stock_maps(struct halo *h)
 	{
 		say("Save about 800 MB? The 23 multiplayer and campaign maps can share one file, stock.shared, for their textures and "
 			"sounds.");
-		say("It takes about a quarter of an hour, and needs about 350 MB free while it works.");
+		say("It takes about ten minutes, and needs about 350 MB free while it works.");
 	}
 	say("Retail Halo can't play them that way: X in this installer puts the exact originals back.");
 	say_in(COLOUR_YELLOW, "A: do it   B: not now");
@@ -1614,7 +1619,7 @@ static void offer_stock_maps(struct halo *h)
 	stockmaps_log = log_file;
 	package_free(&package);
 	log_memory();
-	cache_make_room();
+	cache_make_room(h->path);
 	spun = screen_spinner_busy_ms();
 	failed = stockmaps_convert(h->path, stock_maps_say, error);
 	log_spinner(spun);

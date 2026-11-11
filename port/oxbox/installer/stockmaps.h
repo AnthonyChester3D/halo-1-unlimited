@@ -15,14 +15,16 @@ extern void (*stockmaps_flush_drive)(char const *path);
 extern void (*stockmaps_log)(char const *text);
 
 /* the cache drives (set by the installer, as "X:" and the like; NULL: none): while the swap reads the retail maps into
-stock.shared it makes each small map there too, so it reads each map once; then each is copied into the maps folder. Its
-files are named h1u_<map>.oxsmall, and they go when the swap's done with them, when it stops, and after a power cut (a map
-whose copy isn't there is made from its retail map, as before) */
+stock.shared it makes each small map in the maps folder (<map>.map.oxsmall) when its drive has the room, else there, so it
+reads each map once; then each is renamed or copied into place. On a cache drive its files are named h1u_<map>.oxsmall;
+they go when the swap's done with them, when it stops, and after a power cut (a map whose copy isn't there is made from its
+retail map, as before) */
 #define STOCKMAPS_CACHES 3
 extern char const *stockmaps_cache[STOCKMAPS_CACHES];
 
-/* how much room the cache drives need in all for the small maps (they're spread over them) */
-unsigned long long stockmaps_cache_need(void);
+/* how much room the cache drives need in all for the small maps (they're spread over them): none when the Halo folder's
+drive has the room for them, beside its retail maps (then they're made in its maps folder and needn't be copied) */
+unsigned long long stockmaps_cache_need(char const *halo);
 
 /* the swap's files on the cache drives deleted */
 void stockmaps_cache_clear(void);
