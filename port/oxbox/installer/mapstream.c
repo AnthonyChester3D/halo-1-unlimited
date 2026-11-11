@@ -497,10 +497,9 @@ uint32_t crc_add(uint32_t crc, unsigned char const *p, uint32_t size)
 		crc = (crc >> 8) ^ crc_table[0][(crc ^ *p++) & 0xFF], size--;
 	while (size >= 8)
 	{
-		uint32_t a, b;
-		memcpy(&a, p, 4);
-		memcpy(&b, p + 4, 4);
-		a ^= crc; /* (little-endian: the Xbox's, and the PC's) */
+		/* (p is on a 4-byte boundary here; little-endian, the Xbox's and the PC's. Not memcpy: nxdk's compiler makes each
+		one a call) */
+		uint32_t a = ((uint32_t const *)(void const *)p)[0] ^ crc, b = ((uint32_t const *)(void const *)p)[1];
 		crc = crc_table[7][a & 0xFF] ^ crc_table[6][(a >> 8) & 0xFF] ^ crc_table[5][(a >> 16) & 0xFF] ^ crc_table[4][a >> 24] ^
 			crc_table[3][b & 0xFF] ^ crc_table[2][(b >> 8) & 0xFF] ^ crc_table[1][(b >> 16) & 0xFF] ^ crc_table[0][b >> 24];
 		p += 8;
