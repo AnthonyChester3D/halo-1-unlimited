@@ -37,6 +37,7 @@ static unsigned long row_background[SCREEN_ROWS];
 #define SPIN_LEFT (SCREEN_COLUMNS - SPIN_COLUMNS)
 static volatile LONG spinner_running, spinner_wanted;
 static HANDLE spinner_thread;
+static volatile ULONGLONG spinner_busy; /* performance counter ticks spent drawing (screen_spinner_busy_ms) */
 
 static int in_spinner(int row, int column)
 {
@@ -309,6 +310,7 @@ static DWORD WINAPI spinner_main(LPVOID parameter)
 	while (spinner_wanted)
 	{
 		unsigned char *fb = XVideoGetFB();
+		ULONGLONG start = KeQueryPerformanceCounter();
 		int x, y;
 		for (y = 0; y < SPIN_HIGH; y++)
 		{
@@ -324,10 +326,16 @@ static DWORD WINAPI spinner_main(LPVOID parameter)
 			}
 		}
 		XVideoFlushFB();
+		spinner_busy += KeQueryPerformanceCounter() - start;
 		t -= SPIN_STEP;
 		Sleep(60);
 	}
 	return 0;
+}
+
+unsigned long screen_spinner_busy_ms(void)
+{
+	return (unsigned long)(spinner_busy * 1000u / KeQueryPerformanceFrequency());
 }
 
 void screen_spinner(int on)

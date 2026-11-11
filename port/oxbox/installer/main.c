@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 31
+#define INSTALLER_VERSION 32
 #endif
 __attribute__((used)) static struct
 {
@@ -1440,10 +1440,20 @@ static void log_memory(void)
 	}
 }
 
+/* how long the spinner spent drawing since `since` (screen_spinner_busy_ms), for the log after a swap or restore's time lines */
+static void log_spinner(unsigned long since)
+{
+	char line[96];
+	unsigned long ms = screen_spinner_busy_ms() - since;
+	text_print(line, sizeof(line), "time: the spinner drew for %lu.%lu s of it", ms / 1000u, ms / 100u % 10u);
+	log_file(line);
+}
+
 static int stock_maps_restore(struct halo *h)
 {
 	char error[256];
 	int failed, b;
+	unsigned long spun;
 	say("This puts the retail maps back too: it takes about an hour, and needs room for them (about 1.2 GB free).");
 	say_in(COLOUR_GREY, "(A map pack that draws on stock.shared needs it: installing here again remakes it.)");
 	say_in(COLOUR_YELLOW, "A: go on   B: leave everything as it is");
@@ -1458,7 +1468,9 @@ static int stock_maps_restore(struct halo *h)
 	stockmaps_log = log_file;
 	package_free(&package);
 	log_memory();
+	spun = screen_spinner_busy_ms();
 	failed = stockmaps_restore(h->path, stock_maps_say, error);
+	log_spinner(spun);
 	package_read();
 	if (failed)
 	{
@@ -1475,7 +1487,8 @@ player wants. A failure changes nothing: the retail maps play as they did */
 static void offer_stock_maps(struct halo *h)
 {
 	char error[256];
-	int b;
+	int b, failed;
+	unsigned long spun;
 	stockmaps_examine(h->path, &h->stock);
 	/* (all 23 there, each retail or small: some small is a swap that stopped, to go on with) */
 	if (h->stock.small == STOCK_MAPS || h->stock.small + h->stock.retail_sized != STOCK_MAPS)
@@ -1499,7 +1512,10 @@ static void offer_stock_maps(struct halo *h)
 	stockmaps_log = log_file;
 	package_free(&package);
 	log_memory();
-	if (stockmaps_convert(h->path, stock_maps_say, error))
+	spun = screen_spinner_busy_ms();
+	failed = stockmaps_convert(h->path, stock_maps_say, error);
+	log_spinner(spun);
+	if (failed)
 		say_in(COLOUR_YELLOW, "%s", error);
 	else
 		say_in(COLOUR_GREEN, "Done: the maps are small now (stock.shared holds what they share).");

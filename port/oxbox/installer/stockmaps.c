@@ -145,7 +145,7 @@ struct restore_block
 then each index_block */
 /* ---- files ---- */
 
-static unsigned char io_in[65536];
+static unsigned char io_in[1024 * 1024]; /* (1 MB reads: mapstream.c's io_in says why) */
 static unsigned char const zeros[SECTOR];
 
 static int exists(char const *path)
