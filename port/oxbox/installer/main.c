@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 42
+#define INSTALLER_VERSION 43
 #endif
 __attribute__((used)) static struct
 {
@@ -62,6 +62,9 @@ static char const *own_path(char const *name);
 #define OLD_INSTALLER_PATH own_path("installer_old.xbe") /* (the installer an update replaced) */
 #define NOTICES_PATH own_path("THIRD_PARTY.txt")
 #define LOG_PATH own_path("installer_log.txt")
+/* what the installer fills in a build (package.c): its pictures and each header. All of them are left out of its hash
+when it's checked (installer 42 has 5: before, 4 fitted, and the fifth, SELECT CAMPAIGN, failed every check) */
+#define GENERATED_REGIONS (1 + HEADER_COUNT)
 #define LAST_PATH own_path("installer_last.txt") /* the folder of the last install that worked, first in the list next time */
 /* the updater: this installer's copy in each Halo folder it installs to (<Halo>\updater\default.xbe), and the note the
 game leaves beside it (the game's offer of a newer release: port/oxbox/oxbox_sdk.c) to have it update that folder and
@@ -721,9 +724,9 @@ static void examine(struct halo *h)
 		h->retail = backup_retail, h->patched = backup_patched;
 		if (h->state == INSTALLED)
 		{
-			unsigned long at[4], size[4], made;
+			unsigned long at[GENERATED_REGIONS], size[GENERATED_REGIONS], made;
 			unsigned char digest[32];
-			int zeros = package_pictures(&package, h->retail, at, size, 4);
+			int zeros = package_pictures(&package, h->retail, at, size, GENERATED_REGIONS);
 			h->up_to_date = !file_sha256(main, at, size, zeros, digest, &made) && made == h->retail->build_size &&
 				!memcmp(digest, h->retail->build_sha256, 32);
 		}
@@ -1315,7 +1318,7 @@ static void downloads_default(struct halo const *h)
 static int install(struct halo *h)
 {
 	char main[200], backup[200], temp[220], ui_map[200], error[256], line[SCREEN_COLUMNS + 8];
-	unsigned long zero_at[4], zero_size[4], made_size;
+	unsigned long zero_at[GENERATED_REGIONS], zero_size[GENERATED_REGIONS], made_size;
 	unsigned char digest[32];
 	int zeros, have_pictures;
 	struct retail r;
@@ -1379,7 +1382,7 @@ static int install(struct halo *h)
 		retail_free(&r);
 		return 1;
 	}
-	zeros = package_pictures(&package, h->retail, zero_at, zero_size, 4);
+	zeros = package_pictures(&package, h->retail, zero_at, zero_size, GENERATED_REGIONS);
 	if (file_sha256(temp, zero_at, zero_size, zeros, digest, &made_size) || made_size != h->retail->build_size ||
 		memcmp(digest, h->retail->build_sha256, 32))
 	{
