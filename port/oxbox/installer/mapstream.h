@@ -23,6 +23,8 @@ stream) read and written a piece at a time, and a map's blocks (a bitmap's pixel
 #define MOST_BSPS 16
 
 uint32_t u32(unsigned char const *p);
+/* zlib's CRC-32 (crc32()'s numbers; NULL: the start, 0), 8 bytes a step: nxdk's zlib goes a byte a step */
+uint32_t crc_add(uint32_t crc, unsigned char const *p, uint32_t size);
 void put32(unsigned char *p, uint32_t value);
 HANDLE open_read(char const *path);
 int write_all(HANDLE file, void const *from, uint32_t size);
