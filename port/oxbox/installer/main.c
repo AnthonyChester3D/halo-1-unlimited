@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 34
+#define INSTALLER_VERSION 35
 #endif
 __attribute__((used)) static struct
 {
@@ -1602,7 +1602,7 @@ static void offer_stock_maps(struct halo *h)
 	{
 		say("Save about 800 MB? The 23 multiplayer and campaign maps can share one file, stock.shared, for their textures and "
 			"sounds.");
-		say("It takes perhaps half an hour, and needs about 350 MB free while it works.");
+		say("It takes about a quarter of an hour, and needs about 350 MB free while it works.");
 	}
 	say("Retail Halo can't play them that way: X in this installer puts the exact originals back.");
 	say_in(COLOUR_YELLOW, "A: do it   B: not now");
