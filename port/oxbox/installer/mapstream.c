@@ -14,8 +14,9 @@
 static unsigned char const zeros[1];
 /* (1 MB at a time each way: the swap reads a retail map and writes its small map in turns, and on the Xbox's disk 64 KB
 reads and deflate's ~24 KB writes ran at 20 and 5 MB/s, against 29 and 28 for 1 MB ones. One writer at a time: its output
-waits in io_out until that's full or it finishes) */
-static unsigned char io_in[MB], io_out[MB];
+waits in io_out until that's full or it finishes. A reader reads into io_in and io_in2 in turns: one's read ahead while
+the other's unpacked) */
+static unsigned char io_in[MB], io_in2[MB], io_out[MB];
 
 /* (zlib built without its own allocator on the Xbox: nxdk's Z_SOLO) */
 static voidpf z_alloc(voidpf opaque, uInt items, uInt size)
@@ -47,31 +48,396 @@ uint64_t stream_now(void)
 #endif
 }
 
-int timed_read(HANDLE file, void *to, DWORD size, DWORD *got)
+/* ---- the disk thread: while it's on (stockmaps.c's swap and restore), writes are queued and made behind, and a reader's
+next 1 MB is read ahead, while zlib works on what's here (on the Xbox's one CPU, the disk works on its own while it waits).
+Everything goes in the order it was queued, so each file's writes, seeks and reads are as they were made; anything else
+that touches a file (a read not queued, a flush, a close, a rename) first waits for the queue to empty ---- */
+
+#define JOBS 512
+#define RING (4u * MB)                  /* (a power of 2: the counts below go round 2^32 evenly) */
+#define MOST_FAILED 8
+
+enum { JOB_WRITE, JOB_SEEK, JOB_READ };
+struct job
+{
+	int kind;
+	HANDLE file;
+	unsigned char *data;
+	uint32_t size, at, ring_end;
+	struct ahead_read *result;      /* (a read's) */
+};
+static struct job jobs[JOBS];
+static unsigned char ring[RING];        /* what's waiting to be written */
+static volatile uint32_t queued, done, ring_freed;
+static uint32_t ring_used;              /* (counts: of jobs, and of the ring's bytes, all the way since it began) */
+static HANDLE volatile failed[MOST_FAILED];  /* files a queued write or seek failed for (until closed) */
+static volatile int failed_all;         /* (more than that: all of them) */
+static int disk_running, disk_started;
+
+#define BARRIER() __asm__ __volatile__("" ::: "memory")
+
+#ifdef STOCKMAPS_HOST
+#include <pthread.h>
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
+static int work_count, progress_set;
+static void work_post(void)
+{
+	pthread_mutex_lock(&lock);
+	work_count++;
+	pthread_cond_broadcast(&changed);
+	pthread_mutex_unlock(&lock);
+}
+static void work_wait(void)
+{
+	pthread_mutex_lock(&lock);
+	while (!work_count)
+		pthread_cond_wait(&changed, &lock);
+	work_count--;
+	pthread_mutex_unlock(&lock);
+}
+static void progress_post(void)
+{
+	pthread_mutex_lock(&lock);
+	progress_set = 1;
+	pthread_cond_broadcast(&changed);
+	pthread_mutex_unlock(&lock);
+}
+static void progress_wait(void)
+{
+	pthread_mutex_lock(&lock);
+	while (!progress_set)
+		pthread_cond_wait(&changed, &lock);
+	progress_set = 0;
+	pthread_mutex_unlock(&lock);
+}
+#else
+static HANDLE work, progress;           /* (a semaphore: jobs queued; an event, auto-reset: a job's done) */
+static void work_post(void)
+{
+	ReleaseSemaphore(work, 1, NULL);
+}
+static void work_wait(void)
+{
+	WaitForSingleObject(work, INFINITE);
+}
+static void progress_post(void)
+{
+	SetEvent(progress);
+}
+static void progress_wait(void)
+{
+	WaitForSingleObject(progress, INFINITE);
+}
+#endif
+
+static int file_failed(HANDLE file)
+{
+	int i;
+	if (failed_all)
+		return 1;
+	for (i = 0; i < MOST_FAILED; i++)
+		if (failed[i] == file)
+			return 1;
+	return 0;
+}
+
+static void fail(HANDLE file)
+{
+	int i;
+	if (file_failed(file))
+		return;
+	for (i = 0; i < MOST_FAILED; i++)
+		if (!failed[i])
+		{
+			failed[i] = file;
+			return;
+		}
+	failed_all = 1;
+}
+
+#ifdef STOCKMAPS_HOST
+static void *disk_thread(void *unused)
+#else
+static DWORD WINAPI disk_thread(LPVOID unused)
+#endif
+{
+	(void)unused;
+	for (;;)
+	{
+		struct job *j;
+		uint64_t start;
+		DWORD n = 0;
+		work_wait();
+		BARRIER();
+		j = &jobs[done % JOBS];
+		start = stream_now();
+		if (j->kind == JOB_READ)
+		{
+			int ok = ReadFile(j->file, j->data, j->size, &n, NULL);
+			stream_times.read += stream_now() - start;
+			stream_times.read_bytes += n;
+			j->result->ok = ok;
+			j->result->got = n;
+		}
+		else if (file_failed(j->file))
+			; /* (what comes after a failed write isn't written) */
+		else if (j->kind == JOB_SEEK)
+		{
+			if (SetFilePointer(j->file, (LONG)j->at, NULL, FILE_BEGIN) != j->at)
+				fail(j->file);
+		}
+		else
+		{
+			if (!WriteFile(j->file, j->data, j->size, &n, NULL) || n != j->size)
+				fail(j->file);
+			stream_times.write += stream_now() - start;
+			stream_times.write_bytes += n;
+		}
+		if (j->kind == JOB_WRITE)
+			ring_freed = j->ring_end;
+		BARRIER();
+		done++;
+		progress_post();
+	}
+#ifdef STOCKMAPS_HOST
+	return NULL;
+#else
+	return 0;
+#endif
+}
+
+/* (the main thread waiting for the disk: the time goes in stream_times.wait) */
+static void wait_until_done(uint32_t count)
 {
 	uint64_t start = stream_now();
-	int ok = ReadFile(file, to, size, got, NULL);
-	stream_times.read += stream_now() - start;
+	while ((int32_t)(done - count) < 0)
+		progress_wait();
+	BARRIER();
+	stream_times.wait += stream_now() - start;
+}
+
+static struct job *job_new(void)
+{
+	if (queued - done >= JOBS)
+		wait_until_done(queued - JOBS + 1);
+	return &jobs[queued % JOBS];
+}
+
+static uint32_t job_queue(void)
+{
+	BARRIER();
+	queued++;
+	work_post();
+	return queued;
+}
+
+void disk_on(void)
+{
+	if (!disk_started)
+	{
+#ifdef STOCKMAPS_HOST
+		pthread_t thread;
+		if (pthread_create(&thread, NULL, disk_thread, NULL))
+			return;
+		pthread_detach(thread);
+#else
+		HANDLE thread;
+		work = CreateSemaphore(NULL, 0, JOBS + 1, NULL);
+		progress = CreateEvent(NULL, FALSE, FALSE, NULL);
+		if (!work || !progress)
+			return;
+		thread = CreateThread(NULL, 64 * 1024, disk_thread, NULL, 0, NULL);
+		if (!thread)
+			return;
+		/* (above the main thread: it gives the disk its next job as soon as one's done) */
+		SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
+		CloseHandle(thread);
+#endif
+		disk_started = 1;
+	}
+	disk_running = 1;
+}
+
+void disk_sync(void)
+{
+	if (disk_running)
+		wait_until_done(queued);
+}
+
+void disk_off(void)
+{
+	int i;
+	disk_sync();
+	disk_running = 0;
+	for (i = 0; i < MOST_FAILED; i++)
+		failed[i] = 0;
+	failed_all = 0;
+}
+
+int disk_seek(HANDLE file, uint32_t at)
+{
+	struct job *j;
+	if (!disk_running)
+		return SetFilePointer(file, (LONG)at, NULL, FILE_BEGIN) != at;
+	j = job_new();
+	j->kind = JOB_SEEK;
+	j->file = file;
+	j->at = at;
+	job_queue();
+	return file_failed(file);
+}
+
+int file_close(HANDLE file)
+{
+	int ok, i;
+	disk_sync();
+	ok = !file_failed(file);
+	for (i = 0; i < MOST_FAILED; i++)
+		if (failed[i] == file)
+			failed[i] = 0;
+	return CloseHandle(file) && ok;
+}
+
+int timed_read(HANDLE file, void *to, DWORD size, DWORD *got)
+{
+	uint64_t start, took;
+	int ok;
+	disk_sync();
+	start = stream_now();
+	ok = ReadFile(file, to, size, got, NULL);
+	took = stream_now() - start;
+	stream_times.read += took;
+	stream_times.wait += took;
 	stream_times.read_bytes += *got;
 	return ok;
 }
 
 int timed_write(HANDLE file, void const *from, DWORD size, DWORD *put)
 {
-	uint64_t start = stream_now();
-	int ok = WriteFile(file, from, size, put, NULL);
-	stream_times.write += stream_now() - start;
+	uint64_t start, took;
+	int ok;
+	if (disk_running && size <= MB)
+	{
+		struct job *j;
+		uint32_t at = ring_used % RING;
+		if (at + size > RING)
+			ring_used += RING - at; /* (each write's bytes in one piece) */
+		while (ring_used + size - ring_freed > RING)
+		{
+			uint64_t began = stream_now();
+			progress_wait();
+			stream_times.wait += stream_now() - began;
+		}
+		BARRIER();
+		j = job_new();
+		j->kind = JOB_WRITE;
+		j->file = file;
+		j->data = ring + ring_used % RING;
+		j->size = (uint32_t)size;
+		memcpy(j->data, from, size);
+		ring_used += size;
+		j->ring_end = ring_used;
+		job_queue();
+		*put = size;
+		return !file_failed(file);
+	}
+	disk_sync();
+	start = stream_now();
+	ok = WriteFile(file, from, size, put, NULL);
+	took = stream_now() - start;
+	stream_times.write += took;
+	stream_times.wait += took;
 	stream_times.write_bytes += *put;
-	return ok;
+	return ok && !file_failed(file);
 }
 
 int timed_flush(HANDLE file)
 {
 	IO_STATUS_BLOCK status;
-	uint64_t start = stream_now();
-	int ok = NT_SUCCESS(NtFlushBuffersFile(file, &status));
-	stream_times.write += stream_now() - start;
+	uint64_t start, took;
+	int ok;
+	disk_sync();
+	start = stream_now();
+	ok = NT_SUCCESS(NtFlushBuffersFile(file, &status)) && !file_failed(file);
+	took = stream_now() - start;
+	stream_times.write += took;
+	stream_times.wait += took;
 	return !ok;
+}
+
+void stream_times_get(struct stream_times *t)
+{
+	/* (the disk thread adds to it as it goes: a copy made twice the same isn't half one and half the other) */
+	struct stream_times again;
+	do
+	{
+		*t = stream_times;
+		again = stream_times;
+	} while (memcmp(t, &again, sizeof(again)));
+}
+
+/* ---- a file read 1 MB at a time, the next read ahead while the disk thread is on ---- */
+
+static void ahead_queue(struct ahead *a, int i)
+{
+	struct job *j = job_new();
+	j->kind = JOB_READ;
+	j->file = a->file;
+	j->data = a->buffer[i];
+	j->size = MB;
+	j->result = &a->read[i];
+	a->read[i].job = job_queue();
+}
+
+void ahead_open(struct ahead *a, HANDLE file, unsigned char *one, unsigned char *two)
+{
+	memset(a, 0, sizeof(*a));
+	a->file = file;
+	a->buffer[0] = one;
+	a->buffer[1] = two;
+	a->handed = -1;
+	a->queued = disk_running;
+	if (a->queued)
+	{
+		ahead_queue(a, 0);
+		ahead_queue(a, 1);
+	}
+}
+
+int ahead_next(struct ahead *a, unsigned char **data, DWORD *got)
+{
+	int i = a->next;
+	*data = a->buffer[i];
+	*got = 0;
+	if (!a->queued)
+	{
+		if (a->ended)
+			return 0;
+		if (!timed_read(a->file, a->buffer[0], MB, got))
+			return 1;
+		*data = a->buffer[0];
+		a->ended = *got < MB;
+		return 0;
+	}
+	if (a->handed >= 0 && !a->ended)
+		ahead_queue(a, a->handed);
+	a->handed = -1;
+	if (!a->read[i].job)
+		return 0; /* (the end: nothing more was asked for) */
+	wait_until_done(a->read[i].job);
+	a->read[i].job = 0;
+	if (!a->read[i].ok)
+	{
+		a->ended = 1;
+		return 1;
+	}
+	*got = a->read[i].got;
+	if (*got < MB)
+		a->ended = 1;
+	a->handed = i;
+	a->next = i ^ 1;
+	return 0;
 }
 
 static void tenths(char *to, int size, uint64_t us)
@@ -81,19 +447,22 @@ static void tenths(char *to, int size, uint64_t us)
 
 void stream_times_text(char *text, int size, uint64_t since, struct stream_times const *then)
 {
-	struct stream_times const *now = &stream_times;
-	uint64_t all = stream_now() - since, read = now->read - then->read, write = now->write - then->write,
-		unzip = now->unzip - then->unzip, zip = now->zip - then->zip, busy = read + write + unzip + zip;
-	char t[5][24];
+	struct stream_times now;
+	uint64_t all = stream_now() - since, read, write, unzip, zip, wait, busy;
+	char t[6][24];
+	stream_times_get(&now);
+	read = now.read - then->read, write = now.write - then->write, unzip = now.unzip - then->unzip,
+		zip = now.zip - then->zip, wait = now.wait - then->wait, busy = unzip + zip + wait;
 	tenths(t[0], 24, all);
 	tenths(t[1], 24, read);
 	tenths(t[2], 24, write);
 	tenths(t[3], 24, unzip);
 	tenths(t[4], 24, zip);
-	text_print(text, (size_t)size, "%s: read %s (%lu MB), write %s (%lu MB), unzip %s (%lu MB), zip %s (%lu MB), other %lu.%lu s",
-		t[0], t[1], (unsigned long)((now->read_bytes - then->read_bytes) >> 20), t[2],
-		(unsigned long)((now->write_bytes - then->write_bytes) >> 20), t[3], (unsigned long)((now->unzipped - then->unzipped) >> 20),
-		t[4], (unsigned long)((now->zipped - then->zipped) >> 20), (unsigned long)((all > busy ? all - busy : 0) / 1000000u),
+	tenths(t[5], 24, wait);
+	text_print(text, (size_t)size, "%s: read %s (%lu MB), write %s (%lu MB), unzip %s (%lu MB), zip %s (%lu MB), "
+		"waited for the disk %s, other %lu.%lu s", t[0], t[1], (unsigned long)((now.read_bytes - then->read_bytes) >> 20), t[2],
+		(unsigned long)((now.write_bytes - then->write_bytes) >> 20), t[3], (unsigned long)((now.unzipped - then->unzipped) >> 20),
+		t[4], (unsigned long)((now.zipped - then->zipped) >> 20), t[5], (unsigned long)((all > busy ? all - busy : 0) / 1000000u),
 		(unsigned long)((all > busy ? all - busy : 0) / 100000u % 10u));
 }
 
@@ -159,7 +528,7 @@ void reader_close(struct reader *r)
 	if (r->started)
 		inflateEnd(&r->z);
 	if (r->file != INVALID_HANDLE_VALUE)
-		CloseHandle(r->file);
+		file_close(r->file);
 	r->started = 0;
 	r->file = INVALID_HANDLE_VALUE;
 }
@@ -178,6 +547,7 @@ int reader_open(struct reader *r, char const *path, unsigned char *header)
 	}
 	r->raw_crc = (uint32_t)crc32(crc32(0, NULL, 0), header, HEADER);
 	r->raw_size = HEADER;
+	ahead_open(&r->ahead, r->file, io_in, io_in2);
 	r->z.zalloc = z_alloc;
 	r->z.zfree = z_free;
 	if (inflateInit(&r->z) != Z_OK)
@@ -204,12 +574,13 @@ int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
 			return !checking;
 		if (!r->z.avail_in)
 		{
+			unsigned char *data;
 			DWORD got = 0;
-			if (!timed_read(r->file, io_in, sizeof(io_in), &got) || !got)
+			if (ahead_next(&r->ahead, &data, &got) || !got)
 				return 1;
-			r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, got);
+			r->raw_crc = (uint32_t)crc32(r->raw_crc, data, got);
 			r->raw_size += got;
-			r->z.next_in = io_in;
+			r->z.next_in = data;
 			r->z.avail_in = got;
 		}
 		status = timed_inflate(&r->z);
@@ -231,12 +602,13 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 		int status;
 		if (!r->z.avail_in)
 		{
+			unsigned char *data;
 			DWORD part = 0;
-			if (!timed_read(r->file, io_in, sizeof(io_in), &part) || !part)
+			if (ahead_next(&r->ahead, &data, &part) || !part)
 				return 1;
-			r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, part);
+			r->raw_crc = (uint32_t)crc32(r->raw_crc, data, part);
 			r->raw_size += part;
-			r->z.next_in = io_in;
+			r->z.next_in = data;
 			r->z.avail_in = part;
 		}
 		status = timed_inflate(&r->z);
@@ -251,10 +623,11 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 
 int reader_raw(struct reader *r, uint32_t *size, uint32_t *crc)
 {
+	unsigned char *data;
 	DWORD got;
-	while (timed_read(r->file, io_in, sizeof(io_in), &got) && got)
+	while (!ahead_next(&r->ahead, &data, &got) && got)
 	{
-		r->raw_crc = (uint32_t)crc32(r->raw_crc, io_in, got);
+		r->raw_crc = (uint32_t)crc32(r->raw_crc, data, got);
 		r->raw_size += got;
 	}
 	*size = r->raw_size;

@@ -91,7 +91,7 @@ static struct stream_times step_then, whole_then;
 static void step_begin(void)
 {
 	step_began = stream_now();
-	step_then = stream_times;
+	stream_times_get(&step_then);
 }
 
 static void step_end(char const *format, ...)
@@ -112,7 +112,7 @@ static void step_end(char const *format, ...)
 static void whole_begin(void)
 {
 	whole_began = stream_now();
-	whole_then = stream_times;
+	stream_times_get(&whole_then);
 	step_begin();
 }
 
@@ -151,7 +151,7 @@ struct restore_block
 then each index_block */
 /* ---- files ---- */
 
-static unsigned char io_in[1024 * 1024]; /* (1 MB reads: mapstream.c's io_in says why) */
+static unsigned char io_in[1024 * 1024], io_in2[1024 * 1024]; /* (1 MB reads, in turns: mapstream.c's io_in says why) */
 static unsigned char const zeros[SECTOR];
 
 static int exists(char const *path)
@@ -159,9 +159,22 @@ static int exists(char const *path)
 	return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 }
 
+/* (after what the disk thread has queued: a rename or a delete comes after every write made before it, as without it) */
+static int delete_file(char const *path)
+{
+	disk_sync();
+	return DeleteFileA(path);
+}
+
+static int move_file(char const *from, char const *to)
+{
+	disk_sync();
+	return MoveFileA(from, to);
+}
+
 static HANDLE create(char const *path)
 {
-	DeleteFileA(path);
+	delete_file(path);
 	return CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 }
 
@@ -169,7 +182,7 @@ static HANDLE create(char const *path)
 static int finish(HANDLE file)
 {
 	int ok = !timed_flush(file);
-	return CloseHandle(file) && ok;
+	return file_close(file) && ok;
 }
 
 static void map_path(char *path, int size, char const *halo, char const *name, char const *extension)
@@ -192,17 +205,20 @@ static void flush(char const *halo)
 static int file_crc(char const *path, uint32_t *size, uint32_t *crc)
 {
 	HANDLE file = open_read(path);
+	struct ahead ahead;
+	unsigned char *data;
 	DWORD got;
 	if (file == INVALID_HANDLE_VALUE)
 		return 1;
 	*size = 0;
 	*crc = (uint32_t)crc32(0, NULL, 0);
-	while (timed_read(file, io_in, sizeof(io_in), &got) && got)
+	ahead_open(&ahead, file, io_in, io_in2);
+	while (!ahead_next(&ahead, &data, &got) && got)
 	{
-		*crc = (uint32_t)crc32(*crc, io_in, got);
+		*crc = (uint32_t)crc32(*crc, data, got);
 		*size += got;
 	}
-	CloseHandle(file);
+	file_close(file);
 	return 0;
 }
 
@@ -452,7 +468,7 @@ static int small_open(struct small *s, struct restore_map const *map, uint32_t g
 	s->crc = (uint32_t)crc32(crc32(0, NULL, 0), small_header, HEADER);
 	if (write_all(s->file, small_header, HEADER) || writer_open(&s->w, level, s->file, s->crc))
 	{
-		CloseHandle(s->file);
+		file_close(s->file);
 		return 1;
 	}
 	return 0;
@@ -504,7 +520,7 @@ static int small_piece(struct small *s, uint32_t at, uint32_t size)
 static void small_abandon(struct small *s)
 {
 	deflateEnd(&s->w.z);
-	CloseHandle(s->file);
+	file_close(s->file);
 }
 
 /* the small map finished, padded to a whole sector (the game copies them unbuffered) and written to the disk: 0 when it's
@@ -624,7 +640,7 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 			if (overlap(moved[i].from, moved[i].to, at, size, &in_piece, &in_block, &n))
 			{
 				uint32_t place = moved[i].stock + in_block;
-				if (SetFilePointer(stock, (LONG)place, NULL, FILE_BEGIN) != place || read_all(stock, chunk + in_piece, n))
+				if (disk_seek(stock, place) || read_all(stock, chunk + in_piece, n))
 					goto done;
 			}
 		}
@@ -648,14 +664,14 @@ static int swap_in(char const *halo, char const *name)
 	map_path(path, sizeof(path), halo, name, "");
 	map_path(old, sizeof(old), halo, name, ".oxold");
 	map_path(fresh, sizeof(fresh), halo, name, ".oxnew");
-	if (exists(path) && !MoveFileA(path, old))
+	if (exists(path) && !move_file(path, old))
 		return 1;
-	if (!MoveFileA(fresh, path))
+	if (!move_file(fresh, path))
 	{
-		MoveFileA(old, path);
+		move_file(old, path);
 		return 1;
 	}
-	DeleteFileA(old);
+	delete_file(old);
 	return 0;
 }
 
@@ -679,13 +695,13 @@ static void recover(char const *halo)
 		map_path(old, sizeof(old), halo, name, ".oxold");
 		map_path(fresh, sizeof(fresh), halo, name, ".oxnew");
 		map_path(temp, sizeof(temp), halo, name, ".oxtmp");
-		DeleteFileA(temp);
+		delete_file(temp);
 		has_map = exists(path), has_old = exists(old), has_new = exists(fresh);
 		if (!committed && has_new)
-			DeleteFileA(fresh), has_new = 0;
+			delete_file(fresh), has_new = 0;
 		if (has_old && !has_map)
 		{
-			if (!MoveFileA(has_new ? fresh : old, path))
+			if (!move_file(has_new ? fresh : old, path))
 				continue;
 			has_map = 1;
 			has_new = 0;
@@ -693,17 +709,17 @@ static void recover(char const *halo)
 				has_old = 0;
 		}
 		if (has_old && has_map)
-			DeleteFileA(old);
+			delete_file(old);
 		else if (has_new && has_map)
 			swap_in(halo, name);
 		else if (has_new)
-			MoveFileA(fresh, path);
+			move_file(fresh, path);
 	}
-	DeleteFileA(building);
+	delete_file(building);
 	maps_file(temp, sizeof(temp), halo, "stock.index.oxtmp");
-	DeleteFileA(temp);
+	delete_file(temp);
 	maps_file(temp, sizeof(temp), halo, "stock.restore.oxtmp");
-	DeleteFileA(temp);
+	delete_file(temp);
 	/* (nothing draws on stock.shared: the end of a restore, or a swap stopped before stock.restore went in place) */
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
@@ -715,15 +731,15 @@ static void recover(char const *halo)
 			continue;
 		if (!read_all(file, header, HEADER) && u32(header + REFERENCE_OFFSET) == REFERENCE_SIGNATURE)
 			small++;
-		CloseHandle(file);
+		file_close(file);
 	}
 	if (!small)
 	{
 		maps_file(temp, sizeof(temp), halo, "stock.shared");
-		DeleteFileA(temp);
+		delete_file(temp);
 		maps_file(temp, sizeof(temp), halo, "stock.index");
-		DeleteFileA(temp);
-		DeleteFileA(table);
+		delete_file(temp);
+		delete_file(table);
 	}
 	flush(halo);
 }
@@ -746,7 +762,7 @@ void stockmaps_examine(char const *halo, struct stockmaps_look *look)
 			look->retail_sized++;
 		if (!read_all(file, header, HEADER) && u32(header + REFERENCE_OFFSET) == REFERENCE_SIGNATURE)
 			look->small++;
-		CloseHandle(file);
+		file_close(file);
 	}
 	maps_file(path, sizeof(path), halo, "stock.restore");
 	look->restorable = exists(path);
@@ -758,6 +774,7 @@ static unsigned long long free_bytes(char const *path)
 {
 	ULARGE_INTEGER available, total, free_total;
 	char root[4] = {path[0], ':', '\\', 0};
+	disk_sync(); /* (what's still to be written takes room too) */
 	if (!GetDiskFreeSpaceExA(root, &available, &total, &free_total))
 		return ~0ull;
 	return available.QuadPart;
@@ -781,22 +798,24 @@ static int stock_check(char const *path)
 {
 	HANDLE file = open_read(path);
 	uint32_t size = 0, crc = (uint32_t)crc32(0, NULL, 0);
-	unsigned char header[HEADER];
+	unsigned char header[HEADER], *data;
+	struct ahead ahead;
 	DWORD got;
 	if (file == INVALID_HANDLE_VALUE)
 		return 1;
 	if (read_all(file, header, HEADER))
 	{
-		CloseHandle(file);
+		file_close(file);
 		return 1;
 	}
 	size = HEADER;
-	while (timed_read(file, io_in, sizeof(io_in), &got) && got)
+	ahead_open(&ahead, file, io_in, io_in2);
+	while (!ahead_next(&ahead, &data, &got) && got)
 	{
-		crc = (uint32_t)crc32(crc, io_in, got);
+		crc = (uint32_t)crc32(crc, data, got);
 		size += got;
 	}
-	CloseHandle(file);
+	file_close(file);
 	return size != STOCK_LENGTH || crc != STOCK_CHECKSUM || u32(header + 8) != STOCK_LENGTH || u32(header + 0x64) != STOCK_CHECKSUM;
 }
 
@@ -819,7 +838,7 @@ static int index_write(char const *path)
 		(unsigned char const *)stock_index, sizeof(stock_index));
 	if (write_all(file, &head, sizeof(head)) || write_all(file, stock_index, sizeof(stock_index)))
 	{
-		CloseHandle(file);
+		file_close(file);
 		return 1;
 	}
 	if (!finish(file))
@@ -855,16 +874,16 @@ static void clear_temporary(char const *halo)
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
 		map_path(path, sizeof(path), halo, retail_maps[k].name, ".oxtmp");
-		DeleteFileA(path);
+		delete_file(path);
 	}
 	maps_file(path, sizeof(path), halo, "stock.index.oxtmp");
-	DeleteFileA(path);
+	delete_file(path);
 	maps_file(path, sizeof(path), halo, "stock.shared.oxtmp");
-	DeleteFileA(path);
+	delete_file(path);
 	maps_file(path, sizeof(path), halo, "stock.restore.oxtmp");
-	DeleteFileA(path);
+	delete_file(path);
 	maps_file(path, sizeof(path), halo, "stock.unpacked");
-	DeleteFileA(path);
+	delete_file(path);
 }
 
 /* the room while it works: stock.shared, the two tables, and the biggest small map beside its retail one */
@@ -888,6 +907,7 @@ static unsigned long long cache_room(char const *cache)
 {
 	ULARGE_INTEGER available, total, free_total;
 	char root[4] = {cache[0], ':', '\\', 0};
+	disk_sync();
 	return GetDiskFreeSpaceExA(root, &available, &total, &free_total) ? available.QuadPart : 0;
 }
 
@@ -912,7 +932,7 @@ void stockmaps_cache_clear(void)
 		{
 			cache_file(path, sizeof(path), stockmaps_cache[i], retail_maps[k].name);
 			if (exists(path))
-				DeleteFileA(path);
+				delete_file(path);
 		}
 	}
 }
@@ -943,27 +963,30 @@ static int copy_small(char const *from, char const *to, uint32_t size, uint32_t 
 {
 	HANDLE in = open_read(from), out;
 	uint32_t got_size = 0, got_crc = (uint32_t)crc32(0, NULL, 0);
+	struct ahead ahead;
+	unsigned char *data;
 	DWORD got;
 	if (in == INVALID_HANDLE_VALUE)
 		return 1;
 	out = create(to);
 	if (out == INVALID_HANDLE_VALUE)
 	{
-		CloseHandle(in);
+		file_close(in);
 		return 1;
 	}
-	while (timed_read(in, io_in, sizeof(io_in), &got) && got)
+	ahead_open(&ahead, in, io_in, io_in2);
+	while (!ahead_next(&ahead, &data, &got) && got)
 	{
-		got_crc = (uint32_t)crc32(got_crc, io_in, got);
+		got_crc = (uint32_t)crc32(got_crc, data, got);
 		got_size += got;
-		if (write_all(out, io_in, got))
+		if (write_all(out, data, got))
 		{
-			CloseHandle(in);
-			CloseHandle(out);
+			file_close(in);
+			file_close(out);
 			return 1;
 		}
 	}
-	CloseHandle(in);
+	file_close(in);
 	if (!finish(out))
 		return 1;
 	return got_size != size || got_crc != crc;
@@ -992,7 +1015,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 		uint32_t part = left > CHUNK ? CHUNK : left;
 		if (write_all(stock, chunk_before, part))
 		{
-			CloseHandle(stock);
+			file_close(stock);
 			text_print(error, 256, "Couldn't write maps\\stock.shared (is the drive full?): nothing changed.");
 			return 1;
 		}
@@ -1018,7 +1041,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			reader_close(&r);
 			say_text(say, 1, "(%s.map: its header isn't the retail map's)", retail->name);
 			text_print(error, 256, "%s.map isn't the retail map this knows: nothing changed.", retail->name);
-			CloseHandle(stock);
+			file_close(stock);
 			return 1;
 		}
 		memset(map, 0, sizeof(*map));
@@ -1049,7 +1072,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			if (!small_open(&s, map, gone, 1, cache_path))
 				making = 1;
 			else
-				DeleteFileA(cache_path);
+				delete_file(cache_path);
 		}
 		for (at = HEADER; at < retail->length;)
 		{
@@ -1067,14 +1090,14 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 				if (overlap(f->offset, f->offset + f->size, at, size, &in_piece, &in_block, &n))
 				{
 					uint32_t place = f->at + in_block;
-					if (SetFilePointer(stock, (LONG)place, NULL, FILE_BEGIN) != place || write_all(stock, chunk + in_piece, n))
+					if (disk_seek(stock, place) || write_all(stock, chunk + in_piece, n))
 					{
 						reader_close(&r);
-						CloseHandle(stock);
+						file_close(stock);
 						if (making)
 						{
 							small_abandon(&s);
-							DeleteFileA(cache_path);
+							delete_file(cache_path);
 						}
 						text_print(error, 256, "Couldn't write maps\\stock.shared: nothing changed.");
 						return 1;
@@ -1089,7 +1112,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			if (making && at < defer && small_piece(&s, at, at + size <= defer ? size : defer - at))
 			{
 				small_abandon(&s);
-				DeleteFileA(cache_path);
+				delete_file(cache_path);
 				making = 0;
 			}
 			at += size;
@@ -1101,10 +1124,10 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			if (making)
 			{
 				small_abandon(&s);
-				DeleteFileA(cache_path);
+				delete_file(cache_path);
 			}
 			text_print(error, 256, "%s.map isn't the retail map this knows: nothing changed.", retail->name);
-			CloseHandle(stock);
+			file_close(stock);
 			return 1;
 		}
 		reader_close(&r);
@@ -1139,7 +1162,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			if (failed)
 			{
 				say_text(say, 1, "(%s: its small map on the cache drive didn't come out right: it's made later)", retail->name);
-				DeleteFileA(cache_path);
+				delete_file(cache_path);
 			}
 			else
 			{
@@ -1151,20 +1174,20 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 		continue;
 bad_map:
 		reader_close(&r);
-		CloseHandle(stock);
+		file_close(stock);
 		if (making)
 		{
 			small_abandon(&s);
-			DeleteFileA(cache_path);
+			delete_file(cache_path);
 		}
 		text_print(error, 256, "%s.map doesn't unpack: nothing changed.", retail->name);
 		return 1;
 bad_tags:
-		CloseHandle(stock);
+		file_close(stock);
 		if (making)
 		{
 			small_abandon(&s);
-			DeleteFileA(cache_path);
+			delete_file(cache_path);
 		}
 		text_print(error, 256, "%s.map's tags don't read: nothing changed.", retail->name);
 		return 1;
@@ -1177,7 +1200,7 @@ bad_tags:
 	memcpy(stock_header + 0x40, "shared", 6);
 	put32(stock_header + 0x64, STOCK_CHECKSUM);
 	memcpy(stock_header + 0x7FC, "toof", 4);
-	if (SetFilePointer(stock, 0, NULL, FILE_BEGIN) != 0 || write_all(stock, stock_header, HEADER) || !finish(stock))
+	if (disk_seek(stock, 0) || write_all(stock, stock_header, HEADER) || !finish(stock))
 	{
 		text_print(error, 256, "Couldn't finish maps\\stock.shared: nothing changed.");
 		return 1;
@@ -1201,12 +1224,12 @@ static int table_read(char const *table_path, unsigned char **table_out, uint32_
 	table = size >= sizeof(struct restore_file) && size < 8u * MB ? malloc(size) : NULL;
 	if (!table || read_all(file, table, size))
 	{
-		CloseHandle(file);
+		file_close(file);
 		free(table);
 		text_print(error, 256, "stock.restore can't be read: nothing changed.");
 		return 1;
 	}
-	CloseHandle(file);
+	file_close(file);
 	head = (struct restore_file *)table;
 	if (!memcmp(head->magic, "OXSR", 4) && head->version == 1)
 	{
@@ -1236,7 +1259,7 @@ static int map_is_small(char const *path)
 	if (file == INVALID_HANDLE_VALUE)
 		return 0;
 	small = !read_all(file, header, HEADER) && u32(header + REFERENCE_OFFSET) == REFERENCE_SIGNATURE;
-	CloseHandle(file);
+	file_close(file);
 	return small;
 }
 
@@ -1283,7 +1306,7 @@ static unsigned char *layout_unpack(void)
 	return out;
 }
 
-int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
+static int convert(char const *halo, stockmaps_say_t say, char *error)
 {
 	char path[240], other[240], building_path[240], shared_path[240], table_path[240], temp_table[240], index_path[240], temp_index[240];
 	unsigned char *table = NULL, *tail = NULL, *layout = NULL;
@@ -1331,7 +1354,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			if (file != INVALID_HANDLE_VALUE)
 			{
 				size = GetFileSize(file, NULL);
-				CloseHandle(file);
+				file_close(file);
 			}
 			if (size != retail_maps[k].raw_size)
 			{
@@ -1407,25 +1430,25 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			text_print(error, 256, "stock.restore didn't read back right: nothing changed.");
 			goto done;
 		}
-		DeleteFileA(index_path);
-		if (!MoveFileA(temp_index, index_path))
+		delete_file(index_path);
+		if (!move_file(temp_index, index_path))
 		{
 			text_print(error, 256, "Couldn't put stock.index in place: nothing changed.");
 			goto done;
 		}
-		DeleteFileA(shared_path);
-		if (!MoveFileA(building_path, shared_path))
+		delete_file(shared_path);
+		if (!move_file(building_path, shared_path))
 		{
-			DeleteFileA(index_path);
+			delete_file(index_path);
 			text_print(error, 256, "Couldn't put stock.shared in place: nothing changed.");
 			goto done;
 		}
 		flush(halo);
-		DeleteFileA(table_path);
-		if (!MoveFileA(temp_table, table_path))
+		delete_file(table_path);
+		if (!move_file(temp_table, table_path))
 		{
-			DeleteFileA(shared_path);
-			DeleteFileA(index_path);
+			delete_file(shared_path);
+			delete_file(index_path);
 			text_print(error, 256, "Couldn't put stock.restore in place: nothing changed.");
 			goto done;
 		}
@@ -1463,14 +1486,14 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 			/* (made in the one pass: copied from the cache drive, then read back like one made here) */
 			say_text(say, 0, "%s (%d of %d): putting the small map in place...", retail->name, k + 1, STOCK_MAPS);
 			failed = copy_small(cached[k].path, other, cached[k].size, cached[k].crc);
-			DeleteFileA(cached[k].path);
+			delete_file(cached[k].path);
 			cached[k].ok = 0;
 			small_length = retail->small_length;
 			small_crc = retail->small_crc;
 			disk_size = cached[k].size;
 			disk_crc = cached[k].crc;
 			if (failed)
-				DeleteFileA(other);
+				delete_file(other);
 			else
 				step_end("%s copied from the cache drive", retail->name);
 		}
@@ -1492,7 +1515,7 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 		}
 		if (failed)
 		{
-			DeleteFileA(other);
+			delete_file(other);
 			text_print(error, 256, "%s.map couldn't be made small. %d of %d are done: the rest stay as they are, and all of them "
 				"play. Install again to go on, or X to put them back.", retail->name, done_maps, STOCK_MAPS);
 			result = 2;
@@ -1501,8 +1524,8 @@ int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 		{
 			char fresh[240];
 			map_path(fresh, sizeof(fresh), halo, retail->name, ".oxnew");
-			DeleteFileA(fresh);
-			if (!MoveFileA(other, fresh) || swap_in(halo, retail->name))
+			delete_file(fresh);
+			if (!move_file(other, fresh) || swap_in(halo, retail->name))
 			{
 				text_print(error, 256, "Couldn't put the small %s.map in place: start the installer again to finish.", retail->name);
 				result = 2;
@@ -1532,7 +1555,7 @@ done:
 
 /* ---- putting them back ---- */
 
-int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
+static int restore(char const *halo, stockmaps_say_t say, char *error)
 {
 	char path[240], other[240], shared_path[240], table_path[240], index_path[240];
 	unsigned char *table = NULL;
@@ -1589,7 +1612,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 				text_print(error, 256, "%s.map can't be read: nothing changed.", map->name);
 				goto done;
 			}
-			CloseHandle(file);
+			file_close(file);
 			file = INVALID_HANDLE_VALUE;
 			if (u32(header + REFERENCE_OFFSET) == REFERENCE_SIGNATURE && map->raw_size > size)
 			{
@@ -1636,11 +1659,11 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 		if (map_file == INVALID_HANDLE_VALUE || read_all(map_file, header, HEADER))
 		{
 			if (map_file != INVALID_HANDLE_VALUE)
-				CloseHandle(map_file);
+				file_close(map_file);
 			text_print(error, 256, "%s.map can't be read.", map->name);
 			goto done;
 		}
-		CloseHandle(map_file);
+		file_close(map_file);
 		if (u32(header + REFERENCE_OFFSET) != REFERENCE_SIGNATURE)
 			continue;                  /* (already back: a restore a power cut stopped) */
 		say_text(say, 0, "%s (%d of %d): putting it back...", map->name, k + 1, STOCK_MAPS);
@@ -1661,7 +1684,7 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 			failed = 1;
 		if (failed || crc != map->raw_crc)
 		{
-			DeleteFileA(other);
+			delete_file(other);
 			text_print(error, 256, "%s.map's restore didn't make the original (is the drive full?). The maps not yet back "
 				"still play in Halo 1 Unlimited.", map->name);
 			goto done;
@@ -1669,14 +1692,14 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 		/* (as it is on the disk, against the original's size and CRC) */
 		if (file_crc(other, &size, &crc) || size != map->raw_size || crc != map->raw_crc)
 		{
-			DeleteFileA(other);
+			delete_file(other);
 			text_print(error, 256, "%s.map didn't read back as the original. The maps not yet back still play in "
 				"Halo 1 Unlimited.", map->name);
 			goto done;
 		}
 		map_path(path, sizeof(path), halo, map->name, ".oxnew");
-		DeleteFileA(path);
-		if (!MoveFileA(other, path) || swap_in(halo, map->name))
+		delete_file(path);
+		if (!move_file(other, path) || swap_in(halo, map->name))
 		{
 			text_print(error, 256, "Couldn't put %s.map in place: start the installer again to finish.", map->name);
 			goto done;
@@ -1684,19 +1707,38 @@ int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
 		flush(halo);
 		step_end("%s put back", map->name);
 	}
-	CloseHandle(file);
+	file_close(file);
 	file = INVALID_HANDLE_VALUE;
 	/* all back: what the swap added goes */
-	DeleteFileA(shared_path);
-	DeleteFileA(index_path);
+	delete_file(shared_path);
+	delete_file(index_path);
 	flush(halo);
-	DeleteFileA(table_path);
+	delete_file(table_path);
 	flush(halo);
 	result = 0;
 	whole_end("putting them back");
 done:
 	if (file != INVALID_HANDLE_VALUE)
-		CloseHandle(file);
+		file_close(file);
 	free(table);
 	return result;
+}
+
+/* (with the disk thread on: it reads ahead and writes behind while zlib works) */
+int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
+{
+	int failed;
+	disk_on();
+	failed = convert(halo, say, error);
+	disk_off();
+	return failed;
+}
+
+int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error)
+{
+	int failed;
+	disk_on();
+	failed = restore(halo, say, error);
+	disk_off();
+	return failed;
 }

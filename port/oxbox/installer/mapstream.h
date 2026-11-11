@@ -28,24 +28,55 @@ HANDLE open_read(char const *path);
 int write_all(HANDLE file, void const *from, uint32_t size);
 int read_all(HANDLE file, void *to, uint32_t size);
 
-/* where the time goes, for the log (stockmaps.c's "time:" lines): the disk's reads and writes (a flush is a write), and
-zlib's unpacking and packing; the rest is the CPU's own work (CRCs, hashes, copying) */
+/* where the time goes, for the log (stockmaps.c's "time:" lines): the disk's reads and writes (a flush is a write), zlib's
+unpacking and packing, and how long the work waited for the disk; the rest is the CPU's own work (CRCs, hashes, copying).
+While the disk thread is on, the disk's times are its own, partly while zlib works */
 struct stream_times
 {
-	uint64_t read, write, unzip, zip;          /* microseconds */
+	uint64_t read, write, unzip, zip, wait;    /* microseconds */
 	uint64_t read_bytes, write_bytes, unzipped, zipped; /* (unzipped: what came out; zipped: what went in) */
 };
 extern struct stream_times stream_times;
+void stream_times_get(struct stream_times *t);  /* (a copy: the disk thread adds to it) */
 uint64_t stream_now(void);                      /* microseconds */
 int timed_read(HANDLE file, void *to, DWORD size, DWORD *got);
 int timed_write(HANDLE file, void const *from, DWORD size, DWORD *put);
-int timed_flush(HANDLE file);                   /* 0 when flushed */
+int timed_flush(HANDLE file);                   /* 0 when flushed (and every write to it went) */
 /* the time since then (stream_now) and how it went, from the times then: "12.3 s: read 4.1 s (61 MB), ..." */
 void stream_times_text(char *text, int size, uint64_t since, struct stream_times const *then);
+
+/* the disk thread (stockmaps.c turns it on for the swap and the restore): writes go behind, a reader's next 1 MB is read
+ahead, in the order they were made. While it's on, a file that's written is moved with disk_seek and closed with
+file_close, and anything else done to a file (a rename, a delete, its size) comes after disk_sync. A write that fails shows
+at the file's next write, its flush or its close */
+void disk_on(void);
+void disk_off(void);                            /* (what's queued done first) */
+void disk_sync(void);                           /* waits until what's queued is done */
+int disk_seek(HANDLE file, uint32_t at);        /* 0 unless the file's failed */
+int file_close(HANDLE file);                    /* as CloseHandle: nonzero when closed and every write to it went */
+
+/* a file read 1 MB at a time into two buffers in turns, the next read ahead while the disk thread is on */
+struct ahead_read
+{
+	uint32_t job;                   /* (the read queued into a buffer: its number; 0: none) */
+	int ok;
+	DWORD got;
+};
+struct ahead
+{
+	HANDLE file;
+	unsigned char *buffer[2];       /* 1 MB each */
+	struct ahead_read read[2];
+	int next, handed, ended, queued;
+};
+void ahead_open(struct ahead *a, HANDLE file, unsigned char *one, unsigned char *two);
+/* the next part (got 0 at the end), good until the next call; 0 when read */
+int ahead_next(struct ahead *a, unsigned char **data, DWORD *got);
 
 struct reader
 {
 	HANDLE file;
+	struct ahead ahead;
 	z_stream z;
 	int started, ended;
 	uint32_t raw_crc, raw_size;     /* of the file as it is on the disk, so far */

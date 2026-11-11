@@ -193,6 +193,10 @@ map's tags, at its end, needn't be read first). The cache drives are the install
 room for the small maps between them, it empties them, the fullest first, and its own files there go when it's done (and
 after a power cut). Without a cache drive, a map is made from its retail map again after stock.shared is in place.
 
+The swap and the restore do their reads and writes on a second thread (`port/oxbox/installer/mapstream.c`): the next 1 MB of
+a file is read ahead and writes are made behind, so the disk works while zlib does. They're done in the order they were
+made, and a flush, a close, a rename or a delete waits for what's queued first, so a power cut sees them as before.
+
 **X** (*retail Halo back*) puts them back, the exact files: `maps\stock.restore` holds each map's restore table (its
 header, each block's place, and for a moved one its place in stock.shared, its BSPs' offsets, and the original file's size
 and CRC), and retail maps recompress to their own bytes with zlib level 6, memLevel 8. A level unpacks to as much as 280 MB
