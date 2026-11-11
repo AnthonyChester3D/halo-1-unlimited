@@ -29,6 +29,8 @@ void screen_show(void);
 /* the spinner in the bottom right corner, which moves on its own (a thread) while the installer works: on, or off
 (its corner then shows the screen's own text again) */
 void screen_spinner(int on);
+/* the time the spinner has spent drawing so far, in ms (an upper bound: it counts the times it was interrupted) */
+unsigned long screen_spinner_busy_ms(void);
 /* the screen blanked (the video encoder's output, not a picture in memory) while the console starts the next XBE,
 whose Direct3D shows the screen again at its first frame */
 void screen_hand_over(void);

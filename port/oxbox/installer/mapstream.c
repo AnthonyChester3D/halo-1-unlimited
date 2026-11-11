@@ -12,7 +12,10 @@
 #define MB (1024u * 1024u)
 
 static unsigned char const zeros[1];
-static unsigned char io_in[65536], io_out[65536];
+/* (1 MB at a time each way: the swap reads a retail map and writes its small map in turns, and on the Xbox's disk 64 KB
+reads and deflate's ~24 KB writes ran at 20 and 5 MB/s, against 29 and 28 for 1 MB ones. One writer at a time: its output
+waits in io_out until that's full or it finishes) */
+static unsigned char io_in[MB], io_out[MB];
 
 /* (zlib built without its own allocator on the Xbox: nxdk's Z_SOLO) */
 static voidpf z_alloc(voidpf opaque, uInt items, uInt size)
@@ -267,6 +270,7 @@ int writer_open(struct writer *w, int level, HANDLE to, uint32_t crc)
 	w->z.zfree = z_free;
 	w->to = to;
 	w->crc = crc;
+	w->held = 0;
 	return deflateInit2(&w->z, level, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY) != Z_OK;
 }
 
@@ -276,8 +280,8 @@ static int writer_run(struct writer *w, int flush)
 	do
 	{
 		uint32_t n;
-		w->z.next_out = io_out;
-		w->z.avail_out = sizeof(io_out);
+		w->z.next_out = io_out + w->held;
+		w->z.avail_out = (uInt)(sizeof(io_out) - w->held);
 		{
 			uint64_t start = stream_now();
 			uInt before = w->z.avail_in;
@@ -287,11 +291,16 @@ static int writer_run(struct writer *w, int flush)
 		}
 		if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END)
 			return 1;
-		n = (uint32_t)sizeof(io_out) - w->z.avail_out;
-		w->crc = (uint32_t)crc32(w->crc, io_out, n);
+		n = (uint32_t)(sizeof(io_out) - w->held) - w->z.avail_out;
+		w->crc = (uint32_t)crc32(w->crc, io_out + w->held, n);
 		w->written += n;
-		if (w->to != INVALID_HANDLE_VALUE && write_all(w->to, io_out, n))
-			return 1;
+		w->held += n;
+		if (w->held == sizeof(io_out) || (flush == Z_FINISH && status == Z_STREAM_END))
+		{
+			if (w->to != INVALID_HANDLE_VALUE && write_all(w->to, io_out, w->held))
+				return 1;
+			w->held = 0;
+		}
 	} while (flush == Z_FINISH ? status != Z_STREAM_END : !w->z.avail_out);
 	return 0;
 }

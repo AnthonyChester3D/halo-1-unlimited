@@ -66,6 +66,7 @@ struct writer
 	z_stream z;
 	HANDLE to;
 	uint32_t written, crc;          /* what's gone out so far, and the running CRC of it */
+	uint32_t held;                  /* of that, what's still waiting to be written (one writer at a time) */
 };
 /* one zlib stream (memLevel 8) to a file, or only measured; the CRC goes on from crc */
 int writer_open(struct writer *w, int level, HANDLE to, uint32_t crc);
