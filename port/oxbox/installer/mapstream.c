@@ -1,6 +1,7 @@
 /* mapstream.c: a cache file read and written a piece at a time, and a map's blocks found (mapstream.h) */
 #include "mapstream.h"
 
+#include "ngz.h"
 #include "text.h"
 
 #include <stdlib.h>
@@ -557,23 +558,23 @@ int read_all(HANDLE file, void *to, uint32_t size)
 }
 
 
-static int timed_inflate(z_stream *z)
+/* (zlib-ng's inflate: what comes out is the same as zlib's, faster) */
+static int timed_inflate(struct reader *r, unsigned char **out, uint32_t *room)
 {
 	uint64_t start = stream_now();
-	uInt before = z->avail_out;
-	int status = inflate(z, Z_NO_FLUSH);
+	uint32_t before = *room;
+	int status = ngz_run(r->z, Z_NO_FLUSH, &r->in, &r->in_size, out, room);
 	stream_times.unzip += stream_now() - start;
-	stream_times.unzipped += before - z->avail_out;
+	stream_times.unzipped += before - *room;
 	return status;
 }
 
 void reader_close(struct reader *r)
 {
-	if (r->started)
-		inflateEnd(&r->z);
+	ngz_end(r->z);
+	r->z = NULL;
 	if (r->file != INVALID_HANDLE_VALUE)
 		file_close(r->file);
-	r->started = 0;
 	r->file = INVALID_HANDLE_VALUE;
 }
 
@@ -591,46 +592,50 @@ int reader_open(struct reader *r, char const *path, unsigned char *header)
 	}
 	r->raw_crc = crc_add(crc_add(0, NULL, 0), header, HEADER);
 	r->raw_size = HEADER;
-	ahead_open(&r->ahead, r->file, io_in, io_in2);
-	r->z.zalloc = z_alloc;
-	r->z.zfree = z_free;
-	if (inflateInit(&r->z) != Z_OK)
+	r->z = ngz_inflate();
+	if (!r->z)
 	{
 		reader_close(r);
 		return 1;
 	}
-	r->started = 1;
+	ahead_open(&r->ahead, r->file, io_in, io_in2);
+	return 0;
+}
+
+/* (the next part of the file in, when what came is used up: 0 when there is one) */
+static int reader_fill(struct reader *r)
+{
+	unsigned char *data;
+	DWORD got = 0;
+	if (ahead_next(&r->ahead, &data, &got) || !got)
+		return 1;
+	r->raw_crc = crc_add(r->raw_crc, data, got);
+	r->raw_size += got;
+	r->in = data;
+	r->in_size = got;
 	return 0;
 }
 
 /* exactly size bytes of what's unpacked; with size 0, 0 only if the stream ends here */
 int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
 {
-	unsigned char spare;
+	unsigned char spare, *out;
+	uint32_t room;
 	int checking = !size;
 
-	r->z.next_out = checking ? &spare : to;
-	r->z.avail_out = checking ? 1 : size;
-	while (r->z.avail_out)
+	out = checking ? &spare : to;
+	room = checking ? 1 : size;
+	while (room)
 	{
 		int status;
 		if (r->ended)
 			return !checking;
-		if (!r->z.avail_in)
-		{
-			unsigned char *data;
-			DWORD got = 0;
-			if (ahead_next(&r->ahead, &data, &got) || !got)
-				return 1;
-			r->raw_crc = crc_add(r->raw_crc, data, got);
-			r->raw_size += got;
-			r->z.next_in = data;
-			r->z.avail_in = got;
-		}
-		status = timed_inflate(&r->z);
+		if (!r->in_size && reader_fill(r))
+			return 1;
+		status = timed_inflate(r, &out, &room);
 		if (status == Z_STREAM_END)
 			r->ended = 1;
-		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->z.avail_in))
+		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->in_size))
 			return 1;
 	}
 	return checking; /* (a byte more came: it doesn't end here) */
@@ -639,29 +644,20 @@ int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
 
 int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *got)
 {
-	r->z.next_out = to;
-	r->z.avail_out = size;
-	while (r->z.avail_out && !r->ended)
+	unsigned char *out = to;
+	uint32_t room = size;
+	while (room && !r->ended)
 	{
 		int status;
-		if (!r->z.avail_in)
-		{
-			unsigned char *data;
-			DWORD part = 0;
-			if (ahead_next(&r->ahead, &data, &part) || !part)
-				return 1;
-			r->raw_crc = crc_add(r->raw_crc, data, part);
-			r->raw_size += part;
-			r->z.next_in = data;
-			r->z.avail_in = part;
-		}
-		status = timed_inflate(&r->z);
+		if (!r->in_size && reader_fill(r))
+			return 1;
+		status = timed_inflate(r, &out, &room);
 		if (status == Z_STREAM_END)
 			r->ended = 1;
-		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->z.avail_in))
+		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->in_size))
 			return 1;
 	}
-	*got = size - r->z.avail_out;
+	*got = size - room;
 	return 0;
 }
 
@@ -687,28 +683,56 @@ int writer_open(struct writer *w, int level, HANDLE to, uint32_t crc)
 	w->z.zfree = z_free;
 	w->to = to;
 	w->crc = crc;
-	w->held = 0;
 	return deflateInit2(&w->z, level, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY) != Z_OK;
+}
+
+int writer_open_fast(struct writer *w, HANDLE to, uint32_t crc)
+{
+	memset(w, 0, sizeof(*w));
+	w->to = to;
+	w->crc = crc;
+	w->fast = ngz_deflate(WRITER_FAST_LEVEL);
+	return !w->fast;
+}
+
+/* (one deflate call on whichever stream it is: out and room in, what came out and what's left to go in back) */
+static int writer_deflate(struct writer *w, int flush, unsigned char *out, uint32_t room, uint32_t *made, uint32_t *left_in)
+{
+	uint64_t start = stream_now();
+	uint32_t before;
+	int status;
+	if (w->fast)
+	{
+		uint32_t out_room = room;
+		before = w->in_size;
+		status = ngz_run(w->fast, flush, &w->in, &w->in_size, &out, &out_room);
+		*made = room - out_room;
+		*left_in = w->in_size;
+	}
+	else
+	{
+		w->z.next_out = out;
+		w->z.avail_out = (uInt)room;
+		before = w->z.avail_in;
+		status = deflate(&w->z, flush);
+		*made = room - w->z.avail_out;
+		*left_in = w->z.avail_in;
+	}
+	stream_times.zip += stream_now() - start;
+	stream_times.zipped += before - *left_in;
+	return status;
 }
 
 static int writer_run(struct writer *w, int flush)
 {
 	int status;
+	uint32_t room, n, left_in;
 	do
 	{
-		uint32_t n;
-		w->z.next_out = io_out + w->held;
-		w->z.avail_out = (uInt)(sizeof(io_out) - w->held);
-		{
-			uint64_t start = stream_now();
-			uInt before = w->z.avail_in;
-			status = deflate(&w->z, flush);
-			stream_times.zip += stream_now() - start;
-			stream_times.zipped += before - w->z.avail_in;
-		}
+		room = (uint32_t)sizeof(io_out) - w->held;
+		status = writer_deflate(w, flush, io_out + w->held, room, &n, &left_in);
 		if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END)
 			return 1;
-		n = (uint32_t)(sizeof(io_out) - w->held) - w->z.avail_out;
 		w->crc = crc_add(w->crc, io_out + w->held, n);
 		w->written += n;
 		w->held += n;
@@ -718,24 +742,50 @@ static int writer_run(struct writer *w, int flush)
 				return 1;
 			w->held = 0;
 		}
-	} while (flush == Z_FINISH ? status != Z_STREAM_END : !w->z.avail_out);
+	} while (flush == Z_FINISH ? status != Z_STREAM_END : n == room);
+	(void)left_in;
 	return 0;
 }
 
 int writer_put(struct writer *w, unsigned char const *from, uint32_t size)
 {
-	w->z.next_in = (Bytef *)from;
-	w->z.avail_in = size;
+	if (w->fast)
+	{
+		w->in = from;
+		w->in_size = size;
+	}
+	else
+	{
+		w->z.next_in = (Bytef *)from;
+		w->z.avail_in = size;
+	}
 	return writer_run(w, Z_NO_FLUSH);
+}
+
+void writer_abandon(struct writer *w)
+{
+	if (w->fast)
+		ngz_end(w->fast);
+	else
+		deflateEnd(&w->z);
+	w->fast = NULL;
 }
 
 int writer_finish(struct writer *w)
 {
 	int failed;
-	w->z.next_in = (Bytef *)zeros;
-	w->z.avail_in = 0;
+	if (w->fast)
+	{
+		w->in = zeros;
+		w->in_size = 0;
+	}
+	else
+	{
+		w->z.next_in = (Bytef *)zeros;
+		w->z.avail_in = 0;
+	}
 	failed = writer_run(w, Z_FINISH);
-	deflateEnd(&w->z);
+	writer_abandon(w);
 	return failed;
 }
 

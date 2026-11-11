@@ -5,8 +5,9 @@
 XBE_TITLE = Halo\ 1\ Unlimited\ installer
 MONOCYPHER = $(CURDIR)/../../third_party/monocypher
 MBEDTLS = $(CURDIR)/../../third_party/mbedtls
+ZLIBNG = $(CURDIR)/../../third_party/zlib-ng
 SRCS = $(CURDIR)/main.c $(CURDIR)/package.c $(CURDIR)/packs.c $(CURDIR)/pictures.c $(CURDIR)/screen.c $(CURDIR)/sha256.c \
-	$(CURDIR)/stockmaps.c $(CURDIR)/mapstream.c $(CURDIR)/consolidate.c \
+	$(CURDIR)/stockmaps.c $(CURDIR)/mapstream.c $(CURDIR)/ngz.c $(CURDIR)/consolidate.c \
 	$(CURDIR)/download.c $(MONOCYPHER)/monocypher.c $(MONOCYPHER)/monocypher-ed25519.c
 NXDK_SDL = y
 KEYS ?= $(CURDIR)/keys.txt
@@ -43,3 +44,19 @@ $(CURDIR)/mbedtls_obj/%.obj: $(MBEDTLS)/library/%.c $(CURDIR)/tls_config.h
 		$(MBEDTLS_FLAGS) -c -o '$@' '$<'
 $(CURDIR)/mbedtls_obj/libmbedtls.lib: $(MBEDTLS_OBJS)
 main.exe: $(CURDIR)/mbedtls_obj/libmbedtls.lib
+
+# zlib-ng 2.2.2 (port/third_party/zlib-ng: its plain C, native zng_ API; ngz.c is the only file that sees it), a library.
+# -fhosted -fbuiltin: else nxdk's -ffreestanding makes its every small fixed-size memcpy a call. -U_MSC_VER: nxdk's compiler
+# says it's Microsoft's, and zlib-ng would then use Microsoft's intrinsics
+ZLIBNG_OBJS = $(patsubst $(ZLIBNG)/%.c,$(CURDIR)/zlibng_obj/%.obj,$(wildcard $(ZLIBNG)/*.c $(ZLIBNG)/arch/generic/*.c))
+# (its folders before nxdk's, which has zlib's own zutil.h and the like)
+ZLIBNG_FLAGS = -I$(ZLIBNG) -I$(ZLIBNG)/arch/generic -O2 -fhosted -fbuiltin -std=c11 -U_MSC_VER -DNDEBUG -DZLIBNG_NATIVE_API \
+	-DDISABLE_RUNTIME_CPU_DETECTION -DHAVE_ALIGNED_ALLOC -DHAVE_ATTRIBUTE_ALIGNED -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL \
+	-DHAVE_BUILTIN_ASSUME_ALIGNED
+$(CURDIR)/zlibng_obj/%.obj: $(ZLIBNG)/%.c
+	@mkdir -p $(dir $@)
+	@echo "[ CC       ] $@"
+	$(VE) $(CC) $(ZLIBNG_FLAGS) $(NXDK_CFLAGS) -c -o '$@' '$<'
+$(CURDIR)/zlibng_obj/libzlibng.lib: $(ZLIBNG_OBJS)
+main.exe: $(CURDIR)/zlibng_obj/libzlibng.lib
+$(CURDIR)/ngz.obj: CFLAGS += -I$(ZLIBNG)

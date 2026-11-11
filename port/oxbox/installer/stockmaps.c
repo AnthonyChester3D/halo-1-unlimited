@@ -440,7 +440,7 @@ static int small_fields(struct small *s, struct restore_map const *map, struct m
 
 /* the small map's file begun at path, its header written: 0 when it's open (small_piece, then small_close or
 small_abandon). map: the original's header and length; gone: the sectors covered */
-static int small_open(struct small *s, struct restore_map const *map, uint32_t gone, int level, char const *path)
+static int small_open(struct small *s, struct restore_map const *map, uint32_t gone, char const *path)
 {
 	unsigned char small_header[HEADER];
 	uint32_t to;
@@ -466,7 +466,7 @@ static int small_open(struct small *s, struct restore_map const *map, uint32_t g
 	if (s->file == INVALID_HANDLE_VALUE)
 		return 1;
 	s->crc = crc_add(crc_add(0, NULL, 0), small_header, HEADER);
-	if (write_all(s->file, small_header, HEADER) || writer_open(&s->w, level, s->file, s->crc))
+	if (write_all(s->file, small_header, HEADER) || writer_open_fast(&s->w, s->file, s->crc))
 	{
 		file_close(s->file);
 		return 1;
@@ -519,7 +519,7 @@ static int small_piece(struct small *s, uint32_t at, uint32_t size)
 /* a small map that won't be finished: its file closed (the caller deletes it) */
 static void small_abandon(struct small *s)
 {
-	deflateEnd(&s->w.z);
+	writer_abandon(&s->w);
 	file_close(s->file);
 }
 
@@ -551,7 +551,7 @@ static int small_close(struct small *s, uint32_t *small_length, uint32_t *small_
 /* the small map written to path, from the retail map as it unpacks (checked against its size and CRC): 0 when written, with
 what it unpacks to (its length and CRC32, header and all) and the file as it should be on the disk (its size and CRC32) */
 static int write_small(char const *retail_path, struct retail_map const *retail, struct restore_map const *map,
-	struct map_bsp const *bsps, struct restore_block const *blocks, int level, char const *path, uint32_t *small_length,
+	struct map_bsp const *bsps, struct restore_block const *blocks, char const *path, uint32_t *small_length,
 	uint32_t *small_crc, uint32_t *file_size, uint32_t *file_crc)
 {
 	unsigned char header[HEADER];
@@ -562,7 +562,7 @@ static int write_small(char const *retail_path, struct retail_map const *retail,
 	gone = cover(blocks, map->blocks, map->length);
 	if (small_fields(&s, map, bsps, blocks) || reader_open(&r, retail_path, header))
 		return 1;
-	if (small_open(&s, map, gone, level, path))
+	if (small_open(&s, map, gone, path))
 	{
 		reader_close(&r);
 		return 1;
@@ -1069,7 +1069,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			!cover_baked(layout, layout_size, k, retail->length, &gone))
 		{
 			s.field_count = s.first_field = 0;
-			if (!small_open(&s, map, gone, 1, cache_path))
+			if (!small_open(&s, map, gone, cache_path))
 				making = 1;
 			else
 				delete_file(cache_path);
@@ -1500,7 +1500,7 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 		if (failed)
 		{
 			say_text(say, 0, "%s (%d of %d): making it small...", retail->name, k + 1, STOCK_MAPS);
-			failed = write_small(path, retail, map, bsps, blocks, 1, other, &small_length, &small_crc, &disk_size, &disk_crc);
+			failed = write_small(path, retail, map, bsps, blocks, other, &small_length, &small_crc, &disk_size, &disk_crc);
 			if (!failed)
 				step_end("%s made small", retail->name);
 		}
@@ -1676,7 +1676,7 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 		{
 			failed = make_original(path, map, bsps, blocks, file, &w);
 			if (failed)
-				deflateEnd(&w.z);
+				writer_abandon(&w);
 			else
 				failed = writer_finish(&w) || retail_padding(&w, map->raw_size, out, &crc);
 		}

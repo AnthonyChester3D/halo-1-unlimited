@@ -849,7 +849,7 @@ stop_reading:
 	reader_close(&r);
 stop:
 	if (writing)
-		deflateEnd(&w.z);
+		writer_abandon(&w);
 	if (file != INVALID_HANDLE_VALUE)
 		CloseHandle(file);
 	layout_free(&l);
@@ -983,7 +983,7 @@ static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, 
 	file = INVALID_HANDLE_VALUE;
 stop:
 	if (writing)
-		deflateEnd(&w.z);
+		writer_abandon(&w);
 	if (file != INVALID_HANDLE_VALUE)
 		CloseHandle(file);
 	return failed;
