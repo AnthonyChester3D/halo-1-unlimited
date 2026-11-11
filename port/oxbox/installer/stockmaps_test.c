@@ -1,7 +1,9 @@
 /* stockmaps_test HALO_FOLDER look|convert|restore: what the installer does to a Halo folder's stock maps, on a PC, for
-testing (the folder holds maps\, with the 13 retail multiplayer maps and 10 levels). Built (in this folder) with
+testing (the folder holds maps\, with the 13 retail multiplayer maps and 10 levels; STOCKMAPS_TEST_CACHE=DIR,DIR,DIR: folders
+standing in for the cache drives). Built (in this folder) with
 	cc -O2 -DSTOCKMAPS_HOST -o stockmaps_test stockmaps_test.c stockmaps.c mapstream.c sha256.c -lz */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "stockmaps.h"
@@ -29,6 +31,22 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	stockmaps_log = log_line;
+	/* (STOCKMAPS_TEST_CACHE=DIR[,DIR[,DIR]]: folders standing in for the cache drives) */
+	if (getenv("STOCKMAPS_TEST_CACHE"))
+	{
+		static char caches[512];
+		char *at = caches;
+		int n = 0;
+		snprintf(caches, sizeof(caches), "%s", getenv("STOCKMAPS_TEST_CACHE"));
+		while (at && n < STOCKMAPS_CACHES)
+		{
+			char *comma = strchr(at, ',');
+			if (comma)
+				*comma = 0;
+			stockmaps_cache[n++] = at;
+			at = comma ? comma + 1 : NULL;
+		}
+	}
 	if (!strcmp(argv[2], "convert"))
 		failed = stockmaps_convert(argv[1], say, error);
 	else if (!strcmp(argv[2], "restore"))

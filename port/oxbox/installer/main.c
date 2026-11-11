@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 33
+#define INSTALLER_VERSION 34
 #endif
 __attribute__((used)) static struct
 {
@@ -1440,6 +1440,108 @@ static void log_memory(void)
 	}
 }
 
+/* ---- the cache drives X, Y and Z (partitions 3-5): the stock maps swap makes its small maps there (stockmaps.h). They're
+the installer's to use while it runs (nothing else can run then): a game that finds its cache gone makes it again ---- */
+
+static char const *const cache_letters[STOCKMAPS_CACHES] = {"X:", "Y:", "Z:"};
+
+static unsigned long long cache_free(int i)
+{
+	ULARGE_INTEGER available, total, free_total;
+	char root[4] = {cache_letters[i][0], ':', '\\', 0};
+	return GetDiskFreeSpaceExA(root, &available, &total, &free_total) ? available.QuadPart : 0;
+}
+
+/* mounted, and those whose room reads (formatted) given to the swap; what a swap left there goes */
+static void cache_drives(void)
+{
+	char line[160];
+	int i, n = 0;
+	n += text_print(line, sizeof(line), "cache drives:");
+	for (i = 0; i < STOCKMAPS_CACHES; i++)
+	{
+		char device[40];
+		ULARGE_INTEGER available, total, free_total;
+		char root[4] = {cache_letters[i][0], ':', '\\', 0};
+		text_print(device, sizeof(device), "\\Device\\Harddisk0\\Partition%d\\", 3 + i);
+		if (nxMountDrive(cache_letters[i][0], device) && GetDiskFreeSpaceExA(root, &available, &total, &free_total))
+		{
+			stockmaps_cache[i] = cache_letters[i];
+			n += text_print(line + n, sizeof(line) - (size_t)n, " %s %lu of %lu MB free", cache_letters[i],
+				(unsigned long)(available.QuadPart >> 20), (unsigned long)(total.QuadPart >> 20));
+		}
+		else
+			n += text_print(line + n, sizeof(line) - (size_t)n, " %s not there", cache_letters[i]);
+	}
+	log_file(line);
+	stockmaps_cache_clear();
+}
+
+/* everything in a folder deleted, folders and all (to a depth of 16) */
+static void delete_tree(char const *folder, int depth)
+{
+	WIN32_FIND_DATAA found;
+	char pattern[240], path[240];
+	HANDLE find;
+	text_print(pattern, sizeof(pattern), "%s\\*", folder);
+	find = FindFirstFileA(pattern, &found);
+	if (find == INVALID_HANDLE_VALUE)
+		return;
+	do
+	{
+		if (!strcmp(found.cFileName, ".") || !strcmp(found.cFileName, ".."))
+			continue;
+		text_print(path, sizeof(path), "%s\\%s", folder, found.cFileName);
+		SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+		if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (depth < 16)
+			{
+				delete_tree(path, depth + 1);
+				RemoveDirectoryA(path);
+			}
+		}
+		else
+			DeleteFileA(path);
+	} while (FindNextFileA(find, &found));
+	FindClose(find);
+}
+
+/* room on the cache drives for the swap's small maps: if they haven't enough between them, they're emptied, the fullest
+first, until they have (without it the swap reads each retail map twice: it takes longer, but works the same) */
+static void cache_make_room(void)
+{
+	unsigned long long need = stockmaps_cache_need(), have = 0;
+	int i, emptied[STOCKMAPS_CACHES] = {0};
+	char line[160];
+	for (;;)
+	{
+		unsigned long long least = ~0ull;
+		int fullest = -1;
+		have = 0;
+		for (i = 0; i < STOCKMAPS_CACHES; i++)
+		{
+			unsigned long long room;
+			if (!stockmaps_cache[i])
+				continue;
+			room = cache_free(i);
+			have += room;
+			if (!emptied[i] && room < least)
+				least = room, fullest = i;
+		}
+		if (have >= need || fullest < 0)
+			break;
+		text_print(line, sizeof(line), "cache drives: %lu MB free, the swap's small maps need %lu: emptying %s",
+			(unsigned long)(have >> 20), (unsigned long)(need >> 20), cache_letters[fullest]);
+		log_file(line);
+		delete_tree(cache_letters[fullest], 0);
+		emptied[fullest] = 1;
+	}
+	text_print(line, sizeof(line), "cache drives: %lu MB free for the swap's small maps (they need %lu)", (unsigned long)(have >> 20),
+		(unsigned long)(need >> 20));
+	log_file(line);
+}
+
 /* how long the spinner spent drawing since `since` (screen_spinner_busy_ms), for the log after a swap or restore's time lines */
 static void log_spinner(unsigned long since)
 {
@@ -1512,6 +1614,7 @@ static void offer_stock_maps(struct halo *h)
 	stockmaps_log = log_file;
 	package_free(&package);
 	log_memory();
+	cache_make_room();
 	spun = screen_spinner_busy_ms();
 	failed = stockmaps_convert(h->path, stock_maps_say, error);
 	log_spinner(spun);
@@ -2669,6 +2772,7 @@ int main(void)
 		text_print(line, sizeof(line), "---- %s, version %d", TITLE, INSTALLER_VERSION);
 		log_file(line);
 	}
+	cache_drives();
 	notices_write();
 	package_read();
 	if (exists(AUTO_PATH))
