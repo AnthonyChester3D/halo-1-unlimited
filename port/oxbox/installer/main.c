@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 41
+#define INSTALLER_VERSION 42
 #endif
 __attribute__((used)) static struct
 {
@@ -2205,9 +2205,9 @@ static void consolidate_show(struct halo *h, struct pack_scan const *scan, char 
 	package_read();
 }
 
-/* a pack's multiplayer maps imported, then made small against the install's stock.shared (consolidate.c): their small maps
-beside their links in the starred install's maps folder, the blocks two or more use in the pack's shared file. The pack's own folder is
-left as it is */
+/* a pack's multiplayer maps and modded campaign imported, then made small against the install's stock.shared
+(consolidate.c): their small maps beside their links in the starred install's maps folder (a level's too: a folder map
+the campaign picker plays), the blocks two or more use in the pack's shared file. The pack's own folder is left as it is */
 static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder)
 {
 	static char folders[CONSOLIDATE_MAPS][220];
@@ -2216,8 +2216,9 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	char error[256], pack_folder[220], link[240];
 	int k, count = 0;
 
-	say("Importing its multiplayer maps (names and pictures)...");
-	if (packs_import(scan, 1, 0, packs_say, error))
+	say(scan->campaign ? "Importing its multiplayer maps and campaign (names and pictures)..." :
+		"Importing its multiplayer maps (names and pictures)...");
+	if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
 	{
 		say_in(COLOUR_RED, "%s", error);
 		return;
@@ -2226,7 +2227,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	for (k = 0; k < scan->count && count < CONSOLIDATE_MAPS; k++)
 	{
 		struct pack_map const *m = &scan->maps[k];
-		if (m->type != 1 || m->halos || m->small)
+		if ((m->type != 1 && (m->type != 0 || !scan->campaign)) || m->halos || m->small)
 			continue;
 		text_print(folders[count], 220, "%s\\%s", pack_folder, m->name);
 		text_print(link, sizeof(link), "%s\\map.link", folders[count]);
@@ -2550,14 +2551,14 @@ static void map_pack(struct halo *h)
 	/* (with the install's stock.shared to measure against) */
 	if (stock[0])
 		choices[count++] = MEASURE;
-	if (stock[0] && scan.multiplayer && GetFileAttributesA(stock_index) != INVALID_FILE_ATTRIBUTES)
+	if (stock[0] && (scan.multiplayer || scan.campaign) && GetFileAttributesA(stock_index) != INVALID_FILE_ATTRIBUTES)
 		choices[count++] = CONSOLIDATE;
 	choices[count++] = BACK;
 	for (;;)
 	{
 		char const *const labels[] = {"Import multiplayer and campaign", "Import multiplayer maps only",
 			"Import the campaign only", "Take out what's imported", "See what consolidating would save",
-			"Make its multiplayer maps small (consolidate)", shrink_label, "Back"};
+			"Make its maps small (consolidate)", shrink_label, "Back"};
 		for (k = 0; k < count; k++)
 		{
 			int r = SCREEN_ROWS - 2 - count + k, at;

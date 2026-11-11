@@ -39,6 +39,7 @@ dist/
 /port/oxbox/online_games.dxt3
 /port/oxbox/vehicle_options.dxt3
 /port/oxbox/options.dxt3
+/port/oxbox/select_campaign.dxt3
 # the installer's build (nxdk puts its objects beside the sources)
 /port/oxbox/installer/bin/
 /port/oxbox/installer/main.exe

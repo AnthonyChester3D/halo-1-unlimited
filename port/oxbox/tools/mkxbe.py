@@ -247,9 +247,11 @@ if mark > 0:
     struct.pack_into('<II', d, mark + 8, len(d), len(header))
     d += header
 # the gametype editor's VEHICLE OPTIONS header and the main menu's OPTIONS screen's (DXT3 512 x 64, installer/pictures.c;
-# oxbox_menus.c), after it, the same way (OXVEHIC1, OXOPTNS1: oxbox_entry.c). The installer fills the headers in their
+# oxbox_menus.c) and the campaign picker's SELECT CAMPAIGN, after it, the same way (OXVEHIC1, OXOPTNS1, OXCAMPN1:
+# oxbox_entry.c). The installer fills the headers in their
 # order in the file (installer/package.c)
-for _magic, _file, _what in ((b'OXVEHIC1', 'vehicle_options.dxt3', 'VEHICLE OPTIONS'), (b'OXOPTNS1', 'options.dxt3', 'OPTIONS')):
+for _magic, _file, _what in ((b'OXVEHIC1', 'vehicle_options.dxt3', 'VEHICLE OPTIONS'), (b'OXOPTNS1', 'options.dxt3', 'OPTIONS'),
+                              (b'OXCAMPN1', 'select_campaign.dxt3', 'SELECT CAMPAIGN')):
     mark = d.find(_magic)
     if mark <= 0:
         continue

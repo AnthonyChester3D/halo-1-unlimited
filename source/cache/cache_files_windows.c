@@ -658,8 +658,14 @@ boolean cache_files_precache_map_begin(
 		if (cache_file_read_header_from_dvd(cache_map_name, &header))
 		{
 			long buffer_size = cache_copy_buffer_size(copy_map);
+			/* oxbox: a pack's shared file (its key "*<name>") goes in a multiplayer cache file when it fits (they're
+			47 MiB; a pack's is 1-27 MiB), so both of the campaign's stay for the level being left and the next
+			(docs/shared_maps.md); a bigger one goes in a campaign one (cached_map_files_find_free_map) */
 			short map_file_index = cached_map_files_find_free_map(
 				header.file_length,
+#if defined(HALO_XBOX_TARGET)
+				cache_map_name[0] == '*' ? (short)_scenario_type_multiplayer :
+#endif
 				header.scenario_type);
 			void *buffer;
 			struct cached_map_file *map_file;

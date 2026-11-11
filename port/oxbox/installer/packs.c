@@ -258,7 +258,11 @@ static int count_links(char const *key)
 		if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.')
 			continue;
 		text_print(link, sizeof(link), "%s\\maps\\%s\\%s\\map.link", STORAGE, key, found.cFileName);
-		n += GetFileAttributesA(link) != INVALID_FILE_ATTRIBUTES;
+		if (GetFileAttributesA(link) == INVALID_FILE_ATTRIBUTES)
+			continue;
+		/* (a campaign level's folder: level.txt beside its link) */
+		text_print(link, sizeof(link), "%s\\maps\\%s\\%s\\level.txt", STORAGE, key, found.cFileName);
+		n += GetFileAttributesA(link) == INVALID_FILE_ATTRIBUTES;
 	} while (FindNextFileA(find, &found));
 	FindClose(find);
 	return n;
@@ -629,13 +633,17 @@ static void delete_matching(char const *folder, char const *pattern)
 	FindClose(find);
 }
 
-static void remove_multiplayer(char const *key)
+/* the import's map folders in maps\<key>: its multiplayer maps' (levels 0) or its campaign levels' (levels 1, with
+level.txt); how many of the other kind are left */
+static int remove_folders(char const *key, int levels)
 {
 	WIN32_FIND_DATAA found;
 	char pattern[200], folder[200], file[240];
-	static char const *const files[] = {"map.link", "info.txt", "preview.bin", "bots.txt", "bots_learned.txt", "showcase.txt"};
+	static char const *const files[] = {"map.link", "info.txt", "preview.bin", "level.txt", "bots.txt",
+		"bots_learned.txt", "showcase.txt"};
 	HANDLE find;
 	unsigned k;
+	int others = 0;
 	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*", STORAGE, key);
 	find = FindFirstFileA(pattern, &found);
 	if (find != INVALID_HANDLE_VALUE)
@@ -648,6 +656,12 @@ static void remove_multiplayer(char const *key)
 			text_print(file, sizeof(file), "%s\\map.link", folder);
 			if (GetFileAttributesA(file) == INVALID_FILE_ATTRIBUTES)
 				continue; /* (a map that isn't an import's: map sharing's copy, say) */
+			text_print(file, sizeof(file), "%s\\level.txt", folder);
+			if ((GetFileAttributesA(file) != INVALID_FILE_ATTRIBUTES) != levels)
+			{
+				others++;
+				continue;
+			}
 			for (k = 0; k < sizeof(files) / sizeof(files[0]); k++)
 			{
 				text_print(file, sizeof(file), "%s\\%s", folder, files[k]);
@@ -659,9 +673,16 @@ static void remove_multiplayer(char const *key)
 		} while (FindNextFileA(find, &found));
 		FindClose(find);
 	}
-	/* (the pack's shared file, a consolidated pack's) */
+	return others;
+}
+
+static void remove_multiplayer(char const *key)
+{
+	char folder[200], file[240];
+	/* (the pack's shared file, a consolidated pack's, unless its campaign's levels are still there) */
 	text_print(folder, sizeof(folder), "%s\\maps\\%s", STORAGE, key);
-	delete_matching(folder, "*.shared");
+	if (!remove_folders(key, 0))
+		delete_matching(folder, "*.shared");
 	text_print(file, sizeof(file), "%s\\maps\\%s\\imported.txt", STORAGE, key);
 	DeleteFileA(file);
 	text_print(file, sizeof(file), "%s\\maps\\%s\\order.txt", STORAGE, key);
@@ -692,6 +713,18 @@ static void remove_campaign(char const *key)
 	}
 	text_print(file, sizeof(file), "%s\\campaigns\\%s", STORAGE, key);
 	RemoveDirectoryA(file);
+	/* (its levels' folders in maps\<key>; the folder too when nothing else is in it) */
+	text_print(file, sizeof(file), "%s\\maps\\%s", STORAGE, key);
+	if (!remove_folders(key, 1) && GetFileAttributesA(file) != INVALID_FILE_ATTRIBUTES)
+	{
+		char check[240];
+		text_print(check, sizeof(check), "%s\\imported.txt", file);
+		if (GetFileAttributesA(check) == INVALID_FILE_ATTRIBUTES)
+		{
+			delete_matching(file, "*.shared");
+			RemoveDirectoryA(file);
+		}
+	}
 }
 
 /* (what an installer before 41 imported from it, in E:'s storage, goes: E:'s room back) */
@@ -837,6 +870,7 @@ static int write_campaign(struct pack_scan *scan, struct entry *entries, int n, 
 	if (!text)
 		return 1;
 	make_folders("campaigns", scan->key);
+	make_folders("maps", scan->key);
 	at = text_print(text, 512, "Name: %s\r\nFrom: %s\r\n", last_part(scan->path), scan->path);
 	for (k = 0; k < n; k++)
 	{
@@ -849,6 +883,30 @@ static int write_campaign(struct pack_scan *scan, struct entry *entries, int n, 
 			text_print(path, sizeof(path), "%s\\campaigns\\%s\\%s.bin", STORAGE, scan->key, name);
 			failed |= write_file(path, e->picture.data, PICTURE_SIZE);
 		}
+		/* (the level as a folder map, played as "+<key>/<level>": maps\<key>\<level>, as a multiplayer map's, with
+		level.txt; the game leaves it out of the multiplayer list: its header says campaign) */
+		if (strlen(scan->key) + 1 + strlen(name) > MAXIMUM_FOLDER_NAME)
+		{
+			text_print(line, sizeof(line), "  %s: its name is too long for the game's map list; skipped.", name);
+			say(1, line);
+			continue;
+		}
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s", STORAGE, scan->key, name);
+		CreateDirectoryA(path, NULL);
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\level.txt", STORAGE, scan->key, name);
+		text_print(line, sizeof(line), "Campaign: %s\r\n", scan->key);
+		failed |= write_file(path, line, strlen(line));
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\info.txt", STORAGE, scan->key, name);
+		text_print(line, sizeof(line), "%s\r\n%s\r\n", e->name, e->description);
+		failed |= write_file(path, line, strlen(line));
+		if (e->picture.size)
+		{
+			text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\preview.bin", STORAGE, scan->key, name);
+			failed |= write_file(path, e->picture.data, PICTURE_SIZE);
+		}
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\map.link", STORAGE, scan->key, name);
+		text_print(line, sizeof(line), "%s\\maps\\%s.map\r\n", scan->path, name);
+		failed |= write_file(path, line, strlen(line));
 		text_print(line, sizeof(line), "  %s: %s%s", name, e->name, e->picture.size ? "" : " (no picture)");
 		say(0, line);
 	}

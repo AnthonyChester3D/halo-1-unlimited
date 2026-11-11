@@ -73,6 +73,8 @@ the list's table and the text caches are the menus' and are freed when a game ma
 #define PREVIEW_SLOTS 16                     /* preview bitmaps kept (the 3 cards, the lobby, the game browser) */
 #define NOT_IN_PACK_ORDER 0x7fff
 #define LEVEL_PICTURES_TAG_NAME "ui\\shell\\bitmaps\\mp_map_grafix"
+#define CAMPAIGN_PICTURES_TAG_NAME "ui\\shell\\bitmaps\\sp_levels"
+#define CAMPAIGN_UNKNOWN_PICTURE 10          /* (sp_levels' frame for a level not reached) */
 #define INVALID_FILE ((HANDLE)-1)
 #define MAXIMUM_LINK_PATH 200                /* a map.link's path */
 
@@ -105,6 +107,8 @@ struct hmp_info
 	wchar_t description[384];
 };
 
+#define HMP_CAMPAIGNS 48                     /* the campaign picker's campaigns, at most (Halo's not counted) */
+
 /* what only the menus need (hmp_menu_memory_release frees it) */
 struct hmp_menu_memory
 {
@@ -114,6 +118,12 @@ struct hmp_menu_memory
 	long composed_next;
 	wchar_t raw_description[320];
 	unsigned char raw[1024];
+	/* the campaign picker's: each campaign's first level (a folder map), its level count and name; the cards' text */
+	long campaign_count;
+	long campaign_first[HMP_CAMPAIGNS];
+	short campaign_levels[HMP_CAMPAIGNS];
+	wchar_t campaign_name[HMP_CAMPAIGNS][40];
+	wchar_t card_name[3][64], card_text[3][400];
 };
 
 struct preview_slot
@@ -411,6 +421,23 @@ static boolean table_allocate(void)
 	return hmp_maps_globals.table != NULL;
 }
 
+/* the campaign levels (folder maps whose header says campaign) left out of the multiplayer list: the campaign picker's
+(SELECT CAMPAIGN, oxbox_menus.c) */
+static void drop_campaign_levels(void)
+{
+	long k, n = 0, entry;
+	for (k = 0; k < hmp_maps_globals.map_count && !hmp_maps_globals.maps[k].solo; k++)
+		;
+	if (k == hmp_maps_globals.map_count) return;   /* (none: the usual) */
+	for (k = 0; k < hmp_maps_globals.table_count; k++)
+	{
+		entry = hmp_maps_entry(hmp_maps_globals.table[k]);
+		if (entry >= HMP_STOCK_LEVELS && hmp_maps_globals.maps[entry - HMP_STOCK_LEVELS].solo) continue;
+		hmp_maps_globals.table[n++] = hmp_maps_globals.table[k];
+	}
+	hmp_maps_globals.table_count = n;
+}
+
 /* the list in Halo's order (order.txt), then sorted as the browser says */
 static void build_list(void)
 {
@@ -433,7 +460,8 @@ static void build_list(void)
 			if (!hmp_maps_globals.maps[i].order && !hmp_maps_globals.maps[i].hidden) hmp_maps_globals.table[n++] = (char *)MAP_KEY(i);
 		}
 		hmp_maps_globals.table_count = n;
-		if (n) { hmp_browse_apply(); return; }
+		drop_campaign_levels();
+		if (hmp_maps_globals.table_count) { hmp_browse_apply(); return; }
 	}
 	for (k = 0; k < HMP_STOCK_LEVELS; k++) hmp_maps_globals.table[k] = (char *)hmp_maps_globals.stock_levels[k];
 	n = HMP_STOCK_LEVELS;
@@ -442,6 +470,7 @@ static void build_list(void)
 		if (!hmp_maps_globals.maps[i].hidden) hmp_maps_globals.table[n++] = (char *)MAP_KEY(i);
 	}
 	hmp_maps_globals.table_count = n;
+	drop_campaign_levels();
 	hmp_browse_apply();
 }
 
@@ -1794,6 +1823,8 @@ static boolean menu_word_read(struct bitmap_data *bitmap, unsigned char *buffer,
 			return oxbox_xbe_menu_header_read(0, buffer, (unsigned long)size) != 0;
 		if (!csstrcasecmp(name, "h1u\\options_header"))
 			return oxbox_xbe_menu_header_read(1, buffer, (unsigned long)size) != 0;
+		if (!csstrcasecmp(name, "h1u\\select_campaign_header"))
+			return oxbox_xbe_menu_header_read(2, buffer, (unsigned long)size) != 0;
 	}
 	if (bitmap->width != 256 || bitmap->height != 64 || bitmap->format != 15 /* DXT3 */ || size != 16384 ||
 		bitmap->tag_index == NONE) return FALSE;
@@ -2012,6 +2043,12 @@ wchar_t *hmp_string(long tag_index, short index)
 	if (index >= HMP_STRING_BASE && index < HMP_STOCK_DESCRIPTION_BASE) return hmp_game_string(index);
 	if (index >= HMP_MISSING_NAME_BASE && index < HMP_MISSING_NAME_BASE + HMP_MISSING_NAMES)
 		return missing_names[index - HMP_MISSING_NAME_BASE].name;
+	if (index >= HMP_CAMPAIGN_STRING_BASE && index < HMP_CAMPAIGN_STRING_BASE + 6)
+	{
+		struct hmp_menu_memory *menu = menu_memory();
+		long k = index - HMP_CAMPAIGN_STRING_BASE;
+		return menu ? (k & 1 ? menu->card_text[k >> 1] : menu->card_name[k >> 1]) : NULL;
+	}
 	if (index >= 0x7000) return NULL;
 	i = index - (index >= HMP_DESCRIPTION_BASE ? HMP_DESCRIPTION_BASE : index >= HMP_WRAPPED_NAME_BASE ? HMP_WRAPPED_NAME_BASE : HMP_NAME_BASE);
 	if (!(info = info_get(i))) return NULL;
@@ -2041,11 +2078,180 @@ struct bitmap_data *custom_edition_maps_picture(long bitmap_tag_index, short *fr
 	struct bitmap_data *online_picture = hmp_online_picture(bitmap_tag_index, frame_index);   /* (ONLINE GAMES) */
 	if (online_picture) return online_picture;
 #endif
-	if (*frame_index < HMP_NAME_BASE || bitmap_tag_index == NONE || csstrcasecmp(tag_get_name(bitmap_tag_index), LEVEL_PICTURES_TAG_NAME))
-		return NULL;
-	*frame_index = HMP_UNKNOWN_PICTURE;
+	boolean levels;
+	if (*frame_index < HMP_NAME_BASE || *frame_index >= HMP_WRAPPED_NAME_BASE || bitmap_tag_index == NONE) return NULL;
+	/* (the multiplayer list's pictures, or the campaign picker's and its levels': the level select's) */
+	levels = !csstrcasecmp(tag_get_name(bitmap_tag_index), CAMPAIGN_PICTURES_TAG_NAME);
+	if (!levels && csstrcasecmp(tag_get_name(bitmap_tag_index), LEVEL_PICTURES_TAG_NAME)) return NULL;
+	*frame_index = levels ? CAMPAIGN_UNKNOWN_PICTURE : HMP_UNKNOWN_PICTURE;
 	if (i < 0 || i >= hmp_maps_globals.map_count || !hmp_maps_globals.maps[i].picture) return NULL;
 	return preview_bitmap(i);
+}
+
+
+/* ---------- public code: the campaign picker (oxbox_menus.c's SELECT CAMPAIGN screen, then the level select for the
+campaign chosen: ui_widget_event_handler_functions.c's and ui_widget_game_data_input_functions.c's solo level list)
+
+A campaign is a pack's folder maps whose headers say campaign (an imported campaign's levels, the installer's packs.c,
+or Halo Map Porter's): its name from <root>campaigns\<pack>\campaign.txt's "Name:" (else the pack's folder's), its levels
+in the folder maps' order; a loose one ("+folder") is a campaign of its own. The picker's first card is Halo's own. Its
+table and the cards' text are menu memory; what's chosen is kept for the level select that follows. */
+
+static long campaign_chosen = NONE;          /* the level select's campaign: its first level's folder map, or NONE */
+static wchar_t *campaign_name_target;
+
+/* "+pack/folder" -> the length of "+pack/"; "+folder" -> all of it */
+static long key_prefix(char const *key)
+{
+	char const *slash = strchr(key, '/');
+	return slash ? (long)(slash - key) + 1 : (long)strlen(key);
+}
+
+static boolean same_campaign(long a, long b)
+{
+	char const *x = MAP_KEY(a), *y = MAP_KEY(b);
+	long n = key_prefix(x), k;
+	if (n != key_prefix(y) || hmp_maps_globals.maps[a].root != hmp_maps_globals.maps[b].root) return FALSE;
+	for (k = 0; k < n; k++) if (lower((unsigned char)x[k]) != lower((unsigned char)y[k])) return FALSE;
+	return TRUE;
+}
+
+static void ascii_wide(wchar_t *out, long cap, char const *in, long length)
+{
+	long k;
+	for (k = 0; k < length && k < cap - 1 && in[k]; k++) out[k] = (unsigned char)in[k];
+	out[k] = 0;
+}
+
+static void campaign_name_line(char *s)
+{
+	if (!campaign_name_target || strncmp(s, "Name:", 5)) return;
+	for (s += 5; *s == ' '; s++) ;
+	if (*s) ascii_wide(campaign_name_target, 40, s, (long)strlen(s));
+	campaign_name_target = NULL;
+}
+
+/* how many campaigns there are besides Halo's (the table made again) */
+long hmp_campaigns_count(void)
+{
+	struct hmp_menu_memory *menu = menu_memory();
+	long i, c;
+	if (!menu) return 0;
+	scan_if_needed();
+	menu->campaign_count = 0;
+	for (i = 0; i < hmp_maps_globals.map_count; i++)
+	{
+		char const *key = MAP_KEY(i);
+		if (!hmp_maps_globals.maps[i].solo || hmp_maps_globals.maps[i].hidden) continue;
+		for (c = 0; c < menu->campaign_count && !same_campaign(menu->campaign_first[c], i); c++) ;
+		if (c < menu->campaign_count) { menu->campaign_levels[c]++; continue; }
+		if (c == HMP_CAMPAIGNS) continue;
+		menu->campaign_first[c] = i;
+		menu->campaign_levels[c] = 1;
+		menu->campaign_count++;
+		if (strchr(key, '/'))
+		{
+			char path[96], *p;
+			long n = key_prefix(key) - 2;
+			ascii_wide(menu->campaign_name[c], 40, key + 1, n);
+			p = scpy(path, hmp_maps_globals.maps[i].root & 1 ? "T:\\campaigns\\" : "d:\\campaigns\\");
+			memcpy(p, key + 1, n);
+			scpy(p + n, "\\campaign.txt");
+			campaign_name_target = menu->campaign_name[c];
+			read_lines(path, campaign_name_line);
+			campaign_name_target = NULL;
+		}
+		else
+		{
+			struct hmp_info *info = info_get(i);
+			if (info) { long k; for (k = 0; k < 39 && info->name[k]; k++) menu->campaign_name[c][k] = info->name[k];
+				menu->campaign_name[c][k] = 0; }
+		}
+	}
+	return menu->campaign_count;
+}
+
+/* the picker's card `card` shows position `position` (0 Halo's, then each campaign): its name, picture (NONE: none) and
+text */
+void hmp_campaigns_card(short card, long position, short *name, short *frame, short *text)
+{
+	struct hmp_menu_memory *menu = menu_memory();
+	wchar_t raw[160];
+	char line[160];
+	if (!menu || card < 0 || card >= 3) return;
+	*name = (short)(HMP_CAMPAIGN_STRING_BASE + card * 2);
+	*text = (short)(HMP_CAMPAIGN_STRING_BASE + card * 2 + 1);
+	if (position <= 0 || position > menu->campaign_count)
+	{
+		ascii_wide(menu->card_name[card], 64, "Halo", 4);
+		snprintf(line, sizeof(line), "Halo's own campaign, from the Pillar of Autumn to the Maw: 10 levels");
+		*frame = 0;
+	}
+	else
+	{
+		long c = position - 1, k;
+		for (k = 0; k < 63 && menu->campaign_name[c][k]; k++) menu->card_name[card][k] = menu->campaign_name[c][k];
+		menu->card_name[card][k] = 0;
+		snprintf(line, sizeof(line), "%d level%s", (int)menu->campaign_levels[c],
+			menu->campaign_levels[c] == 1 ? "" : "s");
+		*frame = hmp_maps_globals.maps[menu->campaign_first[c]].picture ? (short)(HMP_NAME_BASE + menu->campaign_first[c]) :
+			NONE;
+	}
+	ascii_wide(raw, NUMBEROF(raw), line, (long)strlen(line));
+	hmp_wrap_text(raw, menu->card_text[card], NUMBEROF(menu->card_text[card]), FALSE, DESCRIPTION_TEXT_WIDTH);
+}
+
+/* the picker's A: the level select that follows shows that campaign's levels (position 0: Halo's) */
+void hmp_campaigns_choose(long position)
+{
+	struct hmp_menu_memory *menu = menu_memory();
+	campaign_chosen = menu && position > 0 && position <= menu->campaign_count ? menu->campaign_first[position - 1] : NONE;
+}
+
+/* the level select's: the chosen campaign's level at position (its folder map), or NONE */
+static long campaign_level(long position)
+{
+	long i;
+	if (campaign_chosen == NONE || campaign_chosen >= hmp_maps_globals.map_count) return NONE;
+	for (i = campaign_chosen; i < hmp_maps_globals.map_count; i++)
+	{
+		if (!hmp_maps_globals.maps[i].solo || hmp_maps_globals.maps[i].hidden || !same_campaign(campaign_chosen, i)) continue;
+		if (position-- == 0) return i;
+	}
+	return NONE;
+}
+
+/* how many levels the level select shows: NONE when it's Halo's own (Bungie's code shows them) */
+long hmp_campaigns_level_count(void)
+{
+	long n = 0;
+	if (campaign_chosen == NONE) return NONE;
+	while (campaign_level(n) != NONE) n++;
+	return n;
+}
+
+/* the level select's card `card` shows level `position` of the campaign chosen */
+void hmp_campaigns_level_card(short card, long position, short *name, short *frame, short *text)
+{
+	struct hmp_menu_memory *menu = menu_memory();
+	long i = campaign_level(position), k;
+	struct hmp_info *info = i != NONE ? info_get(i) : NULL;
+	if (!menu || !info || card < 0 || card >= 3) return;
+	for (k = 0; k < 63 && info->name[k]; k++) menu->card_name[card][k] = info->name[k];
+	menu->card_name[card][k] = 0;
+	for (k = 0; k < (long)NUMBEROF(menu->card_text[card]) - 1 && info->description[k]; k++)
+		menu->card_text[card][k] = info->description[k];
+	menu->card_text[card][k] = 0;
+	*name = (short)(HMP_CAMPAIGN_STRING_BASE + card * 2);
+	*text = (short)(HMP_CAMPAIGN_STRING_BASE + card * 2 + 1);
+	*frame = hmp_maps_globals.maps[i].picture ? (short)(HMP_NAME_BASE + i) : NONE;
+}
+
+/* the level chosen's map name ("+pack/level"), or NULL */
+char const *hmp_campaigns_level_name(long position)
+{
+	long i = campaign_level(position);
+	return i == NONE ? NULL : MAP_KEY(i);
 }
 
 #endif /* HALO_XBOX_TARGET */

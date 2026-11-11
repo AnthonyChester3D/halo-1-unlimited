@@ -478,7 +478,7 @@ int package_make(struct package const *package, struct package_xbe const *xbe, u
 		{
 			size = u32(p);
 			p += 4;
-			/* (the headers in order: ONLINE GAMES, VEHICLE OPTIONS; an older package has only the first) */
+			/* (the headers in order: ONLINE GAMES, VEHICLE OPTIONS, OPTIONS, SELECT CAMPAIGN; an older package has fewer) */
 			from = op == PICTURES ? pictures : op == HEADER && header ?
 				header + HEADER_SIZE * (headers < HEADER_COUNT ? headers : HEADER_COUNT - 1) : NULL;
 			if (op == HEADER)

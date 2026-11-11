@@ -28,6 +28,7 @@ file_close, and anything else done to it comes after disk_sync. Each step's time
 #define STOCK_BIT 0xC0000000u
 #define OFFSET_BITS 0x3FFFFFFFu
 #define MP_SLOT (47u * 1024u * 1024u)   /* what a multiplayer map may unpack to (the game's cache file for one) */
+#define CAMPAIGN_SLOT (278u * 1024u * 1024u) /* a campaign level's (header 0x60: scenario type 0) */
 #define MAP_LEVEL 1                     /* (as the stock maps': far quicker on a console, and only 3% bigger than 6) */
 #define SHARED_LEVEL 6
 #define EDGE 65536u                     /* a map's identity: its size and the CRC32s of this much at its start and its end */
@@ -1325,7 +1326,7 @@ static int convert_pack(char const *stock_folder, char const *pack_folder, char 
 			int too_big;
 			if (c->state != CONVERTING)
 				continue;
-			too_big = lay_out(c, &l) || c->out_length > MP_SLOT;
+			too_big = lay_out(c, &l) || c->out_length > (c->header[0x60] == 0 && c->header[0x61] == 0 ? CAMPAIGN_SLOT : MP_SLOT);
 			layout_free(&l);
 			if (!too_big)
 				continue;

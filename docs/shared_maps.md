@@ -132,8 +132,9 @@ the place's.
 ## What the game does
 
 - Loading a map with a reference: a shared file stored unpacked is opened where it is. A packed one is copied into a
-  campaign cache file first (once per launch; the next map drawing on it finds it there), then the map, and stays cached
-  while it plays.
+  cache file first (a multiplayer one when it fits, 47 MiB, so both campaign ones stay for the level being left and the
+  next; else a campaign one), once per launch (the next map drawing on it finds it there), then the map, and stays
+  cached while it plays.
 - A packed shared file that's missing, or cached in another version (checksum or length different), is copied again; one
   that can't be found fails the map's load with the log line `shared: <map> draws on <name>.shared, which is neither
   beside it nor in the folder above`.
@@ -233,8 +234,9 @@ only reads, and says each pack's size now and about what it would be (`port/oxbo
 unpacked length can be a little under its header's file_length, which a pass may round up to a sector: read to the end of the
 stream.
 
-*Make its multiplayer maps small (consolidate)*, on a pack's own Halo folder (one the installer imports from), does it: the
-pack's multiplayer maps are imported (names, pictures and links, as an import's), then each is converted against the install's
+*Make its maps small (consolidate)*, on a pack's own Halo folder (one the installer imports from), does it: the pack's
+multiplayer maps and modded campaign levels are imported (names, pictures and links, as an import's; a level's folder has
+level.txt too, and the campaign picker plays it), then each is converted against the install's
 `stock.index` and `stock.shared`, by the rules above and with shared_pass.py's layout (the same maps in the same order give
 byte-identical files, unpacked). Each small map goes in its imported folder in the starred install's maps folder (`<install>\maps\<pack>\<map>`, never E:'s
 storage) beside its `map.link` (the

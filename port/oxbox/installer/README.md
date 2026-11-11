@@ -151,7 +151,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `screen.c`, `screen.h` | the text screen, in colour, and the screen blanked while the next XBE starts |
 | `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
-| `consolidate.c`, `consolidate.h` | consolidating a pack: what it would save (**White**, *See what consolidating would save*: it only reads), *Make its multiplayer maps small*, and on the game's install *Shrink maps* (full-size maps a pack's file here was made from: docs/shared_maps.md) |
+| `consolidate.c`, `consolidate.h` | consolidating a pack: what it would save (**White**, *See what consolidating would save*: it only reads), *Make its maps small* (its multiplayer maps and modded campaign), and on the game's install *Shrink maps* (full-size maps a pack's file here was made from: docs/shared_maps.md) |
 | `mapstream.c`, `mapstream.h` | a cache file read and written a piece at a time, and a map's blocks found |
 | `stockmaps_table.h` | the retail maps' sizes and CRCs and which levels' blocks go in stock.shared (made by `tools/gen_stock_table.py`) |
 | `stockmaps.c`, `stockmaps.h` | the stock maps swapped for small ones drawing on stock.shared, and put back exactly |

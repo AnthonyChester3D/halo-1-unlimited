@@ -51,6 +51,7 @@ enum
 	HMP_STOCK_DESCRIPTION_BASE = 0x7100, /* a stock map's description with the browser's lines on top */
 	HMP_MISSING_NAME_BASE = 0x7200, /* a map this console hasn't (a game in the browser): its folder's name */
 	HMP_MISSING_NAMES = 8,
+	HMP_CAMPAIGN_STRING_BASE = 0x7300, /* the campaign picker's three cards' names and texts (hmp_maps.c: 0x7300-0x7305) */
 	HMP_UNKNOWN_PICTURE = 13,       /* the frame Halo itself shows for an unknown map */
 	HMP_STOCK_LEVELS = 13,
 };

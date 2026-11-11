@@ -4180,6 +4180,14 @@ static void solo_level_select_list_update_displayed_items(
 	struct ui_widget_definition *definition;
 	long item_index;
 	long displayed_item_indices[3];
+#if defined(HALO_XBOX_TARGET)
+	extern long hmp_campaigns_level_count(void);
+	extern void hmp_campaigns_card(short card, long position, short *name, short *frame, short *text);
+	extern void hmp_campaigns_level_card(short card, long position, short *name, short *frame, short *text);
+	extern char *tag_get_name(long tag_index);
+	boolean picker = list_widget->definition_tag_index != NONE &&
+		!strcmp(tag_get_name(list_widget->definition_tag_index), "h1u\\select_campaign_list");
+#endif
 
 	player_ui_get_active_player_profile(0, &profile);
 	player_profile_get_highest_completed_solo_level(
@@ -4255,6 +4263,38 @@ static void solo_level_select_list_update_displayed_items(
 		difficulty_marker->animation.current_frame_index = 2;
 		cooperative_marker->animation.current_frame_index = 3;
 
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: the campaign picker's cards (port/oxbox/oxbox_menus.c's SELECT CAMPAIGN list), or an imported
+		campaign's levels when it chose one (port/linux/game/hmp_maps.c): their names, pictures and texts, no marks */
+		if (picker || hmp_campaigns_level_count() != NONE)
+		{
+			short name_index = 10, frame_index = 10, text_index = 10;
+
+			if (picker)
+				hmp_campaigns_card((short)item_index, displayed_item_indices[item_index], &name_index, &frame_index,
+					&text_index);
+			else
+				hmp_campaigns_level_card((short)item_index, displayed_item_indices[item_index], &name_index,
+					&frame_index, &text_index);
+			map_name->parameters.text_box.string_list_index = name_index;
+			map_bitmap->visible = frame_index != NONE;     /* (a level with no picture: the card's background) */
+			map_bitmap->animation.current_frame_index = frame_index != NONE ? frame_index : 0;
+			map_description->parameters.text_box.string_list_index = text_index;
+			/* (fewer than three: the list wraps; a card showing what one before it shows is left empty) */
+			{
+				long earlier;
+
+				for (earlier = 0; earlier < item_index &&
+					displayed_item_indices[earlier] != displayed_item_indices[item_index]; earlier++)
+					;
+				item->visible = earlier == item_index;
+			}
+			completion_marker->visible = FALSE;
+			difficulty_marker->visible = FALSE;
+			cooperative_marker->visible = FALSE;
+			continue;
+		}
+#endif
 		match_vassert(
 			"c:\\halo\\SOURCE\\interface\\ui_widget_game_data_input_functions.c",
 			0x204,
