@@ -74,7 +74,11 @@ struct ahead
 void ahead_open(struct ahead *a, HANDLE file, unsigned char *one, unsigned char *two);
 /* the next part (got 0 at the end), good until the next call; 0 when read */
 int ahead_next(struct ahead *a, unsigned char **data, DWORD *got);
+/* 1 when ahead_next wouldn't wait for the disk */
+int ahead_ready(struct ahead const *a);
 
+/* what inflate takes from a reader's file, as it takes it (offset: where in the file), for a small map made from it */
+typedef void (*reader_tap_t)(void *context, uint32_t offset, unsigned char const *data, uint32_t size);
 struct reader
 {
 	HANDLE file;
@@ -82,6 +86,9 @@ struct reader
 	z_stream z;
 	int started, ended;
 	uint32_t raw_crc, raw_size;     /* of the file as it is on the disk, so far */
+	reader_tap_t tap;               /* (NULL: none) */
+	void *tap_context;
+	uint32_t taken;                 /* how far into the file inflate has taken */
 };
 /* a cache file opened, its header read */
 int reader_open(struct reader *r, char const *path, unsigned char *header);
@@ -100,11 +107,20 @@ struct writer
 	HANDLE to;
 	uint32_t written, crc;          /* what's gone out so far, and the running CRC of it */
 	uint32_t held;                  /* of that, what's still waiting to be written (one writer at a time) */
+	int fresh;                      /* (in pieces: something's gone in since the piece began) */
 };
 /* one zlib stream (memLevel 8) to a file, or only measured; the CRC goes on from crc */
 int writer_open(struct writer *w, int level, HANDLE to, uint32_t crc);
 int writer_put(struct writer *w, unsigned char const *from, uint32_t size);
 int writer_finish(struct writer *w);
+/* one zlib stream made in pieces (stockmaps.c's small maps, reusing a retail map's packed data): the zlib header goes out,
+then each piece is raw deflate from a fresh start (writer_put), ended on a byte by writer_cut (Z_SYNC_FLUSH; nothing if
+nothing went in), with bytes that are packed already between pieces (writer_emit); writer_end ends the last piece
+(Z_FINISH) and writes the Adler-32 of all of it unpacked */
+int writer_open_pieces(struct writer *w, int level, HANDLE to, uint32_t crc);
+int writer_cut(struct writer *w);
+int writer_emit(struct writer *w, unsigned char const *from, uint32_t size);
+int writer_end(struct writer *w, uint32_t adler);
 
 /* a map's tag data in memory: everything read of its tags is in it */
 struct map_view

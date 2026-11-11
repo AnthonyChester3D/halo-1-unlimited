@@ -440,6 +440,15 @@ int ahead_next(struct ahead *a, unsigned char **data, DWORD *got)
 	return 0;
 }
 
+int ahead_ready(struct ahead const *a)
+{
+	uint32_t job = a->read[a->next].job;
+	if (!a->queued || !job)
+		return 1;
+	BARRIER();
+	return (int32_t)(done - job) >= 0;
+}
+
 static void tenths(char *to, int size, uint64_t us)
 {
 	text_print(to, (size_t)size, "%lu.%lu s", (unsigned long)(us / 1000000u), (unsigned long)(us / 100000u % 10u));
@@ -567,6 +576,15 @@ static int timed_inflate(z_stream *z)
 	return status;
 }
 
+/* inflate took from next_in up to where it is now: the tap gets it */
+static void reader_took(struct reader *r, Bytef const *before)
+{
+	uint32_t n = (uint32_t)(r->z.next_in - before);
+	if (n && r->tap)
+		r->tap(r->tap_context, r->taken, before, n);
+	r->taken += n;
+}
+
 void reader_close(struct reader *r)
 {
 	if (r->started)
@@ -591,6 +609,7 @@ int reader_open(struct reader *r, char const *path, unsigned char *header)
 	}
 	r->raw_crc = crc_add(crc_add(0, NULL, 0), header, HEADER);
 	r->raw_size = HEADER;
+	r->taken = HEADER;
 	ahead_open(&r->ahead, r->file, io_in, io_in2);
 	r->z.zalloc = z_alloc;
 	r->z.zfree = z_free;
@@ -627,7 +646,11 @@ int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
 			r->z.next_in = data;
 			r->z.avail_in = got;
 		}
-		status = timed_inflate(&r->z);
+		{
+			Bytef const *before = r->z.next_in;
+			status = timed_inflate(&r->z);
+			reader_took(r, before);
+		}
 		if (status == Z_STREAM_END)
 			r->ended = 1;
 		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->z.avail_in))
@@ -655,7 +678,11 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 			r->z.next_in = data;
 			r->z.avail_in = part;
 		}
-		status = timed_inflate(&r->z);
+		{
+			Bytef const *before = r->z.next_in;
+			status = timed_inflate(&r->z);
+			reader_took(r, before);
+		}
 		if (status == Z_STREAM_END)
 			r->ended = 1;
 		else if (status != Z_OK && !(status == Z_BUF_ERROR && !r->z.avail_in))
@@ -726,7 +753,82 @@ int writer_put(struct writer *w, unsigned char const *from, uint32_t size)
 {
 	w->z.next_in = (Bytef *)from;
 	w->z.avail_in = size;
+	if (size)
+		w->fresh = 1;
 	return writer_run(w, Z_NO_FLUSH);
+}
+
+int writer_emit(struct writer *w, unsigned char const *from, uint32_t size)
+{
+	while (size)
+	{
+		uint32_t n = (uint32_t)sizeof(io_out) - w->held;
+		if (n > size)
+			n = size;
+		memcpy(io_out + w->held, from, n);
+		w->crc = crc_add(w->crc, io_out + w->held, n);
+		w->written += n;
+		w->held += n;
+		from += n;
+		size -= n;
+		if (w->held == sizeof(io_out))
+		{
+			if (w->to != INVALID_HANDLE_VALUE && write_all(w->to, io_out, w->held))
+				return 1;
+			w->held = 0;
+		}
+	}
+	return 0;
+}
+
+int writer_open_pieces(struct writer *w, int level, HANDLE to, uint32_t crc)
+{
+	static unsigned char const zlib_header[2] = {0x78, 0x01};
+	memset(w, 0, sizeof(*w));
+	w->z.zalloc = z_alloc;
+	w->z.zfree = z_free;
+	w->to = to;
+	w->crc = crc;
+	if (deflateInit2(&w->z, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
+		return 1;
+	if (writer_emit(w, zlib_header, 2))
+	{
+		deflateEnd(&w->z);
+		return 1;
+	}
+	return 0;
+}
+
+int writer_cut(struct writer *w)
+{
+	if (!w->fresh)
+		return 0;
+	w->z.next_in = (Bytef *)zeros;
+	w->z.avail_in = 0;
+	if (writer_run(w, Z_SYNC_FLUSH) || deflateReset(&w->z) != Z_OK)
+		return 1;
+	w->fresh = 0;
+	return 0;
+}
+
+int writer_end(struct writer *w, uint32_t adler)
+{
+	unsigned char trailer[4];
+	int failed;
+	w->z.next_in = (Bytef *)zeros;
+	w->z.avail_in = 0;
+	failed = writer_run(w, Z_FINISH);
+	deflateEnd(&w->z);
+	trailer[0] = (unsigned char)(adler >> 24);
+	trailer[1] = (unsigned char)(adler >> 16);
+	trailer[2] = (unsigned char)(adler >> 8);
+	trailer[3] = (unsigned char)adler;
+	if (!failed)
+		failed = writer_emit(w, trailer, 4);
+	if (!failed && w->held && w->to != INVALID_HANDLE_VALUE)
+		failed = write_all(w->to, io_out, w->held);
+	w->held = 0;
+	return failed;
 }
 
 int writer_finish(struct writer *w)

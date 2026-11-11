@@ -184,14 +184,26 @@ After an install (never in the game's own updates) the installer offers to swap 
 ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 800 MB
 saved). The small maps are packed at zlib level 1: only 3% bigger than level 6, and far quicker on a console. It needs all 23: a folder without them isn't offered it, since stock.shared couldn't be the same file. Only the
 retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is the same file. All 24 maps are byte-identical on the three NTSC discs (the original, Rev 1 and Rev 2), and stock.shared and
-the small maps built from each compare equal: the three builds need no table of their own. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
+the small maps built from each compare equal: the three builds need no table of their own. stock.shared is the same, byte for byte, as `shared_pass.py stock` makes, and the small maps unpack to the same bytes as its.
 
-It reads each retail map once: as a map's data goes into stock.shared, its small map is made on a cache drive (X:, Y:,
-Z:), and once all 23 are read and stock.shared is checked, each is copied into the maps folder, read back, and swapped in.
+Most of a small map is its retail map's data as it was (a level's BSPs and models, most of its tags), so the one pass
+reuses the retail map's own packed data instead of packing it again: where a run of the retail stream's deflate blocks
+unpacks to bytes the small map has unchanged, and so do the 32 KB before them (all a block can refer back to), the small
+map's stream takes those blocks bit for bit, then an empty stored block, so that what follows starts on a byte; the rest is
+packed at level 1, raw deflate from a fresh start after each run, and the stream ends with the Adler-32 of all of it. The
+table has each map's runs (where they are unpacked and in the retail file's bits; 494 runs in all, 82% of the small maps'
+bytes) and the file as it must come out (its size and CRC: `gen_stock_table.py` makes the same file and checks it unpacks to
+the small map), so the console packs a fifth of what it did (259 MB of 1430) and the small maps are 738 MB in all (755
+packed through at level 1). One that doesn't come out as the table says is made from its retail map again, packed through.
+
+It reads each retail map once: as a map's data goes into stock.shared, its small map is made in the maps folder beside it
+(`<map>.map.oxsmall`) when the drive has the room for it (and 108 MB besides), else on a cache drive (X:, Y:, Z:), and once
+all 23 are read and stock.shared is checked, each is renamed (or copied) into place, read back, and swapped in. When the
+Halo folder's drive has the room for all of them, the cache drives aren't touched.
 The small map's layout comes from the installer's table (`tools/gen_stock_table.py`: where each map's moved data is, so the
 map's tags, at its end, needn't be read first). The cache drives are the installer's to use while it runs: if they haven't
-room for the small maps between them, it empties them, the fullest first, and its own files there go when it's done (and
-after a power cut). Without a cache drive, a map is made from its retail map again after stock.shared is in place.
+room for the small maps between them, it empties them, the fullest first, and its own files there (and in the maps folder)
+go when it's done (and after a power cut). Without a cache drive, a map is made from its retail map again after stock.shared is in place.
 
 The swap and the restore do their reads and writes on a second thread (`port/oxbox/installer/mapstream.c`): the next 1 MB of
 a file is read ahead and writes are made behind, so the disk works while zlib does. They're done in the order they were
