@@ -388,10 +388,10 @@ static int identity(char const *path, unsigned char *buffer, uint32_t *size, uin
 	at = *size - n;
 	if (*size != 0xFFFFFFFFu && !read_all(file, buffer, n))
 	{
-		*head = (uint32_t)crc32(crc32(0, NULL, 0), buffer, n);
+		*head = crc_add(crc_add(0, NULL, 0), buffer, n);
 		if (SetFilePointer(file, (LONG)at, NULL, FILE_BEGIN) == at && !read_all(file, buffer, n))
 		{
-			*tail = (uint32_t)crc32(crc32(0, NULL, 0), buffer, n);
+			*tail = crc_add(crc_add(0, NULL, 0), buffer, n);
 			failed = 0;
 		}
 	}
@@ -702,7 +702,7 @@ static void set_reference(struct cmap *c, struct measuring const *m, char const 
 /* the small map's CRC32 unpacked, now its header is made */
 static void small_crc(struct cmap *c)
 {
-	c->small_crc = (uint32_t)crc32_combine(crc32(crc32(0, NULL, 0), c->header, HEADER), c->body_crc,
+	c->small_crc = (uint32_t)crc32_combine(crc_add(crc_add(0, NULL, 0), c->header, HEADER), c->body_crc,
 		(z_off_t)(c->out_length - HEADER));
 }
 
@@ -744,7 +744,7 @@ static int convert_map(struct converting *v, int index, char const *path, char c
 	struct reader r;
 	struct writer w;
 	HANDLE file = INVALID_HANDLE_VALUE;
-	uint32_t at, out = HEADER, tail, crc = (uint32_t)crc32(0, NULL, 0);
+	uint32_t at, out = HEADER, tail, crc = crc_add(0, NULL, 0);
 	int i, writes = 0, first_moved = 0, first_stay = 0, first_field = 0, first_write = 0, failed = 1, writing = 0;
 
 	if (lay_out(c, &l))
@@ -822,7 +822,7 @@ static int convert_map(struct converting *v, int index, char const *path, char c
 				continue;
 			if (writer_put(&w, chunk + s * SECTOR, part))
 				goto stop_reading;
-			crc = (uint32_t)crc32(crc, chunk + s * SECTOR, part);
+			crc = crc_add(crc, chunk + s * SECTOR, part);
 			out += part;
 		}
 	}
@@ -831,7 +831,7 @@ static int convert_map(struct converting *v, int index, char const *path, char c
 	{
 		if (writer_put(&w, zeros, c->out_length - out))
 			goto stop;
-		crc = (uint32_t)crc32(crc, zeros, c->out_length - out);
+		crc = crc_add(crc, zeros, c->out_length - out);
 		out = c->out_length;
 	}
 	writing = 0;
@@ -869,7 +869,7 @@ static int pack_data(struct converting *v, HANDLE temporary, uint32_t from, uint
 	int count, uint32_t *checksum)
 {
 	struct sha256 h;
-	uint32_t at, crc = (uint32_t)crc32(0, NULL, 0);
+	uint32_t at, crc = crc_add(0, NULL, 0);
 	int k = 0;
 	if (SetFilePointer(temporary, (LONG)from, NULL, FILE_BEGIN) != from)
 		return 1;
@@ -878,7 +878,7 @@ static int pack_data(struct converting *v, HANDLE temporary, uint32_t from, uint
 		uint32_t size = length - at > CHUNK ? CHUNK : length - at;
 		if (read_all(temporary, v->m.piece, size))
 			return 1;
-		crc = (uint32_t)crc32(crc, v->m.piece, size);
+		crc = crc_add(crc, v->m.piece, size);
 		/* (its blocks follow each other, none overlapping) */
 		while (k < count && pblocks[k].e->at < at + size)
 		{
@@ -942,7 +942,7 @@ static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, 
 	unsigned char header[HEADER];
 	struct writer w;
 	HANDLE file = create(path, 0);
-	uint32_t at, crc = (uint32_t)crc32(0, NULL, 0), tail, data = HEADER + list_room;
+	uint32_t at, crc = crc_add(0, NULL, 0), tail, data = HEADER + list_room;
 	int failed = 1, writing = 0;
 	if (file == INVALID_HANDLE_VALUE || write_all(file, zeros, HEADER) || writer_open(&w, SHARED_LEVEL, file, 0))
 		goto stop;
@@ -957,7 +957,7 @@ static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, 
 		if (at + size > data)
 		{
 			uint32_t skip = data > at ? data - at : 0;
-			crc = (uint32_t)crc32(crc, v->m.piece + skip, size - skip);
+			crc = crc_add(crc, v->m.piece + skip, size - skip);
 		}
 		if (writer_put(&w, v->m.piece, size))
 			goto stop;

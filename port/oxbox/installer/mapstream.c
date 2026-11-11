@@ -466,6 +466,51 @@ void stream_times_text(char *text, int size, uint64_t since, struct stream_times
 		(unsigned long)((all > busy ? all - busy : 0) / 100000u % 10u));
 }
 
+/* ---- CRC-32 (zlib's, the same numbers): 8 bytes a step. nxdk's zlib is built Z_SOLO, which leaves out its own fast CRC,
+so its crc32() goes a byte a step: about 65 MB/s on the console, ~100 s of the swap's CPU time ---- */
+
+static uint32_t crc_table[8][256];
+
+static void crc_tables(void)
+{
+	uint32_t n, k;
+	for (n = 0; n < 256; n++)
+	{
+		uint32_t c = n;
+		for (k = 0; k < 8; k++)
+			c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+		crc_table[0][n] = c;
+	}
+	for (n = 0; n < 256; n++)
+		for (k = 1; k < 8; k++)
+			crc_table[k][n] = (crc_table[k - 1][n] >> 8) ^ crc_table[0][crc_table[k - 1][n] & 0xFF];
+}
+
+uint32_t crc_add(uint32_t crc, unsigned char const *p, uint32_t size)
+{
+	if (!crc_table[0][1])
+		crc_tables();
+	if (!p)
+		return 0;
+	crc = ~crc;
+	while (size && ((uintptr_t)p & 3))
+		crc = (crc >> 8) ^ crc_table[0][(crc ^ *p++) & 0xFF], size--;
+	while (size >= 8)
+	{
+		uint32_t a, b;
+		memcpy(&a, p, 4);
+		memcpy(&b, p + 4, 4);
+		a ^= crc; /* (little-endian: the Xbox's, and the PC's) */
+		crc = crc_table[7][a & 0xFF] ^ crc_table[6][(a >> 8) & 0xFF] ^ crc_table[5][(a >> 16) & 0xFF] ^ crc_table[4][a >> 24] ^
+			crc_table[3][b & 0xFF] ^ crc_table[2][(b >> 8) & 0xFF] ^ crc_table[1][(b >> 16) & 0xFF] ^ crc_table[0][b >> 24];
+		p += 8;
+		size -= 8;
+	}
+	while (size--)
+		crc = (crc >> 8) ^ crc_table[0][(crc ^ *p++) & 0xFF];
+	return ~crc;
+}
+
 uint32_t u32(unsigned char const *p)
 {
 	return p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -545,7 +590,7 @@ int reader_open(struct reader *r, char const *path, unsigned char *header)
 		reader_close(r);
 		return 1;
 	}
-	r->raw_crc = (uint32_t)crc32(crc32(0, NULL, 0), header, HEADER);
+	r->raw_crc = crc_add(crc_add(0, NULL, 0), header, HEADER);
 	r->raw_size = HEADER;
 	ahead_open(&r->ahead, r->file, io_in, io_in2);
 	r->z.zalloc = z_alloc;
@@ -578,7 +623,7 @@ int reader_pull(struct reader *r, unsigned char *to, uint32_t size)
 			DWORD got = 0;
 			if (ahead_next(&r->ahead, &data, &got) || !got)
 				return 1;
-			r->raw_crc = (uint32_t)crc32(r->raw_crc, data, got);
+			r->raw_crc = crc_add(r->raw_crc, data, got);
 			r->raw_size += got;
 			r->z.next_in = data;
 			r->z.avail_in = got;
@@ -606,7 +651,7 @@ int reader_read(struct reader *r, unsigned char *to, uint32_t size, uint32_t *go
 			DWORD part = 0;
 			if (ahead_next(&r->ahead, &data, &part) || !part)
 				return 1;
-			r->raw_crc = (uint32_t)crc32(r->raw_crc, data, part);
+			r->raw_crc = crc_add(r->raw_crc, data, part);
 			r->raw_size += part;
 			r->z.next_in = data;
 			r->z.avail_in = part;
@@ -627,7 +672,7 @@ int reader_raw(struct reader *r, uint32_t *size, uint32_t *crc)
 	DWORD got;
 	while (!ahead_next(&r->ahead, &data, &got) && got)
 	{
-		r->raw_crc = (uint32_t)crc32(r->raw_crc, data, got);
+		r->raw_crc = crc_add(r->raw_crc, data, got);
 		r->raw_size += got;
 	}
 	*size = r->raw_size;
@@ -665,7 +710,7 @@ static int writer_run(struct writer *w, int flush)
 		if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END)
 			return 1;
 		n = (uint32_t)(sizeof(io_out) - w->held) - w->z.avail_out;
-		w->crc = (uint32_t)crc32(w->crc, io_out + w->held, n);
+		w->crc = crc_add(w->crc, io_out + w->held, n);
 		w->written += n;
 		w->held += n;
 		if (w->held == sizeof(io_out) || (flush == Z_FINISH && status == Z_STREAM_END))

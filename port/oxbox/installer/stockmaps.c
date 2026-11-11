@@ -211,11 +211,11 @@ static int file_crc(char const *path, uint32_t *size, uint32_t *crc)
 	if (file == INVALID_HANDLE_VALUE)
 		return 1;
 	*size = 0;
-	*crc = (uint32_t)crc32(0, NULL, 0);
+	*crc = crc_add(0, NULL, 0);
 	ahead_open(&ahead, file, io_in, io_in2);
 	while (!ahead_next(&ahead, &data, &got) && got)
 	{
-		*crc = (uint32_t)crc32(*crc, data, got);
+		*crc = crc_add(*crc, data, got);
 		*size += got;
 	}
 	file_close(file);
@@ -234,7 +234,7 @@ static int retail_padding(struct writer const *w, uint32_t raw_size, HANDLE to, 
 	for (padding = raw_size - HEADER - w->written; padding;)
 	{
 		uint32_t part = padding > SECTOR ? SECTOR : padding;
-		*crc = (uint32_t)crc32(*crc, zeros, part);
+		*crc = crc_add(*crc, zeros, part);
 		if (to != INVALID_HANDLE_VALUE && write_all(to, zeros, part))
 			return 1;
 		padding -= part;
@@ -465,7 +465,7 @@ static int small_open(struct small *s, struct restore_map const *map, uint32_t g
 	s->file = create(path);
 	if (s->file == INVALID_HANDLE_VALUE)
 		return 1;
-	s->crc = (uint32_t)crc32(crc32(0, NULL, 0), small_header, HEADER);
+	s->crc = crc_add(crc_add(0, NULL, 0), small_header, HEADER);
 	if (write_all(s->file, small_header, HEADER) || writer_open(&s->w, level, s->file, s->crc))
 	{
 		file_close(s->file);
@@ -510,7 +510,7 @@ static int small_piece(struct small *s, uint32_t at, uint32_t size)
 			continue;
 		if (writer_put(&s->w, chunk + sector * SECTOR, part))
 			return 1;
-		s->crc = (uint32_t)crc32(s->crc, chunk + sector * SECTOR, part);
+		s->crc = crc_add(s->crc, chunk + sector * SECTOR, part);
 		s->out += part;
 	}
 	return 0;
@@ -542,7 +542,7 @@ static int small_close(struct small *s, uint32_t *small_length, uint32_t *small_
 	*small_length = s->out;
 	*small_crc = s->crc;
 	*file_size = HEADER + s->w.written + tail;
-	*file_crc = (uint32_t)crc32(s->w.crc, zeros, tail);
+	*file_crc = crc_add(s->w.crc, zeros, tail);
 	if (!finish(s->file))
 		failed = 1;
 	return failed;
@@ -620,7 +620,7 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 	if (u32(header + 8) != map->length - gone * SECTOR)
 		goto done;
 	sectors = map->length / SECTOR + (map->length % SECTOR ? 1 : 0);
-	crc = (uint32_t)crc32(crc32(0, NULL, 0), map->header, HEADER);
+	crc = crc_add(crc_add(0, NULL, 0), map->header, HEADER);
 	for (c = 1; c < sectors; c += CHUNK / SECTOR)
 	{
 		uint32_t at = c * SECTOR, size = map->length - at > CHUNK ? CHUNK : map->length - at, s, in_piece, in_block, n;
@@ -645,7 +645,7 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 			}
 		}
 		set_fields(field_count, &first_field, at, size);
-		crc = (uint32_t)crc32(crc, chunk, size);
+		crc = crc_add(crc, chunk, size);
 		if (w && writer_put(w, chunk, size))
 			goto done;
 	}
@@ -797,7 +797,7 @@ static void say_text(stockmaps_say_t say, int warning, char const *format, ...)
 static int stock_check(char const *path)
 {
 	HANDLE file = open_read(path);
-	uint32_t size = 0, crc = (uint32_t)crc32(0, NULL, 0);
+	uint32_t size = 0, crc = crc_add(0, NULL, 0);
 	unsigned char header[HEADER], *data;
 	struct ahead ahead;
 	DWORD got;
@@ -812,7 +812,7 @@ static int stock_check(char const *path)
 	ahead_open(&ahead, file, io_in, io_in2);
 	while (!ahead_next(&ahead, &data, &got) && got)
 	{
-		crc = (uint32_t)crc32(crc, data, got);
+		crc = crc_add(crc, data, got);
 		size += got;
 	}
 	file_close(file);
@@ -834,7 +834,7 @@ static int index_write(char const *path)
 	head.count = STOCK_BLOCKS;
 	head.stock_checksum = STOCK_CHECKSUM;
 	head.stock_length = STOCK_LENGTH;
-	crc = (uint32_t)crc32(crc32(crc32(0, NULL, 0), (unsigned char const *)&head, sizeof(head)),
+	crc = crc_add(crc_add(crc_add(0, NULL, 0), (unsigned char const *)&head, sizeof(head)),
 		(unsigned char const *)stock_index, sizeof(stock_index));
 	if (write_all(file, &head, sizeof(head)) || write_all(file, stock_index, sizeof(stock_index)))
 	{
@@ -962,7 +962,7 @@ it's copied (the caller reads the copy back) */
 static int copy_small(char const *from, char const *to, uint32_t size, uint32_t crc)
 {
 	HANDLE in = open_read(from), out;
-	uint32_t got_size = 0, got_crc = (uint32_t)crc32(0, NULL, 0);
+	uint32_t got_size = 0, got_crc = crc_add(0, NULL, 0);
 	struct ahead ahead;
 	unsigned char *data;
 	DWORD got;
@@ -977,7 +977,7 @@ static int copy_small(char const *from, char const *to, uint32_t size, uint32_t 
 	ahead_open(&ahead, in, io_in, io_in2);
 	while (!ahead_next(&ahead, &data, &got) && got)
 	{
-		got_crc = (uint32_t)crc32(got_crc, data, got);
+		got_crc = crc_add(got_crc, data, got);
 		got_size += got;
 		if (write_all(out, data, got))
 		{
@@ -1054,7 +1054,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 		view.length = retail->length;
 		view.tag_offset = u32(header + 0x10);
 		view.tag_size = u32(header + 0x14);
-		crc = (uint32_t)crc32(crc32(0, NULL, 0), header, HEADER);
+		crc = crc_add(crc_add(0, NULL, 0), header, HEADER);
 		if (view.tag_offset < HEADER || view.tag_size > MOST_TAG_SIZE || view.tag_size > retail->length ||
 			view.tag_offset > retail->length - view.tag_size)
 			goto bad_map;
@@ -1080,7 +1080,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			int i;
 			if (reader_pull(&r, chunk, size))
 				goto bad_map;
-			crc = (uint32_t)crc32(crc, chunk, size);
+			crc = crc_add(crc, chunk, size);
 			/* (what stock.shared gets from this map) */
 			while (first < retail->first_count && retail->firsts[first].offset + retail->firsts[first].size <= at)
 				first++;
@@ -1239,7 +1239,7 @@ static int table_read(char const *table_path, unsigned char **table_out, uint32_
 		return 1;
 	}
 	if (memcmp(head->magic, "OXSR", 4) || head->version != RESTORE_VERSION || head->count != STOCK_MAPS || head->size != size ||
-		head->crc != (uint32_t)crc32(crc32(0, NULL, 0), table + sizeof(*head), size - (uint32_t)sizeof(*head)))
+		head->crc != crc_add(crc_add(0, NULL, 0), table + sizeof(*head), size - (uint32_t)sizeof(*head)))
 	{
 		free(table);
 		text_print(error, 256, "stock.restore is damaged: nothing changed.");
@@ -1296,7 +1296,7 @@ static unsigned char *layout_unpack(void)
 	z.next_out = out;
 	z.avail_out = STOCK_LAYOUT_LENGTH;
 	ok = inflate(&z, Z_FINISH) == Z_STREAM_END && z.total_out == STOCK_LAYOUT_LENGTH &&
-		(uint32_t)crc32(crc32(0, NULL, 0), out, STOCK_LAYOUT_LENGTH) == STOCK_LAYOUT_CRC;
+		crc_add(crc_add(0, NULL, 0), out, STOCK_LAYOUT_LENGTH) == STOCK_LAYOUT_CRC;
 	inflateEnd(&z);
 	if (!ok)
 	{
@@ -1418,14 +1418,14 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 		file_head->stock_checksum = STOCK_CHECKSUM;
 		file_head->stock_length = STOCK_LENGTH;
 		file_head->size = table_size;
-		file_head->crc = (uint32_t)crc32(crc32(0, NULL, 0), table + sizeof(*file_head), table_size - (uint32_t)sizeof(*file_head));
+		file_head->crc = crc_add(crc_add(0, NULL, 0), table + sizeof(*file_head), table_size - (uint32_t)sizeof(*file_head));
 		file = create(temp_table);
 		if (file == INVALID_HANDLE_VALUE || write_all(file, table, table_size) || !finish(file))
 		{
 			text_print(error, 256, "Couldn't write stock.restore: nothing changed.");
 			goto done;
 		}
-		if (file_crc(temp_table, &size, &crc) || size != table_size || crc != (uint32_t)crc32(crc32(0, NULL, 0), table, table_size))
+		if (file_crc(temp_table, &size, &crc) || size != table_size || crc != crc_add(crc_add(0, NULL, 0), table, table_size))
 		{
 			text_print(error, 256, "stock.restore didn't read back right: nothing changed.");
 			goto done;
@@ -1671,7 +1671,7 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 		map_path(other, sizeof(other), halo, map->name, ".oxtmp");
 		out = create(other);
 		failed = out == INVALID_HANDLE_VALUE || write_all(out, map->header, HEADER) ||
-			writer_open(&w, 6, out, (uint32_t)crc32(crc32(0, NULL, 0), map->header, HEADER));
+			writer_open(&w, 6, out, crc_add(crc_add(0, NULL, 0), map->header, HEADER));
 		if (!failed)
 		{
 			failed = make_original(path, map, bsps, blocks, file, &w);
