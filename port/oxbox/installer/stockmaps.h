@@ -14,6 +14,19 @@ extern void (*stockmaps_flush_drive)(char const *path);
 /* the log file only (set by the installer): "time:" lines, how long each step took and where the time went */
 extern void (*stockmaps_log)(char const *text);
 
+/* the cache drives (set by the installer, as "X:" and the like; NULL: none): while the swap reads the retail maps into
+stock.shared it makes each small map there too, so it reads each map once; then each is copied into the maps folder. Its
+files are named h1u_<map>.oxsmall, and they go when the swap's done with them, when it stops, and after a power cut (a map
+whose copy isn't there is made from its retail map, as before) */
+#define STOCKMAPS_CACHES 3
+extern char const *stockmaps_cache[STOCKMAPS_CACHES];
+
+/* how much room the cache drives need in all for the small maps (they're spread over them) */
+unsigned long long stockmaps_cache_need(void);
+
+/* the swap's files on the cache drives deleted */
+void stockmaps_cache_clear(void);
+
 struct stockmaps_look
 {
 	int retail_sized;              /* of the 23, how many are there with a retail map's file size */

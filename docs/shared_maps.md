@@ -186,6 +186,13 @@ saved). The small maps are packed at zlib level 1: only 3% bigger than level 6, 
 retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is the same file. All 24 maps are byte-identical on the three NTSC discs (the original, Rev 1 and Rev 2), and stock.shared and
 the small maps built from each compare equal: the three builds need no table of their own. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
 
+It reads each retail map once: as a map's data goes into stock.shared, its small map is made on a cache drive (X:, Y:,
+Z:), and once all 23 are read and stock.shared is checked, each is copied into the maps folder, read back, and swapped in.
+The small map's layout comes from the installer's table (`tools/gen_stock_table.py`: where each map's moved data is, so the
+map's tags, at its end, needn't be read first). The cache drives are the installer's to use while it runs: if they haven't
+room for the small maps between them, it empties them, the fullest first, and its own files there go when it's done (and
+after a power cut). Without a cache drive, a map is made from its retail map again after stock.shared is in place.
+
 **X** (*retail Halo back*) puts them back, the exact files: `maps\stock.restore` holds each map's restore table (its
 header, each block's place, and for a moved one its place in stock.shared, its BSPs' offsets, and the original file's size
 and CRC), and retail maps recompress to their own bytes with zlib level 6, memLevel 8. A level unpacks to as much as 280 MB
