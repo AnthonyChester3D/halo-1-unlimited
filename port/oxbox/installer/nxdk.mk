@@ -10,6 +10,7 @@ SRCS = $(CURDIR)/main.c $(CURDIR)/package.c $(CURDIR)/packs.c $(CURDIR)/pictures
 	$(CURDIR)/download.c $(MONOCYPHER)/monocypher.c $(MONOCYPHER)/monocypher-ed25519.c
 NXDK_SDL = y
 KEYS ?= $(CURDIR)/keys.txt
+# (nxdk's libraries, zlib among them, are built with these flags too when this build is the one that makes them: README.md)
 # (single precision in SSE, in the order written: the pictures come out as the PC tool makes them)
 CFLAGS += -O2 -mfpmath=sse -ffp-contract=off -Wall -I$(MONOCYPHER) -I$(MBEDTLS)/include -I$(CURDIR) \
 	'-DMBEDTLS_CONFIG_FILE="tls_config.h"'
