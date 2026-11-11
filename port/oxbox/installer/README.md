@@ -108,6 +108,11 @@ Building the installer needs nxdk (with its submodules) and its tools on the `PA
 make -C port/oxbox/installer -f nxdk.mk NXDK_DIR=/path/to/nxdk     # bin/default.xbe
 ```
 
+nxdk builds its libraries (zlib, its C library's memcpy and the rest) with the flags of whichever project builds them
+first, and keeps them. Built with no `-O`, they run unoptimized, and the stock maps swap took almost three times as long
+(xemu: 1784 s, against 639 s with them built by this makefile, `-O2`). On a fresh nxdk, or after building anything
+else with it, run `make ... clean` first: it removes nxdk's library objects too, and the next build makes them `-O2`.
+
 A package is made from builds of the same commit, one from each disc's XBE (NTSC versions 1, 8 and 9: the
 README in `port/oxbox` has their SHA-256s):
 
