@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 40
+#define INSTALLER_VERSION 41
 #endif
 __attribute__((used)) static struct
 {
@@ -2206,7 +2206,7 @@ static void consolidate_show(struct halo *h, struct pack_scan const *scan, char 
 }
 
 /* a pack's multiplayer maps imported, then made small against the install's stock.shared (consolidate.c): their small maps
-beside their links in the game's storage, the blocks two or more use in the pack's shared file. The pack's own folder is
+beside their links in the starred install's maps folder, the blocks two or more use in the pack's shared file. The pack's own folder is
 left as it is */
 static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder)
 {
@@ -2222,7 +2222,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 		say_in(COLOUR_RED, "%s", error);
 		return;
 	}
-	text_print(pack_folder, sizeof(pack_folder), "E:\\TDATA\\" OWN_TITLE_FOLDER "\\maps\\%s", scan->key);
+	text_print(pack_folder, sizeof(pack_folder), "%s\\maps\\%s", packs_storage, scan->key);
 	for (k = 0; k < scan->count && count < CONSOLIDATE_MAPS; k++)
 	{
 		struct pack_map const *m = &scan->maps[k];
@@ -2426,7 +2426,7 @@ static void shrink_scan(char const *root)
 	}
 }
 
-/* this install's maps folder and the game's storage's looked at for maps to shrink */
+/* this install's maps folder, the starred install's and E:'s old storage looked at for maps to shrink */
 static void shrink_look(struct halo const *h)
 {
 	char root[200];
@@ -2434,6 +2434,12 @@ static void shrink_look(struct halo const *h)
 	shrink_before = shrink_after = 0;
 	text_print(root, sizeof(root), "%s\\maps", h->path);
 	shrink_scan(root);
+	/* (the packs imported into the starred install, and into E:'s storage by installers before 41) */
+	if (packs_storage[0] && _stricmp(packs_storage, h->path))
+	{
+		text_print(root, sizeof(root), "%s\\maps", packs_storage);
+		shrink_scan(root);
+	}
 	shrink_scan("E:\\TDATA\\" OWN_TITLE_FOLDER "\\maps");
 }
 
@@ -2493,8 +2499,15 @@ static void map_pack(struct halo *h)
 	log_clear();
 	say("Looking at the maps in %s\\maps...", h->path);
 	stock_maps_folder(stock, sizeof(stock));
+	/* (what's imported goes in that install's own folder, the starred one: never E:'s storage) */
+	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
 	packs_scan(h->path, stock, &scan);
-	if (can_import(h))
+	if (can_import(h) && !packs_storage[0])
+	{
+		say_in(COLOUR_YELLOW, "Install Halo 1 Unlimited first: a pack's maps are imported into its folder.");
+		scan.multiplayer = scan.campaign = scan.multiplayer_imported = scan.campaign_imported = 0;
+	}
+	else if (can_import(h))
 	{
 		say("Multiplayer: %d maps Halo 1 Unlimited doesn't have%s.", scan.multiplayer,
 			scan.multiplayer_imported ? " (imported)" : "");
@@ -2504,7 +2517,7 @@ static void map_pack(struct halo *h)
 		else
 			say("Campaign: none that isn't Halo's own.");
 		say_in(COLOUR_GREY, "Nothing is copied: the game plays them from this folder, which is left as it is. They go in "
-			"the map list as the pack \"%s\", and the campaign under the folder's name.", scan.key);
+			"the map list as the pack \"%s\", and the campaign under the folder's name (in %s).", scan.key, packs_storage);
 	}
 	else
 	{
@@ -2585,8 +2598,10 @@ static void map_pack(struct halo *h)
 	else if (packs_import(&scan, choices[chosen] != CAMPAIGN, choices[chosen] != MULTIPLAYER, packs_say, error))
 		say_in(COLOUR_RED, "%s", error);
 	else
-		say_in(COLOUR_GREEN, "Done: they're in the game's storage (E:\\TDATA\\" OWN_TITLE_FOLDER ").");
+		say_in(COLOUR_GREEN, "Done: they're in the game's folder, %s.", packs_storage);
 	flush_drive("E:\\");
+	if (packs_storage[0] && packs_storage[0] != 'E')
+		flush_drive(packs_storage);
 	say_in(COLOUR_YELLOW, "B: back");
 	while (wait_input() != B)
 		;

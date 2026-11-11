@@ -46,7 +46,9 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
    is copied and the pack's folder isn't changed: the game plays its maps where they are. The multiplayer maps go
    in the game's map list as a pack named after the folder ("Halo 1 - NHE": "NHE"), with their names, descriptions
    and pictures from the pack's own `ui.map`; map sharing sends them to Xboxes that haven't got them. What's written
-   goes in the game's storage (`E:\TDATA\4c4a4855`, a few small files per map: `packs.c`). (The campaign is imported
+   goes in the game's own folder, the install the list stars (`<install>\maps\<pack>`, `<install>\campaigns\<pack>`:
+   `packs.c`), never E:'s storage: a pack made small takes tens of MB, and E: is the smallest drive. Installers before 41
+   put imports in `E:\TDATA\4c4a4855`; importing a pack again or taking it out removes that copy. (The campaign is imported
    for the campaign picker that's coming; the game doesn't show it yet.)
 
 ### Updates

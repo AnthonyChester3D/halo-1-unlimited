@@ -27,6 +27,11 @@ struct pack_scan
 	int campaign_imported;
 };
 
+/* where imports go (set by the installer): the game's own folder, the install its list stars ("F:\Games\H1U"): a pack
+in <it>\maps\<key>, its campaign in <it>\campaigns\<key> (the game reads d:\maps as T:\maps). Not E:'s storage: E: is
+the console's smallest drive */
+extern char packs_storage[160];
+
 /* what it's doing, for the installer's log */
 typedef void (*packs_say_t)(int warning, char const *text);
 
@@ -39,5 +44,9 @@ int packs_import(struct pack_scan *scan, int multiplayer, int campaign, packs_sa
 
 /* takes out what was imported from it (the pack's own files are never touched) */
 void packs_remove(struct pack_scan *scan, int multiplayer, int campaign, packs_say_t say);
+
+/* takes out an import of the pack folder path that an installer before 41 put in E:\TDATA\4c4a4855; how many maps and
+levels it had (0: none) */
+int packs_remove_old(char const *path, int multiplayer, int campaign);
 
 #endif

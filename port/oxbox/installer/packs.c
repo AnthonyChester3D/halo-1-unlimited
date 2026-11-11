@@ -1,6 +1,7 @@
 /* packs.c: importing a map pack (another Halo's folder on the hard drive: a modded Halo's maps) into Halo 1
 Unlimited (packs.h). Nothing is copied or changed in the pack's folder: the game plays its .map files where they are.
-What's written goes in the game's own storage (E:\TDATA\4c4a4855, the game's T:):
+What's written goes in the game's own folder, packs_storage (the install the installer's list stars: "F:\Games\H1U"; the
+game reads its d:\maps as it reads T:\maps), never E:'s storage, as installers before 41 did (packs_remove_old):
 
 	maps\<pack>\                  a pack in the game's map list (port/linux/game/hmp_maps.c)
 		imported.txt              "From: <the Halo folder>", what the installer finds the import by
@@ -26,7 +27,10 @@ imported. */
 #include <stdlib.h>
 #include <string.h>
 
-#define STORAGE "E:\\TDATA\\4c4a4855"
+#define OLD_STORAGE "E:\\TDATA\\4c4a4855" /* (where installers before 41 put imports: E: is the smallest drive) */
+char packs_storage[160];
+static char const *storage = packs_storage;
+#define STORAGE storage
 #define MAP_HEADER 2048
 #define MAP_BASE 0x803A6000u
 #define MAXIMUM_FOLDER_NAME 30 /* (the game's: a pack's name and its map's together, hmp_maps.c) */
@@ -131,11 +135,9 @@ static int text_field(char const *path, char const *field, char *value, int size
 static void make_folders(char const *kind, char const *key)
 {
 	char path[200];
-	CreateDirectoryA("E:\\TDATA", NULL);
-	CreateDirectoryA(STORAGE, NULL);
-	text_print(path, sizeof(path), STORAGE "\\%s", kind);
+	text_print(path, sizeof(path), "%s\\%s", STORAGE, kind);
 	CreateDirectoryA(path, NULL);
-	text_print(path, sizeof(path), STORAGE "\\%s\\%s", kind, key);
+	text_print(path, sizeof(path), "%s\\%s\\%s", STORAGE, kind, key);
 	CreateDirectoryA(path, NULL);
 }
 
@@ -148,7 +150,7 @@ static int find_import(char const *kind, char const *file, char const *path, cha
 	char pattern[200], name[200], from[200];
 	HANDLE find;
 	int result = 1;
-	text_print(pattern, sizeof(pattern), STORAGE "\\%s\\*", kind);
+	text_print(pattern, sizeof(pattern), "%s\\%s\\*", STORAGE, kind);
 	find = FindFirstFileA(pattern, &found);
 	if (find == INVALID_HANDLE_VALUE)
 		return 1;
@@ -157,7 +159,7 @@ static int find_import(char const *kind, char const *file, char const *path, cha
 		if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.' ||
 			strlen(found.cFileName) >= PACK_KEY)
 			continue;
-		text_print(name, sizeof(name), STORAGE "\\%s\\%s\\%s", kind, found.cFileName, file);
+		text_print(name, sizeof(name), "%s\\%s\\%s\\%s", STORAGE, kind, found.cFileName, file);
 		if (!text_field(name, "From", from, sizeof(from)) && !_stricmp(from, path))
 		{
 			text_print(key, PACK_KEY, "%s", found.cFileName);
@@ -172,10 +174,10 @@ static int find_import(char const *kind, char const *file, char const *path, cha
 static int taken(char const *key)
 {
 	char path[200];
-	text_print(path, sizeof(path), STORAGE "\\maps\\%s", key);
+	text_print(path, sizeof(path), "%s\\maps\\%s", STORAGE, key);
 	if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES)
 		return 1;
-	text_print(path, sizeof(path), STORAGE "\\campaigns\\%s", key);
+	text_print(path, sizeof(path), "%s\\campaigns\\%s", STORAGE, key);
 	return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 }
 
@@ -247,7 +249,7 @@ static int count_links(char const *key)
 	char pattern[200], link[240];
 	HANDLE find;
 	int n = 0;
-	text_print(pattern, sizeof(pattern), STORAGE "\\maps\\%s\\*", key);
+	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*", STORAGE, key);
 	find = FindFirstFileA(pattern, &found);
 	if (find == INVALID_HANDLE_VALUE)
 		return 0;
@@ -255,7 +257,7 @@ static int count_links(char const *key)
 	{
 		if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.')
 			continue;
-		text_print(link, sizeof(link), STORAGE "\\maps\\%s\\%s\\map.link", key, found.cFileName);
+		text_print(link, sizeof(link), "%s\\maps\\%s\\%s\\map.link", STORAGE, key, found.cFileName);
 		n += GetFileAttributesA(link) != INVALID_FILE_ATTRIBUTES;
 	} while (FindNextFileA(find, &found));
 	FindClose(find);
@@ -269,7 +271,7 @@ static int count_levels(char const *key)
 	size_t got;
 	int n = 0;
 	FILE *file;
-	text_print(path, sizeof(path), STORAGE "\\campaigns\\%s\\campaign.txt", key);
+	text_print(path, sizeof(path), "%s\\campaigns\\%s\\campaign.txt", STORAGE, key);
 	if (!(file = fopen(path, "rb")))
 		return 0;
 	got = fread(text, 1, sizeof(text) - 1, file);
@@ -331,7 +333,44 @@ int packs_scan(char const *path, char const *stock_folder, struct pack_scan *sca
 		new_key(path, scan->key);
 	scan->multiplayer_imported = count_links(scan->key);
 	scan->campaign_imported = count_levels(scan->key);
+	/* (what an installer before 41 imported into E:'s storage counts too: the game still plays it, and taking it out or
+	importing it again removes it) */
+	if (_stricmp(packs_storage, OLD_STORAGE))
+	{
+		char old[PACK_KEY];
+		storage = OLD_STORAGE;
+		if (!find_import("maps", "imported.txt", path, old))
+			scan->multiplayer_imported += count_links(old);
+		if (!find_import("campaigns", "campaign.txt", path, old))
+			scan->campaign_imported += count_levels(old);
+		storage = packs_storage;
+	}
 	return 0;
+}
+
+static void remove_multiplayer(char const *key);
+static void remove_campaign(char const *key);
+
+/* an import of path in OLD_STORAGE taken out (its multiplayer maps and/or campaign); how many maps and levels it had */
+int packs_remove_old(char const *path, int multiplayer, int campaign)
+{
+	char key[PACK_KEY];
+	int n = 0;
+	if (!_stricmp(packs_storage, OLD_STORAGE))
+		return 0;
+	storage = OLD_STORAGE;
+	if (multiplayer && !find_import("maps", "imported.txt", path, key))
+	{
+		n += count_links(key);
+		remove_multiplayer(key);
+	}
+	if (campaign && !find_import("campaigns", "campaign.txt", path, key))
+	{
+		n += count_levels(key);
+		remove_campaign(key);
+	}
+	storage = packs_storage;
+	return n;
 }
 
 /* ---- the pack's XBE: its multiplayer levels' order ---- */
@@ -597,7 +636,7 @@ static void remove_multiplayer(char const *key)
 	static char const *const files[] = {"map.link", "info.txt", "preview.bin", "bots.txt", "bots_learned.txt", "showcase.txt"};
 	HANDLE find;
 	unsigned k;
-	text_print(pattern, sizeof(pattern), STORAGE "\\maps\\%s\\*", key);
+	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*", STORAGE, key);
 	find = FindFirstFileA(pattern, &found);
 	if (find != INVALID_HANDLE_VALUE)
 	{
@@ -605,7 +644,7 @@ static void remove_multiplayer(char const *key)
 		{
 			if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.')
 				continue;
-			text_print(folder, sizeof(folder), STORAGE "\\maps\\%s\\%s", key, found.cFileName);
+			text_print(folder, sizeof(folder), "%s\\maps\\%s\\%s", STORAGE, key, found.cFileName);
 			text_print(file, sizeof(file), "%s\\map.link", folder);
 			if (GetFileAttributesA(file) == INVALID_FILE_ATTRIBUTES)
 				continue; /* (a map that isn't an import's: map sharing's copy, say) */
@@ -621,13 +660,13 @@ static void remove_multiplayer(char const *key)
 		FindClose(find);
 	}
 	/* (the pack's shared file, a consolidated pack's) */
-	text_print(folder, sizeof(folder), STORAGE "\\maps\\%s", key);
+	text_print(folder, sizeof(folder), "%s\\maps\\%s", STORAGE, key);
 	delete_matching(folder, "*.shared");
-	text_print(file, sizeof(file), STORAGE "\\maps\\%s\\imported.txt", key);
+	text_print(file, sizeof(file), "%s\\maps\\%s\\imported.txt", STORAGE, key);
 	DeleteFileA(file);
-	text_print(file, sizeof(file), STORAGE "\\maps\\%s\\order.txt", key);
+	text_print(file, sizeof(file), "%s\\maps\\%s\\order.txt", STORAGE, key);
 	DeleteFileA(file);
-	text_print(folder, sizeof(folder), STORAGE "\\maps\\%s", key);
+	text_print(folder, sizeof(folder), "%s\\maps\\%s", STORAGE, key);
 	RemoveDirectoryA(folder);
 }
 
@@ -636,7 +675,7 @@ static void remove_campaign(char const *key)
 	WIN32_FIND_DATAA found;
 	char pattern[200], file[240];
 	HANDLE find;
-	text_print(pattern, sizeof(pattern), STORAGE "\\campaigns\\%s\\*", key);
+	text_print(pattern, sizeof(pattern), "%s\\campaigns\\%s\\*", STORAGE, key);
 	find = FindFirstFileA(pattern, &found);
 	if (find != INVALID_HANDLE_VALUE)
 	{
@@ -646,32 +685,47 @@ static void remove_campaign(char const *key)
 			if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
 				!((n > 4 && !_stricmp(found.cFileName + n - 4, ".bin")) || !_stricmp(found.cFileName, "campaign.txt")))
 				continue;
-			text_print(file, sizeof(file), STORAGE "\\campaigns\\%s\\%s", key, found.cFileName);
+			text_print(file, sizeof(file), "%s\\campaigns\\%s\\%s", STORAGE, key, found.cFileName);
 			DeleteFileA(file);
 		} while (FindNextFileA(find, &found));
 		FindClose(find);
 	}
-	text_print(file, sizeof(file), STORAGE "\\campaigns\\%s", key);
+	text_print(file, sizeof(file), "%s\\campaigns\\%s", STORAGE, key);
 	RemoveDirectoryA(file);
+}
+
+/* (what an installer before 41 imported from it, in E:'s storage, goes: E:'s room back) */
+static void old_say(struct pack_scan const *scan, int multiplayer, int campaign, packs_say_t say)
+{
+	char line[200];
+	int n = packs_remove_old(scan->path, multiplayer, campaign);
+	if (!n)
+		return;
+	text_print(line, sizeof(line), "Took out the copy an older installer put in E:'s storage (%d map%s).", n, n == 1 ? "" : "s");
+	say(0, line);
 }
 
 void packs_remove(struct pack_scan *scan, int multiplayer, int campaign, packs_say_t say)
 {
 	char line[200];
-	if (multiplayer && scan->multiplayer_imported)
+	int n;
+	if (multiplayer && (n = count_links(scan->key)) != 0)
 	{
 		remove_multiplayer(scan->key);
-		text_print(line, sizeof(line), "Took out %d multiplayer maps (maps\\%s).", scan->multiplayer_imported, scan->key);
+		text_print(line, sizeof(line), "Took out %d multiplayer maps (maps\\%s).", n, scan->key);
 		say(0, line);
-		scan->multiplayer_imported = 0;
 	}
-	if (campaign && scan->campaign_imported)
+	if (campaign && count_levels(scan->key))
 	{
 		remove_campaign(scan->key);
 		text_print(line, sizeof(line), "Took out the campaign (campaigns\\%s).", scan->key);
 		say(0, line);
-		scan->campaign_imported = 0;
 	}
+	old_say(scan, multiplayer, campaign, say);
+	if (multiplayer)
+		scan->multiplayer_imported = 0;
+	if (campaign)
+		scan->campaign_imported = 0;
 }
 
 /* the maps of one kind (type) to import, with their names and pictures' places (entries[PACK_MAPS]); how many */
@@ -743,18 +797,18 @@ static int write_multiplayer(struct pack_scan *scan, struct entry *entries, int 
 			say(1, text);
 			continue;
 		}
-		text_print(path, sizeof(path), STORAGE "\\maps\\%s\\%s", scan->key, name);
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s", STORAGE, scan->key, name);
 		CreateDirectoryA(path, NULL);
-		text_print(path, sizeof(path), STORAGE "\\maps\\%s\\%s\\info.txt", scan->key, name);
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\info.txt", STORAGE, scan->key, name);
 		text_print(text, sizeof(text), "%s\r\n%s\r\n", e->name, e->description);
 		failed |= write_file(path, text, strlen(text));
 		if (e->picture.size)
 		{
-			text_print(path, sizeof(path), STORAGE "\\maps\\%s\\%s\\preview.bin", scan->key, name);
+			text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\preview.bin", STORAGE, scan->key, name);
 			failed |= write_file(path, e->picture.data, PICTURE_SIZE);
 		}
 		/* (the link last: a map is in the list once it's there) */
-		text_print(path, sizeof(path), STORAGE "\\maps\\%s\\%s\\map.link", scan->key, name);
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\map.link", STORAGE, scan->key, name);
 		text_print(text, sizeof(text), "%s\\maps\\%s.map\r\n", scan->path, name);
 		if (write_file(path, text, strlen(text)))
 		{
@@ -766,9 +820,9 @@ static int write_multiplayer(struct pack_scan *scan, struct entry *entries, int 
 		text_print(text, sizeof(text), "  %s: %s%s", name, e->name, e->picture.size ? "" : " (no picture)");
 		say(0, text);
 	}
-	text_print(path, sizeof(path), STORAGE "\\maps\\%s\\order.txt", scan->key);
+	text_print(path, sizeof(path), "%s\\maps\\%s\\order.txt", STORAGE, scan->key);
 	failed |= write_file(path, order, (unsigned long)at);
-	text_print(path, sizeof(path), STORAGE "\\maps\\%s\\imported.txt", scan->key);
+	text_print(path, sizeof(path), "%s\\maps\\%s\\imported.txt", STORAGE, scan->key);
 	text_print(text, sizeof(text), "From: %s\r\nName: %s\r\n", scan->path, last_part(scan->path));
 	failed |= write_file(path, text, strlen(text));
 	scan->multiplayer_imported = written;
@@ -792,13 +846,13 @@ static int write_campaign(struct pack_scan *scan, struct entry *entries, int n, 
 			e->description);
 		if (e->picture.size)
 		{
-			text_print(path, sizeof(path), STORAGE "\\campaigns\\%s\\%s.bin", scan->key, name);
+			text_print(path, sizeof(path), "%s\\campaigns\\%s\\%s.bin", STORAGE, scan->key, name);
 			failed |= write_file(path, e->picture.data, PICTURE_SIZE);
 		}
 		text_print(line, sizeof(line), "  %s: %s%s", name, e->name, e->picture.size ? "" : " (no picture)");
 		say(0, line);
 	}
-	text_print(path, sizeof(path), STORAGE "\\campaigns\\%s\\campaign.txt", scan->key);
+	text_print(path, sizeof(path), "%s\\campaigns\\%s\\campaign.txt", STORAGE, scan->key);
 	failed |= write_file(path, text, (unsigned long)at);
 	free(text);
 	scan->campaign_imported = failed ? 0 : n;
@@ -896,7 +950,9 @@ int packs_import(struct pack_scan *scan, int multiplayer, int campaign, packs_sa
 		failed |= write_campaign(scan, entries + mp_count, sp_count, say);
 	}
 	if (failed)
-		text_print(error, 256, "some files couldn't be written in " STORAGE " (is E: full?)");
+		text_print(error, 256, "some files couldn't be written in %s (is its drive full?)", STORAGE);
+	else
+		old_say(scan, multiplayer && mp_count, campaign && sp_count, say);
 done:
 	free(ui.tags);
 	free(ranges);

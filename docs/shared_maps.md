@@ -236,7 +236,8 @@ stream.
 *Make its multiplayer maps small (consolidate)*, on a pack's own Halo folder (one the installer imports from), does it: the
 pack's multiplayer maps are imported (names, pictures and links, as an import's), then each is converted against the install's
 `stock.index` and `stock.shared`, by the rules above and with shared_pass.py's layout (the same maps in the same order give
-byte-identical files, unpacked). Each small map goes in its imported folder in the game's storage beside its `map.link` (the
+byte-identical files, unpacked). Each small map goes in its imported folder in the starred install's maps folder (`<install>\maps\<pack>\<map>`, never E:'s
+storage) beside its `map.link` (the
 game plays a folder's `.map` before its link; the link marks the folder as the import's), and the blocks two or more of the
 maps use in `<pack>-<checksum>.shared` in the pack's folder there. The pack's own folder is left as it is: nothing is
 deleted yet.
@@ -255,7 +256,8 @@ written and checked the same.
 
 ## Shrink maps
 
-On the game's own install, **White** looks in its maps folder and the game's storage (E:\TDATA\4c4a4855\maps) for packs'
+On the game's own install, **White** looks in its maps folder, the starred install's, and E:'s old storage (E:\TDATA\4c4a4855\maps, where installers
+before 41 imported packs) for packs'
 files with full-size maps they were made from where the game would find them (beside the map or in the folder above): maps
 downloaded from a console that hadn't consolidated, or copied there. It says *You have N maps that can be shrunk to save
 space* and offers *Shrink maps (saves about N MB)*. Each map is made small against stock.shared and that pack's file by its

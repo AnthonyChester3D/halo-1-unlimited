@@ -15,7 +15,8 @@ the retail XBE's addresses).
 
 A map's folder can hold a map.link in place of its .map: one line, the path of a .map somewhere else on the hard drive
 ("F:\Games\Halo NHE\maps\atlas.map"), played where it is. The installer makes these for a map pack it imports (another
-Halo's maps: port/oxbox/installer/packs.c), as a pack in T:\maps; deleting such a map deletes its folder, never the .map.
+Halo's maps: port/oxbox/installer/packs.c), as a pack in the install's d:\maps (installers before 41: T:\maps); deleting
+such a map deletes its folder, never the .map.
 
 T:\maps (E:\TDATA\4c4a4855\maps: the game's own storage on the hard drive) is read the same way after d:\maps; a map in
 both is listed once (the higher "Version:" in its info .txt, else the newer .map; map sharing can switch to the copy
