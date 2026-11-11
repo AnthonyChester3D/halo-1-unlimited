@@ -1,10 +1,7 @@
 /* stockmaps_test HALO_FOLDER look|convert|restore: what the installer does to a Halo folder's stock maps, on a PC, for
 testing (the folder holds maps\, with the 13 retail multiplayer maps and 10 levels; STOCKMAPS_TEST_CACHE=DIR,DIR,DIR: folders
 standing in for the cache drives). Built (in this folder) with
-	Z=../../third_party/zlib-ng
-	cc -O2 -DSTOCKMAPS_HOST -I$Z -DZLIBNG_NATIVE_API -DDISABLE_RUNTIME_CPU_DETECTION -DHAVE_POSIX_MEMALIGN \
-		-DHAVE_ATTRIBUTE_ALIGNED -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL -I$Z/arch/generic -o stockmaps_test stockmaps_test.c \
-		stockmaps.c mapstream.c ngz.c sha256.c $Z/*.c $Z/arch/generic/*.c -lz */
+	cc -O2 -DSTOCKMAPS_HOST -o stockmaps_test stockmaps_test.c stockmaps.c mapstream.c sha256.c -lz */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

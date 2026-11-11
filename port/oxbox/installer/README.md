@@ -215,5 +215,5 @@ The game saying when an update is out and starting the installer to get it.
 
 This folder is part of the online branch (AGPL-3.0-or-later). The installer XBE also contains nxdk's libraries (MIT;
 its USB stack, Apache-2.0; PDCLib, CC0; its lwIP, BSD 3-clause; its network driver, MIT), SDL2 (zlib licence), zlib
-and zlib-ng (zlib licence), the unscii font (public domain), Monocypher (CC0) and Mbed TLS (Apache-2.0): a release carries their
+(zlib licence), the unscii font (public domain), Monocypher (CC0) and Mbed TLS (Apache-2.0): a release carries their
 notices beside it (`THIRD_PARTY.txt`), and the installer writes them beside itself.

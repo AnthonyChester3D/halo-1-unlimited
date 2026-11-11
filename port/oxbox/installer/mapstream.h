@@ -6,8 +6,6 @@ stream) read and written a piece at a time, and a map's blocks (a bitmap's pixel
 #include <stdint.h>
 #include <zlib.h>
 
-struct ngz;
-
 #ifdef STOCKMAPS_HOST
 #include "stockmaps_host.h"
 #else
@@ -81,10 +79,8 @@ struct reader
 {
 	HANDLE file;
 	struct ahead ahead;
-	struct ngz *z;                  /* (zlib-ng's inflate: ngz.h. What comes out is the same as zlib's, faster) */
-	unsigned char const *in;        /* what's read and not yet unpacked */
-	uint32_t in_size;
-	int ended;
+	z_stream z;
+	int started, ended;
 	uint32_t raw_crc, raw_size;     /* of the file as it is on the disk, so far */
 };
 /* a cache file opened, its header read */
@@ -100,23 +96,15 @@ void reader_close(struct reader *r);
 
 struct writer
 {
-	z_stream z;                     /* (zlib's) */
-	struct ngz *fast;               /* (zlib-ng's, when writer_open_fast) */
-	unsigned char const *in;
-	uint32_t in_size;
+	z_stream z;
 	HANDLE to;
 	uint32_t written, crc;          /* what's gone out so far, and the running CRC of it */
 	uint32_t held;                  /* of that, what's still waiting to be written (one writer at a time) */
 };
-/* one zlib stream (memLevel 8) to a file, or only measured; the CRC goes on from crc. writer_open: zlib's, at level (the
-restore's level 6 must be zlib's, to give the retail maps' own bytes). writer_open_fast: zlib-ng's level 2, as small as
-zlib's level 1 and about twice as quick (the swap's small maps: they're checked by what they unpack to, not their bytes) */
-#define WRITER_FAST_LEVEL 2
+/* one zlib stream (memLevel 8) to a file, or only measured; the CRC goes on from crc */
 int writer_open(struct writer *w, int level, HANDLE to, uint32_t crc);
-int writer_open_fast(struct writer *w, HANDLE to, uint32_t crc);
 int writer_put(struct writer *w, unsigned char const *from, uint32_t size);
 int writer_finish(struct writer *w);
-void writer_abandon(struct writer *w);     /* (closed without finishing) */
 
 /* a map's tag data in memory: everything read of its tags is in it */
 struct map_view

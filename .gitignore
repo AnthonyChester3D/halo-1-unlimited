@@ -47,7 +47,6 @@ dist/
 /port/oxbox/installer/keys.h
 /port/oxbox/installer/notices.h
 /port/oxbox/installer/mbedtls_obj/
-/port/oxbox/installer/zlibng_obj/
 /port/third_party/monocypher/*.obj
 /port/third_party/monocypher/*.c.d
 *.oxpk

@@ -182,9 +182,9 @@ unaffected: they get Custom Edition maps through `map_share.c`, and a PC game st
 
 After an install (never in the game's own updates) the installer offers to swap a Halo folder's 23 stock maps for small
 ones drawing on `maps\stock.shared`, built from the player's own maps (`port/oxbox/installer/stockmaps.c`; about 800 MB
-saved). The small maps are packed with zlib-ng (`port/third_party/zlib-ng`) at its level 2: as small as zlib's level 1, only 3% bigger than level 6, and about twice as quick as zlib's level 1. It needs all 23: a folder without them isn't offered it, since stock.shared couldn't be the same file. Only the
+saved). The small maps are packed at zlib level 1: only 3% bigger than level 6, and far quicker on a console. It needs all 23: a folder without them isn't offered it, since stock.shared couldn't be the same file. Only the
 retail maps are swapped, each checked by its file's size and CRC, so every console's stock.shared is the same file. All 24 maps are byte-identical on the three NTSC discs (the original, Rev 1 and Rev 2), and stock.shared and
-the small maps built from each compare equal: the three builds need no table of their own. stock.shared is the same, byte for byte, as `shared_pass.py stock` makes; the small maps unpack to the same bytes as its (their packed bytes differ: it packs with zlib, and only what a map unpacks to is checked).
+the small maps built from each compare equal: the three builds need no table of their own. The small maps and stock.shared are the same, byte for byte, as `shared_pass.py stock` makes.
 
 It reads each retail map once: as a map's data goes into stock.shared, its small map is made on a cache drive (X:, Y:,
 Z:), and once all 23 are read and stock.shared is checked, each is copied into the maps folder, read back, and swapped in.

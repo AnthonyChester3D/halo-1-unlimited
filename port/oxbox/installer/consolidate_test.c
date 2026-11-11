@@ -1,8 +1,5 @@
 /* consolidate_test: consolidate.c on a PC, for testing. Built (in this folder) with
-	Z=../../third_party/zlib-ng
-	cc -O2 -DSTOCKMAPS_HOST -I$Z -DZLIBNG_NATIVE_API -DDISABLE_RUNTIME_CPU_DETECTION -DHAVE_POSIX_MEMALIGN \
-		-DHAVE_ATTRIBUTE_ALIGNED -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL -I$Z/arch/generic -o consolidate_test \
-		consolidate_test.c consolidate.c mapstream.c ngz.c sha256.c $Z/*.c $Z/arch/generic/*.c -lz
+	cc -O2 -DSTOCKMAPS_HOST -o consolidate_test consolidate_test.c consolidate.c mapstream.c sha256.c -lz
 consolidate_test STOCK_INDEX MAP...: what consolidating these maps would save.
 consolidate_test --convert STOCK_FOLDER PACK_FOLDER PREFIX MAP...: converts them, as the installer does, each into
 PACK_FOLDER/<its name>/ (made, with a map.link, as an import makes it), the pack's file in PACK_FOLDER. STOCK_FOLDER holds
