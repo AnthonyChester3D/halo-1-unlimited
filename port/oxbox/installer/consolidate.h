@@ -30,6 +30,10 @@ struct consolidate_result
 	char shared[32];                /* the pack's file's name, without .shared ("" for none) */
 };
 
+/* the log file only (set by the installer): "time:" lines, how long each step took and where the time went, as the stock
+maps' swap logs them */
+extern void (*consolidate_log)(char const *text);
+
 /* the maps at paths (count of them) measured, against stock_index (maps\stock.index). 0 when done, else error[256] */
 int consolidate_measure(char const *stock_index, char const *const *paths, int count, consolidate_say_t say,
 	struct consolidate_measure *result, char *error);

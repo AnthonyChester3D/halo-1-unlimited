@@ -27,9 +27,15 @@ static char *backslashes(char const *from)
 	return to;
 }
 
+static void log_line(char const *text)
+{
+	fprintf(stderr, "  %s\n", text);
+}
+
 int main(int argc, char **argv)
 {
 	char error[256] = "";
+	consolidate_log = log_line;
 	if (argc >= 6 && !strcmp(argv[1], "--convert"))
 	{
 		struct consolidate_result r;

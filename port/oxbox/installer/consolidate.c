@@ -5,12 +5,15 @@ give the same files), and a converted map is checked as tools/verify_shared.py c
 
 Measuring only reads. A map is gone through twice, a piece at a time (the first for its tag data, usually at its end; the
 second to hash its blocks): a level can unpack to 280 MB. Converting adds a pass for each map (its small map written, its
-part of the pack's file with it), one to pack the pack's file, and one to read each small map back. */
+part of the pack's file with it), one to pack the pack's file, and one to read each small map back. The disk thread
+(mapstream.c) is on throughout, as in the stock maps' swap: a file that's written is moved with disk_seek and closed with
+file_close, and anything else done to it comes after disk_sync. Each step's time goes in the log (consolidate_log). */
 #include "consolidate.h"
 #include "mapstream.h"
 #include "sha256.h"
 #include "text.h"
 
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,6 +35,53 @@ part of the pack's file with it), one to pack the pack's file, and one to read e
 #define LIST_HEAD 16u
 #define LIST_MAP 20u
 #define LIST_BLOCK 40u
+
+void (*consolidate_log)(char const *text);
+
+static char const *last_part(char const *path);
+
+/* ---- the "time:" lines (as stockmaps.c's): each step, from when it began ---- */
+
+static uint64_t step_began, whole_began;
+static struct stream_times step_then, whole_then;
+
+static void step_begin(void)
+{
+	step_began = stream_now();
+	stream_times_get(&step_then);
+}
+
+static void step_end(char const *format, ...)
+{
+	char what[80], how[200], line[300];
+	va_list list;
+	if (!consolidate_log)
+		return;
+	va_start(list, format);
+	text_vprint(what, sizeof(what), format, list);
+	va_end(list);
+	stream_times_text(how, sizeof(how), step_began, &step_then);
+	text_print(line, sizeof(line), "time: %s: %s", what, how);
+	consolidate_log(line);
+	step_begin();
+}
+
+static void whole_begin(void)
+{
+	whole_began = stream_now();
+	stream_times_get(&whole_then);
+	step_begin();
+}
+
+static void whole_end(char const *what)
+{
+	char how[200], line[300];
+	if (!consolidate_log)
+		return;
+	stream_times_text(how, sizeof(how), whole_began, &whole_then);
+	text_print(line, sizeof(line), "time: %s, all of it: %s", what, how);
+	consolidate_log(line);
+}
 /* how a map's other data packs, and a pack's shared file, on the 14 old packs (shared_pass.py at level 6). An estimate */
 #define MAP_PACKED_PERCENT 39
 #define SHARED_PACKED_PERCENT 47
@@ -441,6 +491,7 @@ static int measure_all(struct measuring *m, char const *const *paths, int count,
 			say(0, line);
 		}
 		r = measure_map(m, paths[i], i, result, &length, keeps ? &keeps[i] : NULL);
+		step_end("%s measured", last_part(paths[i]));
 		if (r == 2)
 		{
 			text_print(error, 256, "Too many different textures and sounds to count in this pack.");
@@ -485,9 +536,13 @@ int consolidate_measure(char const *stock_index, char const *const *paths, int c
 	struct measuring m;
 	int status = 1;
 	memset(result, 0, sizeof(*result));
+	disk_on();
+	whole_begin();
 	if (!measuring_start(&m, stock_index, error) && !measure_all(&m, paths, count, say, result, NULL, error))
 		status = 0;
 	measuring_end(&m);
+	whole_end("measuring");
+	disk_off();
 	return status;
 }
 
@@ -505,14 +560,13 @@ static HANDLE create(char const *path, int and_read)
 /* (written to the disk before it's closed) */
 static int finish(HANDLE file)
 {
-	IO_STATUS_BLOCK status;
-	int ok = NT_SUCCESS(NtFlushBuffersFile(file, &status));
-	return CloseHandle(file) && ok;
+	int ok = !timed_flush(file);
+	return file_close(file) && ok;
 }
 
 static int write_at(HANDLE file, uint32_t at, void const *from, uint32_t size)
 {
-	return SetFilePointer(file, (LONG)at, NULL, FILE_BEGIN) != at || write_all(file, from, size);
+	return disk_seek(file, at) || write_all(file, from, size);
 }
 
 struct range
@@ -851,7 +905,7 @@ stop:
 	if (writing)
 		deflateEnd(&w.z);
 	if (file != INVALID_HANDLE_VALUE)
-		CloseHandle(file);
+		file_close(file);
 	layout_free(&l);
 	return failed;
 }
@@ -871,7 +925,7 @@ static int pack_data(struct converting *v, HANDLE temporary, uint32_t from, uint
 	struct sha256 h;
 	uint32_t at, crc = crc_add(0, NULL, 0);
 	int k = 0;
-	if (SetFilePointer(temporary, (LONG)from, NULL, FILE_BEGIN) != from)
+	if (disk_seek(temporary, from))
 		return 1;
 	for (at = from; at < length; at += CHUNK)
 	{
@@ -947,7 +1001,7 @@ static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, 
 	if (file == INVALID_HANDLE_VALUE || write_all(file, zeros, HEADER) || writer_open(&w, SHARED_LEVEL, file, 0))
 		goto stop;
 	writing = 1;
-	if (SetFilePointer(temporary, (LONG)HEADER, NULL, FILE_BEGIN) != HEADER)
+	if (disk_seek(temporary, HEADER))
 		goto stop;
 	for (at = HEADER; at < length; at += CHUNK)
 	{
@@ -985,7 +1039,7 @@ stop:
 	if (writing)
 		deflateEnd(&w.z);
 	if (file != INVALID_HANDLE_VALUE)
-		CloseHandle(file);
+		file_close(file);
 	return failed;
 }
 
@@ -1224,7 +1278,7 @@ static uint32_t to_sector(uint32_t n)
 	return n + (SECTOR - n % SECTOR) % SECTOR;
 }
 
-int consolidate_convert(char const *stock_folder, char const *pack_folder, char const *pack_prefix, char const *const *paths,
+static int convert_pack(char const *stock_folder, char const *pack_folder, char const *pack_prefix, char const *const *paths,
 	char const *const *folders, int count, consolidate_say_t say, struct consolidate_result *result, char *error)
 {
 	struct converting v;
@@ -1258,6 +1312,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 		goto done;
 	result->already = measured.already;
 	result->unreadable = measured.unreadable;
+	step_begin();
 	/* each map's small map laid out: one that would be too big to play is left (a block's place doesn't change that), and
 	what it uses no longer counts, so another may keep a block it shared and grow: again until none is left */
 	for (changed = 1; changed;)
@@ -1347,7 +1402,9 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 	}
 	has_pack = blocks > 0;
 	/* room: the pack's file twice (as it's made, and packed) and the maps, by the measure's estimate, and some to spare */
+	step_end("laid out");
 	root[0] = pack_folder[0];
+	disk_sync(); /* (what's still to be written takes room too) */
 	if (GetDiskFreeSpaceExA(root, &available, &total, &free_total) &&
 		available.QuadPart < (unsigned long long)pack_length * 2 + measured.after + 16 * 1024 * 1024)
 	{
@@ -1374,6 +1431,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 				goto done;
 			}
 		}
+		step_end("the pack's file filled with zeros");
 	}
 	/* each map's small map, beside its map.link as <name>.map.new until it's checked */
 	for (i = 0; i < count; i++)
@@ -1389,6 +1447,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			text_print(error, 256, "%s couldn't be converted (written to %s).", last_part(paths[i]), folders[i]);
 			goto done;
 		}
+		step_end("%s made small", last_part(paths[i]));
 	}
 	/* the pack's file read back from its layout: its checksum, which names it, and its blocks' hashes, for its list */
 	if (has_pack)
@@ -1401,6 +1460,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			goto done;
 		}
 		text_print(name, 32, "%s-%08lx", pack_prefix, (unsigned long)checksum);
+		step_end("the pack's file read back");
 	}
 	/* the small maps' headers name it */
 	for (i = 0; i < count; i++)
@@ -1423,6 +1483,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			goto done;
 		}
 	}
+	step_end("the small maps' headers written");
 	/* then its list, and it's packed and named */
 	if (has_pack)
 	{
@@ -1435,7 +1496,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			text_print(error, 256, "The pack's shared file couldn't be written.");
 			goto done;
 		}
-		CloseHandle(temporary);
+		file_close(temporary);
 		temporary = INVALID_HANDLE_VALUE;
 		DeleteFileA(temporary_path);
 		text_print(path, sizeof(path), "%s\\%s.shared", pack_folder, name);
@@ -1446,6 +1507,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 			goto done;
 		}
 		text_print(shared_path, sizeof(shared_path), "%s", path);
+		step_end("the pack's file packed");
 	}
 	/* then read back: what's in the shared files, and each map; a map that reads back right takes its link's place */
 	if (say)
@@ -1456,6 +1518,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 		text_print(error, 256, "The shared files didn't read back right: nothing was changed.");
 		goto done;
 	}
+	step_end("the shared files' blocks checked");
 	for (i = 0; i < count; i++)
 	{
 		struct cmap *c = &v.maps[i];
@@ -1490,6 +1553,7 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 		result->converted++;
 		result->before += c->raw_size;
 		result->after += file_size(final_path);
+		step_end("%s read back and put in place", last_part(paths[i]));
 	}
 	if (has_pack)
 	{
@@ -1503,7 +1567,8 @@ int consolidate_convert(char const *stock_folder, char const *pack_folder, char 
 	status = 0;
 done:
 	if (temporary != INVALID_HANDLE_VALUE)
-		CloseHandle(temporary);
+		file_close(temporary);
+	disk_sync();
 	if (status)
 	{
 		/* (nothing changes when it stops: what it made goes) */
@@ -1532,6 +1597,18 @@ done:
 	free(order);
 	free(pblocks);
 	measuring_end(&v.m);
+	return status;
+}
+
+int consolidate_convert(char const *stock_folder, char const *pack_folder, char const *pack_prefix, char const *const *paths,
+	char const *const *folders, int count, consolidate_say_t say, struct consolidate_result *result, char *error)
+{
+	int status;
+	disk_on();
+	whole_begin();
+	status = convert_pack(stock_folder, pack_folder, pack_prefix, paths, folders, count, say, result, error);
+	whole_end("consolidating");
+	disk_off();
 	return status;
 }
 
@@ -1610,7 +1687,7 @@ int consolidate_members(char const *pack_path, struct consolidate_member *member
 	return 0;
 }
 
-int consolidate_shrink(char const *stock_folder, char const *pack_path, char const *const *paths, int count,
+static int shrink_maps(char const *stock_folder, char const *pack_path, char const *const *paths, int count,
 	consolidate_say_t say, struct consolidate_result *result, char *error)
 {
 	struct converting v;
@@ -1710,6 +1787,7 @@ int consolidate_shrink(char const *stock_folder, char const *pack_path, char con
 		need += c->length ? (unsigned long long)c->out_length * c->raw_size / c->length : c->out_length;
 	}
 	root[0] = count ? paths[0][0] : 'E';
+	disk_sync();
 	if (count && GetDiskFreeSpaceExA(root, &available, &total, &free_total) && available.QuadPart < need)
 	{
 		text_print(error, 256, "Not enough room: it needs about %lu MB free on the drive.", (unsigned long)(need >> 20));
@@ -1753,6 +1831,7 @@ int consolidate_shrink(char const *stock_folder, char const *pack_path, char con
 			text_print(error, 256, "%s couldn't be written.", out_path);
 			goto done;
 		}
+		step_end("%s made small", last_part(paths[i]));
 	}
 	/* read back: what's in the shared files, then each map, which then takes its full-size one's place */
 	if (say)
@@ -1763,6 +1842,7 @@ int consolidate_shrink(char const *stock_folder, char const *pack_path, char con
 		text_print(error, 256, "The shared files didn't read back right: nothing was changed.");
 		goto done;
 	}
+	step_end("the shared files' blocks checked");
 	for (i = 0; i < count; i++)
 	{
 		struct cmap *c = &v.maps[i];
@@ -1802,10 +1882,12 @@ int consolidate_shrink(char const *stock_folder, char const *pack_path, char con
 		result->converted++;
 		result->before += c->raw_size;
 		result->after += file_size(paths[i]);
+		step_end("%s read back and put in place", last_part(paths[i]));
 	}
 	text_print(result->shared, sizeof(result->shared), "%s", name);
 	status = 0;
 done:
+	disk_sync();
 	if (status && v.maps)
 	{
 		for (i = 0; i < count; i++)
@@ -1825,5 +1907,17 @@ done:
 	free(member);
 	free(list);
 	measuring_end(&v.m);
+	return status;
+}
+
+int consolidate_shrink(char const *stock_folder, char const *pack_path, char const *const *paths, int count,
+	consolidate_say_t say, struct consolidate_result *result, char *error)
+{
+	int status;
+	disk_on();
+	whole_begin();
+	status = shrink_maps(stock_folder, pack_path, paths, count, say, result, error);
+	whole_end("shrinking");
+	disk_off();
 	return status;
 }

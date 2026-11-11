@@ -47,10 +47,10 @@ int timed_flush(HANDLE file);                   /* 0 when flushed (and every wri
 /* the time since then (stream_now) and how it went, from the times then: "12.3 s: read 4.1 s (61 MB), ..." */
 void stream_times_text(char *text, int size, uint64_t since, struct stream_times const *then);
 
-/* the disk thread (stockmaps.c turns it on for the swap and the restore): writes go behind, a reader's next 1 MB is read
-ahead, in the order they were made. While it's on, a file that's written is moved with disk_seek and closed with
-file_close, and anything else done to a file (a rename, a delete, its size) comes after disk_sync. A write that fails shows
-at the file's next write, its flush or its close */
+/* the disk thread (on for the stock maps' swap and restore, stockmaps.c, and a pack's maps, consolidate.c): writes go
+behind, a reader's next 1 MB is read ahead, in the order they were made. While it's on, a file that's written is moved
+with disk_seek and closed with file_close, and anything else done to a file (a rename, a delete, its size) comes after
+disk_sync. A write that fails shows at the file's next write, its flush or its close */
 void disk_on(void);
 void disk_off(void);                            /* (what's queued done first) */
 void disk_sync(void);                           /* waits until what's queued is done */
