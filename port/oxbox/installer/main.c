@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 51
+#define INSTALLER_VERSION 52
 #endif
 __attribute__((used)) static struct
 {
@@ -258,18 +258,6 @@ static unsigned held_buttons = ~0u; /* (none counts as pressed until it's been s
 static int held_direction;
 static DWORD held_since, last_repeat;
 
-static void launch(char const *device);
-
-/* L + R + Back + Start held on any pad: back to the dashboard, as modded dashboards' shortcut does. Looked at by every
-menu, and while the drives or packs are looked round (only read then: nothing's half written) */
-static int to_dashboard_held(SDL_GameController *p)
-{
-	return SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000 &&
-		SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000 &&
-		SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_BACK) &&
-		SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_START);
-}
-
 static int poll_input(void)
 {
 	SDL_Event e;
@@ -303,11 +291,6 @@ static int poll_input(void)
 		int y;
 		if (!p)
 			continue;
-		if (to_dashboard_held(p))
-		{
-			log_file("to the dashboard (L + R + Back + Start)");
-			launch(NULL);
-		}
 		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_A) << A;
 		buttons |= (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_B) |
 			SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_BACK)) << B;
@@ -347,8 +330,8 @@ static int poll_input(void)
 	return NONE;
 }
 
-/* the pads looked at while it's busy only reading (looking round the drives, the packs): for the dashboard shortcut
-(the buttons pressed then are dropped) */
+/* the pads read while it's busy only reading (looking round the drives, the packs), what's pressed dropped: the
+dashboard's own back-to-the-dashboard buttons (whatever they are) work only while the pads are being read */
 static void poll_while_busy(void)
 {
 	static DWORD last;
