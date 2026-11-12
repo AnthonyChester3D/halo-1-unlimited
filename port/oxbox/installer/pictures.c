@@ -843,7 +843,8 @@ static int gametype_picture(unsigned char const *rgba, unsigned char *out)
 }
 
 /* ---- the headers made of letters (512 x 64): ONLINE GAMES (from SYSTEM LINK GAMES and SELECT PROFILE), VEHICLE
-OPTIONS (from LOAD LEVEL, SELECT PROFILE, CHOOSE DIFFICULTY and ITEM OPTIONS) and OPTIONS (from ITEM OPTIONS).
+OPTIONS (from LOAD LEVEL, SELECT PROFILE, CHOOSE DIFFICULTY and ITEM OPTIONS), OPTIONS (from ITEM OPTIONS) and SELECT
+CAMPAIGN (from SELECT PROFILE and SYSTEM LINK GAMES).
 
 Each is laid on a glow bar like the headers' own: the bar's start (its columns left of the text), a column of it
 between two words where no letter's glow reaches, repeated under the whole text, and its fading end (its columns
@@ -909,6 +910,19 @@ static struct header_bar const items_bar = {S_ITEMS, 111, 258};
 static struct header_piece const options_pieces[] = {
 	{S_ITEMS, 119, 257, 1},    /* OPTIONS */
 	{-1, 0, 0, 0}};
+
+static struct header_piece const campaign_pieces[] = {
+	{S_PROFILE, 30, 146, 0},   /* SELECT */
+	{S_PROFILE, 110, 127, 14}, /* C */
+	{S_FOUND, 275, 296, 3},    /* A */
+	{S_FOUND, 299, 323, 2},    /* M */
+	{S_PROFILE, 161, 179, 3},  /* P */
+	{S_FOUND, 275, 296, 2},    /* A */
+	{S_FOUND, 191, 194, 4},    /* I */
+	{S_FOUND, 254, 273, 5},    /* G */
+	{S_FOUND, 200, 218, 4},    /* N */
+	{-1, 0, 0, 0}};
+static struct header_bar const profile_bar = {S_PROFILE, 153, 292};
 
 /* copies column `from` of source over column `to` of out, as it is */
 static void bar_column(unsigned char *out, int to, unsigned char const *source, int from)
@@ -1079,6 +1093,9 @@ int pictures_make(char const *ui_map_path, unsigned char *pictures, unsigned cha
 		progress("making the OPTIONS header");
 		header_compose(options_pieces, &items_bar, images, picture);
 		dxt3_encode(picture, 512, 64, header + 2 * HEADER_SIZE);
+		progress("making the SELECT CAMPAIGN header");
+		header_compose(campaign_pieces, &profile_bar, images, picture);
+		dxt3_encode(picture, 512, 64, header + 3 * HEADER_SIZE);
 	}
 	result = 0;
 done:

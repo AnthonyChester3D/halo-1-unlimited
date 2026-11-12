@@ -46,7 +46,9 @@ installer and a package, and neither holds any of Microsoft's code or any of Hal
    is copied and the pack's folder isn't changed: the game plays its maps where they are. The multiplayer maps go
    in the game's map list as a pack named after the folder ("Halo 1 - NHE": "NHE"), with their names, descriptions
    and pictures from the pack's own `ui.map`; map sharing sends them to Xboxes that haven't got them. What's written
-   goes in the game's storage (`E:\TDATA\4c4a4855`, a few small files per map: `packs.c`). (The campaign is imported
+   goes in the game's own folder, the install the list stars (`<install>\maps\<pack>`, `<install>\campaigns\<pack>`:
+   `packs.c`), never E:'s storage: a pack made small takes tens of MB, and E: is the smallest drive. Installers before 41
+   put imports in `E:\TDATA\4c4a4855`; importing a pack again or taking it out removes that copy. (The campaign is imported
    for the campaign picker that's coming; the game doesn't show it yet.)
 
 ### Updates
@@ -149,7 +151,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `screen.c`, `screen.h` | the text screen, in colour, and the screen blanked while the next XBE starts |
 | `package.c`, `package.h` | reading a package, checking its signature, making a build from it |
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
-| `consolidate.c`, `consolidate.h` | consolidating a pack: what it would save (**White**, *See what consolidating would save*: it only reads), *Make its multiplayer maps small*, and on the game's install *Shrink maps* (full-size maps a pack's file here was made from: docs/shared_maps.md) |
+| `consolidate.c`, `consolidate.h` | consolidating a pack: what it would save (**White**, *See what consolidating would save*: it only reads), *Make its maps small* (its multiplayer maps and modded campaign), and on the game's install *Shrink maps* (full-size maps a pack's file here was made from: docs/shared_maps.md) |
 | `mapstream.c`, `mapstream.h` | a cache file read and written a piece at a time, and a map's blocks found |
 | `stockmaps_table.h` | the retail maps' sizes and CRCs and which levels' blocks go in stock.shared (made by `tools/gen_stock_table.py`) |
 | `stockmaps.c`, `stockmaps.h` | the stock maps swapped for small ones drawing on stock.shared, and put back exactly |

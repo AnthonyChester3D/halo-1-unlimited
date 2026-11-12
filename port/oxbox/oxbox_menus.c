@@ -20,7 +20,11 @@ OPTIONS, the main menu's (hmp_game.c opens it in place of its old dialog, and ke
 ATTRACT MODE (the showcase, Halo's movies, off), ATTRACT MODE WAIT, KEEP DOWNLOADS UNDER (map sharing's limit:
 hmp_share.c) and CHECK FOR UPDATES.
 
-Both are laid out as ITEM OPTIONS is (copies of its rows, its help box under them: a line for each row's values),
+SELECT CAMPAIGN, when there's a campaign besides Halo's (an imported pack's levels, or Halo Map Porter's: hmp_maps.c):
+a copy of the level select's screen, its cards the campaigns (Halo's first), opened by the profile screens in place of
+the level select; its A opens the level select, which then shows the campaign chosen's levels.
+
+VEHICLE OPTIONS and OPTIONS are laid out as ITEM OPTIONS is (copies of its rows, its help box under them: a line for each row's values),
 with a header picture made by the installer from Halo's own header letters (oxbox_entry.c), or a text title.
 
 Anything it can't find (a ui.map unlike the ones it knows) is logged, and nothing is added: the menus stay
@@ -41,7 +45,12 @@ void platform_log(char const *format, ...);
 void *cache_files_tag_instances(long *count);
 void cache_files_set_tag_instances(void *instances, long count);
 char *tag_get_name(long tag_index);
-int oxbox_xbe_menu_header_present(int which);   /* (oxbox_entry.c: the installer's pictures: 0 VEHICLE OPTIONS, 1 OPTIONS) */
+int oxbox_xbe_menu_header_present(int which);   /* (oxbox_entry.c: the installer's pictures: 0 VEHICLE OPTIONS, 1 OPTIONS,
+	2 SELECT CAMPAIGN) */
+/* (the campaign picker's: port/linux/game/hmp_maps.c's campaigns, ui_widget_event_handler_functions.c's list) */
+long hmp_campaigns_count(void);
+boolean oxbox_campaign_picker_created(void *widget);
+boolean oxbox_campaign_picker_chosen(void *widget);
 int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
 #define text_print halo_linux_snprintf
 /* (hmp_game.c's: the main menu's OPTIONS, OPTIONS_ROWS values) */
@@ -71,6 +80,12 @@ void oxbox_update_check_now(void);
 #define ITEMS_YES_NO_ROW SETUP "item_options_edit\\op_infinite_grenades"
 #define ITEMS_WIDE_ROW SETUP "item_options_edit\\op_vehicle_set"
 #define ITEMS_WIDEST_ROW SETUP "item_options_edit\\op_weapon_set"
+#define LEVELS "ui\\shell\\main_menu\\solo_level_select\\"
+#define LEVELS_SCREEN LEVELS "solo_level_select_screen"
+#define LEVELS_LIST LEVELS "level_select_list"
+#define LEVELS_HEADER LEVELS "header_replay_level"
+#define PROFILES "ui\\shell\\main_menu\\player_profiles_select\\"
+#define PROFILES_SOLO PROFILES "solo_game_player_profile_select_screen"
 
 enum
 {
@@ -79,6 +94,8 @@ enum
 	_menu_function_vehicle_options_save,
 	_menu_function_options_load,
 	_menu_function_options_save,
+	_menu_function_campaign_picker_created,
+	_menu_function_campaign_picker_chosen,
 
 	/* the rows our screens copy: ITEM OPTIONS' INFINITE GRENADES (YES / NO), VEHICLE SET and WEAPON SET (wider
 	spinners) */
@@ -94,6 +111,8 @@ enum
 	_event_a_button = 0,
 	_event_start_button = 12,
 	_event_created = 24,
+	_event_deleted = 25,
+	_event_handler_function_dispose_sp_level_list = 7,   /* (Bungie's "dispose sp level list") */
 
 	_widget_type_container = 0,
 	_widget_type_text_box,
@@ -106,7 +125,7 @@ enum
 	EDIT_ROW_STEP = 33,
 	/* the tags it adds, at most: each screen's screen, header, picture, list, help, help's, labels' and title's
 	string lists, and each row's container, label, spinner and values; the editor's row and its strings */
-	MAXIMUM_ADDED_TAGS = 2 * 8 + 4 * (VEHICLE_OPTION_ROWS + OPTIONS_ROWS) + 3,
+	MAXIMUM_ADDED_TAGS = 2 * 8 + 4 * (VEHICLE_OPTION_ROWS + OPTIONS_ROWS) + 3 + 4,
 	/* the help: a line for each row's each value, in order (the game picks it: game_options_menu_update_text_desc) */
 	VEHICLE_HELP_LINES = 2 + NUMBER_OF_VEHICLE_CATEGORIES * NUMBER_OF_VEHICLE_CATEGORY_COUNTS,
 	MAXIMUM_HELP = 64,
@@ -720,6 +739,141 @@ static void vehicle_rows(struct menu_row *rows, char (*lines)[HELP_SIZE], char c
 
 /* the editor's row, opening the screen, before SAVE CHANGES; the editor's description gets its line, and its line
 under the list moves down with it */
+/* SELECT CAMPAIGN, when there's a campaign besides Halo's (port/linux/game/hmp_maps.c): the level select's screen copied,
+with the installer's header (made of Halo's letters, as OPTIONS' is) and a copy of its list whose cards are the campaigns
+(Halo's first: ui_widget_game_data_input_functions.c draws them) and whose A opens the level select, which then shows
+the campaign chosen's levels. The profile screens that open the level select (one player's, and player 2's for co-op),
+and a new profile's (which opens CHOOSE DIFFICULTY for the Pillar of Autumn), open it instead, in ui.map's loaded copy.
+With no other campaign, nothing changes */
+static void campaign_picker_build(struct cache_file_tag_instance *grown)
+{
+	/* (the screens that lead on to the level select, or for a new profile straight to CHOOSE DIFFICULTY) */
+	static char const *const profile_screens[] = { PROFILES_SOLO,
+		"ui\\shell\\main_menu\\multiplayer_type_select\\coop\\player2_profile_select_screen",
+		"ui\\shell\\main_menu\\new_campaign_saving_profile" };
+	long difficulty_screen = tag_loaded(WIDGET_TAG, "ui\\shell\\main_menu\\difficulty_select\\difficulty_select_list_screen");
+	long level_screen, level_list, level_header, screen_tag, list_tag, header_tag, picture_tag, index, k;
+	struct ui_widget_definition *screen, *list, *header;
+	struct ui_widget_child_reference *children;
+	long campaigns = hmp_campaigns_count();
+
+	if (oxbox_menus.failed || campaigns <= 0)
+		return;
+	level_screen = tag_loaded(WIDGET_TAG, LEVELS_SCREEN);
+	level_list = tag_loaded(WIDGET_TAG, LEVELS_LIST);
+	level_header = tag_loaded(WIDGET_TAG, LEVELS_HEADER);
+	if (level_screen == NONE || level_list == NONE || level_header == NONE || widget_get(level_list)->type !=
+		_widget_type_spinner_list || widget_get(level_list)->child_widgets.count != 3)
+	{
+		platform_log("menus: the level select isn't as expected: SELECT CAMPAIGN isn't added");
+		return;
+	}
+	screen_tag = next_tag();
+	list_tag = next_tag();
+	header_tag = next_tag();
+	picture_tag = next_tag();
+
+	/* (its list: the level select's, its cards the same, its functions ours: made, and A opening the level select) */
+	list = widget_copy(level_list, 3);
+	if (list)
+	{
+		static short const events[4] = { _event_created, _event_deleted, _event_a_button, _event_start_button };
+		long flags[4], widgets[4];
+		short functions[4];
+
+		strncpy(list->name, "select_campaign_list", sizeof(list->name) - 1);
+		flags[0] = flags[1] = FLAG(_event_handler_run_function_bit);
+		flags[2] = flags[3] = FLAG(_event_handler_run_function_bit) | FLAG(_event_handler_open_widget_bit);
+		functions[0] = MENU_FUNCTION_BASE + _menu_function_campaign_picker_created;
+		functions[1] = _event_handler_function_dispose_sp_level_list;
+		functions[2] = functions[3] = MENU_FUNCTION_BASE + _menu_function_campaign_picker_chosen;
+		widgets[0] = widgets[1] = NONE;
+		widgets[2] = widgets[3] = level_screen;
+		handlers_set(list, 4, events, flags, functions, widgets);
+	}
+	instance_set(grown, WIDGET_TAG, list_tag, "select_campaign_list", list);
+
+	/* (its header: the level select's, with the installer's SELECT CAMPAIGN; none in the XBE, LOAD LEVEL's) */
+	header = widget_copy(level_header, widget_get(level_header)->child_widgets.count);
+	if (header && oxbox_xbe_menu_header_present(2))
+	{
+		long model_bitmap = header->background_bitmap.index;
+		struct bitmap_group const *model_group = model_bitmap == NONE ? NULL :
+			(struct bitmap_group const *)tag_get('bitm', model_bitmap);
+		struct bitmap_group *group = allocate(sizeof(struct bitmap_group));
+		struct bitmap_data *bitmap = allocate(sizeof(struct bitmap_data));
+
+		if (model_group && group && bitmap && model_group->bitmaps.count >= 1)
+		{
+			memcpy(group, model_group, sizeof(*group));
+			memcpy(bitmap, model_group->bitmaps.address, sizeof(*bitmap));
+			bitmap->tag_index = picture_tag;
+			bitmap->cache_block_index = NONE;
+			bitmap->hardware_format = NULL;
+			bitmap->base_address = NULL;
+			group->bitmaps.count = 1;
+			group->bitmaps.address = bitmap;
+			instance_set(grown, 'bitm', picture_tag, "select_campaign_header", group);
+			reference_set(&header->background_bitmap, 'bitm', picture_tag);
+		}
+		else
+			instance_set(grown, 'bitm', picture_tag, "select_campaign_header", allocate(sizeof(struct bitmap_group)));
+	}
+	else
+	{
+		platform_log("menus: no SELECT CAMPAIGN header in the XBE (an installer before 42 made it): LOAD LEVEL's shows");
+		instance_set(grown, 'bitm', picture_tag, "select_campaign_header", allocate(sizeof(struct bitmap_group)));
+	}
+	if (header)
+	{
+		strncpy(header->name, "select_campaign_title", sizeof(header->name) - 1);
+		/* (as wide as its picture: LOAD LEVEL's is narrower than SELECT CAMPAIGN) */
+		if (header->bounds.x0 + 512 <= 640)
+			header->bounds.x1 = header->bounds.x0 + 512;
+	}
+	instance_set(grown, WIDGET_TAG, header_tag, "select_campaign_title", header);
+
+	/* (the screen: the level select's, its list and header ours) */
+	screen = widget_copy(level_screen, widget_get(level_screen)->child_widgets.count);
+	if (screen)
+	{
+		strncpy(screen->name, "select_campaign_screen", sizeof(screen->name) - 1);
+		children = (struct ui_widget_child_reference *)screen->child_widgets.address;
+		for (index = 0; children && index < screen->child_widgets.count; index++)
+		{
+			if (children[index].widget_tag.index == level_list)
+				reference_set(&children[index].widget_tag, WIDGET_TAG, list_tag);
+			else if (children[index].widget_tag.index == level_header)
+				reference_set(&children[index].widget_tag, WIDGET_TAG, header_tag);
+		}
+	}
+	instance_set(grown, WIDGET_TAG, screen_tag, "select_campaign_screen", screen);
+	if (oxbox_menus.failed)
+		return;
+
+	/* (the profile screens open it in place of the level select, and a new profile's last screen in place of CHOOSE
+	DIFFICULTY: their handlers copied, in ui.map's loaded copy) */
+	for (k = 0; k < (long)NUMBEROF(profile_screens); k++)
+	{
+		long profile = tag_loaded(WIDGET_TAG, profile_screens[k]);
+		struct ui_widget_definition *definition = profile == NONE ? NULL : widget_get(profile);
+		struct ui_widget_event_handler_reference *handlers;
+		long count = definition ? definition->event_handlers.count : 0;
+
+		if (!count || !(handlers = allocate(count * sizeof(*handlers))))
+			continue;
+		memcpy(handlers, definition->event_handlers.address, count * sizeof(*handlers));
+		for (index = 0; index < count; index++)
+		{
+			if (handlers[index].widget_tag.index == level_screen || (k == 2 && difficulty_screen != NONE &&
+				handlers[index].widget_tag.index == difficulty_screen))
+				reference_set(&handlers[index].widget_tag, WIDGET_TAG, screen_tag);
+		}
+		definition->event_handlers.address = handlers;
+	}
+	platform_log("menus: SELECT CAMPAIGN added (%ld campaigns besides Halo's)", campaigns);
+}
+
 static void vehicle_editor_patch(struct cache_file_tag_instance *grown, long screen_tag)
 {
 	long edit_list = found(WIDGET_TAG, EDIT_LIST), edit_row = found(WIDGET_TAG, EDIT_ROW);
@@ -930,6 +1084,9 @@ static void menus_build(void)
 	if (oxbox_menus.failed || oxbox_menus.next > MAXIMUM_ADDED_TAGS)
 		return;
 	vehicle_editor_patch(grown, vehicle_screen);
+	if (oxbox_menus.failed || oxbox_menus.next > MAXIMUM_ADDED_TAGS)
+		return;
+	campaign_picker_build(grown);
 	if (oxbox_menus.failed || oxbox_menus.next > MAXIMUM_ADDED_TAGS)
 		return;
 
@@ -1286,6 +1443,10 @@ boolean oxbox_menus_function(
 		return options_function((struct menu_widget_instance *)widget, FALSE);
 	case _menu_function_options_save:
 		return options_function((struct menu_widget_instance *)widget, TRUE);
+	case _menu_function_campaign_picker_created:
+		return oxbox_campaign_picker_created(widget);
+	case _menu_function_campaign_picker_chosen:
+		return oxbox_campaign_picker_chosen(widget);
 	}
 	return FALSE;
 }

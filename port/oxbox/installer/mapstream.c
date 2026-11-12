@@ -48,10 +48,11 @@ uint64_t stream_now(void)
 #endif
 }
 
-/* ---- the disk thread: while it's on (stockmaps.c's swap and restore), writes are queued and made behind, and a reader's
-next 1 MB is read ahead, while zlib works on what's here (on the Xbox's one CPU, the disk works on its own while it waits).
-Everything goes in the order it was queued, so each file's writes, seeks and reads are as they were made; anything else
-that touches a file (a read not queued, a flush, a close, a rename) first waits for the queue to empty ---- */
+/* ---- the disk thread: while it's on (stockmaps.c's swap and restore, consolidate.c's packs), writes are queued and
+made behind, and a reader's next 1 MB is read ahead, while zlib works on what's here (on the Xbox's one CPU, the disk
+works on its own while it waits). Everything goes in the order it was queued, so each file's writes, seeks and reads are
+as they were made; anything else that touches a file (a read not queued, a flush, a close, a rename) first waits for the
+queue to empty ---- */
 
 #define JOBS 512
 #define RING (4u * MB)                  /* (a power of 2: the counts below go round 2^32 evenly) */

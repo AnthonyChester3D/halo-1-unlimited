@@ -1034,14 +1034,16 @@ int oxbox_xbe_online_header_read(void *buffer, unsigned long size)
 
 /* the gametype editor's VEHICLE OPTIONS header and the main menu's OPTIONS screen's (32 KB each, DXT3 512 x 64:
 installer/pictures.c), the same way, after the others (oxbox_menus.c, hmp_maps.c's menu_word_read): header 0
-VEHICLE OPTIONS, 1 OPTIONS. TRUE when read; present: TRUE when the file has it (not blank) */
+VEHICLE OPTIONS, 1 OPTIONS, 2 SELECT CAMPAIGN. TRUE when read; present: TRUE when the file has it (not blank) */
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_vehicle_marker = { "OXVEHIC1", 0, 0 };
 static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_options_marker = { "OXOPTNS1", 0, 0 };
+/* (header 2: the campaign picker's SELECT CAMPAIGN, after OPTIONS; an installer before 42 fills it with OPTIONS') */
+static volatile struct { char magic[8]; unsigned long offset, size; } oxbox_campaign_marker = { "OXCAMPN1", 0, 0 };
 
 static void oxbox_menu_header(int which, unsigned long *offset, unsigned long *size)
 {
-	*offset = which ? oxbox_options_marker.offset : oxbox_vehicle_marker.offset;
-	*size = which ? oxbox_options_marker.size : oxbox_vehicle_marker.size;
+	*offset = which == 2 ? oxbox_campaign_marker.offset : which ? oxbox_options_marker.offset : oxbox_vehicle_marker.offset;
+	*size = which == 2 ? oxbox_campaign_marker.size : which ? oxbox_options_marker.size : oxbox_vehicle_marker.size;
 }
 
 int oxbox_xbe_menu_header_read(int which, void *buffer, unsigned long size)
@@ -1066,8 +1068,20 @@ int oxbox_xbe_menu_header_present(int which)
 		return 0;
 	for (index = 0; index < (int)sizeof(first); index++)
 		if (first[index])
-			return 1;
-	return 0;
+			break;
+	if (index == (int)sizeof(first))
+		return 0;
+	/* (SELECT CAMPAIGN the same as OPTIONS there: an installer before 42 copied OPTIONS into its place) */
+	if (which == 2)
+	{
+		unsigned char options[16];
+
+		oxbox_menu_header(1, &offset, &size);
+		if (offset && size >= (8 * 128 + 11) * 16 && own_xbe_read(offset + (8 * 128 + 10) * 16, options, sizeof(options)) &&
+			!memcmp(first, options, sizeof(first)))
+			return 0;
+	}
+	return 1;
 }
 
 int oxbox_picture_read(long index, void *buffer, unsigned long size)

@@ -44,7 +44,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 39
+#define INSTALLER_VERSION 43
 #endif
 __attribute__((used)) static struct
 {
@@ -62,6 +62,9 @@ static char const *own_path(char const *name);
 #define OLD_INSTALLER_PATH own_path("installer_old.xbe") /* (the installer an update replaced) */
 #define NOTICES_PATH own_path("THIRD_PARTY.txt")
 #define LOG_PATH own_path("installer_log.txt")
+/* what the installer fills in a build (package.c): its pictures and each header. All of them are left out of its hash
+when it's checked (installer 42 has 5: before, 4 fitted, and the fifth, SELECT CAMPAIGN, failed every check) */
+#define GENERATED_REGIONS (1 + HEADER_COUNT)
 #define LAST_PATH own_path("installer_last.txt") /* the folder of the last install that worked, first in the list next time */
 /* the updater: this installer's copy in each Halo folder it installs to (<Halo>\updater\default.xbe), and the note the
 game leaves beside it (the game's offer of a newer release: port/oxbox/oxbox_sdk.c) to have it update that folder and
@@ -721,9 +724,9 @@ static void examine(struct halo *h)
 		h->retail = backup_retail, h->patched = backup_patched;
 		if (h->state == INSTALLED)
 		{
-			unsigned long at[4], size[4], made;
+			unsigned long at[GENERATED_REGIONS], size[GENERATED_REGIONS], made;
 			unsigned char digest[32];
-			int zeros = package_pictures(&package, h->retail, at, size, 4);
+			int zeros = package_pictures(&package, h->retail, at, size, GENERATED_REGIONS);
 			h->up_to_date = !file_sha256(main, at, size, zeros, digest, &made) && made == h->retail->build_size &&
 				!memcmp(digest, h->retail->build_sha256, 32);
 		}
@@ -1315,7 +1318,7 @@ static void downloads_default(struct halo const *h)
 static int install(struct halo *h)
 {
 	char main[200], backup[200], temp[220], ui_map[200], error[256], line[SCREEN_COLUMNS + 8];
-	unsigned long zero_at[4], zero_size[4], made_size;
+	unsigned long zero_at[GENERATED_REGIONS], zero_size[GENERATED_REGIONS], made_size;
 	unsigned char digest[32];
 	int zeros, have_pictures;
 	struct retail r;
@@ -1379,7 +1382,7 @@ static int install(struct halo *h)
 		retail_free(&r);
 		return 1;
 	}
-	zeros = package_pictures(&package, h->retail, zero_at, zero_size, 4);
+	zeros = package_pictures(&package, h->retail, zero_at, zero_size, GENERATED_REGIONS);
 	if (file_sha256(temp, zero_at, zero_size, zeros, digest, &made_size) || made_size != h->retail->build_size ||
 		memcmp(digest, h->retail->build_sha256, 32))
 	{
@@ -1561,7 +1564,7 @@ static int stock_maps_restore(struct halo *h)
 	char error[256];
 	int failed, b;
 	unsigned long spun;
-	say("This puts the retail maps back too: it takes about an hour, and needs room for them (about 1.2 GB free).");
+	say("This puts the retail maps back too: it takes about half an hour, and needs room for them (about 1.2 GB free).");
 	say_in(COLOUR_GREY, "(A map pack that draws on stock.shared needs it: installing here again remakes it.)");
 	say_in(COLOUR_YELLOW, "A: go on   B: leave everything as it is");
 	while ((b = wait_input()) != A && b != B)
@@ -1607,7 +1610,7 @@ static void offer_stock_maps(struct halo *h)
 	{
 		say("Save about 800 MB? The 23 multiplayer and campaign maps can share one file, stock.shared, for their textures and "
 			"sounds.");
-		say("It takes about ten minutes, and needs about 350 MB free while it works.");
+		say("It takes about five minutes, and needs about 350 MB free while it works.");
 	}
 	say("Retail Halo can't play them that way: X in this installer puts the exact originals back.");
 	say_in(COLOUR_YELLOW, "A: do it   B: not now");
@@ -2205,9 +2208,9 @@ static void consolidate_show(struct halo *h, struct pack_scan const *scan, char 
 	package_read();
 }
 
-/* a pack's multiplayer maps imported, then made small against the install's stock.shared (consolidate.c): their small maps
-beside their links in the game's storage, the blocks two or more use in the pack's shared file. The pack's own folder is
-left as it is */
+/* a pack's multiplayer maps and modded campaign imported, then made small against the install's stock.shared
+(consolidate.c): their small maps beside their links in the starred install's maps folder (a level's too: a folder map
+the campaign picker plays), the blocks two or more use in the pack's shared file. The pack's own folder is left as it is */
 static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder)
 {
 	static char folders[CONSOLIDATE_MAPS][220];
@@ -2216,17 +2219,18 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	char error[256], pack_folder[220], link[240];
 	int k, count = 0;
 
-	say("Importing its multiplayer maps (names and pictures)...");
-	if (packs_import(scan, 1, 0, packs_say, error))
+	say(scan->campaign ? "Importing its multiplayer maps and campaign (names and pictures)..." :
+		"Importing its multiplayer maps (names and pictures)...");
+	if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
 	{
 		say_in(COLOUR_RED, "%s", error);
 		return;
 	}
-	text_print(pack_folder, sizeof(pack_folder), "E:\\TDATA\\" OWN_TITLE_FOLDER "\\maps\\%s", scan->key);
+	text_print(pack_folder, sizeof(pack_folder), "%s\\maps\\%s", packs_storage, scan->key);
 	for (k = 0; k < scan->count && count < CONSOLIDATE_MAPS; k++)
 	{
 		struct pack_map const *m = &scan->maps[k];
-		if (m->type != 1 || m->halos || m->small)
+		if ((m->type != 1 && (m->type != 0 || !scan->campaign)) || m->halos || m->small)
 			continue;
 		text_print(folders[count], 220, "%s\\%s", pack_folder, m->name);
 		text_print(link, sizeof(link), "%s\\map.link", folders[count]);
@@ -2426,7 +2430,7 @@ static void shrink_scan(char const *root)
 	}
 }
 
-/* this install's maps folder and the game's storage's looked at for maps to shrink */
+/* this install's maps folder, the starred install's and E:'s old storage looked at for maps to shrink */
 static void shrink_look(struct halo const *h)
 {
 	char root[200];
@@ -2434,6 +2438,12 @@ static void shrink_look(struct halo const *h)
 	shrink_before = shrink_after = 0;
 	text_print(root, sizeof(root), "%s\\maps", h->path);
 	shrink_scan(root);
+	/* (the packs imported into the starred install, and into E:'s storage by installers before 41) */
+	if (packs_storage[0] && _stricmp(packs_storage, h->path))
+	{
+		text_print(root, sizeof(root), "%s\\maps", packs_storage);
+		shrink_scan(root);
+	}
 	shrink_scan("E:\\TDATA\\" OWN_TITLE_FOLDER "\\maps");
 }
 
@@ -2493,8 +2503,15 @@ static void map_pack(struct halo *h)
 	log_clear();
 	say("Looking at the maps in %s\\maps...", h->path);
 	stock_maps_folder(stock, sizeof(stock));
+	/* (what's imported goes in that install's own folder, the starred one: never E:'s storage) */
+	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
 	packs_scan(h->path, stock, &scan);
-	if (can_import(h))
+	if (can_import(h) && !packs_storage[0])
+	{
+		say_in(COLOUR_YELLOW, "Install Halo 1 Unlimited first: a pack's maps are imported into its folder.");
+		scan.multiplayer = scan.campaign = scan.multiplayer_imported = scan.campaign_imported = 0;
+	}
+	else if (can_import(h))
 	{
 		say("Multiplayer: %d maps Halo 1 Unlimited doesn't have%s.", scan.multiplayer,
 			scan.multiplayer_imported ? " (imported)" : "");
@@ -2504,7 +2521,7 @@ static void map_pack(struct halo *h)
 		else
 			say("Campaign: none that isn't Halo's own.");
 		say_in(COLOUR_GREY, "Nothing is copied: the game plays them from this folder, which is left as it is. They go in "
-			"the map list as the pack \"%s\", and the campaign under the folder's name.", scan.key);
+			"the map list as the pack \"%s\", and the campaign under the folder's name (in %s).", scan.key, packs_storage);
 	}
 	else
 	{
@@ -2537,14 +2554,14 @@ static void map_pack(struct halo *h)
 	/* (with the install's stock.shared to measure against) */
 	if (stock[0])
 		choices[count++] = MEASURE;
-	if (stock[0] && scan.multiplayer && GetFileAttributesA(stock_index) != INVALID_FILE_ATTRIBUTES)
+	if (stock[0] && (scan.multiplayer || scan.campaign) && GetFileAttributesA(stock_index) != INVALID_FILE_ATTRIBUTES)
 		choices[count++] = CONSOLIDATE;
 	choices[count++] = BACK;
 	for (;;)
 	{
 		char const *const labels[] = {"Import multiplayer and campaign", "Import multiplayer maps only",
 			"Import the campaign only", "Take out what's imported", "See what consolidating would save",
-			"Make its multiplayer maps small (consolidate)", shrink_label, "Back"};
+			"Make its maps small (consolidate)", shrink_label, "Back"};
 		for (k = 0; k < count; k++)
 		{
 			int r = SCREEN_ROWS - 2 - count + k, at;
@@ -2585,8 +2602,10 @@ static void map_pack(struct halo *h)
 	else if (packs_import(&scan, choices[chosen] != CAMPAIGN, choices[chosen] != MULTIPLAYER, packs_say, error))
 		say_in(COLOUR_RED, "%s", error);
 	else
-		say_in(COLOUR_GREEN, "Done: they're in the game's storage (E:\\TDATA\\" OWN_TITLE_FOLDER ").");
+		say_in(COLOUR_GREEN, "Done: they're in the game's folder, %s.", packs_storage);
 	flush_drive("E:\\");
+	if (packs_storage[0] && packs_storage[0] != 'E')
+		flush_drive(packs_storage);
 	say_in(COLOUR_YELLOW, "B: back");
 	while (wait_input() != B)
 		;
@@ -2777,6 +2796,7 @@ int main(void)
 		text_print(line, sizeof(line), "---- %s, version %d", TITLE, INSTALLER_VERSION);
 		log_file(line);
 	}
+	consolidate_log = log_file; /* (the map packs' "time:" lines) */
 	cache_drives();
 	notices_write();
 	package_read();

@@ -4366,6 +4366,29 @@ static boolean solo_level_set_next_map_name(
 
 	list_widget = widget;
 	result = FALSE;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: an imported campaign's level: its folder map ("+pack/level", port/linux/game/hmp_maps.c) */
+	{
+		extern long hmp_campaigns_level_count(void);
+		extern char const *hmp_campaigns_level_name(long position);
+
+		if (hmp_campaigns_level_count() != NONE)
+		{
+			char const *name = hmp_campaigns_level_name(list_widget->data3C.selected_index);
+
+			if (!name)
+			{
+				ui_play_audio_feedback_sound(4);
+				return FALSE;
+			}
+			if (player_spawn_count == 1)
+				player_ui_remember_player1_profile(0);
+			main_set_map_name(name);
+			main_defer_map_map_change();
+			return TRUE;
+		}
+	}
+#endif
 	match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 724, list_widget->data3C.selected_index >= 0 && list_widget->data3C.selected_index < 10, "I don't think this is the solo level list widget");
 	switch (player_spawn_count)
 	{
@@ -5920,6 +5943,35 @@ static boolean multiplayer_profile_set_for_game(
 }
 
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the campaign picker's list (port/oxbox/oxbox_menus.c's SELECT CAMPAIGN, a copy of the level select's): made,
+Halo's campaign and each imported one (port/linux/game/hmp_maps.c); its A, the campaign the level select shows */
+boolean oxbox_campaign_picker_created(
+	void *instance)
+{
+	extern long hmp_campaigns_count(void);
+	extern void hmp_campaigns_choose(long position);
+	struct widget_instance *widget = (struct widget_instance *)instance;
+
+	hmp_campaigns_choose(0);
+	memset(single_player_level_data, 0, sizeof(single_player_level_data));
+	widget->generated_list = single_player_level_data;
+	widget->generated_count = (short)(1 + MIN(hmp_campaigns_count(), 0x7FFE));
+	widget->data3C.selected_index = 0;
+	return TRUE;
+}
+
+boolean oxbox_campaign_picker_chosen(
+	void *instance)
+{
+	extern void hmp_campaigns_choose(long position);
+	struct widget_instance *widget = (struct widget_instance *)instance;
+
+	hmp_campaigns_choose(widget->data3C.selected_index);
+	return TRUE;
+}
+#endif
+
 static boolean solo_level_initialize_list_single_player(
 	struct widget_instance *widget,
 	struct event_record *event,
@@ -5932,6 +5984,24 @@ static boolean solo_level_initialize_list_single_player(
 	long profile_index;
 	long level_index;
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: an imported campaign's levels when the campaign picker chose one (port/linux/game/hmp_maps.c; its cards:
+	ui_widget_game_data_input_functions.c), all of them open, none Halo's saved game */
+	{
+		extern long hmp_campaigns_level_count(void);
+		long count = hmp_campaigns_level_count();
+
+		if (count != NONE)
+		{
+			memset(single_player_level_data, 0, sizeof(single_player_level_data));
+			memset(&persistant_game_data_info, 0, sizeof(persistant_game_data_info));
+			widget->generated_list = single_player_level_data;
+			widget->generated_count = (short)MIN(count, 0x7FFF);
+			widget->data3C.selected_index = 0;
+			return TRUE;
+		}
+	}
+#endif
 	if (player_spawn_count >= 2)
 	{
 		memset(&persistant_game_data_info, 0, sizeof(persistant_game_data_info));
