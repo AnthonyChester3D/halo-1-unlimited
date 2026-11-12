@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 52
+#define INSTALLER_VERSION 53
 #endif
 __attribute__((used)) static struct
 {
@@ -253,61 +253,94 @@ enum { CHECK_FAILED, CHECK_RUNNING, CHECK_NEWER, CHECK_NEWEST };
 static volatile int check_state = CHECK_FAILED;
 static int menu_watches_check, check_seen = -1;
 
-static SDL_GameController *pads[4];
 static unsigned held_buttons = ~0u; /* (none counts as pressed until it's been seen up) */
 static int held_direction;
 static DWORD held_since, last_repeat;
 
-static int poll_input(void)
+/* the pads as last read (pads_main): buttons held (1 << A...), and the direction held */
+static volatile unsigned pad_buttons;
+static volatile int pad_direction;
+
+/* the pads read every 16 ms on a thread of their own, from the start to the end, whatever else the installer is doing
+(a menu, looking round the drives, installing): the dashboard's own back-to-the-dashboard buttons work only while
+something reads the pads. Every SDL call is made here */
+static DWORD WINAPI pads_main(LPVOID unused)
 {
-	SDL_Event e;
-	unsigned buttons = 0, pressed;
-	int direction = NONE, i;
-	DWORD now;
-	while (SDL_PollEvent(&e))
+	SDL_GameController *pads[4] = {NULL, NULL, NULL, NULL};
+	(void)unused;
+	SDL_Init(SDL_INIT_GAMECONTROLLER);
+	for (;;)
 	{
-		if (e.type == SDL_CONTROLLERDEVICEADDED)
+		SDL_Event e;
+		unsigned buttons = 0;
+		int direction = NONE, i;
+		while (SDL_PollEvent(&e))
 		{
-			for (i = 0; i < 4 && pads[i]; i++)
-				;
-			if (i < 4)
-				pads[i] = SDL_GameControllerOpen(e.cdevice.which);
-		}
-		else if (e.type == SDL_CONTROLLERDEVICEREMOVED)
-		{
-			for (i = 0; i < 4; i++)
+			if (e.type == SDL_CONTROLLERDEVICEADDED)
 			{
-				if (pads[i] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pads[i])) == e.cdevice.which)
+				for (i = 0; i < 4 && pads[i]; i++)
+					;
+				if (i < 4)
+					pads[i] = SDL_GameControllerOpen(e.cdevice.which);
+			}
+			else if (e.type == SDL_CONTROLLERDEVICEREMOVED)
+			{
+				for (i = 0; i < 4; i++)
 				{
-					SDL_GameControllerClose(pads[i]);
-					pads[i] = NULL;
+					if (pads[i] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pads[i])) == e.cdevice.which)
+					{
+						SDL_GameControllerClose(pads[i]);
+						pads[i] = NULL;
+					}
 				}
 			}
 		}
+		for (i = 0; i < 4; i++)
+		{
+			SDL_GameController *p = pads[i];
+			int y;
+			if (!p)
+				continue;
+			buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_A) << A;
+			buttons |= (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_B) |
+				SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_BACK)) << B;
+			buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_X) << X;
+			buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_Y) << Y;
+			buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_START) << START;
+			buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) << WHITE; /* (nxdk's White) */
+			y = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_LEFTY);
+			if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_UP) || y < -16000)
+				direction = UP;
+			else if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_DOWN) || y > 16000)
+				direction = DOWN;
+			else if (SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000)
+				direction = PAGE_UP;
+			else if (SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000)
+				direction = PAGE_DOWN;
+		}
+		pad_buttons = buttons;
+		pad_direction = direction;
+		Sleep(16);
 	}
-	for (i = 0; i < 4; i++)
+	return 0;
+}
+
+static void pads_start(void)
+{
+	HANDLE thread = CreateThread(NULL, 0, pads_main, NULL, 0, NULL);
+	if (thread)
 	{
-		SDL_GameController *p = pads[i];
-		int y;
-		if (!p)
-			continue;
-		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_A) << A;
-		buttons |= (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_B) |
-			SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_BACK)) << B;
-		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_X) << X;
-		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_Y) << Y;
-		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_START) << START;
-		buttons |= SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) << WHITE; /* (nxdk's White) */
-		y = SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_LEFTY);
-		if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_UP) || y < -16000)
-			direction = UP;
-		else if (SDL_GameControllerGetButton(p, SDL_CONTROLLER_BUTTON_DPAD_DOWN) || y > 16000)
-			direction = DOWN;
-		else if (SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000)
-			direction = PAGE_UP;
-		else if (SDL_GameControllerGetAxis(p, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000)
-			direction = PAGE_DOWN;
+		SetThreadPriority(thread, THREAD_PRIORITY_ABOVE_NORMAL); /* (it's never kept waiting by the work) */
+		CloseHandle(thread);
 	}
+}
+
+/* a button pressed since the last look (or a direction, repeating while held); NONE: none */
+static int poll_input(void)
+{
+	unsigned buttons = pad_buttons, pressed;
+	int direction = pad_direction, i;
+	DWORD now;
 	pressed = buttons & ~held_buttons;
 	held_buttons = buttons;
 	for (i = A; i <= WHITE; i++)
@@ -328,18 +361,6 @@ static int poll_input(void)
 		return direction;
 	}
 	return NONE;
-}
-
-/* the pads read while it's busy only reading (looking round the drives, the packs), what's pressed dropped: the
-dashboard's own back-to-the-dashboard buttons (whatever they are) work only while the pads are being read */
-static void poll_while_busy(void)
-{
-	static DWORD last;
-	DWORD now = GetTickCount();
-	if (now - last < 50)
-		return;
-	last = now;
-	poll_input();
 }
 
 /* (the spinner stops while it waits for a button: nothing is being done; and moves again after it) */
@@ -926,7 +947,6 @@ static void scan(char const *folder, int depth)
 		return;
 	do
 	{
-		poll_while_busy();
 		if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !skipped_folder(found.cFileName))
 		{
 			text_print(path, sizeof(path), "%s\\%s", folder, found.cFileName);
@@ -3931,7 +3951,6 @@ static void player_map_packs(void)
 			for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
 			{
 				struct pack_scan *scan = &pack_scans[pack_count];
-				poll_while_busy();
 				if (!can_import(&halos[i]) || halos[i].unfinished)
 					continue;
 				packs_scan(halos[i].path, stock, scan);
@@ -3982,25 +4001,39 @@ static void player_map_packs(void)
 of its own beside it: <drive>:\Games\Halo (or "Halo 2"... when that's taken) */
 static void rebuild_original(struct halo *h)
 {
-	char folder[200], base[64], path[260], to[260], error[256];
+	char folder[200], base[64], path[260], to[260], error[256], mark[240];
 	int n, failed;
 	unsigned long spun;
 	text_print(base, sizeof(base), "%c:\\Games", h->path[0]);
 	if (GetFileAttributesA(base) == INVALID_FILE_ATTRIBUTES)
 		text_print(base, sizeof(base), "%c:", h->path[0]);
+	/* (a free name, or one a rebuild was stopped in: BUILDING_MARK still there) */
 	for (n = 1; n < 10; n++)
 	{
 		if (n == 1)
 			text_print(folder, sizeof(folder), "%s\\Halo", base);
 		else
 			text_print(folder, sizeof(folder), "%s\\Halo %d", base, n);
-		if (GetFileAttributesA(folder) == INVALID_FILE_ATTRIBUTES)
+		text_print(mark, sizeof(mark), "%s\\" BUILDING_MARK, folder);
+		if (GetFileAttributesA(folder) == INVALID_FILE_ATTRIBUTES || GetFileAttributesA(mark) != INVALID_FILE_ATTRIBUTES)
 			break;
 	}
 	task_begin("Rebuilding your original Halo", "Rebuilding Halo's maps exactly as they came (about half an hour)...");
+	/* (BUILDING_MARK in it until it's done: stopped halfway (the dashboard's buttons, a power cut), it's no Halo to
+	play, and the next rebuild empties it and starts again) */
+	if (GetFileAttributesA(mark) != INVALID_FILE_ATTRIBUTES)
+		delete_tree(folder, 0);
 	CreateDirectoryA(folder, NULL);
 	text_print(to, sizeof(to), "%s\\maps", folder);
 	CreateDirectoryA(to, NULL);
+	if (write_file(mark, (unsigned char const *)"Halo is being rebuilt here.\r\n", 29))
+	{
+		say_in(COLOUR_RED, "Couldn't write in %s. Is the drive full, or failing?", folder);
+		task_end();
+		task_wait();
+		return;
+	}
+	flush_drive(folder);
 	text_print(path, sizeof(path), "%s\\maps\\ui.map", h->path);
 	text_print(to, sizeof(to), "%s\\maps\\ui.map", folder);
 	failed = copy_file(path, to);
@@ -4014,7 +4047,8 @@ static void rebuild_original(struct halo *h)
 		text_print(error, sizeof(error), "Couldn't copy Halo's menus (ui.map). Is the drive full?");
 	log_spinner(spun);
 	package_read();
-	/* (the game last: a folder with it is a Halo) */
+	if (!failed)
+		movies_copy(h->path, folder, 1);
 	text_print(path, sizeof(path), "%s\\default_retail.xbe", h->path);
 	text_print(to, sizeof(to), "%s\\default.xbe", folder);
 	if (!failed && copy_file(path, to))
@@ -4022,11 +4056,19 @@ static void rebuild_original(struct halo *h)
 		failed = 1;
 		text_print(error, sizeof(error), "Couldn't copy Halo's game (default_retail.xbe). Is the drive full?");
 	}
-	movies_copy(h->path, folder, 1);
 	if (failed)
+	{
+		/* (what was rebuilt goes: the room's given back) */
 		say_in(COLOUR_RED, "%s", error);
+		delete_tree(folder, 0);
+		RemoveDirectoryA(folder);
+	}
 	else
+	{
+		flush_drive(folder);       /* (everything in it written before the mark goes) */
+		DeleteFileA(mark);
 		say_in(COLOUR_WHITE, "Done: your original Halo is in %s.", folder);
+	}
 	flush_drive(folder);
 	task_end();
 	halo_changed(folder, 1);
@@ -4234,7 +4276,7 @@ int main(void)
 	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
 	screen_init();
 	screen_spinner(1);                 /* (something moves at once: the reading and the rest take a while) */
-	SDL_Init(SDL_INIT_GAMECONTROLLER);
+	pads_start();
 	heading("Reading the package...");
 	{
 		char line[96];
