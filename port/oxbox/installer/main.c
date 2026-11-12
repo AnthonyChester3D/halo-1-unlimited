@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 49
+#define INSTALLER_VERSION 50
 #endif
 __attribute__((used)) static struct
 {
@@ -853,30 +853,39 @@ static int skipped_folder(char const *name)
 	return 0;
 }
 
+static int looking;                          /* (find_halos is looking round the drives: shown on screen) */
+
 static void scan_note(char const *folder)
 {
+	if (!looking)
+		return;
 	screen_row(5, COLOUR_BLACK);
 	screen_text(4, 0, COLOUR_WHITE, "Looking for Halo: %d found", halo_count);
 	screen_text(5, 0, COLOUR_DIM, "%.72s", folder);
 	screen_show();
 }
 
-/* folder, if it has a Halo XBE in it (as default.xbe, or default_retail.xbe alone); 1 if it has a default.xbe */
-static int add_halo(char const *folder)
+/* 1 when folder has a Halo XBE in it (as default.xbe, or default_retail.xbe); *has_main: 1 if it has a default.xbe */
+static int halo_in(char const *folder, int *has_main)
 {
 	char path[200];
 	struct xbe_head head;
-	int i, has_main;
 	text_print(path, sizeof(path), "%s\\default.xbe", folder);
 	read_head(path, &head);
-	has_main = head.present;
-	if (!head.halo)
-	{
-		text_print(path, sizeof(path), "%s\\default_retail.xbe", folder);
-		read_head(path, &head);
-		if (!head.halo)
-			return has_main;
-	}
+	*has_main = head.present;
+	if (head.halo)
+		return 1;
+	text_print(path, sizeof(path), "%s\\default_retail.xbe", folder);
+	read_head(path, &head);
+	return head.halo;
+}
+
+/* folder, if it has a Halo XBE in it (as default.xbe, or default_retail.xbe alone); 1 if it has a default.xbe */
+static int add_halo(char const *folder)
+{
+	int i, has_main;
+	if (!halo_in(folder, &has_main))
+		return has_main;
 	for (i = 0; i < halo_count; i++)
 	{
 		if (!_stricmp(halos[i].path, folder))
@@ -987,10 +996,18 @@ static void sort_halos(void)
 	memcpy(halos, sorted, sizeof(halos[0]) * halo_count);
 }
 
+static int packs_listed;                     /* (Map Packs' list is up to date: halo_changed clears it) */
+
+/* the drives looked round for Halo folders, ONCE a run: nothing but the installer changes them while it runs, so from
+then on the list is kept, and what the installer changes is looked at again by halo_changed */
 static void find_halos(void)
 {
+	static int looked;
 	char own[260], *slash, path[260];
 	int i;
+	if (looked)
+		return;
+	looked = looking = 1;
 	halo_count = 0;
 	heading(NULL);
 	/* the folder the installer is in, if it's in Halo's (E:\Games\Halo\OpenCE installer: E:\Games\Halo) */
@@ -1007,7 +1024,45 @@ static void find_halos(void)
 		char root[4] = {partitions[i][0], ':', 0};
 		scan(root, 2);
 	}
+	looking = 0;
 	sort_halos();
+}
+
+/* the installer has changed this Halo folder (NULL: any of them): it's looked at again, added when it's new, dropped
+when it's gone; packs: Map Packs' list too (else only what changed in it is looked at again there). The drives aren't
+looked round again */
+static void halo_changed(char const *changed, int packs)
+{
+	char folder[160];
+	int i, n = 0, has_main, added = 0;
+	if (changed)
+	{
+		text_print(folder, sizeof(folder), "%s", changed);   /* (it may be a path in the list, which moves) */
+		for (i = 0; i < halo_count && _stricmp(halos[i].path, folder); i++)
+			;
+		if (i == halo_count)
+		{
+			add_halo(folder);
+			added = 1;
+		}
+	}
+	for (i = 0; i < halo_count; i++)
+	{
+		if (!changed || !_stricmp(halos[i].path, folder))
+		{
+			if (!halo_in(halos[i].path, &has_main))
+				continue;                  /* (gone) */
+			if (!added)
+				examine(&halos[i]);
+		}
+		if (n != i)
+			halos[n] = halos[i];
+		n++;
+	}
+	halo_count = n;
+	sort_halos();
+	if (packs)
+		packs_listed = 0;
 }
 
 /* ---- installing ---- */
@@ -2978,7 +3033,7 @@ static void developer_screen(void)
 		else if (b == Y && check_updates())
 		{
 			offer_installer_update();
-			find_halos();
+			halo_changed(NULL, 1);
 			selected = first_shown = 0;
 		}
 	}
@@ -3526,7 +3581,7 @@ static int player_install_flow(void)
 	task_begin("Installing Halo 1 Unlimited", "Building Halo 1 Unlimited from your Halo...");
 	failed = own_install(choice[k], folder, campaign);
 	task_end();
-	find_halos();
+	halo_changed(folder, 1);
 	if (failed)
 	{
 		task_wait();
@@ -3591,10 +3646,12 @@ static int player_install_flow(void)
 				"can rebuild it exactly any time." : "Its game, maps and movies are deleted. Halo 1 Unlimited can rebuild "
 				"its multiplayer maps, but NOT its campaign: the campaign wasn't installed.", sure, 2, 1) != 0)
 				continue;
+			char gone[160];
+			text_print(gone, sizeof(gone), "%s", original->path);
 			task_begin("Removing your original Halo", "Deleting its game, maps and movies...");
 			remove_original(original);
 			task_end();
-			find_halos();
+			halo_changed(gone, 1);
 			return 0;
 		}
 	}
@@ -3613,7 +3670,7 @@ static void player_update(struct halo *h)
 			offer_installer_update();      /* (a newer installer: it starts, and Update is offered there) */
 		auto_mode = 0;
 		task_end();
-		find_halos();
+		halo_changed(h->path, 0);        /* (the package beside the installer is newer: is it the one installed?) */
 		if (!changed)
 		{
 			task_wait();
@@ -3649,7 +3706,8 @@ sends), Link (its maps played where they are), take it out again, and, consolida
 packs (packs_known.h) show what consolidating saved and took on a console; others an estimate ---- */
 
 #define MOST_PACKS 64
-static struct pack_scan *pack_scans;        /* (MOST_PACKS: while the Map Packs screen is up) */
+static struct pack_scan *pack_scans;        /* (MOST_PACKS: the packs found, kept while packs_listed) */
+static int pack_count;
 
 /* its maps' small copies there: 1 when it's consolidated (a pack's shared file in its folder) */
 static int consolidated(struct pack_scan const *scan)
@@ -3817,15 +3875,25 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 			RemoveDirectoryA(scan->path);
 			flush_drive(scan->path);
 			task_end();
+			halo_changed(scan->path, 0);      /* (off the Halo folders' list; Map Packs drops it) */
 			return;
 		}
 		packs_scan(h->path, stock, scan);
 	}
 }
 
+/* the Halo folder in the list at path; NULL: none (its folder was deleted) */
+static struct halo *halo_at(char const *path)
+{
+	int i;
+	for (i = 0; i < halo_count; i++)
+		if (!_stricmp(halos[i].path, path))
+			return &halos[i];
+	return NULL;
+}
+
 static void player_map_packs(void)
 {
-	static struct halo *choice[MOST_PACKS];
 	struct menu_item *items;
 	char stock[200];
 	int n, i, k = 0;
@@ -3841,21 +3909,30 @@ static void player_map_packs(void)
 	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
 	for (;;)
 	{
-		player_heading("Map Packs");
-		screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at your map packs...");
-		screen_show();
-		for (i = 0, n = 0; i < halo_count && n < MOST_PACKS; i++)
+		/* (the packs are looked at once; then only the one chosen, after what was done to it) */
+		if (!packs_listed)
+		{
+			player_heading("Map Packs");
+			screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at your map packs...");
+			screen_show();
+			for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
+			{
+				struct pack_scan *scan = &pack_scans[pack_count];
+				if (!can_import(&halos[i]) || halos[i].unfinished)
+					continue;
+				packs_scan(halos[i].path, stock, scan);
+				if (scan->multiplayer || scan->campaign || scan->multiplayer_imported || scan->campaign_imported)
+					pack_count++;
+			}
+			packs_listed = 1;
+		}
+		for (n = 0; n < pack_count; n++)
 		{
 			struct pack_scan *scan = &pack_scans[n];
 			unsigned long after, minutes;
 			int known;
 			char const *last;
-			if (!can_import(&halos[i]) || halos[i].unfinished)
-				continue;
-			packs_scan(halos[i].path, stock, scan);
-			if (!scan->multiplayer && !scan->campaign && !scan->multiplayer_imported && !scan->campaign_imported)
-				continue;
-			last = strrchr(halos[i].path, '\\') ? strrchr(halos[i].path, '\\') + 1 : halos[i].path;
+			last = strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path;
 			pack_numbers(scan, &after, &minutes, &known);
 			text_print(items[n].text, sizeof(items[n].text), "%-36.36s %5lu MB  %s", last,
 				(unsigned long)(scan->size >> 20), consolidated(scan) ? "Consolidated" :
@@ -3863,7 +3940,6 @@ static void player_map_packs(void)
 			items[n].about = known ? "A known pack: its numbers are from consolidating it on a console." :
 				"Choose it to add it to Halo 1 Unlimited.";
 			items[n].disabled = 0;
-			choice[n++] = &halos[i];
 		}
 		if (!n)
 		{
@@ -3873,8 +3949,17 @@ static void player_map_packs(void)
 		}
 		if ((k = menu("Map Packs", "The map packs on your Xbox:", items, n, k)) < 0)
 			break;
-		player_pack(choice[k], &pack_scans[k], stock);
-		find_halos();
+		if (!halo_at(pack_scans[k].path))
+			packs_listed = 0;
+		else
+			player_pack(halo_at(pack_scans[k].path), &pack_scans[k], stock);
+		if (!halo_at(pack_scans[k].path) && packs_listed)
+		{
+			/* (its folder was deleted: off the list) */
+			memmove(&pack_scans[k], &pack_scans[k + 1], (pack_count - k - 1) * sizeof(*pack_scans));
+			pack_count--;
+			k = k < pack_count ? k : pack_count - 1;
+		}
 	}
 	free(items);
 }
@@ -3930,7 +4015,7 @@ static void rebuild_original(struct halo *h)
 		say_in(COLOUR_WHITE, "Done: your original Halo is in %s.", folder);
 	flush_drive(folder);
 	task_end();
-	find_halos();
+	halo_changed(folder, 1);
 	if (!failed)
 		page("Your original Halo is back", "Halo is rebuilt exactly as it came, in its own folder. Halo 1 Unlimited "
 			"is as it was.");
@@ -4086,9 +4171,9 @@ static void player_main(void)
 			break;
 		case DEVELOPER:
 			developer_screen();
+			halo_changed(NULL, 1);           /* (it can do anything to any of them) */
 			break;
 		}
-		find_halos();
 	}
 }
 
