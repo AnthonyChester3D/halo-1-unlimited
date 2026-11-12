@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 54
+#define INSTALLER_VERSION 55
 #endif
 __attribute__((used)) static struct
 {
@@ -85,6 +85,9 @@ static char developer_url[512];    /* (its update_url: a test update location, a
 static int developer_unsigned;     /* (its allow_unsigned = 1) */
 static int quiet;                  /* (a player's screen runs an operation: its details only in the log: say_in) */
 static char task_title[80];        /* (what that screen says it's doing: heading) */
+static int stepping;               /* (step: a line for the player, shown under the title) */
+static char task_line[256];        /* (that line, drawn again when the screen is: task_line_show) */
+static int task_problem;           /* (a warning or a problem in this task: its result waits for a button) */
 #define HALO_TITLE_ID 0x4D530004ul
 /* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
 and storage (E:\TDATA\4c4a4855): its profiles and gametypes are its own, starting empty, and retail Halo's are never
@@ -148,6 +151,33 @@ static void say_line(unsigned long colour, char const *text, int length)
 	log_colours[log_count++] = colour;
 }
 
+/* a "how far along" line for the player ("Converting 3 of 14: x.map"; "bloodgulch (3 of 23): making it small..." as
+"Map 3 of 23: bloodgulch"); 0 when it's no such line */
+static int progress_line(char const *text, char *out, int size)
+{
+	char const *of = strstr(text, " of ");
+	char const *open, *close;
+	if (!of || of == text || of[-1] < '0' || of[-1] > '9' || of[4] < '0' || of[4] > '9')
+		return 0;
+	open = strstr(text, " (");
+	close = strstr(of, "):");
+	if (open && open < of && close)
+	{
+		text_print(out, size, "Map %.*s: %.*s", (int)(close - open - 2), open + 2, (int)(open - text), text);
+		return 1;
+	}
+	text_print(out, size, "%s", text);
+	return 1;
+}
+
+/* a task's line for the player, under its title */
+static void task_line_show(void)
+{
+	screen_row(LOG_TOP - 1, COLOUR_BLACK);
+	screen_text(LOG_TOP - 1, 2, COLOUR_DIM, "%.*s", LOG_COLUMNS - 2, task_line);
+	screen_show();
+}
+
 static void say_in(unsigned long colour, char const *format, ...)
 {
 	char text[256], *at;
@@ -161,13 +191,20 @@ static void say_in(unsigned long colour, char const *format, ...)
 	problem shows below as it does) */
 	if (quiet && colour != COLOUR_RED && colour != COLOUR_YELLOW)
 	{
+		char shown[256];
 		for (at = text; *at == ' ' || *at == '('; at++)
 			;
-		screen_row(LOG_TOP - 1, COLOUR_BLACK);
-		screen_text(LOG_TOP - 1, 2, COLOUR_DIM, "%.*s", LOG_COLUMNS - 2, at);
-		screen_show();
+		/* (only what's for the player: a step, or how far along it is; the rest is in the log) */
+		if (stepping)
+			text_print(shown, sizeof(shown), "%s", at);
+		else if (!progress_line(at, shown, sizeof(shown)))
+			return;
+		text_print(task_line, sizeof(task_line), "%s", shown);
+		task_line_show();
 		return;
 	}
+	if (quiet)
+		task_problem = 1;
 	/* (a long line wrapped at a space, the rest indented as it was) */
 	while (text[indent] == ' ')
 		indent++;
@@ -199,6 +236,19 @@ static void say_in(unsigned long colour, char const *format, ...)
 
 #define say(...) say_in(COLOUR_WHITE, __VA_ARGS__)
 
+/* a line for the player (on a task's screen, under its title; else as say) */
+static void step(char const *format, ...)
+{
+	char text[256];
+	va_list list;
+	va_start(list, format);
+	text_vprint(text, sizeof(text), format, list);
+	va_end(list);
+	stepping = 1;
+	say_in(COLOUR_WHITE, "%s", text);
+	stepping = 0;
+}
+
 static void pictures_step(char const *step)
 {
 	say("  %s", step);
@@ -219,12 +269,15 @@ static char const *signature_text(unsigned long *colour)
 
 static void player_heading(char const *title);
 
+static void task_line_show(void);
+
 static void heading(char const *what)
 {
 	if (quiet)
 	{
-		/* (an operation's own heading on a player's screen: the screen's title stays) */
+		/* (an operation's own heading on a player's screen: the screen's title stays, and its line) */
 		player_heading(task_title);
+		task_line_show();
 		return;
 	}
 	screen_clear();
@@ -1998,6 +2051,16 @@ static void update_step(void *context, char const *text)
 static void update_progress(void *context, unsigned long done, unsigned long total)
 {
 	(void)context;
+	if (quiet)
+	{
+		if (total)
+			text_print(task_line, sizeof(task_line), "Downloading: %lu of %lu MB", (done + 524288) >> 20,
+				(total + 524288) >> 20);
+		else
+			text_print(task_line, sizeof(task_line), "Downloading: %lu MB", (done + 524288) >> 20);
+		task_line_show();
+		return;
+	}
 	screen_row(4, COLOUR_BLACK);
 	if (total)
 	{
@@ -2439,7 +2502,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	int k, count = 0;
 	DWORD started;
 
-	say(scan->campaign ? "Importing its multiplayer maps and campaign (names and pictures)..." :
+	step(scan->campaign ? "Importing its multiplayer maps and campaign (names and pictures)..." :
 		"Importing its multiplayer maps (names and pictures)...");
 	if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
 	{
@@ -2462,7 +2525,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 		folder_list[count] = folders[count];
 		count++;
 	}
-	say("Making %d maps small: it reads each one three times, so it takes some minutes...", count);
+	step("Making %d maps small (some minutes)...", count);
 	package_free(&package);
 	log_memory();
 	started = GetTickCount();
@@ -2475,8 +2538,11 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 			say_in(COLOUR_GREEN, "Done: %d maps, %lu MB as they were, %lu MB small%s%s%s.", r.converted,
 				(unsigned long)(r.before >> 20), (unsigned long)((r.after + (1 << 20) - 1) >> 20),
 				r.shared[0] ? " (with " : "", r.shared, r.shared[0] ? ".shared)" : "");
+		if (r.converted)
+			step("Done: %d maps went from %lu MB to %lu MB.", r.converted, (unsigned long)(r.before >> 20),
+				(unsigned long)((r.after + (1 << 20) - 1) >> 20));
 		else
-			say("No map was made small.");
+			step("No map was made small.");
 		if (r.already)
 			say_in(COLOUR_GREY, "  %d already draw on shared files: left as they are.", r.already);
 		if (r.unreadable)
@@ -3191,13 +3257,13 @@ static void task_begin(char const *title, char const *plan)
 {
 	text_print(task_title, sizeof(task_title), "%s", title);
 	quiet = 1;
+	task_problem = 0;
 	log_clear();
 	player_heading(title);
 	if (plan)
-		say_in(COLOUR_WHITE, "%s", plan);
-	if (plan)
-		wrapped(LOG_TOP - 1, 2, LOG_COLUMNS - 2, 1, COLOUR_DIM, plan);
-	screen_show();
+		log_file(plan);
+	text_print(task_line, sizeof(task_line), "%s", plan ? plan : "");
+	task_line_show();
 }
 
 static void task_end(void)
@@ -3205,10 +3271,15 @@ static void task_end(void)
 	quiet = 0;
 }
 
-/* B (or A) after an operation's result */
+/* after an operation's result: it went well, its last line shown a moment; a warning or a problem, B (or A) */
 static void task_wait(void)
 {
 	int b;
+	if (!task_problem)
+	{
+		Sleep(1500);
+		return;
+	}
 	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
 	screen_show();
 	while ((b = wait_input()) != A && b != B)
@@ -3417,7 +3488,7 @@ static int own_install(struct halo *source, char const *folder, int campaign)
 		say_in(COLOUR_RED, "Couldn't write in %s. Is the drive full, or failing?", folder);
 		return 1;
 	}
-	say("Copying Halo's game and menus...");
+	step("Copying Halo's game and menus...");
 	text_print(path, sizeof(path), "%s\\default.xbe", source->path);
 	text_print(to, sizeof(to), "%s\\default.xbe", folder);
 	failed = copy_file(path, to);
@@ -3432,7 +3503,7 @@ static int own_install(struct halo *source, char const *folder, int campaign)
 	}
 	movies_copy(source->path, folder, campaign);
 	/* the maps */
-	say("Building Halo 1 Unlimited's maps (about 5 minutes)...");
+	step("Building Halo 1 Unlimited's maps (about 5 minutes)...");
 	stockmaps_flush_drive = flush_drive;
 	stockmaps_log = log_file;
 	package_free(&package);
@@ -3451,6 +3522,8 @@ static int own_install(struct halo *source, char const *folder, int campaign)
 	for (i = 0; i < halo_count; i++)
 		if (!_stricmp(halos[i].path, folder))
 			h = &halos[i];
+	if (h)
+		step("Making the game...");
 	if (!h || install(h))
 	{
 		if (!h)
@@ -3704,6 +3777,8 @@ static void player_update(struct halo *h)
 		if (changed)
 			offer_installer_update();      /* (a newer installer: it starts, and Update is offered there) */
 		auto_mode = 0;
+		if (!changed)
+			step("Halo 1 Unlimited is up to date.");
 		task_end();
 		halo_changed(h->path, 0);        /* (the package beside the installer is newer: is it the one installed?) */
 		if (!changed)
@@ -3729,7 +3804,10 @@ static void player_update(struct halo *h)
 	text_print(task_title, sizeof(task_title), "Updating Halo 1 Unlimited");
 	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (about a minute)...");
 	if (!install(h))
+	{
+		step("Done: Halo 1 Unlimited v1.%lu is installed.", package.build);
 		offer_stock_maps(h);
+	}
 	task_end();
 	look_again(h);
 	task_wait();
@@ -3778,7 +3856,10 @@ static void update_installed(void)
 		return;                            /* (nothing installed: Install uses the new package) */
 	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (about a minute)...");
 	if (!install(h))
+	{
+		step("Done: Halo 1 Unlimited v1.%lu is installed.", package.build);
 		offer_stock_maps(h);
+	}
 	task_end();
 	look_again(h);
 	task_wait();
@@ -3993,7 +4074,6 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 			text_print(title, sizeof(title), "Consolidating %s", name);
 			task_begin(title, "Making its maps small...");
 			consolidate_pack(h, scan, stock);
-			say_in(COLOUR_WHITE, "Done: %s is consolidated.", name);
 			task_end();
 			task_wait();
 		}
@@ -4004,7 +4084,7 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 			if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
 				say_in(COLOUR_RED, "%s", error);
 			else
-				say_in(COLOUR_WHITE, "Done: its maps are in Halo 1 Unlimited's map list.");
+				step("Done: its maps are in Halo 1 Unlimited's map list.");
 			task_end();
 			task_wait();
 		}
@@ -4186,7 +4266,7 @@ static void rebuild_original(struct halo *h)
 	{
 		flush_drive(folder);       /* (everything in it written before the mark goes) */
 		DeleteFileA(mark);
-		say_in(COLOUR_WHITE, "Done: your original Halo is in %s.", folder);
+		step("Done: your original Halo is in %s.", folder);
 	}
 	flush_drive(folder);
 	task_end();
@@ -4237,7 +4317,7 @@ static void player_more(struct halo *h)
 /* the main screen */
 static void player_main(void)
 {
-	int chosen = 0;
+	int chosen = 0, pointed_at_update = 0;
 	for (;;)
 	{
 		struct menu_item items[6];
@@ -4308,6 +4388,14 @@ static void player_main(void)
 			items[n].about = "Every Halo folder, and everything the installer can do to each (developer.ini).";
 			items[n].disabled = 0;
 			actions[n++] = DEVELOPER;
+		}
+		/* (an update ready: the menu starts on it, once) */
+		if (h && !pointed_at_update && (check_state == CHECK_NEWER || (!h->up_to_date && package_ok)))
+		{
+			for (k = 0; k < n; k++)
+				if (actions[k] == UPDATE && !items[k].disabled)
+					chosen = k;
+			pointed_at_update = 1;
 		}
 		menu_watches_check = 1;            /* (the check's answer shown, and asked about, as it comes) */
 		k = menu(h ? "Main menu" : "Welcome", package_ok ? NULL :
