@@ -49,6 +49,7 @@ int oxbox_xbe_menu_header_present(int which);   /* (oxbox_entry.c: the installer
 	2 SELECT CAMPAIGN) */
 /* (the campaign picker's: port/linux/game/hmp_maps.c's campaigns, ui_widget_event_handler_functions.c's list) */
 long hmp_campaigns_count(void);
+boolean hmp_campaign_playable(void);
 boolean oxbox_campaign_picker_created(void *widget);
 boolean oxbox_campaign_picker_chosen(void *widget);
 int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...);
@@ -874,6 +875,41 @@ static void campaign_picker_build(struct cache_file_tag_instance *grown)
 	platform_log("menus: SELECT CAMPAIGN added (%ld campaigns besides Halo's)", campaigns);
 }
 
+/* no campaign to play (Halo's levels weren't installed: the installer's "Campaign: Not included"; and none imported): the
+main menu without CAMPAIGN, its other items each a place up, in ui.map's loaded copy (its list's extended description is
+an empty widget: the index it follows doesn't matter) */
+static void main_menu_without_campaign(void)
+{
+	long list_index = tag_loaded(WIDGET_TAG, "ui\\shell\\main_menu\\main_menu_select_list");
+	long campaign = tag_loaded(WIDGET_TAG, "ui\\shell\\main_menu\\main_menu_item_load_camp");
+	struct ui_widget_definition *list;
+	struct ui_widget_child_reference *old, *children;
+	long count, k, n = 0;
+
+	if (oxbox_menus.failed || list_index == NONE || campaign == NONE || hmp_campaign_playable())
+		return;
+	list = widget_get(list_index);
+	count = list->child_widgets.count;
+	old = (struct ui_widget_child_reference *)list->child_widgets.address;
+	if (count < 2 || count > 16 || !(children = allocate(count * sizeof(*children))))
+		return;
+	for (k = 0; k < count; k++)
+	{
+		if (old[k].widget_tag.index == campaign)
+			continue;
+		children[n] = old[k];
+		/* (in the place of the one before it) */
+		children[n].vertical_offset = old[n].vertical_offset;
+		children[n].horizontal_offset = old[n].horizontal_offset;
+		n++;
+	}
+	if (n == count)
+		return;
+	list->child_widgets.count = n;
+	list->child_widgets.address = children;
+	platform_log("menus: no campaign to play: CAMPAIGN taken off the main menu");
+}
+
 static void vehicle_editor_patch(struct cache_file_tag_instance *grown, long screen_tag)
 {
 	long edit_list = found(WIDGET_TAG, EDIT_LIST), edit_row = found(WIDGET_TAG, EDIT_ROW);
@@ -1089,6 +1125,7 @@ static void menus_build(void)
 	campaign_picker_build(grown);
 	if (oxbox_menus.failed || oxbox_menus.next > MAXIMUM_ADDED_TAGS)
 		return;
+	main_menu_without_campaign();
 
 	oxbox_menus.count = oxbox_menus.next;
 	oxbox_menus.original_instances = instances;

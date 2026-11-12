@@ -199,6 +199,20 @@ static int finish(HANDLE file)
 	return file_close(file) && ok;
 }
 
+/* (stockmaps_build: the retail maps are read from another folder, and the levels may be left out) */
+static char const *source_folder;
+static int leave_levels;
+static char const *restore_to;          /* (stockmaps_rebuild: the retail maps made in another folder, these kept) */
+#define MULTIPLAYER_MAPS 13             /* (retail_maps' first 13: the levels after them) */
+static char const *retail_from(char const *halo)
+{
+	return source_folder ? source_folder : halo;
+}
+static int left_out(int k)
+{
+	return leave_levels && k >= MULTIPLAYER_MAPS;
+}
+
 static void map_path(char *path, int size, char const *halo, char const *name, char const *extension)
 {
 	text_print(path, size, "%s\\maps\\%s.map%s", halo, name, extension);
@@ -1388,7 +1402,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 		int first = 0, count, making = 0, here;
 
 		say_text(say, 0, "%s (%d of %d): reading...", retail->name, k + 1, STOCK_MAPS);
-		map_path(path, sizeof(path), halo, retail->name, "");
+		map_path(path, sizeof(path), retail_from(halo), retail->name, "");
 		if (reader_open(&r, path, header) || u32(header + 8) != retail->length || u32(header + 0x64) != retail->checksum)
 		{
 			reader_close(&r);
@@ -1417,8 +1431,8 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			goto bad_map;
 		view.tags = tail + (view.tag_offset - defer);
 		/* (the small map on a cache drive, made as it's read) */
-		here = layout && !here_pick(halo, k, cache_path, sizeof(cache_path));
-		if (layout && (here || !cache_pick(k, cache_path, sizeof(cache_path))) &&
+		here = layout && !left_out(k) && !here_pick(halo, k, cache_path, sizeof(cache_path));
+		if (layout && !left_out(k) && (here || !cache_pick(k, cache_path, sizeof(cache_path))) &&
 			!cover_baked(layout, layout_size, k, retail->length, &gone))
 		{
 			s.field_count = s.first_field = 0;
@@ -1701,7 +1715,13 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 		text_print(error, 256, "%d of the stock maps draw on stock.shared, but stock.shared or stock.restore isn't there.", look.small);
 		return 1;
 	}
-	if (free_bytes(halo) < (committed ? (unsigned long long)SMALL_LEVEL_ROOM : SWAP_ROOM))
+	if (source_folder && free_bytes(halo) < stockmaps_build_need(!leave_levels))
+	{
+		text_print(error, 256, "Not enough room on the drive: it needs %lu MB free.",
+			(unsigned long)(stockmaps_build_need(!leave_levels) / MB));
+		return 1;
+	}
+	if (!source_folder && free_bytes(halo) < (committed ? (unsigned long long)SMALL_LEVEL_ROOM : SWAP_ROOM))
 	{
 		text_print(error, 256, "Not enough room on the drive: it needs %lu MB free for a while (it ends up using much "
 			"less than now).", (unsigned long)((committed ? (unsigned long long)SMALL_LEVEL_ROOM : SWAP_ROOM) / MB));
@@ -1711,7 +1731,7 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 	table_room = sizeof(struct restore_file);
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
-		map_path(path, sizeof(path), halo, retail_maps[k].name, "");
+		map_path(path, sizeof(path), retail_from(halo), retail_maps[k].name, "");
 		if (!map_is_small(path))
 		{
 			HANDLE file = open_read(path);
@@ -1843,7 +1863,7 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 			goto done;
 		}
 		map_path(path, sizeof(path), halo, retail->name, "");
-		if (map_is_small(path))
+		if (map_is_small(path) || left_out(k))
 		{
 			done_maps++;
 			continue;
@@ -1879,7 +1899,9 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 		if (failed)
 		{
 			say_text(say, 0, "%s (%d of %d): making it small...", retail->name, k + 1, STOCK_MAPS);
-			failed = write_small(path, retail, map, bsps, blocks, 1, other, &small_length, &small_crc, &disk_size, &disk_crc);
+			char from[240];
+			map_path(from, sizeof(from), retail_from(halo), retail->name, "");
+			failed = write_small(from, retail, map, bsps, blocks, 1, other, &small_length, &small_crc, &disk_size, &disk_crc);
 			if (!failed)
 				step_end("%s made small", retail->name);
 		}
@@ -1988,7 +2010,8 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 			file = open_read(path);
 			if (file == INVALID_HANDLE_VALUE)
 			{
-				text_print(error, 256, "%s.map isn't there: nothing changed.", map->name);
+				text_print(error, 256, restore_to ? "Halo 1 Unlimited hasn't %s.map (its campaign wasn't installed): "
+					"Halo can't be rebuilt from it." : "%s.map isn't there: nothing changed.", map->name);
 				goto done;
 			}
 			size = GetFileSize(file, NULL);
@@ -1999,7 +2022,9 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 			}
 			file_close(file);
 			file = INVALID_HANDLE_VALUE;
-			if (u32(header + REFERENCE_OFFSET) == REFERENCE_SIGNATURE && map->raw_size > size)
+			if (restore_to)
+				need += map->raw_size;
+			else if (u32(header + REFERENCE_OFFSET) == REFERENCE_SIGNATURE && map->raw_size > size)
 			{
 				need += map->raw_size - size;
 				if (size > biggest)
@@ -2008,7 +2033,7 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 		}
 		need += biggest;
 	}
-	if (free_bytes(halo) < need)
+	if (free_bytes(restore_to ? restore_to : halo) < need)
 	{
 		text_print(error, 256, "Not enough room on the drive: putting the maps back needs %lu MB free. Nothing changed.",
 			(unsigned long)(need / MB));
@@ -2050,10 +2075,23 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 		}
 		file_close(map_file);
 		if (u32(header + REFERENCE_OFFSET) != REFERENCE_SIGNATURE)
-			continue;                  /* (already back: a restore a power cut stopped) */
+		{
+			if (!restore_to)
+				continue;              /* (already back: a restore a power cut stopped) */
+			text_print(error, 256, "%s.map in Halo 1 Unlimited isn't one of its small maps: Halo can't be rebuilt from it.",
+				map->name);
+			goto done;
+		}
+		if (restore_to)
+		{
+			/* (rebuilt before: a rebuild a power cut stopped goes on) */
+			map_path(other, sizeof(other), restore_to, map->name, "");
+			if (!file_crc(other, &size, &crc) && size == map->raw_size && crc == map->raw_crc)
+				continue;
+		}
 		say_text(say, 0, "%s (%d of %d): putting it back...", map->name, k + 1, STOCK_MAPS);
 		step_begin();
-		map_path(other, sizeof(other), halo, map->name, ".oxtmp");
+		map_path(other, sizeof(other), restore_to ? restore_to : halo, map->name, ".oxtmp");
 		out = create(other);
 		failed = out == INVALID_HANDLE_VALUE || write_all(out, map->header, HEADER) ||
 			writer_open(&w, 6, out, crc_add(crc_add(0, NULL, 0), map->header, HEADER));
@@ -2082,6 +2120,19 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 				"Halo 1 Unlimited.", map->name);
 			goto done;
 		}
+		if (restore_to)
+		{
+			map_path(path, sizeof(path), restore_to, map->name, "");
+			delete_file(path);
+			if (!move_file(other, path))
+			{
+				text_print(error, 256, "Couldn't put %s.map in place: start the rebuild again to finish.", map->name);
+				goto done;
+			}
+			flush(restore_to);
+			step_end("%s rebuilt", map->name);
+			continue;
+		}
 		map_path(path, sizeof(path), halo, map->name, ".oxnew");
 		delete_file(path);
 		if (!move_file(other, path) || swap_in(halo, map->name))
@@ -2094,6 +2145,13 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 	}
 	file_close(file);
 	file = INVALID_HANDLE_VALUE;
+	if (restore_to)
+	{
+		/* (Halo 1 Unlimited keeps what it has) */
+		result = 0;
+		whole_end("rebuilding Halo");
+		goto done;
+	}
 	/* all back: what the swap added goes */
 	delete_file(shared_path);
 	delete_file(index_path);
@@ -2110,6 +2168,36 @@ done:
 }
 
 /* (with the disk thread on: it reads ahead and writes behind while zlib works) */
+unsigned long long stockmaps_build_need(int campaign)
+{
+	unsigned long long need = (unsigned long long)STOCK_LENGTH + 8u * MB;
+	int k;
+	for (k = 0; k < STOCK_MAPS; k++)
+		if (campaign || k < MULTIPLAYER_MAPS)
+			need += retail_maps[k].small_disk;
+	return need + SMALL_LEVEL_ROOM;
+}
+
+int stockmaps_rebuild(char const *halo, char const *destination, stockmaps_say_t say, char *error)
+{
+	int failed;
+	restore_to = destination;
+	failed = stockmaps_restore(halo, say, error);
+	restore_to = NULL;
+	return failed;
+}
+
+int stockmaps_build(char const *source, char const *destination, int campaign, stockmaps_say_t say, char *error)
+{
+	int failed;
+	source_folder = source;
+	leave_levels = !campaign;
+	failed = stockmaps_convert(destination, say, error);
+	source_folder = NULL;
+	leave_levels = 0;
+	return failed;
+}
+
 int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error)
 {
 	int failed;

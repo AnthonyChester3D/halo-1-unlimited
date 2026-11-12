@@ -2131,6 +2131,22 @@ static void campaign_name_line(char *s)
 	campaign_name_target = NULL;
 }
 
+/* whether there's a campaign to play: one of Halo's levels in the maps folder (the installer's "Campaign: Not
+included" leaves them out), or another campaign */
+long hmp_campaigns_count(void);
+boolean hmp_campaign_playable(void)
+{
+	static char const *const levels[] = { "a10", "a30", "a50", "b30", "b40", "c10", "c20", "c40", "d20", "d40" };
+	char path[32];
+	int k;
+	for (k = 0; k < 10; k++)
+	{
+		snprintf(path, sizeof(path), "d:\\maps\\%s.map", levels[k]);
+		if (GetFileAttributesA(path) != (DWORD)-1) return TRUE;
+	}
+	return hmp_campaigns_count() > 0;
+}
+
 /* how many campaigns there are besides Halo's (the table made again) */
 long hmp_campaigns_count(void)
 {
