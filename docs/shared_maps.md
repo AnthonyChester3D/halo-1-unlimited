@@ -60,9 +60,10 @@ an official pack's file from another (a library of known packs, by these identit
 packs, and quick to take (128 KB read); a map's header checksum isn't (many modded maps have 0).
 
 **Unpacked is read where it is**: when the file's size is its file_length, the game reads it from the disk with no copy, no
-wait and no cache file. stock.shared is always this way. It's worth doing for a big pack's file too: the campaign's two
-big cache files are needed for the level being left and the next, so a packed shared file is only workable beside a level
-that fits a smaller one.
+wait and no cache file. stock.shared is always this way, and so is a pack's file bigger than a multiplayer cache file
+(47 MiB unpacked: the installer's consolidate.c and shared_pass.py leave it unpacked). A smaller packed one is copied into
+a multiplayer cache file; a bigger packed one would need one of the campaign's two, which are for the level being left
+and the next, so a level change would find no room (Covenant Edition's 143 MB file did, on a console).
 
 **Where it goes**: beside the map, or in the folder above the map's folder (a pack's folder holding its maps' folders,
 or `maps\` itself); `stock.shared` may also be in the game's maps folder. The game looks in that order.

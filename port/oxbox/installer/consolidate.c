@@ -29,6 +29,9 @@ file_close, and anything else done to it comes after disk_sync. Each step's time
 #define OFFSET_BITS 0x3FFFFFFFu
 #define MP_SLOT (47u * 1024u * 1024u)   /* what a multiplayer map may unpack to (the game's cache file for one) */
 #define CAMPAIGN_SLOT (278u * 1024u * 1024u) /* a campaign level's (header 0x60: scenario type 0) */
+#ifndef UNPACKED_OVER
+#define UNPACKED_OVER MP_SLOT           /* a pack's file bigger than this stays unpacked (shared_unpacked; tests: smaller) */
+#endif
 #define MAP_LEVEL 1                     /* (as the stock maps': far quicker on a console, and only 3% bigger than 6) */
 #define SHARED_LEVEL 6
 #define EDGE 65536u                     /* a map's identity: its size and the CRC32s of this much at its start and its end */
@@ -991,6 +994,48 @@ static int write_list(struct converting *v, HANDLE temporary, uint32_t list_room
 /* the pack's file from its unpacked layout (temporary, length bytes, its list in the list_room after its header): packed to
 path with its header, as shared_pass.py's: its name, "shared" as its build, its checksum (a CRC32 of all after the list,
 checked again as it's packed) and its list's length at 0x18. 0 when written */
+/* the pack's file's header (the same packed or not) */
+static void shared_header(unsigned char *header, uint32_t length, uint32_t list_room, char const *name, uint32_t checksum)
+{
+	memset(header, 0, HEADER);
+	memcpy(header, "daeh", 4);
+	put32(header + 4, 5);
+	put32(header + 8, length);
+	put32(header + 0x18, list_room);
+	memcpy(header + 0x20, name, strlen(name));
+	memcpy(header + 0x40, "shared", 6);
+	put32(header + 0x64, checksum);
+	memcpy(header + 0x7FC, "toof", 4);
+}
+
+/* a pack's file bigger than a multiplayer cache file (MP_SLOT) stays unpacked, as stock.shared is: the game reads it where
+it is, so it takes no cache file (a packed one that big would take a campaign one, and a level change would find no
+room for the next level: docs/shared_maps.md). The temporary file is it: its blocks checked by the CRC, its header
+written, and it's closed (*temporary). 0 when done */
+static int shared_unpacked(struct converting *v, HANDLE *temporary, uint32_t length, uint32_t list_room,
+	char const *name, uint32_t checksum)
+{
+	unsigned char header[HEADER];
+	uint32_t at, crc = crc_add(0, NULL, 0), data = HEADER + list_room;
+	if (disk_seek(*temporary, data))
+		return 1;
+	for (at = data; at < length; at += CHUNK)
+	{
+		uint32_t size = length - at > CHUNK ? CHUNK : length - at;
+		if (read_all(*temporary, v->m.piece, size))
+			return 1;
+		crc = crc_add(crc, v->m.piece, size);
+	}
+	if (crc != checksum)
+		return 1;
+	shared_header(header, length, list_room, name, checksum);
+	if (write_at(*temporary, 0, header, HEADER))
+		return 1;
+	at = !finish(*temporary);
+	*temporary = INVALID_HANDLE_VALUE;
+	return (int)at;
+}
+
 static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, uint32_t list_room, char const *path,
 	char const *name, uint32_t checksum)
 {
@@ -1023,15 +1068,7 @@ static int pack_shared(struct converting *v, HANDLE temporary, uint32_t length, 
 	tail = (SECTOR - (HEADER + w.written) % SECTOR) % SECTOR;
 	if (write_all(file, zeros, tail))
 		goto stop;
-	memset(header, 0, HEADER);
-	memcpy(header, "daeh", 4);
-	put32(header + 4, 5);
-	put32(header + 8, length);
-	put32(header + 0x18, list_room);
-	memcpy(header + 0x20, name, strlen(name));
-	memcpy(header + 0x40, "shared", 6);
-	put32(header + 0x64, checksum);
-	memcpy(header + 0x7FC, "toof", 4);
+	shared_header(header, length, list_room, name, checksum);
 	if (write_at(file, 0, header, HEADER))
 		goto stop;
 	failed = !finish(file);
@@ -1427,7 +1464,9 @@ static int convert_pack(char const *stock_folder, char const *pack_folder, char 
 		/* (1 MB a write, as stock.shared's: a sector a write took 157 s for Covenant Edition's 143 MB on a console;
 		without the memory, a sector a write) */
 		{
-			uint32_t piece = 1024u * 1024u, whole = (pack_length + SECTOR - 1) / SECTOR * SECTOR;
+			/* (one stored unpacked is exactly its length: the game reads it where it is when its size is that) */
+			uint32_t piece = 1024u * 1024u, whole = pack_length > UNPACKED_OVER ? pack_length :
+				(pack_length + SECTOR - 1) / SECTOR * SECTOR;
 			unsigned char *zeroed = calloc(1, piece);
 			if (!zeroed)
 				piece = SECTOR;
@@ -1497,7 +1536,27 @@ static int convert_pack(char const *stock_folder, char const *pack_folder, char 
 	}
 	step_end("the small maps' headers written");
 	/* then its list, and it's packed and named */
-	if (has_pack)
+	if (has_pack && pack_length > UNPACKED_OVER)
+	{
+		if (say)
+			say(0, "Finishing the pack's shared file (kept unpacked: it's bigger than a multiplayer cache file)...");
+		if (write_list(&v, temporary, list_room, order, members, pblocks, blocks) ||
+			shared_unpacked(&v, &temporary, pack_length, list_room, name, checksum))
+		{
+			text_print(error, 256, "The pack's shared file couldn't be written.");
+			goto done;
+		}
+		text_print(path, sizeof(path), "%s\\%s.shared", pack_folder, name);
+		DeleteFileA(path);
+		if (!MoveFileA(temporary_path, path))
+		{
+			text_print(error, 256, "The pack's shared file couldn't be named.");
+			goto done;
+		}
+		text_print(shared_path, sizeof(shared_path), "%s", path);
+		step_end("the pack's file finished, unpacked");
+	}
+	else if (has_pack)
 	{
 		if (say)
 			say(0, "Packing the pack's shared file...");
