@@ -3,7 +3,13 @@ from the player's own retail Halo XBE, with the package beside it (opence.oxpk: 
 from the game's own ui.map (pictures.c), keeping the retail XBE as default_retail.xbe. Nothing of Microsoft's code or
 of Halo's art is in the installer or the package.
 
-The list shows every Halo it finds: the ones it can install to first, in green; the others in grey.
+A player sees menus climbed with A and B: Install (choose your Halo, then it runs to the end with no questions) or,
+installed, Play, Check for updates / Update, Map Packs and More (the original Halo back, About), each item explained
+in a panel under the menu; an operation shows a few plain lines, its details going to installer_log.txt. With
+developer.ini beside the installer ("developer = 1"; "update_url = <address>" and "allow_unsigned = 1" for a test
+update location), a Developer item opens the list below, as the installer was.
+
+The Developer list shows every Halo it finds: the ones it can install to first, in green; the others in grey.
 	A      install (or update) OpenCE in the folder chosen
 	X      put the retail Halo back (from default_retail.xbe), and its stock maps (stockmaps.c)
 	Y      look online for a newer package (download.c: the project's latest release)
@@ -44,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 46
+#define INSTALLER_VERSION 47
 #endif
 __attribute__((used)) static struct
 {
@@ -72,6 +78,11 @@ start the game again, with no buttons pressed */
 #define UPDATER_FOLDER "updater"
 #define AUTO_PATH own_path("auto_update.txt")
 static int auto_mode;
+static int developer;              /* (developer.ini beside the installer says developer = 1: the Developer screen) */
+static char developer_url[512];    /* (its update_url: a test update location, as update_url.txt's) */
+static int developer_unsigned;     /* (its allow_unsigned = 1) */
+static int quiet;                  /* (a player's screen runs an operation: its details only in the log: say_in) */
+static char task_title[80];        /* (what that screen says it's doing: heading) */
 #define HALO_TITLE_ID 0x4D530004ul
 /* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
 and storage (E:\TDATA\4c4a4855): its profiles and gametypes are its own, starting empty, and retail Halo's are never
@@ -144,6 +155,17 @@ static void say_in(unsigned long colour, char const *format, ...)
 	text_vprint(text, sizeof(text), format, list);
 	va_end(list);
 	log_file(text);
+	/* (a player's screen: the details only in the log, the latest on one dim line under the title; a warning or a
+	problem shows below as it does) */
+	if (quiet && colour != COLOUR_RED && colour != COLOUR_YELLOW)
+	{
+		for (at = text; *at == ' ' || *at == '('; at++)
+			;
+		screen_row(LOG_TOP - 1, COLOUR_BLACK);
+		screen_text(LOG_TOP - 1, 2, COLOUR_DIM, "%.*s", LOG_COLUMNS - 2, at);
+		screen_show();
+		return;
+	}
 	/* (a long line wrapped at a space, the rest indented as it was) */
 	while (text[indent] == ' ')
 		indent++;
@@ -193,8 +215,16 @@ static char const *signature_text(unsigned long *colour)
 	return text;
 }
 
+static void player_heading(char const *title);
+
 static void heading(char const *what)
 {
+	if (quiet)
+	{
+		/* (an operation's own heading on a player's screen: the screen's title stays) */
+		player_heading(task_title);
+		return;
+	}
 	screen_clear();
 	screen_text(0, 0, COLOUR_YELLOW, "%s, version %d", TITLE, INSTALLER_VERSION);
 	if (package_ok)
@@ -1335,7 +1365,10 @@ static int install(struct halo *h)
 		unsigned long colour;
 		char const *said = signature_text(&colour);
 		say("Installing %s", package.name);
-		say_in(colour, "  (release %lu, %s)", package.release, said);
+		if (!quiet)
+			say_in(colour, "  (release %lu, %s)", package.release, said);
+		else
+			log_file(said);
 		say("in %s", h->path);
 	}
 	/* the retail XBE, checked again */
@@ -1613,9 +1646,14 @@ static void offer_stock_maps(struct halo *h)
 		say("It takes about five minutes, and needs about 350 MB free while it works.");
 	}
 	say("Retail Halo can't play them that way: X in this installer puts the exact originals back.");
-	say_in(COLOUR_YELLOW, "A: do it   B: not now");
-	while ((b = wait_input()) != A && b != B)
-		;
+	if (quiet)
+		b = A;                         /* (a player's install: always, with no question) */
+	else
+	{
+		say_in(COLOUR_YELLOW, "A: do it   B: not now");
+		while ((b = wait_input()) != A && b != B)
+			;
+	}
 	if (b == B)
 		return;
 	stockmaps_flush_drive = flush_drive;
@@ -1898,6 +1936,13 @@ static void update_url(char *url, int size)
 {
 	char path[300];
 	test_unsigned = 0;
+	if (developer && developer_url[0])
+	{
+		/* (developer.ini's test location) */
+		text_print(url, size, "%s", developer_url);
+		test_unsigned = developer_unsigned;
+		return;
+	}
 	if (url_file(URL_PATH, url, size) || url_file(OLD_URL_PATH, url, size))
 		return;
 	test_unsigned = 0;
@@ -2781,40 +2826,13 @@ done:
 	launch(NULL);
 }
 
-int main(void)
+/* ---- the Developer screen (developer.ini: developer = 1): every Halo folder in a list, and what can be done to each, as
+the installer was before its player's screens ---- */
+
+static void developer_screen(void)
 {
-	own_folder();
-	nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
-	nxMountDrive('F', "\\Device\\Harddisk0\\Partition6\\");
-	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
-	screen_init();
-	screen_spinner(1);                 /* (something moves at once: the reading and the rest take a while) */
-	SDL_Init(SDL_INIT_GAMECONTROLLER);
-	heading("Reading the package...");
-	{
-		char line[96];
-		text_print(line, sizeof(line), "---- %s, version %d", TITLE, INSTALLER_VERSION);
-		log_file(line);
-	}
-	consolidate_log = log_file; /* (the map packs' "time:" lines) */
-	cache_drives();
-	notices_write();
-	package_read();
-	if (exists(AUTO_PATH))
-		auto_update();
-	{
-		char url[512];
-		update_url(url, sizeof(url)); /* (update_url.txt's allow_unsigned, for the installer the package carries) */
-	}
-	offer_installer_update();
-	last_install_read();
-	if (last_install[0])
-	{
-		char line[200];
-		text_print(line, sizeof(line), "last install: %s", last_install);
-		log_file(line);
-	}
 	find_halos();
+	selected = first_shown = 0;
 	for (;;)
 	{
 		struct halo *h = halo_count ? &halos[selected] : NULL;
@@ -2830,10 +2848,7 @@ int main(void)
 		else if (b == PAGE_DOWN && halo_count)
 			selected = selected + LIST_ROWS < halo_count ? selected + LIST_ROWS : halo_count - 1;
 		else if (b == B)
-		{
-			log_file("to the dashboard");
-			launch(NULL);
-		}
+			return;
 		else if (h && package_ok && b == A && ready(h))
 		{
 			int failed = install(h);
@@ -2868,5 +2883,480 @@ int main(void)
 			selected = first_shown = 0;
 		}
 	}
+}
+
+/* ---- the player's screens: menus climbed with A (choose) and B (back), what the highlighted item does in a panel under
+them, an operation's progress in a few plain lines (its details in installer_log.txt) ---- */
+
+#define MENU_TOP 5
+#define MENU_MOST 12
+#define PANEL_TOP 19
+#define PANEL_ROWS 5
+
+struct menu_item
+{
+	char text[64];
+	char const *about;
+	int disabled;
+};
+
+/* text wrapped at spaces into width columns from (row, column), at most rows lines: how many it took */
+static int wrapped(int row, int column, int width, int rows, unsigned long colour, char const *text)
+{
+	int used = 0;
+	while (*text && used < rows)
+	{
+		int n = (int)strlen(text), cut = n;
+		if (n > width)
+		{
+			for (cut = width; cut > width / 2 && text[cut] != ' '; cut--)
+				;
+			if (text[cut] != ' ')
+				cut = width;
+		}
+		for (n = 0; n < cut && text[n] != '\n'; n++)
+			;
+		screen_text(row + used++, column, colour, "%.*s", n, text);
+		text += n;
+		while (*text == ' ' || *text == '\n')
+			text++;
+	}
+	return used;
+}
+
+static void player_heading(char const *title)
+{
+	screen_clear();
+	screen_text(0, 1, COLOUR_YELLOW, "HALO 1 UNLIMITED");
+	if (package_ok && package.build)
+		screen_text(0, SCREEN_COLUMNS - 8, COLOUR_DIM, "v1.%lu", package.build);
+	screen_text(1, 0, COLOUR_DIM, "------------------------------------------------------------------------");
+	if (title)
+		screen_text(3, 1, COLOUR_WHITE, "%s", title);
+	screen_show();
+}
+
+/* a menu: the item chosen (A), or -1 (B). intro: a line or two above it (NULL: none) */
+static int menu(char const *title, char const *intro, struct menu_item const *items, int count, int chosen)
+{
+	int top = MENU_TOP, k, b;
+	if (chosen < 0 || chosen >= count)
+		chosen = 0;
+	for (;;)
+	{
+		player_heading(title);
+		top = MENU_TOP;
+		if (intro)
+			top += wrapped(MENU_TOP, 1, SCREEN_COLUMNS - 2, 4, COLOUR_GREY, intro) + 1;
+		for (k = 0; k < count && k < MENU_MOST; k++)
+		{
+			screen_row(top + k, k == chosen ? COLOUR_BAR : COLOUR_BLACK);
+			screen_text(top + k, 3, items[k].disabled ? COLOUR_DIM : k == chosen ? COLOUR_WHITE : COLOUR_GREEN, "%s",
+				items[k].text);
+		}
+		if (items[chosen].about)
+			wrapped(PANEL_TOP, 3, SCREEN_COLUMNS - 6, PANEL_ROWS, COLOUR_GREY, items[chosen].about);
+		screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
+		screen_show();
+		b = wait_input();
+		if (b == UP && chosen > 0)
+			chosen--;
+		else if (b == DOWN && chosen + 1 < count)
+			chosen++;
+		else if (b == B)
+			return -1;
+		else if (b == A && !items[chosen].disabled)
+			return chosen;
+	}
+}
+
+/* a page of text, read until A or B */
+static void page(char const *title, char const *text)
+{
+	int b;
+	player_heading(title);
+	wrapped(MENU_TOP, 1, SCREEN_COLUMNS - 2, SCREEN_ROWS - MENU_TOP - 2, COLOUR_WHITE, text);
+	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
+	screen_show();
+	while ((b = wait_input()) != A && b != B)
+		;
+}
+
+/* an operation on a player's screen: its title, a plain line of what it does; its details go to the log */
+static void task_begin(char const *title, char const *plan)
+{
+	text_print(task_title, sizeof(task_title), "%s", title);
+	quiet = 1;
+	log_clear();
+	player_heading(title);
+	if (plan)
+		say_in(COLOUR_WHITE, "%s", plan);
+	if (plan)
+		wrapped(LOG_TOP - 1, 2, LOG_COLUMNS - 2, 1, COLOUR_DIM, plan);
+	screen_show();
+}
+
+static void task_end(void)
+{
+	quiet = 0;
+}
+
+/* B (or A) after an operation's result */
+static void task_wait(void)
+{
+	int b;
+	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
+	screen_show();
+	while ((b = wait_input()) != A && b != B)
+		;
+}
+
+/* Halo 1 Unlimited as installed: the last install that worked (installer_last.txt), else the first found; NULL: none */
+static struct halo *player_install(void)
+{
+	int i;
+	for (i = 0; i < halo_count; i++)
+		if (is_last_install(&halos[i]) && halos[i].state == INSTALLED)
+			return &halos[i];
+	for (i = 0; i < halo_count; i++)
+		if (halos[i].state == INSTALLED)
+			return &halos[i];
+	return NULL;
+}
+
+/* "F:\Games\Halo" as a player reads it: "Halo on F: (Games\Halo)" */
+static void place_name(char const *path, char *out, int size)
+{
+	char const *last = strrchr(path, '\\');
+	text_print(out, size, "%s on %c: (%s)", last ? last + 1 : path, path[0], path[1] && path[2] ? path + 3 : path);
+}
+
+static void what_is_it(void)
+{
+	page("What is Halo 1 Unlimited?",
+		"Halo 1 Unlimited is Halo: Combat Evolved for your Xbox, made from your own copy of Halo, with more to play:\n\n"
+		"- 16-player games over system link and online, with bots\n"
+		"- thousands of community maps, and map packs you already have\n"
+		"- the campaign in split-screen co-op, and custom campaigns\n\n"
+		"It's built from the Halo on your hard drive, which keeps working as it was. Nothing of Halo's is "
+		"downloaded: only Halo 1 Unlimited's own parts.");
+}
+
+/* the install: the Halo it's made from, one screen of what it does, then it runs to the end (0 when done) */
+static int player_install_flow(void)
+{
+	struct menu_item items[MENU_MOST];
+	struct halo *choice[MENU_MOST];
+	char line[160];
+	int n = 0, i, k, failed;
+	for (i = 0; i < halo_count && n < MENU_MOST; i++)
+	{
+		if (!ready(&halos[i]) || halos[i].state != RETAIL)
+			continue;
+		place_name(halos[i].path, items[n].text, sizeof(items[n].text));
+		items[n].about = "This Halo is made into Halo 1 Unlimited. Its maps are made smaller as they're moved into it "
+			"(about 800 MB saved); this installer can put them back exactly as they were.";
+		items[n].disabled = 0;
+		choice[n++] = &halos[i];
+	}
+	if (!n)
+	{
+		page("Install Halo 1 Unlimited",
+			"No copy of Halo was found on your Xbox's hard drive.\n\n"
+			"Copy Halo from its disc to E:, F: or G: (in a folder of its own, or in a Games folder), then start this "
+			"installer again.");
+		return 1;
+	}
+	k = menu("Choose your Halo", "Halo 1 Unlimited is made from a copy of Halo on your hard drive.", items, n, 0);
+	if (k < 0)
+		return 1;
+	place_name(choice[k]->path, line, sizeof(line));
+	{
+		struct menu_item go[2] = {
+			{"Start install", "Takes about 6 minutes. It runs to the end by itself: there's nothing more to choose.", 0},
+			{"Back", NULL, 0}};
+		char intro[300];
+		text_print(intro, sizeof(intro), "Halo 1 Unlimited will be installed in %s. Your saved games and profiles "
+			"aren't touched.", line);
+		if (menu("Install Halo 1 Unlimited", intro, go, 2, 0) != 0)
+			return 1;
+	}
+	task_begin("Installing Halo 1 Unlimited", "Building Halo 1 Unlimited from your Halo...");
+	failed = install(choice[k]);
+	if (!failed)
+	{
+		last_install_write(choice[k]->path);
+		say_in(COLOUR_WHITE, "Making Halo's maps smaller (about 5 minutes)...");
+		offer_stock_maps(choice[k]);
+	}
+	task_end();
+	look_again(choice[k]);
+	if (failed)
+	{
+		task_wait();
+		return 1;
+	}
+	{
+		struct menu_item done[2] = {{"Play now", NULL, 0}, {"Back to the menu", NULL, 0}};
+		if (menu("Halo 1 Unlimited is installed", "Everything's ready.", done, 2, 0) == 0)
+			launch_halo(choice[k]);
+	}
+	return 0;
+}
+
+/* Update: a newer version online, installed (the game's updater's way: no questions) */
+static void player_update(struct halo *h)
+{
+	int changed;
+	if (h->up_to_date)
+	{
+		task_begin("Checking for updates", "Looking online for a newer Halo 1 Unlimited...");
+		auto_mode = 1;
+		changed = check_updates();
+		if (changed)
+			offer_installer_update();      /* (a newer installer: it starts, and Update is offered there) */
+		auto_mode = 0;
+		task_end();
+		find_halos();
+		if (!changed)
+		{
+			task_wait();
+			return;
+		}
+		h = player_install();
+		if (!h || h->up_to_date)
+			return;
+	}
+	text_print(task_title, sizeof(task_title), "Updating Halo 1 Unlimited");
+	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (about a minute)...");
+	if (!install(h))
+		offer_stock_maps(h);
+	task_end();
+	look_again(h);
+	task_wait();
+}
+
+/* Map Packs: the other Halo folders (modded Halos' maps), each one's own screen (packs.c) */
+static void player_map_packs(void)
+{
+	struct menu_item items[MENU_MOST];
+	struct halo *choice[MENU_MOST];
+	int n = 0, i, k = 0;
+	for (i = 0; i < halo_count && n < MENU_MOST; i++)
+	{
+		if (!can_import(&halos[i]))
+			continue;
+		place_name(halos[i].path, items[n].text, sizeof(items[n].text));
+		items[n].about = "Its maps can be added to Halo 1 Unlimited's map list.";
+		items[n].disabled = 0;
+		choice[n++] = &halos[i];
+	}
+	if (!n)
+	{
+		page("Map Packs", "No map packs were found on your hard drive.\n\nA map pack is a modded Halo's folder (its "
+			"default.xbe and maps) on E:, F: or G:.");
+		return;
+	}
+	while ((k = menu("Map Packs", "The map packs on your Xbox:", items, n, k)) >= 0)
+		map_pack(choice[k]);
+}
+
+static void player_more(struct halo *h)
+{
+	struct menu_item items[3] = {
+		{"Put the original Halo back", "Halo 1 Unlimited is taken out of this folder, and Halo's maps are rebuilt "
+			"exactly as they were (about half an hour).", 0},
+		{"About", NULL, 0},
+		{"Back", NULL, 0}};
+	int k;
+	char about[400];
+	while ((k = menu("More", NULL, items, 3, 0)) >= 0 && k != 2)
+	{
+		if (k == 0 && h && can_restore(h))
+		{
+			struct menu_item sure[2] = {{"Put the original Halo back", NULL, 0}, {"Back", NULL, 0}};
+			if (menu("Put the original Halo back?", "Halo 1 Unlimited will be taken out of this folder. You can install "
+				"it again any time.", sure, 2, 1) == 0)
+			{
+				task_begin("Putting the original Halo back", "Rebuilding Halo's maps exactly as they were...");
+				restore(h);
+				task_end();
+				look_again(h);
+				task_wait();
+				return;
+			}
+		}
+		else if (k == 1)
+		{
+			text_print(about, sizeof(about), "%s\n\nInstaller version %d.\n%s", package_ok ? package.name :
+				"No Halo 1 Unlimited package is beside this installer.", INSTALLER_VERSION, h ? h->path : "");
+			page("About", about);
+		}
+	}
+}
+
+/* the main screen */
+static void player_main(void)
+{
+	int chosen = 0;
+	for (;;)
+	{
+		struct menu_item items[6];
+		int n = 0, k, actions[6];
+		struct halo *h = player_install();
+		enum { INSTALL, WHAT, PLAY, UPDATE, PACKS, MORE, DEVELOPER };
+		if (!h)
+		{
+			text_print(items[n].text, sizeof(items[n].text), "Install Halo 1 Unlimited");
+			items[n].about = "Builds Halo 1 Unlimited from the Halo on your hard drive (about 6 minutes).";
+			items[n].disabled = !package_ok;
+			actions[n++] = INSTALL;
+			text_print(items[n].text, sizeof(items[n].text), "What is Halo 1 Unlimited?");
+			items[n].about = "What it is, and what it does to your Xbox.";
+			items[n].disabled = 0;
+			actions[n++] = WHAT;
+		}
+		else
+		{
+			text_print(items[n].text, sizeof(items[n].text), "Play Halo 1 Unlimited");
+			items[n].about = NULL;
+			items[n].disabled = 0;
+			actions[n++] = PLAY;
+			if (!h->up_to_date && package_ok)
+			{
+				text_print(items[n].text, sizeof(items[n].text), "Update Halo 1 Unlimited (v1.%lu)", package.build);
+				items[n].about = "A newer version is ready to install (about a minute).";
+			}
+			else
+			{
+				text_print(items[n].text, sizeof(items[n].text), "Check for updates");
+				items[n].about = "Looks online for a newer Halo 1 Unlimited, and installs it.";
+			}
+			items[n].disabled = 0;
+			actions[n++] = UPDATE;
+			text_print(items[n].text, sizeof(items[n].text), "Map Packs");
+			items[n].about = "Add the map packs on your Xbox to Halo 1 Unlimited's map list.";
+			items[n].disabled = 0;
+			actions[n++] = PACKS;
+			text_print(items[n].text, sizeof(items[n].text), "More...");
+			items[n].about = "Put the original Halo back, and about this installer.";
+			items[n].disabled = 0;
+			actions[n++] = MORE;
+		}
+		if (developer)
+		{
+			text_print(items[n].text, sizeof(items[n].text), "Developer");
+			items[n].about = "Every Halo folder, and everything the installer can do to each (developer.ini).";
+			items[n].disabled = 0;
+			actions[n++] = DEVELOPER;
+		}
+		k = menu(h ? "Main menu" : "Welcome", package_ok ? NULL :
+			"This installer needs its opence.oxpk beside it to install. Put it there and start the installer again.",
+			items, n, chosen);
+		if (k < 0)
+		{
+			log_file("to the dashboard");
+			launch(NULL);
+		}
+		chosen = k;
+		switch (actions[k])
+		{
+		case INSTALL:
+			player_install_flow();
+			break;
+		case WHAT:
+			what_is_it();
+			break;
+		case PLAY:
+			launch_halo(h);
+			break;
+		case UPDATE:
+			player_update(h);
+			break;
+		case PACKS:
+			player_map_packs();
+			break;
+		case MORE:
+			player_more(h);
+			break;
+		case DEVELOPER:
+			developer_screen();
+			break;
+		}
+		find_halos();
+	}
+}
+
+/* developer.ini beside the installer: "developer = 1" shows the Developer screen; "update_url = <address>" and
+"allow_unsigned = 1" are a test update location's (as update_url.txt's) */
+static void developer_read(void)
+{
+	FILE *file = fopen(own_path("developer.ini"), "r");
+	char line[600];
+	developer = 0;
+	if (!file)
+		return;
+	while (fgets(line, sizeof(line), file))
+	{
+		char *key = line, *value, *end;
+		while (*key == ' ' || *key == '\t')
+			key++;
+		if (!(value = strchr(key, '=')))
+			continue;
+		for (end = value; end > key && (end[-1] == ' ' || end[-1] == '\t'); end--)
+			;
+		*end = 0;
+		for (value++; *value == ' ' || *value == '\t'; value++)
+			;
+		for (end = value + strlen(value); end > value && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' '); end--)
+			;
+		*end = 0;
+		if (!_stricmp(key, "developer"))
+			developer = atoi(value) != 0;
+		else if (!_stricmp(key, "update_url"))
+			text_print(developer_url, sizeof(developer_url), "%s", value);
+		else if (!_stricmp(key, "allow_unsigned"))
+			developer_unsigned = atoi(value) != 0;
+	}
+	fclose(file);
+	log_file(developer ? "developer.ini: developer = 1" : "developer.ini: no developer = 1");
+}
+
+int main(void)
+{
+	own_folder();
+	nxMountDrive('E', "\\Device\\Harddisk0\\Partition1\\");
+	nxMountDrive('F', "\\Device\\Harddisk0\\Partition6\\");
+	nxMountDrive('G', "\\Device\\Harddisk0\\Partition7\\");
+	screen_init();
+	screen_spinner(1);                 /* (something moves at once: the reading and the rest take a while) */
+	SDL_Init(SDL_INIT_GAMECONTROLLER);
+	heading("Reading the package...");
+	{
+		char line[96];
+		text_print(line, sizeof(line), "---- %s, version %d", TITLE, INSTALLER_VERSION);
+		log_file(line);
+	}
+	consolidate_log = log_file; /* (the map packs' "time:" lines) */
+	developer_read();
+	cache_drives();
+	notices_write();
+	package_read();
+	if (exists(AUTO_PATH))
+		auto_update();
+	{
+		char url[512];
+		update_url(url, sizeof(url)); /* (update_url.txt's allow_unsigned, for the installer the package carries) */
+	}
+	offer_installer_update();
+	last_install_read();
+	if (last_install[0])
+	{
+		char line[200];
+		text_print(line, sizeof(line), "last install: %s", last_install);
+		log_file(line);
+	}
+	find_halos();
+	player_main();
 	return 0;
 }
