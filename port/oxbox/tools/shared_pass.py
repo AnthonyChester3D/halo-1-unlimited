@@ -44,7 +44,7 @@ SOUND = 0x736E6421         # 'snd!'
 SCENARIO_BSPS = 0x5A4      # scenario's structure_bsp_references (0x20 each: file offset, size, ...)
 PACK_BIT, STOCK_BIT = 0x80000000, 0xC0000000
 LEVEL = int(os.environ.get('SHARED_PASS_LEVEL', '9'))
-MP_SLOT = 47 << 20    # a multiplayer cache file (the installer's consolidate.c MP_SLOT)
+UNPACKED_OVER = 0x2B000000    # the game's seventh cache file, on a second cache drive (consolidate.c UNPACKED_OVER)
 STOCK_NAMES = ('beavercreek', 'bloodgulch', 'boardingaction', 'carousel', 'chillout', 'damnation', 'hangemhigh',
                'longest', 'prisoner', 'putput', 'ratrace', 'sidewinder', 'wizard')
 LIST_SIGNATURE = b'OXPL'
@@ -365,10 +365,10 @@ def main():
         total_after += n
     if has_pack:
         pack.write_list(members)
-    # (a pack's file bigger than a multiplayer cache file, 47 MiB, stays unpacked, as the installer leaves it: the game
-    # reads it where it is, so it takes no cache file and both campaign ones stay for a level change)
+    # (a pack's file bigger than the game's biggest cache file stays unpacked, as the installer leaves it: the game reads
+    # it where it is)
     size = 0
-    if has_pack and len(pack.data) > MP_SLOT:
+    if has_pack and len(pack.data) > UNPACKED_OVER:
         open(os.path.join(out_dir, name + '.shared'), 'wb').write(bytes(pack.data))
         size = len(pack.data)
     elif has_pack:

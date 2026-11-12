@@ -199,7 +199,15 @@ symbols in this file:
 enum
 {
 	MAXIMUM_SIMULTANEOUS_CACHE_REQUESTS = 512,
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a seventh, on a second cache drive (q:): a pack's shared file too big for a multiplayer one
+	(oxbox_shared_cache_drive) */
+	NUMBER_OF_CACHED_MAP_FILES = 7,
+	SHARED_CACHE_FILE_INDEX = 6,
+	SHARED_CACHE_FILE_MAXIMUM_SIZE = 0x2B000000,
+#else
 	NUMBER_OF_CACHED_MAP_FILES = 6,
+#endif
 	CACHE_FILE_SECTOR_SIZE = 512,
 	MAXIMUM_CACHE_FILES = 20,
 	CACHE_FILE_THREAD_STACK_SIZE = 0x4000,
@@ -286,7 +294,8 @@ typedef BOOL (WINAPI *cached_map_async_request_proc)(
 
 struct cache_file_runtime_globals
 {
-	struct cached_map_file cached_map_files[NUMBER_OF_CACHED_MAP_FILES];
+	/* (oxbox: the seventh is shared_cached_map_file, outside: this layout is the retail code's, its offsets fixed) */
+	struct cached_map_file cached_map_files[6];
 	boolean copy_in_progress;
 	byte reserved3049;
 	short copying_to_map_file_index;
@@ -667,6 +676,18 @@ boolean cache_files_precache_map_begin(
 				cache_map_name[0] == '*' ? (short)_scenario_type_multiplayer :
 #endif
 				header.scenario_type);
+
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: one too big for a multiplayer cache file goes in the second cache drive's, when there is one
+			(else a campaign one, as cached_map_files_find_free_map chose) */
+			if (cache_map_name[0] == '*' && header.file_length > MULTIPLAYER_CACHE_FILE_MAXIMUM_SIZE &&
+				cached_map_file_get_size(SHARED_CACHE_FILE_INDEX) > header.file_length &&
+				cache_file_globals.open_map_file_index != SHARED_CACHE_FILE_INDEX &&
+				!shared_slot_kept(SHARED_CACHE_FILE_INDEX))
+			{
+				map_file_index = SHARED_CACHE_FILE_INDEX;
+			}
+#endif
 			void *buffer;
 			struct cached_map_file *map_file;
 
@@ -1115,6 +1136,186 @@ static void cache_files_verify_language(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+void *oxbox_kernel_export(unsigned long ordinal);
+void platform_log(char const *format, ...);
+struct oxbox_string { unsigned short length, maximum_length; char *buffer; };
+struct oxbox_attributes { void *root; struct oxbox_string *name; unsigned long attributes; };
+struct oxbox_io { LONG status; unsigned long information; };
+
+/* ---------- a second cache drive, for a pack's big shared file (cache_files_windows.c's seventh cache file, q:\cache006.map)
+
+The cache drives X, Y and Z (partitions 3-5) are the console's to give each game in turn: the hard drive's config
+area, at 0x800, lists which title has which, most recently used first: its signature 0x97315286, 2, then 12 bytes a
+title (its ID, the drive: 0-2 for partitions 3-5, 1). A game not listed takes a free drive or the least recently used
+one, which it wipes. Halo 1 Unlimited's own (4C4A4855) is Z: for its six cache files. A pack's shared file bigger
+than a multiplayer cache file needs one of its own (a campaign one would leave no room for the next level), so the
+game takes a second drive the same way, under a title ID of its own (4C4A4853): kept while it's listed, else a free
+drive or the least recently used other one, wiped first (what's on a cache drive is the game's that had it, made
+again when it next runs), then listed just after Halo 1 Unlimited's. Its files other than cache006.map go each launch.
+TRUE when q: is there with the room */
+
+#define CACHE_DB_OFFSET 0x800
+#define CACHE_DB_SIGNATURE 0x97315286ul
+#define CACHE_DB_ENTRIES 40                  /* (12 bytes each from +8, before the sector's end mark at +0x1FA) */
+#define OWN_TITLE_ID 0x4C4A4855ul
+#define SHARED_TITLE_ID 0x4C4A4853ul
+
+static LONG cache_db_io(int write, unsigned long *sector)
+{
+	LONG (WINAPI *nt_open)(HANDLE *, unsigned long, struct oxbox_attributes *, struct oxbox_io *, unsigned long,
+		unsigned long) = oxbox_kernel_export(202);   /* NtOpenFile */
+	LONG (WINAPI *nt_io)(HANDLE, HANDLE, void *, void *, struct oxbox_io *, void *, unsigned long,
+		LARGE_INTEGER *) = oxbox_kernel_export(write ? 236 : 219);   /* NtWriteFile, NtReadFile */
+	LONG (WINAPI *nt_close)(HANDLE) = oxbox_kernel_export(187);   /* NtClose */
+	static char path[] = "\\Device\\Harddisk0\\Partition0";
+	struct oxbox_string name = { sizeof(path) - 1, sizeof(path), path };
+	struct oxbox_attributes attributes = { NULL, &name, 0x40 };
+	struct oxbox_io io;
+	LARGE_INTEGER position;
+	HANDLE handle;
+	LONG status;
+
+	if (!nt_open || !nt_io || !nt_close)
+		return -1;
+	/* (GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE, shared, FILE_SYNCHRONOUS_IO_NONALERT) */
+	status = nt_open(&handle, 0xC0100000, &attributes, &io, 3, 0x20);
+	if (status < 0)
+		return status;
+	position.QuadPart = CACHE_DB_OFFSET;
+	status = nt_io(handle, NULL, NULL, NULL, &io, sector, 512, &position);
+	if (status >= 0 && io.information != 512)
+		status = -1;
+	nt_close(handle);
+	return status;
+}
+
+static void shared_drive_empty(char const *folder, int depth)
+{
+	WIN32_FIND_DATAA found;
+	char pattern[MAX_PATH], path[MAX_PATH];
+	HANDLE find;
+
+	_snprintf(pattern, sizeof(pattern), "%s\\*", folder);
+	find = FindFirstFileA(pattern, &found);
+	if (find == INVALID_HANDLE_VALUE)
+		return;
+	do
+	{
+		if (!strcmp(found.cFileName, ".") || !strcmp(found.cFileName, "..") ||
+			(!depth && !_stricmp(found.cFileName, "cache006.map")))
+			continue;
+		_snprintf(path, sizeof(path), "%s\\%s", folder, found.cFileName);
+		SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+		if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (depth < 8)
+				shared_drive_empty(path, depth + 1);
+			RemoveDirectoryA(path);
+		}
+		else
+			DeleteFileA(path);
+	} while (FindNextFileA(find, &found));
+	CloseHandle(find);   /* (the Xbox's FindClose) */
+}
+
+static boolean shared_cache_file_ready;
+
+static int oxbox_shared_cache_drive(unsigned long size)
+{
+	static int known, ready;
+	LONG (WINAPI *create_link)(struct oxbox_string *, struct oxbox_string *) = oxbox_kernel_export(67);
+	unsigned long sector[128], *entries = sector + 2, own = 0, shared = 0, used = 0, kept[3 * CACHE_DB_ENTRIES];
+	int count, k, n, own_at = -1, shared_at = -1, drive = -1, claimed = 0;
+	static char link_name[] = "\\??\\Q:";
+	static char target[] = "\\Device\\Harddisk0\\PartitionN\\";
+	struct oxbox_string link = { sizeof(link_name) - 1, sizeof(link_name), link_name };
+	struct oxbox_string target_string = { sizeof(target) - 1, sizeof(target), target };
+	ULARGE_INTEGER available, total, free_total;
+	WIN32_FILE_ATTRIBUTE_DATA existing;
+	unsigned long long room;
+
+	if (known)
+		return ready;
+	known = 1;
+	if (!create_link || cache_db_io(0, sector) < 0 || sector[0] != CACHE_DB_SIGNATURE || sector[1] != 2)
+	{
+		platform_log("shared: the cache drives' list at 0x800 doesn't read: no second cache drive");
+		return 0;
+	}
+	for (count = 0; count < CACHE_DB_ENTRIES && entries[count * 3]; count++)
+	{
+		if (entries[count * 3] == OWN_TITLE_ID)
+			own_at = count;
+		else if (entries[count * 3] == SHARED_TITLE_ID)
+			shared_at = count;
+		if (entries[count * 3 + 1] < 3)
+			used |= 1ul << entries[count * 3 + 1];
+	}
+	if (own_at < 0 || entries[own_at * 3 + 1] > 2)
+	{
+		platform_log("shared: Halo 1 Unlimited isn't in the cache drives' list: no second cache drive");
+		return 0;
+	}
+	own = entries[own_at * 3 + 1];
+	if (shared_at >= 0 && entries[shared_at * 3 + 1] < 3 && entries[shared_at * 3 + 1] != own)
+		drive = (int)entries[shared_at * 3 + 1];
+	else
+	{
+		/* (a free drive, else the least recently used that isn't ours) */
+		for (k = 0; k < 3 && drive < 0; k++)
+			if (k != (int)own && !(used & (1ul << k)))
+				drive = k;
+		for (k = count - 1; k >= 0 && drive < 0; k--)
+			if (entries[k * 3 + 1] < 3 && entries[k * 3 + 1] != own)
+				drive = (int)entries[k * 3 + 1];
+		claimed = 1;
+	}
+	if (drive < 0)
+		return 0;
+	target[sizeof(target) - 3] = (char)('3' + drive);
+	create_link(&link, &target_string);
+	if (GetFileAttributesA("q:\\") == (DWORD)-1)
+	{
+		platform_log("shared: cache drive %c: (partition %d) doesn't mount: no second cache drive", "XYZ"[drive], 3 + drive);
+		return 0;
+	}
+	/* (wiped before it's listed as ours: a power cut between leaves its old game to make its cache again) */
+	shared_drive_empty("q:", 0);
+	if (claimed || shared_at != own_at + 1)
+	{
+		for (k = 0, n = 0; k < count; k++)
+		{
+			if (entries[k * 3] == SHARED_TITLE_ID || (entries[k * 3] != OWN_TITLE_ID && entries[k * 3 + 1] == (unsigned long)drive))
+				continue;
+			kept[n * 3] = entries[k * 3], kept[n * 3 + 1] = entries[k * 3 + 1], kept[n * 3 + 2] = entries[k * 3 + 2];
+			n++;
+			if (entries[k * 3] == OWN_TITLE_ID)
+			{
+				kept[n * 3] = SHARED_TITLE_ID, kept[n * 3 + 1] = (unsigned long)drive, kept[n * 3 + 2] = 1;
+				n++;
+			}
+		}
+		for (k = 0; k < CACHE_DB_ENTRIES * 3; k++)
+			entries[k] = k < n * 3 ? kept[k] : 0;
+		if (cache_db_io(1, sector) < 0)
+		{
+			platform_log("shared: the cache drives' list couldn't be written: no second cache drive");
+			return 0;
+		}
+	}
+	room = GetDiskFreeSpaceExA("q:\\", &available, &total, &free_total) ? available.QuadPart : 0;
+	if (GetFileAttributesExA("q:\\cache006.map", GetFileExInfoStandard, &existing))
+		room += existing.nFileSizeLow;
+	ready = room >= size;
+	platform_log("shared: cache drive %c: (partition %d) is the second cache drive%s: %lu MB free for cache006.map%s",
+		"XYZ"[drive], 3 + drive, claimed ? " (taken now, wiped)" : "", (unsigned long)(room >> 20),
+		ready ? "" : " (too little: not used)");
+	return ready;
+}
+
+#endif
+
 static void cache_files_open_cache_files(
 	void)
 {
@@ -1128,6 +1329,9 @@ static void cache_files_open_cache_files(
 	short map_file_index;
 
 	cached_map_files_delete(NUMBER_OF_CACHED_MAP_FILES);
+#if defined(HALO_XBOX_TARGET)
+	shared_cache_file_ready = oxbox_shared_cache_drive(SHARED_CACHE_FILE_MAXIMUM_SIZE) != 0;
+#endif
 	for (map_file_index = 0;
 		map_file_index < NUMBER_OF_CACHED_MAP_FILES;
 		map_file_index++)
@@ -1135,6 +1339,16 @@ static void cache_files_open_cache_files(
 		struct cached_map_file *map_file = cached_map_file_get(map_file_index);
 		long size;
 		HANDLE file;
+
+#if defined(HALO_XBOX_TARGET)
+		if (!cached_map_file_get_size(map_file_index))
+		{
+			/* (no second cache drive: no seventh cache file) */
+			map_file->file = INVALID_HANDLE_VALUE;
+			memset(&map_file->header, 0, sizeof(struct cache_file_header));
+			continue;
+		}
+#endif
 
 		valid = FALSE;
 		cached_map_file_get_path(map_file_index, path);
@@ -1569,6 +1783,11 @@ static long cached_map_file_get_size(
 	{
 		return SOLO_CACHE_FILE_MAXIMUM_SIZE;
 	}
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the second cache drive's, none without it (never chosen, never made) */
+	if (map_file_index == SHARED_CACHE_FILE_INDEX)
+		return shared_cache_file_ready ? SHARED_CACHE_FILE_MAXIMUM_SIZE : 0;
+#endif
 
 	return (map_file_index <= 2)
 		? MAIN_MENU_CACHE_FILE_MAXIMUM_SIZE
@@ -1732,6 +1951,13 @@ static void cached_map_file_get_path(
 	short map_file_index,
 	char *path)
 {
+#if defined(HALO_XBOX_TARGET)
+	if (map_file_index == SHARED_CACHE_FILE_INDEX)
+	{
+		strcpy(path, "q:\\cache006.map");
+		return;
+	}
+#endif
 	sprintf(path, "z:\\cache%03d.map", map_file_index);
 
 	return;
@@ -1870,6 +2096,14 @@ static struct cached_map_file *cached_map_file_get(
 		1208,
 		map_file_index>=0 && map_file_index<NUMBER_OF_CACHED_MAP_FILES);
 
+#if defined(HALO_XBOX_TARGET)
+	if (map_file_index == SHARED_CACHE_FILE_INDEX)
+	{
+		static struct cached_map_file shared_cached_map_file;
+
+		return &shared_cached_map_file;
+	}
+#endif
 	return cache_file_globals.cached_map_files + map_file_index;
 }
 

@@ -30,7 +30,9 @@ file_close, and anything else done to it comes after disk_sync. Each step's time
 #define MP_SLOT (47u * 1024u * 1024u)   /* what a multiplayer map may unpack to (the game's cache file for one) */
 #define CAMPAIGN_SLOT (278u * 1024u * 1024u) /* a campaign level's (header 0x60: scenario type 0) */
 #ifndef UNPACKED_OVER
-#define UNPACKED_OVER MP_SLOT           /* a pack's file bigger than this stays unpacked (shared_unpacked; tests: smaller) */
+/* a pack's file bigger than this stays unpacked (shared_unpacked; tests: smaller): the game's seventh cache file, on a
+second cache drive (cache_files_windows.c SHARED_CACHE_FILE_MAXIMUM_SIZE), holds one up to this unpacked */
+#define UNPACKED_OVER 0x2B000000u
 #endif
 #define MAP_LEVEL 1                     /* (as the stock maps': far quicker on a console, and only 3% bigger than 6) */
 #define SHARED_LEVEL 6
@@ -1008,9 +1010,9 @@ static void shared_header(unsigned char *header, uint32_t length, uint32_t list_
 	memcpy(header + 0x7FC, "toof", 4);
 }
 
-/* a pack's file bigger than a multiplayer cache file (MP_SLOT) stays unpacked, as stock.shared is: the game reads it where
-it is, so it takes no cache file (a packed one that big would take a campaign one, and a level change would find no
-room for the next level: docs/shared_maps.md). The temporary file is it: its blocks checked by the CRC, its header
+/* a pack's file bigger than the game's seventh cache file (UNPACKED_OVER) stays unpacked, as stock.shared is: the game
+reads it where it is, so it takes no cache file (a packed one that big would take a campaign one, and a level change
+would find no room for the next level: docs/shared_maps.md). In practice none is: packs' are 1-150 MB. The temporary file is it: its blocks checked by the CRC, its header
 written, and it's closed (*temporary). 0 when done */
 static int shared_unpacked(struct converting *v, HANDLE *temporary, uint32_t length, uint32_t list_room,
 	char const *name, uint32_t checksum)
@@ -1539,7 +1541,7 @@ static int convert_pack(char const *stock_folder, char const *pack_folder, char 
 	if (has_pack && pack_length > UNPACKED_OVER)
 	{
 		if (say)
-			say(0, "Finishing the pack's shared file (kept unpacked: it's bigger than a multiplayer cache file)...");
+			say(0, "Finishing the pack's shared file (kept unpacked: it's bigger than the game's biggest cache file)...");
 		if (write_list(&v, temporary, list_room, order, members, pblocks, blocks) ||
 			shared_unpacked(&v, &temporary, pack_length, list_room, name, checksum))
 		{
