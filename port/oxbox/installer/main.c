@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 53
+#define INSTALLER_VERSION 54
 #endif
 __attribute__((used)) static struct
 {
@@ -77,6 +77,8 @@ game leaves beside it (the game's offer of a newer release: port/oxbox/oxbox_sdk
 start the game again, with no buttons pressed */
 #define UPDATER_FOLDER "updater"
 #define AUTO_PATH own_path("auto_update.txt")
+#define SETTINGS_PATH own_path("installer_settings.txt") /* "update = always": updates installed without asking */
+#define CONTINUE_PATH own_path("update_continue.txt") /* (the installer an update carried goes on with the update) */
 static int auto_mode;
 static int developer;              /* (developer.ini beside the installer says developer = 1: the Developer screen) */
 static char developer_url[512];    /* (its update_url: a test update location, as update_url.txt's) */
@@ -3733,6 +3735,123 @@ static void player_update(struct halo *h)
 	task_wait();
 }
 
+/* ---- the update asked about first thing: "There's a new update available. Download and update?" Yes / No / Always
+(installer_settings.txt "update = always": from then on no question) ---- */
+
+static int update_asked;
+
+static int update_always(void)
+{
+	char line[80];
+	FILE *file = fopen(SETTINGS_PATH, "r");
+	int always = 0;
+	if (!file)
+		return 0;
+	while (fgets(line, sizeof(line), file))
+	{
+		char *at = line;
+		while (*at == ' ' || *at == '\t')
+			at++;
+		if (!_strnicmp(at, "update", 6) && strstr(at, "=") && strstr(at, "always"))
+			always = 1;
+	}
+	fclose(file);
+	return always;
+}
+
+static void update_always_set(void)
+{
+	static char const text[] = "update = always\r\n";
+	write_file(SETTINGS_PATH, (unsigned char const *)text, sizeof(text) - 1);
+	flush_own_drive();
+	log_file("updates: always");
+}
+
+/* Halo 1 Unlimited's game brought up to the package beside the installer (after a download) */
+static void update_installed(void)
+{
+	struct halo *h;
+	find_halos();
+	h = player_install();
+	check_state = CHECK_NEWEST;
+	if (!h || h->up_to_date)
+		return;                            /* (nothing installed: Install uses the new package) */
+	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (about a minute)...");
+	if (!install(h))
+		offer_stock_maps(h);
+	task_end();
+	look_again(h);
+	task_wait();
+}
+
+/* the newer package downloaded; the newer installer it carries put in place and started (it goes on with the update:
+CONTINUE_PATH); then Halo 1 Unlimited updated */
+static void update_go(void)
+{
+	int changed;
+	task_begin("Updating Halo 1 Unlimited", "Downloading the new version...");
+	auto_mode = 1;
+	changed = check_updates();
+	if (changed && package_ok && package.installer_version > INSTALLER_VERSION && trusted(signature))
+	{
+		static char const text[] = "update\r\n";
+		write_file(CONTINUE_PATH, (unsigned char const *)text, sizeof(text) - 1);
+		flush_own_drive();
+		offer_installer_update();          /* (the new installer starts: it doesn't come back here) */
+		DeleteFileA(CONTINUE_PATH);        /* (it didn't) */
+	}
+	auto_mode = 0;
+	task_end();
+	if (!changed)
+	{
+		task_wait();
+		return;
+	}
+	update_installed();
+}
+
+/* a newer version online: asked about (once a run), or with "always" just installed */
+static void update_prompt(void)
+{
+	struct menu_item items[3] = {
+		{"Yes", "Downloads it and updates Halo 1 Unlimited now (a minute or two).", 0},
+		{"No", "Not now: the main menu offers it.", 0},
+		{"Always", "Yes, and from now on updates are downloaded and installed without asking.", 0}};
+	char intro[160];
+	int k;
+	update_asked = 1;
+	if (!update_always())
+	{
+		text_print(intro, sizeof(intro), "There's a new update available (v1.%lu). Download and update?", check_build);
+		k = menu("A new update is available", intro, items, 3, 0);
+		if (k == 2)
+			update_always_set();
+		else if (k != 0)
+			return;
+	}
+	update_go();
+}
+
+/* first thing at the start: online for a newer version (up to 15 s waited for, B skips: a slower answer is asked
+about at the main menu), before Halo folders are looked for */
+static void startup_update_check(void)
+{
+	DWORD start = GetTickCount();
+	check_start();
+	player_heading("Checking for updates");
+	screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking online for a newer Halo 1 Unlimited...");
+	screen_text(MENU_TOP + 2, 1, COLOUR_DIM, "B: skip");
+	screen_show();
+	while (check_state == CHECK_RUNNING && GetTickCount() - start < 15000)
+	{
+		if (poll_input() == B)
+			break;
+		Sleep(16);
+	}
+	if (check_state == CHECK_NEWER)
+		update_prompt();
+}
+
 /* ---- Map Packs: the modded Halos' folders on the drives (the other Halo folders), each one's status and what can be done:
 Consolidate (recommended: its maps made small in Halo 1 Unlimited's folder, drawing on stock.shared; the ones map sharing
 sends), Link (its maps played where they are), take it out again, and, consolidated, its own folder deleted. Known
@@ -4119,13 +4238,14 @@ static void player_more(struct halo *h)
 static void player_main(void)
 {
 	int chosen = 0;
-	if (player_install())
-		check_start();
 	for (;;)
 	{
 		struct menu_item items[6];
 		int n = 0, k, actions[6];
-		struct halo *h = player_install();
+		struct halo *h;
+		if (check_state == CHECK_NEWER && !update_asked)
+			update_prompt();               /* (the answer came after the start's wait) */
+		h = player_install();
 		enum { INSTALL, WHAT, PLAY, UPDATE, PACKS, MORE, DEVELOPER };
 		if (!h)
 		{
@@ -4189,7 +4309,7 @@ static void player_main(void)
 			items[n].disabled = 0;
 			actions[n++] = DEVELOPER;
 		}
-		menu_watches_check = h != NULL;
+		menu_watches_check = 1;            /* (the check's answer shown, and asked about, as it comes) */
 		k = menu(h ? "Main menu" : "Welcome", package_ok ? NULL :
 			"This installer needs its opence.oxpk beside it to install. Put it there and start the installer again.",
 			items, n, chosen);
@@ -4302,6 +4422,17 @@ int main(void)
 		text_print(line, sizeof(line), "last install: %s", last_install);
 		log_file(line);
 	}
+	if (exists(CONTINUE_PATH))
+	{
+		/* (started by the update it came with: Halo 1 Unlimited updated from the new package) */
+		DeleteFileA(CONTINUE_PATH);
+		flush_own_drive();
+		log_file("going on with the update");
+		update_asked = 1;
+		update_installed();
+	}
+	else
+		startup_update_check();
 	find_halos();
 	player_main();
 	return 0;
