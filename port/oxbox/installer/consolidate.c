@@ -1424,13 +1424,24 @@ static int convert_pack(char const *stock_folder, char const *pack_folder, char 
 			text_print(error, 256, "Can't write in %s.", pack_folder);
 			goto done;
 		}
-		for (at = 0; at < pack_length; at += SECTOR)
+		/* (1 MB a write, as stock.shared's: a sector a write took 157 s for Covenant Edition's 143 MB on a console;
+		without the memory, a sector a write) */
 		{
-			if (write_all(temporary, zeros, SECTOR))
+			uint32_t piece = 1024u * 1024u, whole = (pack_length + SECTOR - 1) / SECTOR * SECTOR;
+			unsigned char *zeroed = calloc(1, piece);
+			if (!zeroed)
+				piece = SECTOR;
+			for (at = 0; at < whole; at += piece)
 			{
-				text_print(error, 256, "Can't write in %s.", pack_folder);
-				goto done;
+				uint32_t part = whole - at < piece ? whole - at : piece;
+				if (write_all(temporary, zeroed ? zeroed : zeros, part))
+				{
+					free(zeroed);
+					text_print(error, 256, "Can't write in %s.", pack_folder);
+					goto done;
+				}
 			}
+			free(zeroed);
 		}
 		step_end("the pack's file filled with zeros");
 	}
