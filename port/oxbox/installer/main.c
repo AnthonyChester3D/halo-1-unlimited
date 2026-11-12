@@ -246,7 +246,12 @@ static void heading(char const *what)
 
 /* ---- the controllers: every pad, d-pad or left stick (held: repeats), triggers a page ---- */
 
-enum { NONE, UP, DOWN, PAGE_UP, PAGE_DOWN, A, B, X, Y, START, WHITE };
+enum { NONE, UP, DOWN, PAGE_UP, PAGE_DOWN, A, B, X, Y, START, WHITE, REFRESH };
+
+/* (the background update check's state: a menu watching it is drawn again when it changes: wait_input's REFRESH) */
+enum { CHECK_FAILED, CHECK_RUNNING, CHECK_NEWER, CHECK_NEWEST };
+static volatile int check_state = CHECK_FAILED;
+static int menu_watches_check, check_seen = -1;
 
 static SDL_GameController *pads[4];
 static unsigned held_buttons = ~0u; /* (none counts as pressed until it's been seen up) */
@@ -331,7 +336,15 @@ static int wait_input(void)
 	int b;
 	screen_spinner(0);
 	while ((b = poll_input()) == NONE)
+	{
+		if (menu_watches_check && check_state != check_seen)
+		{
+			check_seen = check_state;
+			b = REFRESH;
+			break;
+		}
 		Sleep(16);
+	}
 	screen_spinner(1);
 	return b;
 }
@@ -1964,6 +1977,68 @@ static void update_url(char *url, int size)
 	text_print(url, size, "%s", DOWNLOAD_DEFAULT_URL);
 }
 
+/* ---- the update check at start: in the background, the newest package's first 128 bytes, its header (its release at
+116, its build at 124), as the game's own check takes them (net/oxbox_update.c); downloaded whole only when Update is
+chosen (check_updates). The network isn't used by two at once: check_wait first ---- */
+
+static volatile unsigned long check_release, check_build;
+static unsigned char check_head[128];
+static unsigned long check_got;
+static HANDLE check_thread;
+
+static int check_put(void *context, unsigned char const *data, unsigned long size)
+{
+	unsigned long n = size < sizeof(check_head) - check_got ? size : sizeof(check_head) - check_got;
+	(void)context;
+	memcpy(check_head + check_got, data, n);
+	check_got += n;
+	return check_got >= sizeof(check_head);    /* (enough: the rest isn't fetched) */
+}
+
+static DWORD WINAPI check_main(LPVOID unused)
+{
+	char url[512], address[32], error[256];
+	unsigned long size;
+	(void)unused;
+	update_url(url, sizeof(url));
+	check_got = 0;
+	if (download_network(NULL, address, error))
+	{
+		check_state = CHECK_FAILED;
+		return 0;
+	}
+	/* (a limit above any package's size: download refuses a longer one before reading; check_put stops it at 128) */
+	download(url, 256ul << 20, check_put, NULL, NULL, &size, error);
+	if (check_got < sizeof(check_head) || memcmp(check_head, "OXPK", 4))
+	{
+		check_state = CHECK_FAILED;
+		return 0;
+	}
+	check_release = u32(check_head + 116);
+	check_build = u32(check_head + 124);
+	check_state = !package_ok || check_release > package.release ||
+		(check_release == package.release && check_build > package.build) ? CHECK_NEWER : CHECK_NEWEST;
+	return 0;
+}
+
+static void check_wait(void)
+{
+	if (!check_thread)
+		return;
+	WaitForSingleObject(check_thread, INFINITE);
+	CloseHandle(check_thread);
+	check_thread = NULL;
+}
+
+static void check_start(void)
+{
+	check_wait();
+	check_state = CHECK_RUNNING;
+	check_thread = CreateThread(NULL, 0, check_main, NULL, 0, NULL);
+	if (!check_thread)
+		check_state = CHECK_FAILED;
+}
+
 /* looks for a newer package online; 1 when opence.oxpk was replaced */
 static int check_updates(void)
 {
@@ -1975,6 +2050,7 @@ static int check_updates(void)
 	char const *fresh_signer;
 	int b, changed = 0;
 
+	check_wait();
 	heading("Looking online for a newer package");
 	log_clear();
 	update_url(url, sizeof(url));
@@ -2995,6 +3071,8 @@ static int menu(char const *title, char const *intro, struct menu_item const *it
 		screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
 		screen_show();
 		b = wait_input();
+		if (b == REFRESH)
+			return -2;                 /* (the update check answered: the caller makes its items again) */
 		if (b == UP && chosen > 0)
 			chosen--;
 		else if (b == DOWN && chosen + 1 < count)
@@ -3542,9 +3620,20 @@ static void player_update(struct halo *h)
 			return;
 		}
 		h = player_install();
-		if (!h || h->up_to_date)
+		if (!h)
 			return;
+		if (h->up_to_date)
+		{
+			/* (the new package's game is the one installed) */
+			check_state = CHECK_NEWEST;
+			page("Halo 1 Unlimited is up to date", "Halo 1 Unlimited is the newest version.");
+			return;
+		}
 	}
+	/* (the package beside the installer is installed: the online check's answer stands against it) */
+	if (check_state == CHECK_NEWER && package_ok && !(check_release > package.release ||
+		(check_release == package.release && check_build > package.build)))
+		check_state = CHECK_NEWEST;
 	text_print(task_title, sizeof(task_title), "Updating Halo 1 Unlimited");
 	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (about a minute)...");
 	if (!install(h))
@@ -3889,6 +3978,8 @@ static void player_more(struct halo *h)
 static void player_main(void)
 {
 	int chosen = 0;
+	if (player_install())
+		check_start();
 	for (;;)
 	{
 		struct menu_item items[6];
@@ -3912,17 +4003,34 @@ static void player_main(void)
 			items[n].about = NULL;
 			items[n].disabled = 0;
 			actions[n++] = PLAY;
+			items[n].disabled = 0;
 			if (!h->up_to_date && package_ok)
 			{
 				text_print(items[n].text, sizeof(items[n].text), "Update Halo 1 Unlimited (v1.%lu)", package.build);
 				items[n].about = "A newer version is ready to install (about a minute).";
 			}
+			else if (check_state == CHECK_RUNNING)
+			{
+				text_print(items[n].text, sizeof(items[n].text), "Checking for updates...");
+				items[n].about = "Looking online for a newer Halo 1 Unlimited.";
+				items[n].disabled = 1;
+			}
+			else if (check_state == CHECK_NEWER)
+			{
+				text_print(items[n].text, sizeof(items[n].text), "Update Halo 1 Unlimited (v1.%lu)", check_build);
+				items[n].about = "A newer Halo 1 Unlimited is online: it's downloaded and installed (a minute or two).";
+			}
+			else if (check_state == CHECK_NEWEST)
+			{
+				text_print(items[n].text, sizeof(items[n].text), "Already up to date!");
+				items[n].about = "This is the newest Halo 1 Unlimited.";
+				items[n].disabled = 1;
+			}
 			else
 			{
 				text_print(items[n].text, sizeof(items[n].text), "Check for updates");
-				items[n].about = "Looks online for a newer Halo 1 Unlimited, and installs it.";
+				items[n].about = "Couldn't look online (is the Xbox connected?). Press A to try again.";
 			}
-			items[n].disabled = 0;
 			actions[n++] = UPDATE;
 			text_print(items[n].text, sizeof(items[n].text), "Map Packs");
 			items[n].about = "Add the map packs on your Xbox to Halo 1 Unlimited's map list.";
@@ -3940,9 +4048,13 @@ static void player_main(void)
 			items[n].disabled = 0;
 			actions[n++] = DEVELOPER;
 		}
+		menu_watches_check = h != NULL;
 		k = menu(h ? "Main menu" : "Welcome", package_ok ? NULL :
 			"This installer needs its opence.oxpk beside it to install. Put it there and start the installer again.",
 			items, n, chosen);
+		menu_watches_check = 0;
+		if (k == -2)
+			continue;
 		if (k < 0)
 		{
 			log_file("to the dashboard");
@@ -3961,7 +4073,10 @@ static void player_main(void)
 			launch_halo(h);
 			break;
 		case UPDATE:
-			player_update(h);
+			if (h->up_to_date && check_state == CHECK_FAILED)
+				check_start();             /* (try again: the item shows it checking) */
+			else
+				player_update(h);
 			break;
 		case PACKS:
 			player_map_packs();
