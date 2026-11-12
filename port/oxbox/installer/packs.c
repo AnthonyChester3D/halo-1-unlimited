@@ -18,6 +18,7 @@ names: Halo's 13 in a retail XBE, more in a modded one), the campaign's (map_lis
 sp_levels) in Halo's level order. A map Halo has already (Halo's 13, or a file the same as the install's) isn't
 imported. */
 #include "packs.h"
+#include "packart.h"
 #include "pictures.h"
 #include "text.h"
 
@@ -474,6 +475,105 @@ struct ui_tags
 #define UI_AT(pointer) ((pointer) - MAP_BASE)
 #define UI_IN(ui, pointer, length) ((pointer) >= MAP_BASE && UI_AT(pointer) <= (ui)->size && (length) <= (ui)->size - UI_AT(pointer))
 
+/* a tag's index entry by its ID (NULL when there's none): its group at 0, name at 16, data at 20 */
+static unsigned char const *ui_entry(struct ui_tags const *ui, unsigned long id)
+{
+	unsigned long array, count, i;
+	if (!ui->tags || ui->size < 16 || !id || id == 0xFFFFFFFFul)
+		return NULL;
+	array = u32(ui->tags);
+	count = u32(ui->tags + 12);
+	if (count > 65536 || !UI_IN(ui, array, count * 32))
+		return NULL;
+	/* (the ID's low half is its place in the table) */
+	i = id & 0xFFFF;
+	if (i < count && u32(ui->tags + UI_AT(array) + i * 32 + 12) == id)
+		return ui->tags + UI_AT(array) + i * 32;
+	for (i = 0; i < count; i++)
+		if (u32(ui->tags + UI_AT(array) + i * 32 + 12) == id)
+			return ui->tags + UI_AT(array) + i * 32;
+	return NULL;
+}
+
+/* a tag's data by its ID and group (0: none), and its name ("" when it hasn't one that reads) */
+static unsigned long ui_data(struct ui_tags const *ui, unsigned long id, unsigned long group, unsigned long length)
+{
+	unsigned char const *entry = ui_entry(ui, id);
+	if (!entry || u32(entry) != group || !UI_IN(ui, u32(entry + 20), length))
+		return 0;
+	return UI_AT(u32(entry + 20));
+}
+
+static void ui_name(struct ui_tags const *ui, unsigned long id, char *out, int size)
+{
+	unsigned char const *entry = ui_entry(ui, id);
+	int k;
+	out[0] = 0;
+	if (!entry || !UI_IN(ui, u32(entry + 16), 1))
+		return;
+	for (k = 0; k < size - 1 && UI_AT(u32(entry + 16)) + k < ui->size && ui->tags[UI_AT(u32(entry + 16)) + k]; k++)
+	{
+		char c = (char)ui->tags[UI_AT(u32(entry + 16)) + k];
+		out[k] = c >= 'A' && c <= 'Z' ? (char)(c + 32) : c;
+	}
+	out[k] = 0;
+}
+
+#define GROUP_WIDGET 0x44654c61ul     /* 'DeLa' */
+#define GROUP_STRINGS 0x75737472ul    /* 'ustr' */
+#define GROUP_BITMAP 0x6269746dul     /* 'bitm' */
+#define WIDGET_SIZE 0x3EC
+/* (a widget: its type at 0, bounds at 0x24 (top, left, bottom, right), background bitmap's reference at 0x38 (its ID at
++12), game data inputs at 0x48 (count, pointer; 36 bytes each, the function first), text's string list at 0xEC,
+children at 0x3E0 (count, pointer; 0x50 bytes each, the widget's reference first)) */
+static unsigned long widget_child(struct ui_tags const *ui, unsigned long widget, unsigned long index)
+{
+	unsigned long count = u32(ui->tags + widget + 0x3E0), list = u32(ui->tags + widget + 0x3E4);
+	if (index >= count || count > 64 || !UI_IN(ui, list, count * 0x50))
+		return 0;
+	return u32(ui->tags + UI_AT(list) + index * 0x50 + 12);
+}
+
+/* the pack's menu that lists its maps (the multiplayer map select, function 22, or the campaign's level select, 6), as
+the game finds what it shows: its list's first item's first three children are the name, the picture and the text
+(ui_widget_game_data_input_functions.c). Their string lists and bitmap: 0 when there's no such menu */
+static int menu_tags(struct ui_tags const *ui, int function, unsigned long *names, unsigned long *texts,
+	unsigned long *pictures)
+{
+	unsigned long array, count, i, k;
+	if (!ui->tags || ui->size < 16)
+		return 0;
+	array = u32(ui->tags);
+	count = u32(ui->tags + 12);
+	if (count > 65536 || !UI_IN(ui, array, count * 32))
+		return 0;
+	for (i = 0; i < count; i++)
+	{
+		unsigned char const *entry = ui->tags + UI_AT(array) + i * 32;
+		unsigned long list, inputs, input_list, item, child[3];
+		if (u32(entry) != GROUP_WIDGET || !(list = ui_data(ui, u32(entry + 12), GROUP_WIDGET, WIDGET_SIZE)))
+			continue;
+		inputs = u32(ui->tags + list + 0x48);
+		input_list = u32(ui->tags + list + 0x4C);
+		if (inputs > 16 || !UI_IN(ui, input_list, inputs * 36))
+			continue;
+		for (k = 0; k < inputs && s16(ui->tags + UI_AT(input_list) + k * 36) != function; k++)
+			;
+		if (k == inputs || !(item = ui_data(ui, widget_child(ui, list, 0), GROUP_WIDGET, WIDGET_SIZE)))
+			continue;
+		for (k = 0; k < 3; k++)
+			child[k] = ui_data(ui, widget_child(ui, item, k), GROUP_WIDGET, WIDGET_SIZE);
+		if (!child[0] || !child[1] || !child[2])
+			continue;
+		*names = ui_data(ui, u32(ui->tags + child[0] + 0xEC + 12), GROUP_STRINGS, 12);
+		*pictures = ui_data(ui, u32(ui->tags + child[1] + 0x38 + 12), GROUP_BITMAP, 0x68);
+		*texts = ui_data(ui, u32(ui->tags + child[2] + 0xEC + 12), GROUP_STRINGS, 12);
+		if (*names || *pictures || *texts)
+			return 1;
+	}
+	return 0;
+}
+
 /* a tag's data (its offset in the tags), by group and name: 0 when there's none */
 static unsigned long ui_tag(struct ui_tags const *ui, unsigned long group, char const *name)
 {
@@ -555,28 +655,44 @@ static void ui_string(struct ui_tags const *ui, unsigned long data, unsigned lon
 	out[n] = 0;
 }
 
-/* a bitmap's picture (256x128 DXT1, as Halo's map pictures, or 128x128 as some packs'): where it is in the map, or 0 */
-static int ui_picture(struct ui_tags const *ui, unsigned long data, unsigned long index, struct map_range *range)
+/* a bitmap's picture `index` (as the game picks it: its sequence 0's index-th bitmap, else the index-th): where its
+pixels are in the map (range), and what they are (frame). 0 when it has none */
+#define MOST_PICTURE_BYTES (4ul << 20)
+static int ui_picture(struct ui_tags const *ui, unsigned long data, unsigned long index, struct map_range *range,
+	struct art_frame *frame)
 {
-	unsigned long count, list;
+	unsigned long count, list, sequences, sequence_list;
 	unsigned char const *bitmap;
 	range->size = 0;
 	if (!data)
 		return 0;
 	count = u32(ui->tags + data + 0x60);
 	list = u32(ui->tags + data + 0x64);
-	if (index >= count || count > 1024 || !UI_IN(ui, list, count * 48))
+	sequences = u32(ui->tags + data + 0x54);
+	sequence_list = u32(ui->tags + data + 0x58);
+	if (sequences && sequences <= 1024 && UI_IN(ui, sequence_list, 64))
+	{
+		int first = s16(ui->tags + UI_AT(sequence_list) + 0x20), frames = s16(ui->tags + UI_AT(sequence_list) + 0x22);
+		if (frames > 0 && first >= 0)
+		{
+			if (index >= (unsigned long)frames)
+				return 0;
+			index += (unsigned long)first;
+		}
+	}
+	if (index >= count || count > 4096 || !UI_IN(ui, list, count * 48))
 		return 0;
 	bitmap = ui->tags + UI_AT(list) + index * 48;
-	if (s16(bitmap + 0xc) != 14 || s16(bitmap + 6) != 128)
+	frame->width = s16(bitmap + 4);
+	frame->height = s16(bitmap + 6);
+	frame->format = s16(bitmap + 0xc);
+	frame->flags = (int)(bitmap[0xe] | bitmap[0xf] << 8);
+	frame->offset = u32(bitmap + 0x18);
+	frame->size = u32(bitmap + 0x1c);
+	if (frame->width <= 0 || frame->height <= 0 || !frame->size || frame->size > MOST_PICTURE_BYTES)
 		return 0;
-	if (s16(bitmap + 4) == 256 && u32(bitmap + 0x1c) == PICTURE_SIZE)
-		range->size = PICTURE_SIZE;
-	else if (s16(bitmap + 4) == 128 && u32(bitmap + 0x1c) >= PICTURE_SIZE / 2)
-		range->size = PICTURE_SIZE / 2; /* (its first level; put top left in 256x128 after reading) */
-	else
-		return 0;
-	range->offset = u32(bitmap + 0x18);
+	range->offset = frame->offset;
+	range->size = frame->size;
 	return 1;
 }
 
@@ -593,6 +709,134 @@ static void picture_widen(unsigned char *p)
 	}
 }
 
+/* ---- the pack's logo: on its main menu (packs usually swap the HALO logo for their own), as Halo Map Porter finds it
+(its mappack.cpp find_menu_logos): the pictures of ui\shell\main_menu\main_menu's widgets (not its lists' items: its
+buttons), then any bitmap named a logo; each one's first picture, read with the maps' (logo_wants), then cut and
+scored (packart.c art_logo_cut). Halo's own HALO logo is skipped ---- */
+
+#define MOST_LOGOS 16
+#define MOST_SEEN 256
+struct logo_want
+{
+	struct map_range range;
+	struct art_frame frame;
+	char names[200];                  /* (its bitmap's name and its widget's, lower case) */
+	int screen, named_only;
+};
+struct logo_search
+{
+	struct logo_want *wants;
+	int count;
+	unsigned long seen[MOST_SEEN];
+	int seen_count;
+};
+
+static int has_any(char const *s, char const *const *words)
+{
+	for (; *words; words++)
+		if (strstr(s, *words))
+			return 1;
+	return 0;
+}
+static char const *const logo_words[] = {"logo", "title", "banner", "emblem", NULL};
+static char const *const not_logo_words[] = {"button", "cursor", "arrow", "highlight", "background", "select", "overscan",
+	"vignette", NULL};
+
+static int seen_before(struct logo_search *search, unsigned long id)
+{
+	int k;
+	for (k = 0; k < search->seen_count; k++)
+		if (search->seen[k] == id)
+			return 1;
+	if (search->seen_count < MOST_SEEN)
+		search->seen[search->seen_count++] = id;
+	return 0;
+}
+
+static void logo_look(struct ui_tags const *ui, unsigned long widget_id, unsigned long bitmap_id, int named_only,
+	struct logo_search *search)
+{
+	unsigned long bitmap = ui_data(ui, bitmap_id, GROUP_BITMAP, 0x68), widget;
+	struct logo_want *want;
+	char widget_name[96];
+	int logo;
+	if (!bitmap || search->count == MOST_LOGOS || seen_before(search, bitmap_id))
+		return;
+	want = &search->wants[search->count];
+	if (!ui_picture(ui, bitmap, 0, &want->range, &want->frame))
+		return;
+	ui_name(ui, bitmap_id, want->names, 96);
+	ui_name(ui, widget_id, widget_name, sizeof(widget_name));
+	strcat(want->names, " ");
+	strcat(want->names, widget_name);
+	logo = has_any(want->names, logo_words);
+	if ((named_only && !logo) || (!logo && has_any(want->names, not_logo_words)))
+		return;
+	want->screen = 0;
+	if ((widget = ui_data(ui, widget_id, GROUP_WIDGET, WIDGET_SIZE)) != 0)
+		want->screen = s16(ui->tags + widget + 0x2A) - s16(ui->tags + widget + 0x26) >= 600 &&
+			s16(ui->tags + widget + 0x28) - s16(ui->tags + widget + 0x24) >= 440;
+	want->named_only = named_only;
+	search->count++;
+}
+
+static void logo_walk(struct ui_tags const *ui, unsigned long widget_id, int depth, struct logo_search *search)
+{
+	unsigned long widget = ui_data(ui, widget_id, GROUP_WIDGET, WIDGET_SIZE), k;
+	int type;
+	if (!widget || depth > 4 || seen_before(search, widget_id))
+		return;
+	logo_look(ui, widget_id, u32(ui->tags + widget + 0x38 + 12), 0, search);
+	type = s16(ui->tags + widget);
+	if (type == 2 || type == 3)
+		return;                       /* (a list: its items are the menu's buttons) */
+	for (k = 0; k < 64 && widget_child(ui, widget, k); k++)
+		logo_walk(ui, widget_child(ui, widget, k), depth + 1, search);
+}
+
+/* the logo's possible pictures (search->wants[MOST_LOGOS]), best guesses first */
+static void logo_wants(struct ui_tags const *ui, struct logo_search *search)
+{
+	unsigned long array, count, i, root = 0;
+	char name[160];
+	search->count = search->seen_count = 0;
+	if (!ui->tags || ui->size < 16)
+		return;
+	array = u32(ui->tags);
+	count = u32(ui->tags + 12);
+	if (count > 65536 || !UI_IN(ui, array, count * 32))
+		return;
+	for (i = 0; i < count; i++)
+	{
+		unsigned char const *entry = ui->tags + UI_AT(array) + i * 32;
+		size_t n;
+		char const *last;
+		if (u32(entry) != GROUP_WIDGET)
+			continue;
+		ui_name(ui, u32(entry + 12), name, sizeof(name));
+		n = strlen(name);
+		last = strrchr(name, '\\') ? strrchr(name, '\\') + 1 : name;
+		if (n >= 19 && !strcmp(name + n - 19, "main_menu\\main_menu"))
+		{
+			root = u32(entry + 12);
+			break;
+		}
+		if (!root && !strcmp(last, "main_menu"))
+			root = u32(entry + 12);
+	}
+	if (root)
+		logo_walk(ui, root, 0, search);
+	for (i = 0; i < count; i++)
+	{
+		unsigned char const *entry = ui->tags + UI_AT(array) + i * 32;
+		if (u32(entry) != GROUP_BITMAP)
+			continue;
+		ui_name(ui, u32(entry + 12), name, sizeof(name));
+		if (strstr(name, "logo"))
+			logo_look(ui, 0, u32(entry + 12), 1, search);
+	}
+}
+
 #undef UI_IN
 #undef UI_AT
 
@@ -604,7 +848,8 @@ struct entry
 	int order;                    /* its place in the pack's menu (ui.map's lists), or a big number */
 	char name[TEXT_NAME];
 	char description[TEXT_DESCRIPTION];
-	struct map_range picture;
+	struct map_range picture;     /* (its pixels as ui.map has them, then the map picture made of them) */
+	struct art_frame frame;
 };
 
 static int entry_compare(void const *a, void const *b)
@@ -687,6 +932,8 @@ static void remove_multiplayer(char const *key)
 	DeleteFileA(file);
 	text_print(file, sizeof(file), "%s\\maps\\%s\\order.txt", STORAGE, key);
 	DeleteFileA(file);
+	text_print(file, sizeof(file), "%s\\maps\\%s\\series.bin", STORAGE, key);
+	DeleteFileA(file);
 	text_print(folder, sizeof(folder), "%s\\maps\\%s", STORAGE, key);
 	RemoveDirectoryA(folder);
 }
@@ -762,23 +1009,51 @@ void packs_remove(struct pack_scan *scan, int multiplayer, int campaign, packs_s
 }
 
 /* the maps of one kind (type) to import, with their names and pictures' places (entries[PACK_MAPS]); how many */
+/* a menu's lists (type 1: the multiplayer map select's, 0: the campaign's level select): the menu's own, wherever the
+pack put them; else Halo's */
+static void list_tags(struct ui_tags const *ui, int type, unsigned long *names_out, unsigned long *texts_out,
+	unsigned long *pictures_out)
+{
+	unsigned long names = 0, texts = 0, pictures = 0;
+	if (!menu_tags(ui, type == 1 ? 22 : 6, &names, &texts, &pictures) || !names || !texts || !pictures)
+	{
+		if (type == 1)
+		{
+			names = names ? names : ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\mp_map_list");
+			texts = texts ? texts : ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\multiplayer_type_select\\mp_map_select\\map_data");
+			pictures = pictures ? pictures : ui_tag(ui, 0x6269746d, "ui\\shell\\bitmaps\\mp_map_grafix");
+		}
+		else
+		{
+			names = names ? names : ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\map_list");
+			texts = texts ? texts : ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\solo_level_select\\map_data");
+			pictures = pictures ? pictures : ui_tag(ui, 0x6269746d, "ui\\shell\\bitmaps\\sp_levels");
+		}
+	}
+	*names_out = names, *texts_out = texts, *pictures_out = pictures;
+}
+
+/* the multiplayer menu's place for a map: in the pack's XBE's list, else Halo's 13; -1 when it isn't there */
+static int multiplayer_index(char const *name, char (*xbe)[40], int xbe_count)
+{
+	int i;
+	for (i = 0; i < xbe_count; i++)
+		if (!_stricmp(xbe[i], name))
+			return i;
+	for (i = 0; !xbe_count && i < 13; i++)
+		if (!_stricmp(halos_order[i], name))
+			return i;
+	return -1;
+}
+
 static int gather(struct pack_scan const *scan, int type, struct ui_tags const *ui, char (*xbe)[40], int xbe_count,
 	struct entry *entries)
 {
-	unsigned long names, texts, pictures;
+	unsigned long names, texts, pictures, mp_names = 0, mp_texts = 0, mp_pictures = 0;
 	int n = 0, k, i;
-	if (type == 1)
-	{
-		names = ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\mp_map_list");
-		texts = ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\multiplayer_type_select\\mp_map_select\\map_data");
-		pictures = ui_tag(ui, 0x6269746d, "ui\\shell\\bitmaps\\mp_map_grafix");
-	}
-	else
-	{
-		names = ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\map_list");
-		texts = ui_tag(ui, 0x75737472, "ui\\shell\\main_menu\\solo_level_select\\map_data");
-		pictures = ui_tag(ui, 0x6269746d, "ui\\shell\\bitmaps\\sp_levels");
-	}
+	list_tags(ui, type, &names, &texts, &pictures);
+	if (type == 0)
+		list_tags(ui, 1, &mp_names, &mp_texts, &mp_pictures);
 	for (k = 0; k < scan->count; k++)
 	{
 		struct pack_map const *map = &scan->maps[k];
@@ -787,12 +1062,7 @@ static int gather(struct pack_scan const *scan, int type, struct ui_tags const *
 		if (map->type != type || (type == 1 && map->halos))
 			continue;
 		if (type == 1)
-		{
-			for (i = 0; i < xbe_count && index < 0; i++)
-				index = _stricmp(xbe[i], map->name) ? -1 : i;
-			for (i = 0; !xbe_count && i < 13 && index < 0; i++)
-				index = _stricmp(halos_order[i], map->name) ? -1 : i;
-		}
+			index = multiplayer_index(map->name, xbe, xbe_count);
 		else
 		{
 			for (i = 0; i < CAMPAIGN_LEVELS && index < 0; i++)
@@ -805,7 +1075,15 @@ static int gather(struct pack_scan const *scan, int type, struct ui_tags const *
 		{
 			ui_string(ui, names, (unsigned long)index, 1, e->name, sizeof(e->name));
 			ui_string(ui, texts, (unsigned long)index, 0, e->description, sizeof(e->description));
-			ui_picture(ui, pictures, (unsigned long)index, &e->picture);
+			ui_picture(ui, pictures, (unsigned long)index, &e->picture, &e->frame);
+		}
+		else if (type == 0 && (i = multiplayer_index(map->name, xbe, xbe_count)) >= 0)
+		{
+			/* (a level under a multiplayer map's name, as co-op packs' are: what the multiplayer menu says of it) */
+			e->order = 500 + i;
+			ui_string(ui, mp_names, (unsigned long)i, 1, e->name, sizeof(e->name));
+			ui_string(ui, mp_texts, (unsigned long)i, 0, e->description, sizeof(e->description));
+			ui_picture(ui, mp_pictures, (unsigned long)i, &e->picture, &e->frame);
 		}
 		if (!e->name[0])
 			text_print(e->name, sizeof(e->name), "%s", map->name);
@@ -924,9 +1202,11 @@ int packs_import(struct pack_scan *scan, int multiplayer, int campaign, packs_sa
 	struct entry *entries = NULL;
 	char (*xbe)[40] = NULL;
 	char ui_path[200], line[256];
-	unsigned char header[MAP_HEADER], *pictures = NULL;
+	unsigned char header[MAP_HEADER], *pictures = NULL, *series = NULL;
+	unsigned long series_size = 0;
+	struct logo_search logos = {NULL, 0};
 	unsigned long file_size;
-	int xbe_count = 0, mp_count = 0, sp_count = 0, k, n, failed = 0;
+	int xbe_count = 0, mp_count = 0, sp_count = 0, k, n, failed = 0, read_ok = 1;
 
 	error[0] = 0;
 	entries = malloc(2 * PACK_MAPS * sizeof(*entries));
@@ -955,41 +1235,105 @@ int packs_import(struct pack_scan *scan, int multiplayer, int campaign, packs_sa
 	}
 	else
 		say(1, "The pack has no ui.map that reads: the maps get their file names, and no pictures.");
+	text_print(line, sizeof(line), "%s\\default.xbe", scan->path);
+	xbe_count = xbe_levels(line, xbe, XBE_LEVELS);
 	if (multiplayer)
-	{
-		text_print(line, sizeof(line), "%s\\default.xbe", scan->path);
-		xbe_count = xbe_levels(line, xbe, XBE_LEVELS);
 		mp_count = gather(scan, 1, &ui, xbe, xbe_count, entries);
-	}
 	if (campaign)
-		sp_count = gather(scan, 0, &ui, xbe, 0, entries + mp_count);
-	/* the pictures, the second time through ui.map */
+		sp_count = gather(scan, 0, &ui, xbe, xbe_count, entries + mp_count);
+	/* the pictures and the logo's, the second time through ui.map: each map's picture made Halo's kind (packart.c) */
 	n = mp_count + sp_count;
-	ranges = malloc((n + 1) * sizeof(*ranges));
+	ranges = malloc((n + MOST_LOGOS + 1) * sizeof(*ranges));
 	pictures = malloc((n + 1) * PICTURE_SIZE);
-	if (!ranges || !pictures)
+	logos.wants = calloc(MOST_LOGOS, sizeof(*logos.wants));
+	if (!ranges || !pictures || !logos.wants)
 	{
 		text_print(error, 256, "out of memory");
 		goto done;
 	}
+	logos.count = 0;
+	if (multiplayer && mp_count)
+		logo_wants(&ui, &logos);
 	{
-		int count = 0;
-		for (k = 0; k < n; k++)
+		int count = 0, ok = 1;
+		for (k = 0; k < n && ok; k++)
 		{
 			if (!entries[k].picture.size)
 				continue;
-			entries[k].picture.data = pictures + count * PICTURE_SIZE;
+			ok = (entries[k].picture.data = malloc(entries[k].picture.size)) != NULL;
 			ranges[count++] = entries[k].picture;
 		}
-		if (count && map_read(ui_path, ranges, count, &file_size, line))
+		for (k = 0; k < logos.count && ok; k++)
 		{
-			say(1, line);
-			for (k = 0; k < n; k++)
-				entries[k].picture.size = 0;
+			ok = (logos.wants[k].range.data = malloc(logos.wants[k].range.size)) != NULL;
+			ranges[count++] = logos.wants[k].range;
+		}
+		if (!ok || (count && map_read(ui_path, ranges, count, &file_size, line)))
+		{
+			say(1, ok ? line : "out of memory for the pictures");
+			read_ok = 0;
 		}
 		for (k = 0; k < n; k++)
-			if (entries[k].picture.size == PICTURE_SIZE / 2)
+		{
+			unsigned char *raw = entries[k].picture.data;
+			struct art_frame const *f = &entries[k].frame;
+			if (!raw)
+				continue;
+			if (!read_ok)
+			{
+				entries[k].picture.size = 0;
+				free(raw);
+				continue;
+			}
+			entries[k].picture.data = pictures + k * PICTURE_SIZE;
+			if (f->width == 128 && f->height == 128 && f->format == 14 && f->size >= PICTURE_SIZE / 2)
+			{
+				/* (a 128x128 one, as some of HMP's packs': top left, as the pack's own menu showed it) */
+				memcpy(entries[k].picture.data, raw, PICTURE_SIZE / 2);
 				picture_widen(entries[k].picture.data);
+			}
+			else if (art_picture(f, raw, entries[k].picture.data))
+				entries[k].picture.size = 0;
+			free(raw);
+		}
+		for (k = 0; k < n; k++)
+			if (!entries[k].picture.size)
+				entries[k].picture.data = NULL;
+	}
+	/* (the logo: the best of what's on the main menu, as Halo Map Porter picks it) */
+	{
+		struct art_logo best = {0, 0, 0, NULL};
+		int stock = 0;
+		for (k = 0; k < logos.count; k++)
+		{
+			struct logo_want *want = &logos.wants[k];
+			struct art_logo logo;
+			unsigned char *rgba;
+			if (!want->range.data || !read_ok)
+				;
+			else if (art_hash(want->range.data, want->range.size) == ART_STOCK_LOGO)
+				stock = 1;
+			else if ((rgba = art_decode(&want->frame, want->range.data)) != NULL &&
+				art_logo_cut(rgba, want->frame.width, want->frame.height, has_any(want->names, logo_words), want->screen,
+					want->named_only, &logo))
+			{
+				if (logo.score > best.score || !best.rgba)
+				{
+					free(best.rgba);
+					best = logo;
+				}
+				else
+					free(logo.rgba);
+			}
+			free(want->range.data);
+			want->range.data = NULL;
+		}
+		if (best.rgba && (series = malloc(ART_SERIES_MOST)) != NULL)
+			series_size = art_series(&best, 32, series);
+		free(best.rgba);
+		if (multiplayer && mp_count)
+			say(0, series_size ? "Its logo, from its main menu, stamps its maps' pictures." : stock ?
+				"Its main menu has Halo's own logo: no stamp." : "No logo found on its main menu: no stamp.");
 	}
 	free(ui.tags);
 	ui.tags = NULL;
@@ -999,6 +1343,10 @@ int packs_import(struct pack_scan *scan, int multiplayer, int campaign, packs_sa
 		text_print(line, sizeof(line), "Multiplayer: %d maps, as the pack \"%s\" in the map list:", mp_count, scan->key);
 		say(0, line);
 		failed |= write_multiplayer(scan, entries, mp_count, say);
+		/* (its logo, stamped on its maps' pictures by the game: hmp_maps.c) */
+		text_print(line, sizeof(line), "%s\\maps\\%s\\series.bin", STORAGE, scan->key);
+		if (series_size)
+			failed |= write_file(line, series, series_size);
 	}
 	if (campaign && sp_count)
 	{
@@ -1012,6 +1360,11 @@ int packs_import(struct pack_scan *scan, int multiplayer, int campaign, packs_sa
 	else
 		old_say(scan, multiplayer && mp_count, campaign && sp_count, say);
 done:
+	if (logos.wants)
+		for (k = 0; k < logos.count; k++)
+			free(logos.wants[k].range.data);
+	free(logos.wants);
+	free(series);
 	free(ui.tags);
 	free(ranges);
 	free(pictures);
