@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 48
+#define INSTALLER_VERSION 49
 #endif
 __attribute__((used)) static struct
 {
@@ -2271,6 +2271,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	struct consolidate_result r;
 	char error[256], pack_folder[220], link[240];
 	int k, count = 0;
+	DWORD started;
 
 	say(scan->campaign ? "Importing its multiplayer maps and campaign (names and pictures)..." :
 		"Importing its multiplayer maps (names and pictures)...");
@@ -2298,6 +2299,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	say("Making %d maps small: it reads each one three times, so it takes some minutes...", count);
 	package_free(&package);
 	log_memory();
+	started = GetTickCount();
 	if (consolidate_convert(stock_folder, pack_folder, scan->key, consolidate_list, folder_list, count, consolidate_progress,
 		&r, error))
 		say_in(COLOUR_RED, "%s", error);
@@ -2318,6 +2320,19 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 		if (r.failed)
 			say_in(COLOUR_YELLOW, "  %d didn't read back right: left as they are.", r.failed);
 		say_in(COLOUR_GREY, "The game plays the small ones. %s\\maps is left as it is.", h->path);
+		/* (developer.ini: what it saved and took, a line for packs_known.txt, in pack_results.txt beside the installer) */
+		if (developer && r.converted)
+		{
+			FILE *file = fopen(own_path("pack_results.txt"), "a");
+			if (file)
+			{
+				fprintf(file, "%08lx  %4d  %5lu  %5lu  %5lu  %s (installer %d)\n", scan->fingerprint, scan->count,
+					(unsigned long)(scan->size >> 20), (unsigned long)((r.after + (1 << 20) - 1) >> 20),
+					(unsigned long)((GetTickCount() - started) / 1000), scan->path, INSTALLER_VERSION);
+				fclose(file);
+				flush_own_drive();
+			}
+		}
 	}
 	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
 	package_read();
@@ -2956,11 +2971,24 @@ static int menu(char const *title, char const *intro, struct menu_item const *it
 		top = MENU_TOP;
 		if (intro)
 			top += wrapped(MENU_TOP, 1, SCREEN_COLUMNS - 2, 4, COLOUR_GREY, intro) + 1;
-		for (k = 0; k < count && k < MENU_MOST; k++)
 		{
-			screen_row(top + k, k == chosen ? COLOUR_BAR : COLOUR_BLACK);
-			screen_text(top + k, 3, items[k].disabled ? COLOUR_DIM : k == chosen ? COLOUR_WHITE : COLOUR_GREEN, "%s",
-				items[k].text);
+			/* (a long list scrolls: the chosen item shown, with what's above and below it marked) */
+			int rows = PANEL_TOP - 1 - top, first = 0, r;
+			if (rows > MENU_MOST)
+				rows = MENU_MOST;
+			if (chosen >= rows)
+				first = chosen - rows + 1;
+			for (r = 0; r < rows && first + r < count; r++)
+			{
+				k = first + r;
+				screen_row(top + r, k == chosen ? COLOUR_BAR : COLOUR_BLACK);
+				screen_text(top + r, 3, items[k].disabled ? COLOUR_DIM : k == chosen ? COLOUR_WHITE : COLOUR_GREEN, "%s",
+					items[k].text);
+			}
+			if (first)
+				screen_text(top, 1, COLOUR_DIM, "^");
+			if (first + rows < count)
+				screen_text(top + rows - 1, 1, COLOUR_DIM, "v");
 		}
 		if (items[chosen].about)
 			wrapped(PANEL_TOP, 3, SCREEN_COLUMNS - 6, PANEL_ROWS, COLOUR_GREY, items[chosen].about);
@@ -3323,6 +3351,8 @@ static int buildable(struct halo *h)
 	return h->stock.retail_sized == STOCK_MAPS && !h->stock.small;
 }
 
+static void player_map_packs(void);
+
 static int player_install_flow(void)
 {
 	struct menu_item items[MENU_MOST];
@@ -3426,24 +3456,56 @@ static int player_install_flow(void)
 	}
 	for (;;)
 	{
-		struct menu_item done[3] = {
-			{"Play now", NULL, 0},
-			{"Remove your original Halo", NULL, 0},
-			{"Back to the menu", NULL, 0}};
+		struct menu_item done[4];
+		enum { DONE_PLAY, DONE_REMOVE, DONE_PACKS, DONE_BACK };
+		int actions[4], count = 0, packs = 0;
 		struct halo *h1u = player_install(), *original = NULL;
-		char about[300];
+		static char about[300];
 		for (i = 0; i < halo_count; i++)
+		{
 			if (!_stricmp(halos[i].path, source_path))
 				original = &halos[i];
-		text_print(about, sizeof(about), "Frees about %lu MB. Halo 1 Unlimited can rebuild it exactly any time (More..., "
-			"Rebuild original Halo).%s", (unsigned long)(original ? original_size(original) >> 20 : 0), campaign ? "" :
-			" Its campaign can't be: it wasn't installed.");
-		done[1].about = about;
-		done[1].disabled = !original;
-		k = menu("Halo 1 Unlimited is installed", "Everything's ready.", done, original ? 3 : 1, 0);
-		if (k == 0 && h1u)
+			else if (can_import(&halos[i]) && !halos[i].unfinished)
+				packs++;
+		}
+		text_print(done[count].text, sizeof(done[count].text), "Play now");
+		done[count].about = NULL;
+		done[count].disabled = 0;
+		actions[count++] = DONE_PLAY;
+		if (original)
+		{
+			text_print(done[count].text, sizeof(done[count].text), "Remove your original Halo");
+			text_print(about, sizeof(about), "Frees about %lu MB. Halo 1 Unlimited can rebuild it exactly any time "
+				"(More..., Rebuild original Halo).%s", (unsigned long)(original_size(original) >> 20), campaign ? "" :
+				" Its campaign can't be: it wasn't installed.");
+			done[count].about = about;
+			done[count].disabled = 0;
+			actions[count++] = DONE_REMOVE;
+		}
+		if (packs)
+		{
+			text_print(done[count].text, sizeof(done[count].text), "We found %d map pack%s on your Xbox: set %s up",
+				packs, packs == 1 ? "" : "s", packs == 1 ? "it" : "them");
+			done[count].about = "Consolidate them (they're made small, and can be shared online), or link them as they "
+				"are.";
+			done[count].disabled = 0;
+			actions[count++] = DONE_PACKS;
+		}
+		text_print(done[count].text, sizeof(done[count].text), "Back to the menu");
+		done[count].about = NULL;
+		done[count].disabled = 0;
+		actions[count++] = DONE_BACK;
+		k = menu("Halo 1 Unlimited is installed", "Everything's ready.", done, count, 0);
+		if (k < 0 || actions[k] == DONE_BACK)
+			return 0;
+		if (actions[k] == DONE_PLAY && h1u)
 			launch_halo(h1u);
-		if (k != 1 || !original)
+		if (actions[k] == DONE_PACKS)
+		{
+			player_map_packs();
+			continue;
+		}
+		if (actions[k] != DONE_REMOVE)
 			return 0;
 		{
 			struct menu_item sure[2] = {{"Remove it", NULL, 0}, {"Keep it", NULL, 0}};
@@ -3492,29 +3554,240 @@ static void player_update(struct halo *h)
 	task_wait();
 }
 
-/* Map Packs: the other Halo folders (modded Halos' maps), each one's own screen (packs.c) */
+/* ---- Map Packs: the modded Halos' folders on the drives (the other Halo folders), each one's status and what can be done:
+Consolidate (recommended: its maps made small in Halo 1 Unlimited's folder, drawing on stock.shared; the ones map sharing
+sends), Link (its maps played where they are), take it out again, and, consolidated, its own folder deleted. Known
+packs (packs_known.h) show what consolidating saved and took on a console; others an estimate ---- */
+
+#define MOST_PACKS 64
+static struct pack_scan *pack_scans;        /* (MOST_PACKS: while the Map Packs screen is up) */
+
+/* its maps' small copies there: 1 when it's consolidated (a pack's shared file in its folder) */
+static int consolidated(struct pack_scan const *scan)
+{
+	char pattern[240];
+	WIN32_FIND_DATAA found;
+	HANDLE find;
+	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*.shared", packs_storage, scan->key);
+	if ((find = FindFirstFileA(pattern, &found)) == INVALID_HANDLE_VALUE)
+		return 0;
+	FindClose(find);
+	return 1;
+}
+
+/* an imported map with no small copy beside its link (its name in missing[40]): 0 when every one has one */
+static int unshrunk(struct pack_scan const *scan, char *missing)
+{
+	WIN32_FIND_DATAA found, inner;
+	char pattern[240], path[260];
+	HANDLE find, maps;
+	int n = 0;
+	missing[0] = 0;
+	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*", packs_storage, scan->key);
+	if ((find = FindFirstFileA(pattern, &found)) == INVALID_HANDLE_VALUE)
+		return 0;
+	do
+	{
+		if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.cFileName[0] == '.')
+			continue;
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\map.link", packs_storage, scan->key, found.cFileName);
+		if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES)
+			continue;
+		text_print(path, sizeof(path), "%s\\maps\\%s\\%s\\*.map", packs_storage, scan->key, found.cFileName);
+		if ((maps = FindFirstFileA(path, &inner)) != INVALID_HANDLE_VALUE)
+		{
+			FindClose(maps);
+			continue;
+		}
+		if (!n++)
+			text_print(missing, 40, "%s", found.cFileName);
+	} while (FindNextFileA(find, &found));
+	FindClose(find);
+	return n;
+}
+
+/* what consolidating it saves and takes: a known pack's numbers, or an estimate ("about"): a quarter of its size (a
+third with a campaign: levels share less), 0.7 s a MB on a console */
+static void pack_numbers(struct pack_scan const *scan, unsigned long *after_mb, unsigned long *minutes, int *known)
+{
+	struct pack_known const *k = packs_known(scan->fingerprint);
+	unsigned long mb = (unsigned long)(scan->size >> 20);
+	*known = k != NULL;
+	*after_mb = k ? k->after_mb : scan->campaign ? mb / 3 : mb / 4;
+	*minutes = k && k->seconds ? (k->seconds + 59) / 60 : (mb * 7 / 10 + 59) / 60;
+	if (!*minutes)
+		*minutes = 1;
+}
+
+static void player_pack(struct halo *h, struct pack_scan *scan, char const *stock)
+{
+	for (;;)
+	{
+		struct menu_item items[6];
+		int actions[6], n = 0, k, imported = scan->multiplayer_imported || scan->campaign_imported, known, is_small;
+		unsigned long after, minutes, mb = (unsigned long)(scan->size >> 20);
+		char intro[300], stock_index[220], consolidate_about[300], name[64], missing[40];
+		enum { PACK_CONSOLIDATE, PACK_LINK, PACK_REMOVE, PACK_DELETE, PACK_BACK };
+		text_print(name, sizeof(name), "%s", strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path);
+		pack_numbers(scan, &after, &minutes, &known);
+		is_small = consolidated(scan);
+		text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
+		text_print(intro, sizeof(intro), "%d multiplayer map%s%s, %lu MB. %s", scan->multiplayer,
+			scan->multiplayer == 1 ? "" : "s", scan->campaign ? " and a campaign" : "", mb, is_small ?
+			"It's consolidated: its maps are small in Halo 1 Unlimited." : imported ?
+			"It's linked: Halo 1 Unlimited plays its maps where they are." : "It isn't in Halo 1 Unlimited yet.");
+		if (!is_small && (scan->multiplayer || scan->campaign))
+		{
+			text_print(items[n].text, sizeof(items[n].text), "Consolidate (recommended)");
+			text_print(consolidate_about, sizeof(consolidate_about), "Shrinks %s from %s%lu MB to %s%lu MB (%s%lu "
+				"minute%s). Small maps are the ones Halo 1 Unlimited can share with other players online. The pack's "
+				"own folder isn't changed.", name, "", mb, known ? "" : "about ", after, known ? "" : "about ", minutes,
+				minutes == 1 ? "" : "s");
+			items[n].about = consolidate_about;
+			items[n].disabled = GetFileAttributesA(stock_index) == INVALID_FILE_ATTRIBUTES;
+			if (items[n].disabled)
+				items[n].about = "Halo 1 Unlimited's own maps need to be made small first: install it again.";
+			actions[n++] = PACK_CONSOLIDATE;
+		}
+		if (!imported && (scan->multiplayer || scan->campaign))
+		{
+			text_print(items[n].text, sizeof(items[n].text), "Link");
+			items[n].about = "Keeps your pack as it is: Halo 1 Unlimited plays its maps from its own folder. Adds less "
+				"than 1 MB.";
+			items[n].disabled = 0;
+			actions[n++] = PACK_LINK;
+		}
+		if (imported)
+		{
+			text_print(items[n].text, sizeof(items[n].text), "Take it out of Halo 1 Unlimited");
+			items[n].about = is_small ? "Its small maps are deleted from Halo 1 Unlimited. The pack's own folder isn't "
+				"changed." : "Its maps leave Halo 1 Unlimited's map list. The pack's own folder isn't changed.";
+			items[n].disabled = 0;
+			actions[n++] = PACK_REMOVE;
+		}
+		if (is_small)
+		{
+			int left = unshrunk(scan, missing);
+			static char delete_about[300];
+			text_print(items[n].text, sizeof(items[n].text), "Delete the pack's own folder");
+			if (left)
+				text_print(delete_about, sizeof(delete_about), "%d of its maps (%s%s) have no small copy in Halo 1 "
+					"Unlimited: they'd go with the folder. Consolidate it again first.", left, missing,
+					left > 1 ? " and more" : "");
+			else
+				text_print(delete_about, sizeof(delete_about), "Frees %lu MB. Halo 1 Unlimited keeps its small maps. The "
+					"pack's own folder can't be rebuilt: its game and menus aren't kept.", mb);
+			items[n].about = delete_about;
+			items[n].disabled = left != 0;
+			actions[n++] = PACK_DELETE;
+		}
+		text_print(items[n].text, sizeof(items[n].text), "Back");
+		items[n].about = NULL;
+		items[n].disabled = 0;
+		actions[n++] = PACK_BACK;
+		k = menu(name, intro, items, n, 0);
+		if (k < 0 || actions[k] == PACK_BACK)
+			return;
+		if (actions[k] == PACK_CONSOLIDATE)
+		{
+			char title[80];
+			text_print(title, sizeof(title), "Consolidating %s", name);
+			task_begin(title, "Making its maps small...");
+			consolidate_pack(h, scan, stock);
+			say_in(COLOUR_WHITE, "Done: %s is consolidated.", name);
+			task_end();
+			task_wait();
+		}
+		else if (actions[k] == PACK_LINK)
+		{
+			char error[256];
+			task_begin("Linking the pack", "Adding its maps to Halo 1 Unlimited's map list...");
+			if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
+				say_in(COLOUR_RED, "%s", error);
+			else
+				say_in(COLOUR_WHITE, "Done: its maps are in Halo 1 Unlimited's map list.");
+			task_end();
+			task_wait();
+		}
+		else if (actions[k] == PACK_REMOVE)
+		{
+			task_begin("Taking the pack out", NULL);
+			packs_remove(scan, 1, 1, packs_say);
+			task_end();
+		}
+		else if (actions[k] == PACK_DELETE)
+		{
+			struct menu_item sure[2] = {{"Delete it", NULL, 0}, {"Keep it", NULL, 0}};
+			char warn[300];
+			text_print(warn, sizeof(warn), "%s and everything in it is deleted. Halo 1 Unlimited keeps the pack's small "
+				"maps, but the folder itself (its own game and menus) can't be rebuilt.", scan->path);
+			if (menu("Delete the pack's own folder?", warn, sure, 2, 1) != 0)
+				continue;
+			task_begin("Deleting the pack's folder", NULL);
+			delete_tree(scan->path, 0);
+			RemoveDirectoryA(scan->path);
+			flush_drive(scan->path);
+			task_end();
+			return;
+		}
+		packs_scan(h->path, stock, scan);
+	}
+}
+
 static void player_map_packs(void)
 {
-	struct menu_item items[MENU_MOST];
-	struct halo *choice[MENU_MOST];
-	int n = 0, i, k = 0;
-	for (i = 0; i < halo_count && n < MENU_MOST; i++)
+	static struct halo *choice[MOST_PACKS];
+	struct menu_item *items;
+	char stock[200];
+	int n, i, k = 0;
+	if (!pack_scans)
+		pack_scans = malloc(MOST_PACKS * sizeof(*pack_scans));
+	items = malloc(MOST_PACKS * sizeof(*items));
+	if (!pack_scans || !items)
 	{
-		if (!can_import(&halos[i]))
-			continue;
-		place_name(halos[i].path, items[n].text, sizeof(items[n].text));
-		items[n].about = "Its maps can be added to Halo 1 Unlimited's map list.";
-		items[n].disabled = 0;
-		choice[n++] = &halos[i];
-	}
-	if (!n)
-	{
-		page("Map Packs", "No map packs were found on your hard drive.\n\nA map pack is a modded Halo's folder (its "
-			"default.xbe and maps) on E:, F: or G:.");
+		free(items);
 		return;
 	}
-	while ((k = menu("Map Packs", "The map packs on your Xbox:", items, n, k)) >= 0)
-		map_pack(choice[k]);
+	stock_maps_folder(stock, sizeof(stock));
+	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
+	for (;;)
+	{
+		player_heading("Map Packs");
+		screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at your map packs...");
+		screen_show();
+		for (i = 0, n = 0; i < halo_count && n < MOST_PACKS; i++)
+		{
+			struct pack_scan *scan = &pack_scans[n];
+			unsigned long after, minutes;
+			int known;
+			char const *last;
+			if (!can_import(&halos[i]) || halos[i].unfinished)
+				continue;
+			packs_scan(halos[i].path, stock, scan);
+			if (!scan->multiplayer && !scan->campaign && !scan->multiplayer_imported && !scan->campaign_imported)
+				continue;
+			last = strrchr(halos[i].path, '\\') ? strrchr(halos[i].path, '\\') + 1 : halos[i].path;
+			pack_numbers(scan, &after, &minutes, &known);
+			text_print(items[n].text, sizeof(items[n].text), "%-36.36s %5lu MB  %s", last,
+				(unsigned long)(scan->size >> 20), consolidated(scan) ? "Consolidated" :
+				scan->multiplayer_imported || scan->campaign_imported ? "Linked" : "Not added");
+			items[n].about = known ? "A known pack: its numbers are from consolidating it on a console." :
+				"Choose it to add it to Halo 1 Unlimited.";
+			items[n].disabled = 0;
+			choice[n++] = &halos[i];
+		}
+		if (!n)
+		{
+			page("Map Packs", "No map packs were found on your hard drive.\n\nA map pack is a modded Halo's folder (its "
+				"default.xbe and maps) on E:, F: or G:.");
+			break;
+		}
+		if ((k = menu("Map Packs", "The map packs on your Xbox:", items, n, k)) < 0)
+			break;
+		player_pack(choice[k], &pack_scans[k], stock);
+		find_halos();
+	}
+	free(items);
 }
 
 /* Rebuild original Halo: their Halo made again from Halo 1 Unlimited (stockmaps_rebuild: each map exact), in a folder

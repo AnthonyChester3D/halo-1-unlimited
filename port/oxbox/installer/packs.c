@@ -314,6 +314,7 @@ int packs_scan(char const *path, char const *stock_folder, struct pack_scan *sca
 			memcpy(map->name, found.cFileName, n - 4);
 			map->name[n - 4] = 0;
 			map->type = s16(header + 0x60);
+			map->size = found.nFileSizeLow;
 			map->length = u32(header + 8);
 			map->checksum = u32(header + 0x64);
 			map->small = u32(header + SHARED_REFERENCE_OFFSET) == SHARED_REFERENCE_SIGNATURE;
@@ -333,6 +334,38 @@ int packs_scan(char const *path, char const *stock_folder, struct pack_scan *sca
 			campaign++, modded_level |= !map->halos;
 	}
 	scan->campaign = modded_level ? campaign : 0;
+	/* (its fingerprint: a CRC-32 of its maps' "name size checksum" lines (lower case, size and header checksum 0x64 in
+	hex: "beavercreek 22802432 1a2b3c4d"), in name order; and their size. tools/pack_fingerprint.py makes the same) */
+	{
+		int order[PACK_MAPS], i, j;
+		unsigned long crc = 0xFFFFFFFFul;
+		char line[96];
+		for (i = 0, j = 0; i < scan->count; i++)
+			order[j++] = i;
+		for (i = 1; i < j; i++)
+		{
+			int t = order[i], m = i;
+			for (; m > 0 && _stricmp(scan->maps[order[m - 1]].name, scan->maps[t].name) > 0; m--)
+				order[m] = order[m - 1];
+			order[m] = t;
+		}
+		scan->size = 0;
+		for (i = 0; i < j; i++)
+		{
+			struct pack_map const *m = &scan->maps[order[i]];
+			int n = text_print(line, sizeof(line), "%s %lu %08lx\n", m->name, m->size, m->checksum), c;
+			for (c = 0; c < n; c++)
+			{
+				int bit;
+				unsigned char ch = (unsigned char)(line[c] >= 'A' && line[c] <= 'Z' ? line[c] + 32 : line[c]);
+				crc ^= ch;
+				for (bit = 0; bit < 8; bit++)
+					crc = crc >> 1 ^ (0xEDB88320ul & (0 - (crc & 1)));
+			}
+			scan->size += m->size;
+		}
+		scan->fingerprint = ~crc & 0xFFFFFFFFul;
+	}
 	if (find_import("maps", "imported.txt", path, scan->key) &&
 		find_import("campaigns", "campaign.txt", path, scan->key))
 		new_key(path, scan->key);
@@ -1371,4 +1404,18 @@ done:
 	free(entries);
 	free(xbe);
 	return error[0] != 0;
+}
+
+/* ---- the packs known: what consolidating them saves and takes (packs_known.h, made by tools/gen_packs_known.py from
+packs_known.txt: Llama's runs on a console) ---- */
+
+#include "packs_known.h"
+
+struct pack_known const *packs_known(unsigned long fingerprint)
+{
+	unsigned k;
+	for (k = 0; k < sizeof(known_packs) / sizeof(known_packs[0]); k++)
+		if (known_packs[k].fingerprint == fingerprint)
+			return &known_packs[k];
+	return NULL;
 }

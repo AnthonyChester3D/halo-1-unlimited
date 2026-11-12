@@ -1,0 +1,12 @@
+# The map packs known: what consolidating each one saves and takes, from runs on a console. The installer's Map Packs
+# screen shows these numbers for a pack whose fingerprint matches (else an estimate, "about"). One pack a line:
+#   fingerprint  maps  MB before  MB after  seconds  name
+# fingerprint, maps and MB before: tools/pack_fingerprint.py PACK_FOLDER, or a line of the installer's pack_results.txt
+# (developer.ini: each consolidation adds one). seconds: 0 when not timed. After editing, run
+#   python3 port/oxbox/tools/gen_packs_known.py
+# which makes packs_known.h (compiled into the installer).
+c635b6a9   14   295    74   227  Halo CE Plus X 16 Console (v1.118)
+167993fe   26   627   153   416  Halo 1 CXEK (v1.118)
+66ecf00a   12  1826   569  1220  Halo Covenant Edition v1.7 (v1.118, before v1.119's faster zero fill)
+01edbb31   11   278   102     0  Halo Zelda Pack v4 (v1.114)
+16968e99    8   223    78     0  TLMP - Halo The Last Mappack (v1.114)

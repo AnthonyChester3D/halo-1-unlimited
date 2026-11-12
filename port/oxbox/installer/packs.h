@@ -11,6 +11,7 @@ struct pack_map
 	char name[40];                /* the file's name, without .map */
 	int type;                     /* its header's scenario type: 0 campaign, 1 multiplayer, 2 the menus */
 	unsigned long length, checksum;
+	unsigned long size;           /* its file's */
 	int small;                    /* it draws on shared files (docs/shared_maps.md) */
 	int halos;                    /* the same file as Halo's own (Halo's 13 multiplayer maps, or the install's) */
 };
@@ -25,7 +26,19 @@ struct pack_scan
 	int campaign;                 /* campaign levels, when one of them isn't Halo's own (else 0) */
 	int multiplayer_imported;     /* already imported: maps in maps\<key>, levels in campaigns\<key> */
 	int campaign_imported;
+	unsigned long fingerprint;    /* the pack's maps' (packs_fingerprint) */
+	unsigned long long size;      /* its maps' files */
 };
+
+/* the pack known as fingerprint (from Llama's runs of consolidating it: packs_known.h), or NULL */
+struct pack_known
+{
+	unsigned long fingerprint;
+	char const *name;
+	int maps;
+	unsigned long before_mb, after_mb, seconds;
+};
+struct pack_known const *packs_known(unsigned long fingerprint);
 
 /* where imports go (set by the installer): the game's own folder, the install its list stars ("F:\Games\H1U"): a pack
 in <it>\maps\<key>, its campaign in <it>\campaigns\<key> (the game reads d:\maps as T:\maps). Not E:'s storage: E: is
