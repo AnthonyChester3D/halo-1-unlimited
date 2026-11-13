@@ -2855,7 +2855,8 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 		if (r.unreadable)
 			say_in(COLOUR_YELLOW, "  %d can't be read: left as they are.", r.unreadable);
 		if (r.too_big)
-			say_in(COLOUR_YELLOW, "  %d would be too big to play: left as they are.", r.too_big);
+			say_in(COLOUR_YELLOW, r.too_big == 1 ? "  1 map is too big to shrink: it stays full size, and plays as it is." :
+				"  %d maps are too big to shrink: they stay full size, and play as they are.", r.too_big);
 		if (r.failed)
 			say_in(COLOUR_YELLOW, "  %d didn't read back right: left as they are.", r.failed);
 		say_in(COLOUR_GREY, "The game plays the small ones. %s\\maps is left as it is.", h->path);
