@@ -86,7 +86,6 @@ static int developer_unsigned;     /* (its allow_unsigned = 1) */
 static int quiet;                  /* (a player's screen runs an operation: its details only in the log: say_in) */
 static char task_title[80];        /* (what that screen says it's doing: heading) */
 static int stepping;               /* (step: a line for the player, shown under the title) */
-static char task_line[256];        /* (that line, drawn again when the screen is: task_line_show) */
 static int task_problem;           /* (a warning or a problem in this task: its result waits for a button) */
 #define HALO_TITLE_ID 0x4D530004ul
 /* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
@@ -151,31 +150,330 @@ static void say_line(unsigned long colour, char const *text, int length)
 	log_colours[log_count++] = colour;
 }
 
-/* a "how far along" line for the player ("Converting 3 of 14: x.map"; "bloodgulch (3 of 23): making it small..." as
-"Map 3 of 23: bloodgulch"); 0 when it's no such line */
-static int progress_line(char const *text, char *out, int size)
+/* ---- a task's receipt: what a player's screen shows under its title. Its steps (done as the next starts), the maps
+by name as they're made, grouped (Multiplayer maps, Campaign), a later pass over them as a count, and its result ---- */
+
+enum { RECEIPT_ACTION, RECEIPT_RESULT, RECEIPT_GROUP, RECEIPT_PROBLEM, RECEIPT_STATUS, RECEIPT_BLANK };
+#define RECEIPT_MOST 24
+static struct receipt_entry
 {
-	char const *of = strstr(text, " of ");
-	char const *open, *close;
+	int kind, done, n, m;
+	unsigned long colour;               /* (a problem's) */
+	char text[200];
+	char names[480];                    /* (a group's maps, ", " between) */
+	char right[24];                     /* (beside it, in place of "n of m": "12 of 40 MB") */
+} receipt[RECEIPT_MOST];
+static int receipt_count, receipt_plan;  /* (receipt_plan: entry 0 is the task's plan, until a step takes its place) */
+static int receipt_last_n;              /* (the map a pass is on: a lower one starts the next pass) */
+static int receipt_pass;
+static int receipt_later_total;         /* (a later pass's maps, when not all of them: Halo's 13 without the campaign) */
+
+/* Halo's maps, as the game calls them (the first 13 multiplayer, then the campaign) */
+static struct { char const *file, *name; } const receipt_stock[] = {
+	{"beavercreek", "Battle Creek"}, {"bloodgulch", "Blood Gulch"}, {"boardingaction", "Boarding Action"},
+	{"carousel", "Derelict"}, {"chillout", "Chill Out"}, {"damnation", "Damnation"}, {"hangemhigh", "Hang 'Em High"},
+	{"longest", "Longest"}, {"prisoner", "Prisoner"}, {"putput", "Chiron TL-34"}, {"ratrace", "Rat Race"},
+	{"sidewinder", "Sidewinder"}, {"wizard", "Wizard"},
+	{"a10", "The Pillar of Autumn"}, {"a30", "Halo"}, {"a50", "The Truth and Reconciliation"},
+	{"b30", "The Silent Cartographer"}, {"b40", "Assault on the Control Room"}, {"c10", "343 Guilty Spark"},
+	{"c20", "The Library"}, {"c40", "Two Betrayals"}, {"d20", "Keyes"}, {"d40", "The Maw"}};
+#define RECEIPT_STOCK_MP 13
+#define RECEIPT_STOCK (int)(sizeof(receipt_stock) / sizeof(receipt_stock[0]))
+
+static void receipt_clear(void)
+{
+	receipt_count = receipt_plan = receipt_last_n = receipt_pass = receipt_later_total = 0;
+}
+
+/* a new entry: everything before it is done; a group: the groups before it (a status line goes) */
+static struct receipt_entry *receipt_add(int kind)
+{
+	struct receipt_entry *e;
+	int i;
+	if (receipt_count && receipt[receipt_count - 1].kind == RECEIPT_STATUS)
+		receipt_count--;
+	if (kind != RECEIPT_STATUS && kind != RECEIPT_PROBLEM && kind != RECEIPT_BLANK)
+		for (i = 0; i < receipt_count; i++)
+			if (kind != RECEIPT_GROUP || receipt[i].kind == RECEIPT_GROUP)
+				receipt[i].done = 1;
+	if (receipt_count == RECEIPT_MOST)
+	{
+		memmove(&receipt[0], &receipt[1], sizeof(receipt[0]) * (RECEIPT_MOST - 1));
+		receipt_count--;
+		receipt_plan = 0;
+	}
+	e = &receipt[receipt_count++];
+	memset(e, 0, sizeof(*e));
+	e->kind = kind;
+	return e;
+}
+
+/* the entry running now (a group under its step, else the step), or NULL */
+static struct receipt_entry *receipt_running(void)
+{
+	int i;
+	for (i = receipt_count - 1; i >= 0; i--)
+		if ((receipt[i].kind == RECEIPT_ACTION || receipt[i].kind == RECEIPT_GROUP) && !receipt[i].done)
+			return &receipt[i];
+		else if (receipt[i].kind == RECEIPT_ACTION || receipt[i].kind == RECEIPT_RESULT)
+			return NULL;
+	return NULL;
+}
+
+/* a step for the player: "...." at its end: an action (done when the next comes), else a result */
+static void receipt_step(char const *text)
+{
+	int length = (int)strlen(text);
+	int action = length > 3 && !strcmp(text + length - 3, "...");
+	struct receipt_entry *e;
+	if (action && receipt_plan && receipt_count == 1)
+		receipt_count = 0;               /* (the plan said it: the steps say it better) */
+	receipt_plan = 0;
+	if (!action && receipt_count)
+		receipt_add(RECEIPT_BLANK);      /* (a line between the steps and the result) */
+	e = receipt_add(action ? RECEIPT_ACTION : RECEIPT_RESULT);
+	text_print(e->text, sizeof(e->text), "%s", text);
+	receipt_last_n = receipt_pass = 0;
+}
+
+/* a map made ("name (3 of 23): making it small...", "Converting 3 of 14: x.map"): its name in the receipt, under its
+group; a later pass over them, a count. 0: no such line */
+static int receipt_progress(char const *text)
+{
+	char const *of = strstr(text, " of "), *open, *close;
+	char name[64];
+	int n, m, k, length;
+	struct receipt_entry *e = NULL;
 	if (!of || of == text || of[-1] < '0' || of[-1] > '9' || of[4] < '0' || of[4] > '9')
 		return 0;
 	open = strstr(text, " (");
 	close = strstr(of, "):");
 	if (open && open < of && close)
 	{
-		text_print(out, size, "Map %.*s: %.*s", (int)(close - open - 2), open + 2, (int)(open - text), text);
+		/* "name (n of m): what" */
+		n = atoi(open + 2);
+		m = atoi(of + 4);
+		text_print(name, sizeof(name), "%.*s", (int)(open - text), text);
+	}
+	else if (!strncmp(text, "Converting ", 11) && (close = strstr(of, ": ")) != NULL)
+	{
+		n = atoi(text + 11);
+		m = atoi(of + 4);
+		text_print(name, sizeof(name), "%s", close + 2);
+	}
+	else
+	{
+		/* (another "how far along" line: under the step, in place of the last) */
+		if (!receipt_count || receipt[receipt_count - 1].kind != RECEIPT_STATUS)
+			e = receipt_add(RECEIPT_STATUS);
+		else
+			e = &receipt[receipt_count - 1];
+		text_print(e->text, sizeof(e->text), "%s", text);
 		return 1;
 	}
-	text_print(out, size, "%s", text);
+	length = (int)strlen(name);
+	if (length > 4 && !_stricmp(name + length - 4, ".map"))
+		name[length - 4] = 0;
+	if (n == receipt_last_n)
+		return 1;                        /* (the same map, its next part) */
+	if (n < receipt_last_n)
+	{
+		/* (a later pass over them: one line under the step, counted) */
+		receipt_pass++;
+		e = receipt_add(RECEIPT_GROUP);
+		text_print(e->text, sizeof(e->text), strstr(text, "putting the small map") ? "Putting them in place" :
+			"Checking them");
+	}
+	receipt_last_n = n;
+	if (receipt_pass)
+	{
+		e = receipt_running();
+		if (e)
+		{
+			e->n++;
+			e->m = receipt_later_total ? receipt_later_total : m;
+		}
+		return 1;
+	}
+	/* (the first pass: its name, under its group) */
+	for (k = 0; k < RECEIPT_STOCK && _stricmp(receipt_stock[k].file, name); k++)
+		;
+	{
+		char const *title = k == RECEIPT_STOCK ? "" : k < RECEIPT_STOCK_MP ? "Multiplayer maps" :
+			receipt_later_total && receipt_later_total <= RECEIPT_STOCK_MP ? "Campaign (its textures and sounds only)" :
+			"Campaign";
+		int total = k == RECEIPT_STOCK ? m : k < RECEIPT_STOCK_MP ? RECEIPT_STOCK_MP : RECEIPT_STOCK - RECEIPT_STOCK_MP;
+		e = receipt_running();
+		if (!e || e->kind != RECEIPT_GROUP || strcmp(e->text, title))
+		{
+			e = receipt_add(RECEIPT_GROUP);
+			text_print(e->text, sizeof(e->text), "%s", title);
+			e->m = total;
+		}
+		e->n++;
+		length = (int)strlen(e->names);
+		text_print(e->names + length, sizeof(e->names) - length, "%s%s", length ? ", " : "",
+			k == RECEIPT_STOCK ? name : receipt_stock[k].name);
+	}
 	return 1;
 }
 
-/* a task's line for the player, under its title */
+/* a problem or warning: in the receipt as it's said */
+static void receipt_problem(unsigned long colour, char const *text)
+{
+	struct receipt_entry *e = receipt_add(RECEIPT_PROBLEM);
+	e->colour = colour;
+	text_print(e->text, sizeof(e->text), "%s", text);
+}
+
+/* (lines of the receipt, as drawn) */
+#define RECEIPT_TOP (LOG_TOP - 1)
+#define RECEIPT_ROWS (SCREEN_ROWS - 1 - RECEIPT_TOP)  /* (the last row: task_wait's buttons) */
+static struct receipt_line
+{
+	unsigned long colour, right_colour;
+	int column;
+	char text[SCREEN_COLUMNS + 1];
+	char right[24];
+} receipt_lines[RECEIPT_ROWS * 4];
+static int receipt_line_count;
+
+static struct receipt_line *receipt_line(int column, unsigned long colour)
+{
+	struct receipt_line *l;
+	if (receipt_line_count == (int)(sizeof(receipt_lines) / sizeof(receipt_lines[0])))
+	{
+		memmove(&receipt_lines[0], &receipt_lines[1], sizeof(receipt_lines[0]) * (receipt_line_count - 1));
+		receipt_line_count--;
+	}
+	l = &receipt_lines[receipt_line_count++];
+	memset(l, 0, sizeof(*l));
+	l->column = column;
+	l->colour = colour;
+	return l;
+}
+
+/* text wrapped at its spaces from column to LOG_COLUMNS (a list: between its names, after their ", ") */
+static void receipt_wrap(int column, unsigned long colour, char const *text, int list)
+{
+	int width = LOG_COLUMNS - column;
+	for (;;)
+	{
+		int length = (int)strlen(text), cut = length;
+		if (length > width)
+		{
+			for (cut = width; cut > width / 3 && (text[cut] != ' ' || (list && text[cut - 1] != ',')); cut--)
+				;
+			if (cut == width / 3)
+				for (cut = width; cut > width / 2 && text[cut] != ' '; cut--)
+					;
+			if (text[cut] != ' ')
+				cut = width;
+		}
+		text_print(receipt_line(column, colour)->text, SCREEN_COLUMNS + 1, "%.*s", cut, text);
+		text += cut;
+		while (*text == ' ')
+			text++;
+		if (!*text)
+			return;
+	}
+}
+
+static void receipt_show(void)
+{
+	int i, first, r;
+	receipt_line_count = 0;
+	for (i = 0; i < receipt_count; i++)
+	{
+		struct receipt_entry const *e = &receipt[i];
+		struct receipt_line *l;
+		char label[200];
+		int length;
+		switch (e->kind)
+		{
+		case RECEIPT_ACTION:
+		case RECEIPT_GROUP:
+			text_print(label, sizeof(label), "%s", e->text);
+			if (e->done)
+			{
+				/* (done: without its "..." and "(about 5 minutes)") */
+				char *note;
+				length = (int)strlen(label);
+				if (length > 3 && !strcmp(label + length - 3, "..."))
+					label[length -= 3] = 0;
+				if (length && label[length - 1] == ')' && (note = strrchr(label, '(')) != NULL && note > label &&
+					note[-1] == ' ')
+					note[-1] = 0;
+			}
+			if (e->kind == RECEIPT_GROUP && !label[0] && !e->names[0])
+				break;
+			l = receipt_line(e->kind == RECEIPT_GROUP ? 4 : 2, e->done ? COLOUR_GREY : COLOUR_WHITE);
+			text_print(l->text, sizeof(l->text), "%s", label);
+			if (e->done)
+			{
+				text_print(l->right, sizeof(l->right), "done");
+				l->right_colour = COLOUR_GREEN;
+			}
+			else if (e->right[0])
+				text_print(l->right, sizeof(l->right), "%s", e->right);
+			else if (e->m)
+				text_print(l->right, sizeof(l->right), "%d of %d", e->n, e->m);
+			if (!l->right_colour)
+				l->right_colour = COLOUR_GREY;
+			if (e->kind == RECEIPT_GROUP && e->names[0])
+			{
+				if (!label[0])
+				{
+					/* (no group name: the names in its place, the count on the step's line) */
+					receipt_line_count--;
+					if (receipt_line_count && !e->done)
+					{
+						struct receipt_line *step_line = &receipt_lines[receipt_line_count - 1];
+						text_print(step_line->right, sizeof(step_line->right), "%d of %d", e->n, e->m);
+						step_line->right_colour = COLOUR_GREY;
+					}
+				}
+				receipt_wrap(6, COLOUR_DIM, e->names, 1);
+			}
+			break;
+		case RECEIPT_RESULT:
+			receipt_wrap(2, COLOUR_WHITE, e->text, 0);
+			break;
+		case RECEIPT_PROBLEM:
+			receipt_wrap(2, e->colour, e->text, 0);
+			break;
+		case RECEIPT_STATUS:
+			receipt_wrap(4, COLOUR_DIM, e->text, 0);
+			break;
+		case RECEIPT_BLANK:
+			receipt_line(0, COLOUR_DIM);
+			break;
+		}
+	}
+	/* (too many lines: its last ones) */
+	first = receipt_line_count > RECEIPT_ROWS ? receipt_line_count - RECEIPT_ROWS : 0;
+	for (r = 0; r < RECEIPT_ROWS; r++)
+	{
+		struct receipt_line const *l = first + r < receipt_line_count ? &receipt_lines[first + r] : NULL;
+		screen_row(RECEIPT_TOP + r, COLOUR_BLACK);
+		if (!l)
+			continue;
+		if (l->right[0])
+		{
+			int at = LOG_COLUMNS - (int)strlen(l->right);
+			screen_text(RECEIPT_TOP + r, l->column, l->colour, "%.*s", at - 1 - l->column, l->text);
+			screen_text(RECEIPT_TOP + r, at, l->right_colour, "%s", l->right);
+		}
+		else
+			screen_text(RECEIPT_TOP + r, l->column, l->colour, "%.*s", LOG_COLUMNS - l->column, l->text);
+	}
+	screen_show();
+}
+
+/* (the old name: a task's screen drawn again) */
 static void task_line_show(void)
 {
-	screen_row(LOG_TOP - 1, COLOUR_BLACK);
-	screen_text(LOG_TOP - 1, 2, COLOUR_DIM, "%.*s", LOG_COLUMNS - 2, task_line);
-	screen_show();
+	receipt_show();
 }
 
 static void say_in(unsigned long colour, char const *format, ...)
@@ -191,20 +489,25 @@ static void say_in(unsigned long colour, char const *format, ...)
 	problem shows below as it does) */
 	if (quiet && colour != COLOUR_RED && colour != COLOUR_YELLOW)
 	{
-		char shown[256];
 		for (at = text; *at == ' ' || *at == '('; at++)
 			;
 		/* (only what's for the player: a step, or how far along it is; the rest is in the log) */
 		if (stepping)
-			text_print(shown, sizeof(shown), "%s", at);
-		else if (!progress_line(at, shown, sizeof(shown)))
+			receipt_step(at);
+		else if (!receipt_progress(at))
 			return;
-		text_print(task_line, sizeof(task_line), "%s", shown);
-		task_line_show();
+		receipt_show();
 		return;
 	}
 	if (quiet)
+	{
 		task_problem = 1;
+		for (at = text; *at == ' '; at++)
+			;
+		receipt_problem(colour, at);
+		receipt_show();
+		return;
+	}
 	/* (a long line wrapped at a space, the rest indented as it was) */
 	while (text[indent] == ' ')
 		indent++;
@@ -2053,12 +2356,17 @@ static void update_progress(void *context, unsigned long done, unsigned long tot
 	(void)context;
 	if (quiet)
 	{
+		struct receipt_entry *e = receipt_running();
+		if (!e)
+		{
+			e = receipt_add(RECEIPT_ACTION);
+			text_print(e->text, sizeof(e->text), "Downloading...");
+		}
 		if (total)
-			text_print(task_line, sizeof(task_line), "Downloading: %lu of %lu MB", (done + 524288) >> 20,
-				(total + 524288) >> 20);
+			text_print(e->right, sizeof(e->right), "%lu of %lu MB", (done + 524288) >> 20, (total + 524288) >> 20);
 		else
-			text_print(task_line, sizeof(task_line), "Downloading: %lu MB", (done + 524288) >> 20);
-		task_line_show();
+			text_print(e->right, sizeof(e->right), "%lu MB", (done + 524288) >> 20);
+		receipt_show();
 		return;
 	}
 	screen_row(4, COLOUR_BLACK);
@@ -2502,8 +2810,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	int k, count = 0;
 	DWORD started;
 
-	step(scan->campaign ? "Importing its multiplayer maps and campaign (names and pictures)..." :
-		"Importing its multiplayer maps (names and pictures)...");
+	step(scan->campaign ? "Importing its maps and campaign..." : "Importing its maps...");
 	if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
 	{
 		say_in(COLOUR_RED, "%s", error);
@@ -3262,8 +3569,14 @@ static void task_begin(char const *title, char const *plan)
 	player_heading(title);
 	if (plan)
 		log_file(plan);
-	text_print(task_line, sizeof(task_line), "%s", plan ? plan : "");
-	task_line_show();
+	receipt_clear();
+	if (plan)
+	{
+		/* (the plan: the first step, until the steps say it) */
+		text_print(receipt_add(RECEIPT_ACTION)->text, sizeof(receipt[0].text), "%s", plan);
+		receipt_plan = 1;
+	}
+	receipt_show();
 }
 
 static void task_end(void)
@@ -3503,7 +3816,8 @@ static int own_install(struct halo *source, char const *folder, int campaign)
 	}
 	movies_copy(source->path, folder, campaign);
 	/* the maps */
-	step("Building Halo 1 Unlimited's maps (about 5 minutes)...");
+	step("Building the maps (about 5 minutes)...");
+	receipt_later_total = campaign ? 0 : RECEIPT_STOCK_MP;
 	stockmaps_flush_drive = flush_drive;
 	stockmaps_log = log_file;
 	package_free(&package);
