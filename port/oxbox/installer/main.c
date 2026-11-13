@@ -3653,8 +3653,16 @@ static int player_install_flow(void)
 		go[1].disabled = 0;
 		text_print(go[2].text, sizeof(go[2].text), "Start install (about 6 minutes, needs %lu MB)",
 			(unsigned long)(need >> 20));
-		go[2].about = room ? "It runs to the end by itself: there's nothing more to choose. Your Halo isn't changed." :
-			"There isn't room on any drive. Free some space (or leave the campaign out), then try again.";
+		if (room)
+		{
+			static char summary[300];
+			own_folder_on(drives[drive], folder, sizeof(folder));
+			text_print(summary, sizeof(summary), "Installs Halo 1 Unlimited to %s. It will use %lu MB.", folder,
+				(unsigned long)(need >> 20));
+			go[2].about = summary;
+		}
+		else
+			go[2].about = "There isn't room on any drive. Free some space (or leave the campaign out), then try again.";
 		go[2].disabled = !room;
 		text_print(go[3].text, sizeof(go[3].text), "Back");
 		go[3].about = NULL;
