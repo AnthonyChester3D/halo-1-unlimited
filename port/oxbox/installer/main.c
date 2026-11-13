@@ -3554,7 +3554,7 @@ static void page(char const *title, char const *text)
 	int b;
 	player_heading(title);
 	wrapped(MENU_TOP, 1, SCREEN_COLUMNS - 2, SCREEN_ROWS - MENU_TOP - 2, COLOUR_WHITE, text);
-	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
+	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: continue");
 	screen_show();
 	while ((b = wait_input()) != A && b != B)
 		;
@@ -3594,7 +3594,7 @@ static void task_wait(void)
 		Sleep(1500);
 		return;
 	}
-	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
+	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: continue");
 	screen_show();
 	while ((b = wait_input()) != A && b != B)
 		;
