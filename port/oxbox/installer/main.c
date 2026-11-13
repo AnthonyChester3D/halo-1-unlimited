@@ -3907,6 +3907,8 @@ static int buildable(struct halo *h)
 }
 
 static void player_map_packs(void);
+static int packs_look(char *stock, int size);
+static unsigned long packs_saving(void);
 
 static int player_install_flow(void)
 {
@@ -4049,8 +4051,18 @@ static int player_install_flow(void)
 		{
 			text_print(done[count].text, sizeof(done[count].text), "We found %d map pack%s on your Xbox: set %s up",
 				packs, packs == 1 ? "" : "s", packs == 1 ? "it" : "them");
-			done[count].about = "Consolidate them (they're made small, and can be shared online), or link them as they "
-				"are.";
+			static char packs_about[400];
+			char stock[200], saving[32];
+			unsigned long saved = packs_look(stock, sizeof(stock)) ? packs_saving() : 0;
+			if (saved >= 1000)
+				text_print(saving, sizeof(saving), "%lu.%lu GB", saved / 1024, saved % 1024 * 10 / 1024);
+			else
+				text_print(saving, sizeof(saving), "%lu MB", saved);
+			text_print(packs_about, sizeof(packs_about), "Consolidate them: they're shrunk to fit in Halo 1 Unlimited and "
+				"use a lot less space%s%s%s. Or link them to Halo 1 Unlimited and leave your map packs as they are. "
+				"Either way, you can play them online in Halo 1 Unlimited.", saved ? " (around " : "",
+				saved ? saving : "", saved ? " less, once you delete the originals" : "");
+			done[count].about = packs_about;
 			done[count].disabled = 0;
 			actions[count++] = DONE_PACKS;
 		}
@@ -4342,8 +4354,8 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 		{
 			text_print(items[n].text, sizeof(items[n].text), "Consolidate (recommended)");
 			text_print(consolidate_about, sizeof(consolidate_about), "Shrinks %s from %s%lu MB to %s%lu MB (%s%lu "
-				"minute%s). Small maps are the ones Halo 1 Unlimited can share with other players online. The pack's "
-				"own folder isn't changed.", name, "", mb, known ? "" : "about ", after, known ? "" : "about ", minutes,
+				"minute%s). Small maps are quicker to send to other players online. The pack's own folder isn't "
+				"changed.", name, "", mb, known ? "" : "about ", after, known ? "" : "about ", minutes,
 				minutes == 1 ? "" : "s");
 			items[n].about = consolidate_about;
 			items[n].disabled = GetFileAttributesA(stock_index) == INVALID_FILE_ATTRIBUTES;
@@ -4446,39 +4458,69 @@ static struct halo *halo_at(char const *path)
 	return NULL;
 }
 
+/* the packs, looked at (once: then only the one chosen, after what was done to it); stock: stock.index's path. 0: no
+room for the list */
+static int packs_look(char *stock, int size)
+{
+	int i;
+	if (!pack_scans)
+		pack_scans = malloc(MOST_PACKS * sizeof(*pack_scans));
+	if (!pack_scans)
+		return 0;
+	stock_maps_folder(stock, size);
+	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
+	if (packs_listed)
+		return 1;
+	for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
+	{
+		struct pack_scan *scan = &pack_scans[pack_count];
+		if (!can_import(&halos[i]) || halos[i].unfinished)
+			continue;
+		packs_scan(halos[i].path, stock, scan);
+		if (scan->multiplayer || scan->campaign || scan->multiplayer_imported || scan->campaign_imported)
+			pack_count++;
+	}
+	packs_listed = 1;
+	return 1;
+}
+
+/* what consolidating every pack that isn't yet would save, in MB (known packs' numbers, else estimates) */
+static unsigned long packs_saving(void)
+{
+	unsigned long saved = 0, after, minutes;
+	int n, known;
+	for (n = 0; n < pack_count; n++)
+	{
+		unsigned long mb = (unsigned long)(pack_scans[n].size >> 20);
+		if (consolidated(&pack_scans[n]))
+			continue;
+		pack_numbers(&pack_scans[n], &after, &minutes, &known);
+		if (mb > after)
+			saved += mb - after;
+	}
+	return saved;
+}
+
 static void player_map_packs(void)
 {
 	struct menu_item *items;
 	char stock[200];
-	int n, i, k = 0;
-	if (!pack_scans)
-		pack_scans = malloc(MOST_PACKS * sizeof(*pack_scans));
+	int n, k = 0;
 	items = malloc(MOST_PACKS * sizeof(*items));
-	if (!pack_scans || !items)
-	{
-		free(items);
+	if (!items)
 		return;
-	}
-	stock_maps_folder(stock, sizeof(stock));
-	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
 	for (;;)
 	{
-		/* (the packs are looked at once; then only the one chosen, after what was done to it) */
 		if (!packs_listed)
 		{
 			player_heading("Map Packs");
 			screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at your map packs...");
 			screen_show();
-			for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
-			{
-				struct pack_scan *scan = &pack_scans[pack_count];
-				if (!can_import(&halos[i]) || halos[i].unfinished)
-					continue;
-				packs_scan(halos[i].path, stock, scan);
-				if (scan->multiplayer || scan->campaign || scan->multiplayer_imported || scan->campaign_imported)
-					pack_count++;
-			}
-			packs_listed = 1;
+		}
+		if (!packs_look(stock, sizeof(stock)))
+		{
+			free(items);
+			return;
 		}
 		for (n = 0; n < pack_count; n++)
 		{
