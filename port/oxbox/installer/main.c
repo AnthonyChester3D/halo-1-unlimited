@@ -4276,27 +4276,42 @@ packs (packs_known.h) show what consolidating saved and took on a console; other
 static struct pack_scan *pack_scans;        /* (MOST_PACKS: the packs found, kept while packs_listed) */
 static int pack_count;
 
-/* its maps' small copies there: 1 when it's consolidated (a pack's shared file in its folder) */
+static int unshrunk_small(struct pack_scan const *scan, char *missing, int *small);
+
+/* 1 when it's consolidated: its maps' small copies there (a pack's shared file in its folder, or a small copy beside a
+map's link: a pack of one map, or whose maps share nothing, has no shared file) */
 static int consolidated(struct pack_scan const *scan)
 {
-	char pattern[240];
+	char pattern[240], missing[40];
 	WIN32_FIND_DATAA found;
 	HANDLE find;
+	int small;
 	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*.shared", packs_storage, scan->key);
-	if ((find = FindFirstFileA(pattern, &found)) == INVALID_HANDLE_VALUE)
-		return 0;
-	FindClose(find);
-	return 1;
+	if ((find = FindFirstFileA(pattern, &found)) != INVALID_HANDLE_VALUE)
+	{
+		FindClose(find);
+		return 1;
+	}
+	unshrunk_small(scan, missing, &small);
+	return small > 0;
 }
 
 /* an imported map with no small copy beside its link (its name in missing[40]): 0 when every one has one */
 static int unshrunk(struct pack_scan const *scan, char *missing)
+{
+	int small;
+	return unshrunk_small(scan, missing, &small);
+}
+
+/* (and how many have one: small) */
+static int unshrunk_small(struct pack_scan const *scan, char *missing, int *small)
 {
 	WIN32_FIND_DATAA found, inner;
 	char pattern[240], path[260];
 	HANDLE find, maps;
 	int n = 0;
 	missing[0] = 0;
+	*small = 0;
 	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*", packs_storage, scan->key);
 	if ((find = FindFirstFileA(pattern, &found)) == INVALID_HANDLE_VALUE)
 		return 0;
@@ -4311,6 +4326,7 @@ static int unshrunk(struct pack_scan const *scan, char *missing)
 		if ((maps = FindFirstFileA(path, &inner)) != INVALID_HANDLE_VALUE)
 		{
 			FindClose(maps);
+			(*small)++;
 			continue;
 		}
 		if (!n++)
@@ -4340,14 +4356,18 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 		struct menu_item items[6];
 		int actions[6], n = 0, k, imported = scan->multiplayer_imported || scan->campaign_imported, known, is_small;
 		unsigned long after, minutes, mb = (unsigned long)(scan->size >> 20);
-		char intro[300], stock_index[220], consolidate_about[300], name[64], missing[40];
+		char intro[300], stock_index[220], consolidate_about[300], name[64], missing[40], kinds[64];
 		enum { PACK_CONSOLIDATE, PACK_LINK, PACK_REMOVE, PACK_DELETE, PACK_BACK };
 		text_print(name, sizeof(name), "%s", strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path);
 		pack_numbers(scan, &after, &minutes, &known);
 		is_small = consolidated(scan);
 		text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
-		text_print(intro, sizeof(intro), "%d multiplayer map%s%s, %lu MB. %s", scan->multiplayer,
-			scan->multiplayer == 1 ? "" : "s", scan->campaign ? " and a campaign" : "", mb, is_small ?
+		if (scan->multiplayer)
+			text_print(kinds, sizeof(kinds), "%d multiplayer map%s%s", scan->multiplayer, scan->multiplayer == 1 ? "" :
+				"s", scan->campaign ? " and a campaign" : "");
+		else
+			text_print(kinds, sizeof(kinds), scan->campaign ? "A campaign" : "No maps");
+		text_print(intro, sizeof(intro), "%s, %lu MB. %s", kinds, mb, is_small ?
 			"It's consolidated: its maps are small in Halo 1 Unlimited." : imported ?
 			"It's linked: Halo 1 Unlimited plays its maps where they are." : "It isn't in Halo 1 Unlimited yet.");
 		if (!is_small && (scan->multiplayer || scan->campaign))
