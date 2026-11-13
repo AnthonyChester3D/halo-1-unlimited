@@ -99,7 +99,7 @@ or `maps\` itself); `stock.shared` may also be in the game's maps folder. The ga
 3. **Leave the moved data out** of the map: lay the map out again without it, moving the offsets of what stays down
    (the header's tag_data_offset, each BSP's file offset in the scenario's structure_bsp_references, and the textures
    and sounds that stay). A sector something that stays needs is kept, even if it's otherwise moved data: some
-   maps have a block that stays, or a BSP, sharing a sector with one that moves. A map drawing on a packed shared file must fit a multiplayer cache file unpacked (47 MiB). The tool drops every 2048-byte
+   maps have a block that stays, or a BSP, sharing a sector with one that moves. A small map must fit a campaign cache file unpacked (278 MiB): a multiplayer one over 47 MiB goes in a campaign cache file, as a full-size one does (its pack's file is in a multiplayer one, or on the second cache drive when it's bigger; until v1.126 small multiplayer maps had to fit 47 MiB, from when pack files took the campaign ones). The tool drops every 2048-byte
    sector made wholly of moved data, so what stays keeps its alignment, and zeroes the rest of the moved bytes.
 4. **A whole number of sectors**: the small map's length (its header's file_length and its stream) padded with zeros to a
    multiple of 2048. A map's stream can end short of a sector (its header's file_length rounded up): 249 of 627 multiplayer
@@ -251,7 +251,7 @@ Each map is read three times: measured (its tag data, then its blocks' hashes), 
 part of the pack's file into a temporary unpacked copy, which is packed at the end and named), and read back before it's
 used: every block it takes from stock.shared or the pack's file read there, and every block it keeps, every BSP and its tag
 data (the fields aside) against the original's hashes, every field against what was laid out. A map that doesn't read back
-right, or that would unpack to more than a multiplayer map may (47 MiB), keeps its link. If anything else goes wrong, what
+right, or that would unpack to more than a campaign cache file holds (278 MiB), keeps its link. If anything else goes wrong, what
 was made is deleted and nothing changes. HMP7's 13 maps (272 MB to 56 MB) took about 4 minutes in xemu, the import included.
 It needs room for the pack's file twice and the small maps, by the measure's estimate. *Take out what's imported* deletes
 the small maps and the pack's file too; importing again puts the links back alone.

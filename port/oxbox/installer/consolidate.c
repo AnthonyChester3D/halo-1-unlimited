@@ -27,8 +27,10 @@ file_close, and anything else done to it comes after disk_sync. Each step's time
 #define PACK_BIT 0x80000000u
 #define STOCK_BIT 0xC0000000u
 #define OFFSET_BITS 0x3FFFFFFFu
-#define MP_SLOT (47u * 1024u * 1024u)   /* what a multiplayer map may unpack to (the game's cache file for one) */
-#define CAMPAIGN_SLOT (278u * 1024u * 1024u) /* a campaign level's (header 0x60: scenario type 0) */
+/* what a small map may unpack to: a campaign cache file (278 MiB), a level or a multiplayer map. A multiplayer map over a
+multiplayer cache file's 47 MiB goes in a campaign one, small or not (cache_files_windows.c): the pack's file it draws on is
+in a multiplayer one, or on the second cache drive when it's bigger (stock.shared isn't cached: it's read where it is) */
+#define CAMPAIGN_SLOT (278u * 1024u * 1024u)
 #ifndef UNPACKED_OVER
 /* a pack's file bigger than this stays unpacked (shared_unpacked; tests: smaller): the game's seventh cache file, on a
 second cache drive (cache_files_windows.c SHARED_CACHE_FILE_MAXIMUM_SIZE), holds one up to this unpacked */
@@ -1365,7 +1367,7 @@ static int convert_pack(char const *stock_folder, char const *pack_folder, char 
 			int too_big;
 			if (c->state != CONVERTING)
 				continue;
-			too_big = lay_out(c, &l) || c->out_length > (c->header[0x60] == 0 && c->header[0x61] == 0 ? CAMPAIGN_SLOT : MP_SLOT);
+			too_big = lay_out(c, &l) || c->out_length >= CAMPAIGN_SLOT;
 			layout_free(&l);
 			if (!too_big)
 				continue;
