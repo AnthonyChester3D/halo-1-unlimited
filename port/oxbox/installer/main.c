@@ -4525,10 +4525,16 @@ static void player_map_packs(void)
 {
 	struct menu_item *items;
 	char stock[200];
+	char (*abouts)[240];
 	int n, k = 0;
 	items = malloc(MOST_PACKS * sizeof(*items));
-	if (!items)
+	abouts = malloc(MOST_PACKS * sizeof(*abouts));
+	if (!items || !abouts)
+	{
+		free(items);
+		free(abouts);
 		return;
+	}
 	for (;;)
 	{
 		if (!packs_listed)
@@ -4538,23 +4544,30 @@ static void player_map_packs(void)
 			screen_show();
 		}
 		if (!packs_look(stock, sizeof(stock)))
-		{
-			free(items);
-			return;
-		}
+			break;
 		for (n = 0; n < pack_count; n++)
 		{
 			struct pack_scan *scan = &pack_scans[n];
 			unsigned long after, minutes;
 			int known;
 			char const *last;
+			int small = consolidated(scan), linked = scan->multiplayer_imported || scan->campaign_imported;
+			unsigned long mb = (unsigned long)(scan->size >> 20);
 			last = strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path;
 			pack_numbers(scan, &after, &minutes, &known);
-			text_print(items[n].text, sizeof(items[n].text), "%-36.36s %5lu MB  %s", last,
-				(unsigned long)(scan->size >> 20), consolidated(scan) ? "Consolidated" :
-				scan->multiplayer_imported || scan->campaign_imported ? "Linked" : "Not added");
-			items[n].about = known ? "A known pack: its numbers are from consolidating it on a console." :
-				"Choose it to add it to Halo 1 Unlimited.";
+			text_print(items[n].text, sizeof(items[n].text), "%-36.36s %5lu MB  %s", last, mb,
+				small ? "Consolidated" : linked ? "Linked" : "Not added");
+			/* (what it is now, and what choosing it can do) */
+			if (small)
+				text_print(abouts[n], sizeof(abouts[n]), "It's in Halo 1 Unlimited, consolidated: its maps are small "
+					"and ready to play.");
+			else if (linked)
+				text_print(abouts[n], sizeof(abouts[n]), "It's in Halo 1 Unlimited, linked: its maps play from where "
+					"they are. Consolidate it to shrink it from %lu MB to %s%lu MB.", mb, known ? "" : "about ", after);
+			else
+				text_print(abouts[n], sizeof(abouts[n]), "It isn't in Halo 1 Unlimited yet. Consolidate it to shrink "
+					"it from %lu MB to %s%lu MB, or link it as it is.", mb, known ? "" : "about ", after);
+			items[n].about = abouts[n];
 			items[n].disabled = 0;
 		}
 		if (!n)
@@ -4578,6 +4591,7 @@ static void player_map_packs(void)
 		}
 	}
 	free(items);
+	free(abouts);
 }
 
 /* Rebuild original Halo: their Halo made again from Halo 1 Unlimited (stockmaps_rebuild: each map exact), in a folder
