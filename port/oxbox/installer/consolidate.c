@@ -1383,7 +1383,7 @@ static int convert_pack(char const *stock_folder, char const *pack_folder, char 
 					e->maps--;
 				}
 			}
-			text_print(line, sizeof(line), "%s: it would be too big to play, left as it is", last_part(paths[i]));
+			text_print(line, sizeof(line), "%s: too big to shrink, left full size", last_part(paths[i]));
 			if (say)
 				say(1, line);
 		}

@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 56
+#define INSTALLER_VERSION 57
 #endif
 __attribute__((used)) static struct
 {
@@ -167,6 +167,7 @@ static int receipt_count, receipt_plan;  /* (receipt_plan: entry 0 is the task's
 static int receipt_last_n;              /* (the map a pass is on: a lower one starts the next pass) */
 static int receipt_pass;
 static int receipt_later_total;         /* (a later pass's maps, when not all of them: Halo's 13 without the campaign) */
+static int receipt_batch;               /* (Consolidate all: one line a pack, its maps counted on it; its steps in the log) */
 
 /* Halo's maps, as the game calls them (the first 13 multiplayer, then the campaign) */
 static struct { char const *file, *name; } const receipt_stock[] = {
@@ -246,6 +247,23 @@ static int receipt_progress(char const *text)
 	struct receipt_entry *e = NULL;
 	if (!of || of == text || of[-1] < '0' || of[-1] > '9' || of[4] < '0' || of[4] > '9')
 		return 0;
+	if (receipt_batch)
+	{
+		/* (all the packs: beside the pack, which pass over its maps and how far: "shrinking 5 of 14") */
+		static char const *const words[][2] = {{"Measuring", "measuring"}, {"Reading", "measuring"},
+			{"Converting", "shrinking"}, {"Checking", "checking"}, {"Shrinking", "shrinking"}};
+		int w;
+		if ((e = receipt_running()) == NULL)
+			return 1;
+		for (w = 0; w < 5 && strncmp(text, words[w][0], strlen(words[w][0])); w++)
+			;
+		for (open = of; open > text && open[-1] >= '0' && open[-1] <= '9'; open--)
+			;
+		n = atoi(open);
+		text_print(e->right, sizeof(e->right), "%s%s%d of %d", w < 5 ? words[w][1] : "", w < 5 ? " " : "", n,
+			atoi(of + 4));
+		return 1;
+	}
 	open = strstr(text, " (");
 	close = strstr(of, "):");
 	if (open && open < of && close)
@@ -411,7 +429,7 @@ static void receipt_show(void)
 			text_print(l->text, sizeof(l->text), "%s", label);
 			if (e->done)
 			{
-				text_print(l->right, sizeof(l->right), "done");
+				text_print(l->right, sizeof(l->right), "%s", e->right[0] ? e->right : "done");
 				l->right_colour = COLOUR_GREEN;
 			}
 			else if (e->right[0])
@@ -493,7 +511,11 @@ static void say_in(unsigned long colour, char const *format, ...)
 			;
 		/* (only what's for the player: a step, or how far along it is; the rest is in the log) */
 		if (stepping)
+		{
+			if (receipt_batch)
+				return;
 			receipt_step(at);
+		}
 		else if (!receipt_progress(at))
 			return;
 		receipt_show();
@@ -2444,6 +2466,29 @@ chosen (check_updates). The network isn't used by two at once: check_wait first 
 
 static volatile unsigned long check_release, check_build;
 static unsigned char check_head[128];
+
+/* a package newer than the one beside the installer (none: any is). A test build (release 0) is replaced only by a
+newer test build, from a test location: a release is older code, as the game's own check holds (it doesn't look at
+all in a test build) */
+static int newer_package(unsigned long release, unsigned long build)
+{
+	if (!package_ok)
+		return 1;
+	if (!package.release && release)
+		return 0;
+	return release > package.release || (release == package.release && build > package.build);
+}
+
+/* the version the check found, as said to a player: "v1.126", or a release's name ("Halo 1 Unlimited, release 2") */
+static char const *check_version(void)
+{
+	static char text[72];
+	if (check_build)
+		text_print(text, sizeof(text), "v1.%lu", check_build);
+	else
+		text_print(text, sizeof(text), "%.64s", (char const *)check_head + 48);
+	return text;
+}
 static unsigned long check_got;
 static HANDLE check_thread;
 
@@ -2477,8 +2522,7 @@ static DWORD WINAPI check_main(LPVOID unused)
 	}
 	check_release = u32(check_head + 116);
 	check_build = u32(check_head + 124);
-	check_state = !package_ok || check_release > package.release ||
-		(check_release == package.release && check_build > package.build) ? CHECK_NEWER : CHECK_NEWEST;
+	check_state = newer_package(check_release, check_build) ? CHECK_NEWER : CHECK_NEWEST;
 	return 0;
 }
 
@@ -2573,10 +2617,10 @@ static int check_updates(void)
 		say_in(COLOUR_GREEN, "That's the package you have: it's up to date.");
 		goto discard;
 	}
-	if (package_ok && trusted(signature) && (fresh.release < package.release ||
-		(fresh.release == package.release && fresh.build < package.build)))
+	if (package_ok && trusted(signature) && !newer_package(fresh.release, fresh.build))
 	{
-		say_in(COLOUR_YELLOW, "That's older than yours (%s), so yours is kept.", package.name);
+		say_in(COLOUR_YELLOW, !package.release && fresh.release ? "That's a release, older than your test build (%s), "
+			"so yours is kept." : "That's older than yours (%s), so yours is kept.", package.name);
 		goto discard;
 	}
 	if (fresh.installer_version > INSTALLER_VERSION)
@@ -2680,7 +2724,13 @@ static int folder_map(char const *folder, char *out)
 /* where the measuring is, on the bottom row (a big pack takes minutes) */
 static void consolidate_progress(int warning, char const *text)
 {
-	(void)warning;
+	/* (a player's screen: how far along, in its receipt; a map's own warning is summed up at the end) */
+	if (quiet)
+	{
+		if (!warning && receipt_progress(text))
+			receipt_show();
+		return;
+	}
 	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
 	screen_text(SCREEN_ROWS - 1, 0, COLOUR_GREY, "%.70s", text);
 	screen_show();
@@ -2801,7 +2851,9 @@ static void consolidate_show(struct halo *h, struct pack_scan const *scan, char 
 /* a pack's multiplayer maps and modded campaign imported, then made small against the install's stock.shared
 (consolidate.c): their small maps beside their links in the starred install's maps folder (a level's too: a folder map
 the campaign picker plays), the blocks two or more use in the pack's shared file. The pack's own folder is left as it is */
-static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder)
+/* the maps made small (-1: it failed), and their MB before and after */
+static int consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder, unsigned long *before_mb,
+	unsigned long *after_mb)
 {
 	static char folders[CONSOLIDATE_MAPS][220];
 	static char const *folder_list[CONSOLIDATE_MAPS];
@@ -2809,12 +2861,14 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	char error[256], pack_folder[220], link[240];
 	int k, count = 0;
 	DWORD started;
+	int made = -1;
 
+	*before_mb = *after_mb = 0;
 	step(scan->campaign ? "Importing its maps and campaign..." : "Importing its maps...");
 	if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
 	{
 		say_in(COLOUR_RED, "%s", error);
-		return;
+		return -1;
 	}
 	text_print(pack_folder, sizeof(pack_folder), "%s\\maps\\%s", packs_storage, scan->key);
 	for (k = 0; k < scan->count && count < CONSOLIDATE_MAPS; k++)
@@ -2841,6 +2895,9 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 		say_in(COLOUR_RED, "%s", error);
 	else
 	{
+		made = r.converted;
+		*before_mb = (unsigned long)(r.before >> 20);
+		*after_mb = (unsigned long)((r.after + (1 << 20) - 1) >> 20);
 		if (r.converted)
 			say_in(COLOUR_GREEN, "Done: %d maps, %lu MB as they were, %lu MB small%s%s%s.", r.converted,
 				(unsigned long)(r.before >> 20), (unsigned long)((r.after + (1 << 20) - 1) >> 20),
@@ -2876,6 +2933,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	}
 	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
 	package_read();
+	return made;
 }
 
 /* ---- Shrink maps: full-size maps that a pack's file here was made from (its list names them: consolidate_shrink) ---- */
@@ -3199,7 +3257,10 @@ static void map_pack(struct halo *h)
 	if (choices[chosen] == MEASURE)
 		consolidate_show(h, &scan, stock);
 	else if (choices[chosen] == CONSOLIDATE)
-		consolidate_pack(h, &scan, stock);
+	{
+		unsigned long before, after;
+		consolidate_pack(h, &scan, stock, &before, &after);
+	}
 	else if (choices[chosen] == SHRINK)
 		shrink_maps(stock);
 	else if (choices[chosen] == REMOVE)
@@ -4133,8 +4194,7 @@ static void player_update(struct halo *h)
 		}
 	}
 	/* (the package beside the installer is installed: the online check's answer stands against it) */
-	if (check_state == CHECK_NEWER && package_ok && !(check_release > package.release ||
-		(check_release == package.release && check_build > package.build)))
+	if (check_state == CHECK_NEWER && package_ok && !newer_package(check_release, check_build))
 		check_state = CHECK_NEWEST;
 	text_print(task_title, sizeof(task_title), "Updating Halo 1 Unlimited");
 	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (about a minute)...");
@@ -4238,7 +4298,7 @@ static void update_prompt(void)
 	update_asked = 1;
 	if (!update_always())
 	{
-		text_print(intro, sizeof(intro), "There's a new update available (v1.%lu). Download and update?", check_build);
+		text_print(intro, sizeof(intro), "There's a new update available (%s). Download and update?", check_version());
 		k = menu("A new update is available", intro, items, 3, 0);
 		if (k == 2)
 			update_always_set();
@@ -4427,8 +4487,9 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 		{
 			char title[80];
 			text_print(title, sizeof(title), "Consolidating %s", name);
+			unsigned long before, after;
 			task_begin(title, "Making its maps small...");
-			consolidate_pack(h, scan, stock);
+			consolidate_pack(h, scan, stock, &before, &after);
 			task_end();
 			task_wait();
 		}
@@ -4522,13 +4583,114 @@ static unsigned long packs_saving(void)
 	return saved;
 }
 
+/* "1 h 20 min", "45 min" */
+static void say_minutes(char *out, int size, unsigned long minutes)
+{
+	if (minutes >= 60)
+		text_print(out, size, "%lu h %lu min", minutes / 60, minutes % 60);
+	else
+		text_print(out, size, "%lu min", minutes ? minutes : 1);
+}
+
+/* the packs Consolidate all does (all = 1: not consolidated yet) or Link all does (all = 0: not in it at all) */
+static int pack_wanted(struct pack_scan const *scan, int consolidating)
+{
+	int linked = scan->multiplayer_imported || scan->campaign_imported;
+	if (!scan->multiplayer && !scan->campaign)
+		return 0;
+	return consolidating ? !consolidated(scan) : !linked && !consolidated(scan);
+}
+
+/* Consolidate all / Link all: every such pack in turn, one line each on the screen (its maps counted, then what it went
+from and to), with nothing to answer: started, it can be left to run. A pack that fails is said and passed. The end waits
+for a button, so what was done is there to read */
+static void packs_all(int consolidating, char const *stock)
+{
+	unsigned long total_before = 0, total_after = 0;
+	int n, done = 0, failed = 0, wanted = 0;
+	DWORD started = GetTickCount();
+	char took[32];
+	for (n = 0; n < pack_count; n++)
+		wanted += pack_wanted(&pack_scans[n], consolidating);
+	task_begin(consolidating ? "Consolidating all your map packs" : "Linking all your map packs", NULL);
+	log_file(consolidating ? "Consolidate all:" : "Link all:");
+	for (n = 0; n < pack_count; n++)
+	{
+		struct pack_scan *scan = &pack_scans[n];
+		struct halo *h = halo_at(scan->path);
+		struct receipt_entry *e;
+		char const *name = strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path;
+		unsigned long before = 0, after = 0;
+		int made;
+		if (!h || !pack_wanted(scan, consolidating))
+			continue;
+		receipt_batch = 0;
+		e = receipt_add(RECEIPT_ACTION);
+		text_print(e->text, sizeof(e->text), "%s", name);
+		/* (the title says which pack of them) */
+		text_print(task_title, sizeof(task_title), "%s (%d of %d)", consolidating ? "Consolidating all your map packs" :
+			"Linking all your map packs", done + failed + 1, wanted);
+		player_heading(task_title);
+		receipt_show();
+		receipt_batch = 1;
+		if (consolidating)
+		{
+			char title[300];
+			text_print(title, sizeof(title), "Consolidating %s", scan->path);
+			log_file(title);
+			made = consolidate_pack(h, scan, stock, &before, &after);
+		}
+		else
+		{
+			char error[256];
+			made = packs_import(scan, 1, scan->campaign != 0, packs_say, error) ? -1 : 1;
+			if (made < 0)
+				say_in(COLOUR_RED, "%s", error);
+		}
+		receipt_batch = 0;
+		/* (its line: what it went from and to; it's marked done by the next) */
+		for (e = &receipt[receipt_count - 1]; e > receipt && e->kind != RECEIPT_ACTION; e--)
+			;
+		if (made < 0)
+		{
+			failed++;
+			text_print(e->right, sizeof(e->right), "failed");
+		}
+		else
+		{
+			done++;
+			total_before += before;
+			total_after += after;
+			if (consolidating)
+				text_print(e->right, sizeof(e->right), made ? "%lu -> %lu MB" : "nothing to shrink", before, after);
+			else
+				text_print(e->right, sizeof(e->right), "linked");
+		}
+		e->done = 1;
+		packs_scan(h->path, stock, scan);
+		receipt_show();
+	}
+	say_minutes(took, sizeof(took), (GetTickCount() - started + 30000) / 60000);
+	if (consolidating)
+		step("Done: %d pack%s consolidated, %lu MB -> %lu MB, in %s.%s", done, done == 1 ? "" : "s", total_before,
+			total_after, took, failed ? "" : " Your map packs' own folders are left as they are.");
+	else
+		step("Done: %d pack%s linked.", done, done == 1 ? "" : "s");
+	if (failed)
+		say_in(COLOUR_YELLOW, "%d didn't work: installer_log.txt says why.", failed);
+	task_end();
+	task_problem = 1;                    /* (it was left to run: the end waits to be read) */
+	task_wait();
+}
+
 static void player_map_packs(void)
 {
 	struct menu_item *items;
 	char stock[200];
 	char (*abouts)[240];
-	int n, k = 0;
-	items = malloc(MOST_PACKS * sizeof(*items));
+	static char consolidate_all_about[300], link_all_about[200];
+	int n, k = 0, first, to_consolidate, to_link, all_consolidate, all_link, pack_k = -1;
+	items = malloc((MOST_PACKS + 2) * sizeof(*items));
 	abouts = malloc(MOST_PACKS * sizeof(*abouts));
 	if (!items || !abouts)
 	{
@@ -4546,6 +4708,49 @@ static void player_map_packs(void)
 		}
 		if (!packs_look(stock, sizeof(stock)))
 			break;
+		/* (first: Consolidate all and Link all, when there's a pack for them) */
+		{
+			unsigned long minutes = 0, saved = 0, after, each;
+			char stock_index[220], took[32];
+			int known;
+			to_consolidate = to_link = 0;
+			for (n = 0; n < pack_count; n++)
+			{
+				if (pack_wanted(&pack_scans[n], 1))
+				{
+					to_consolidate++;
+					pack_numbers(&pack_scans[n], &after, &each, &known);
+					minutes += each;
+					if ((unsigned long)(pack_scans[n].size >> 20) > after)
+						saved += (unsigned long)(pack_scans[n].size >> 20) - after;
+				}
+				to_link += pack_wanted(&pack_scans[n], 0);
+			}
+			first = 0;
+			all_consolidate = all_link = -1;
+			if (to_consolidate > 1)
+			{
+				text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
+				say_minutes(took, sizeof(took), minutes);
+				text_print(items[first].text, sizeof(items[first].text), "Consolidate all (%d packs, about %s)",
+					to_consolidate, took);
+				text_print(consolidate_all_about, sizeof(consolidate_all_about), "Every pack that isn't consolidated yet, "
+					"one after another: about %s, nothing to answer, so you can leave it running. Saves around %lu MB once "
+					"you delete the originals. The packs' own folders aren't changed.", took, saved);
+				items[first].about = consolidate_all_about;
+				items[first].disabled = GetFileAttributesA(stock_index) == INVALID_FILE_ATTRIBUTES;
+				all_consolidate = first++;
+			}
+			if (to_link > 1)
+			{
+				text_print(items[first].text, sizeof(items[first].text), "Link all (%d packs)", to_link);
+				text_print(link_all_about, sizeof(link_all_about), "Every pack that isn't in Halo 1 Unlimited yet goes "
+					"in its map list as it is. Quick: a minute or so.");
+				items[first].about = link_all_about;
+				items[first].disabled = 0;
+				all_link = first++;
+			}
+		}
 		for (n = 0; n < pack_count; n++)
 		{
 			struct pack_scan *scan = &pack_scans[n];
@@ -4556,7 +4761,7 @@ static void player_map_packs(void)
 			unsigned long mb = (unsigned long)(scan->size >> 20);
 			last = strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path;
 			pack_numbers(scan, &after, &minutes, &known);
-			text_print(items[n].text, sizeof(items[n].text), "%-36.36s %5lu MB  %s", last, mb,
+			text_print(items[first + n].text, sizeof(items[0].text), "%-36.36s %5lu MB  %s", last, mb,
 				small ? "Consolidated" : linked ? "Linked" : "Not added");
 			/* (what it is now, and what choosing it can do) */
 			if (small)
@@ -4568,8 +4773,8 @@ static void player_map_packs(void)
 			else
 				text_print(abouts[n], sizeof(abouts[n]), "It isn't in Halo 1 Unlimited yet. Consolidate it to shrink "
 					"it from %lu MB to %s%lu MB, or link it as it is.", mb, known ? "" : "about ", after);
-			items[n].about = abouts[n];
-			items[n].disabled = 0;
+			items[first + n].about = abouts[n];
+			items[first + n].disabled = 0;
 		}
 		if (!n)
 		{
@@ -4577,8 +4782,26 @@ static void player_map_packs(void)
 				"default.xbe and maps) on E:, F: or G:.");
 			break;
 		}
-		if ((k = menu("Map Packs", "The map packs on your Xbox:", items, n, k)) < 0)
+		if (pack_k >= 0)
+			k = first + pack_k;         /* (the pack chosen last, wherever the rows above it went) */
+		pack_k = -1;
+		if ((k = menu("Map Packs", "The map packs on your Xbox:", items, first + n, k)) < 0)
 			break;
+		if (k == all_consolidate || k == all_link)
+		{
+			struct menu_item sure[2] = {{"Start", NULL, 0}, {"Back", NULL, 0}};
+			char line[300];
+			if (k == all_consolidate)
+				text_print(line, sizeof(line), "%d packs are made small, one after another. It takes a while: you can leave "
+					"it running. Your packs' own folders aren't changed.", to_consolidate);
+			else
+				text_print(line, sizeof(line), "%d packs go in Halo 1 Unlimited's map list as they are.", to_link);
+			if (menu(k == all_consolidate ? "Consolidate all your map packs?" : "Link all your map packs?", line, sure, 2,
+				0) == 0)
+				packs_all(k == all_consolidate, stock);
+			continue;
+		}
+		k -= first;
 		if (!halo_at(pack_scans[k].path))
 			packs_listed = 0;
 		else
@@ -4590,6 +4813,7 @@ static void player_map_packs(void)
 			pack_count--;
 			k = k < pack_count ? k : pack_count - 1;
 		}
+		pack_k = k;
 	}
 	free(items);
 	free(abouts);
@@ -4757,7 +4981,7 @@ static void player_main(void)
 			}
 			else if (check_state == CHECK_NEWER)
 			{
-				text_print(items[n].text, sizeof(items[n].text), "Update Halo 1 Unlimited (v1.%lu)", check_build);
+				text_print(items[n].text, sizeof(items[n].text), "Update Halo 1 Unlimited (%s)", check_version());
 				items[n].about = "A newer Halo 1 Unlimited is online: it's downloaded and installed (a minute or two).";
 			}
 			else if (check_state == CHECK_NEWEST)
