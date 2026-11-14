@@ -43,6 +43,18 @@ void stockmaps_examine(char const *halo, struct stockmaps_look *look);
 map isn't touched until its small map is the one it must be (the table's CRC) and reads back from the disk. Else error[256] */
 int stockmaps_convert(char const *halo, stockmaps_say_t say, char *error);
 
+/* the same, made in another Halo folder (destination, with a maps folder) from the retail maps of source, which aren't
+changed: stock.shared and its tables and the small maps there; campaign 0: the levels' small maps left out (the levels are
+still read: stock.shared holds what three of them or more use). 0 when done, else error[256] */
+int stockmaps_build(char const *source, char const *destination, int campaign, stockmaps_say_t say, char *error);
+
+/* the room that needs on the destination's drive (its files, and room to work) */
+unsigned long long stockmaps_build_need(int campaign);
+
+/* the retail maps rebuilt exactly from Halo 1 Unlimited's (halo: its folder, its small maps, stock.shared and stock.restore,
+which are kept) in another folder (destination, with a maps folder). 0 when done, else error[256] */
+int stockmaps_rebuild(char const *halo, char const *destination, stockmaps_say_t say, char *error);
+
 /* puts the retail maps back, each checked against its original's size and CRC, then takes out what the swap added;
 0 when done (or nothing to do), else error[256]: what isn't back yet still plays in Halo 1 Unlimited */
 int stockmaps_restore(char const *halo, stockmaps_say_t say, char *error);

@@ -1,4 +1,4 @@
-/* stockmaps_test HALO_FOLDER look|convert|restore: what the installer does to a Halo folder's stock maps, on a PC, for
+/* stockmaps_test HALO_FOLDER look|convert|restore (or build SOURCE DESTINATION campaign|nocampaign): what the installer does to a Halo folder's stock maps, on a PC, for
 testing (the folder holds maps\, with the 13 retail multiplayer maps and 10 levels; STOCKMAPS_TEST_CACHE=DIR,DIR,DIR: folders
 standing in for the cache drives). Built (in this folder) with
 	cc -O2 -DSTOCKMAPS_HOST -o stockmaps_test stockmaps_test.c stockmaps.c mapstream.c sha256.c -lz */
@@ -25,6 +25,23 @@ int main(int argc, char **argv)
 	struct stockmaps_look look;
 	char error[256] = "";
 	int failed = 0;
+	if (argc == 4 && !strcmp(argv[1], "rebuild"))
+	{
+		/* stockmaps_test rebuild H1U_FOLDER DESTINATION: Halo's retail maps rebuilt from Halo 1 Unlimited's, elsewhere */
+		failed = stockmaps_rebuild(argv[2], argv[3], say, error);
+		printf(failed ? "failed: %s\n" : "rebuilt\n", error);
+		return failed;
+	}
+	if (argc == 5 && !strcmp(argv[1], "build"))
+	{
+		/* stockmaps_test build SOURCE DESTINATION campaign|nocampaign: the own-folder install's maps */
+		failed = stockmaps_build(argv[2], argv[3], !strcmp(argv[4], "campaign"), say, error);
+		if (failed)
+			printf("failed: %s\n", error);
+		else
+			printf("built\n");
+		return failed;
+	}
 	if (argc != 3)
 	{
 		fprintf(stderr, "usage: stockmaps_test HALO_FOLDER look|convert|restore\n");
