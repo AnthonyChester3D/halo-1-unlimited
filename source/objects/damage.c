@@ -139,6 +139,7 @@ symbols in this file:
 #include "units/bipeds.h"
 #include "units/units.h"
 #include "units/vehicles.h"
+#include "server_team_switch.h" /* port: port/linux/game/server_team_switch.c */
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -1141,11 +1142,15 @@ static void object_damage_aftermath(
 		no statistics on a machine that joined after, is no player's) */
 		if (player_index != NONE)
 		{
+			/* port: a dedicated server's !switch's death is no one's kill (server_team_switch.c) */
+			server_team_switch_damage(player_index, object_index,
+				TEST_FLAG(damage->flags, _damage_no_statistics_bit) != 0);
 			game_engine_player_killed(
 				player_index,
 				object_index,
 				player_index,
 				TRUE);
+			server_team_switch_damage(player_index, object_index, FALSE);
 		}
 	}
 
