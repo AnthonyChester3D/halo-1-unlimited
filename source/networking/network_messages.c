@@ -227,7 +227,7 @@ struct network_game_message_packet_definitions
 	struct data_packet_field server_graceful_game_exit_pregame_fields[2];
 	struct data_packet_definition server_graceful_game_exit_pregame;
 #if defined(OXBOX_CROSSPLAY)
-	struct data_packet_field client_join_game_request_fields[5];
+	struct data_packet_field client_join_game_request_fields[6];
 #else
 	struct data_packet_field client_join_game_request_fields[4];
 #endif
@@ -313,7 +313,7 @@ hex: p2p.c's p2p_hardware_id) */
 #if defined(OXBOX_CROSSPLAY)
 /* (oxbox: then a Discord account's pass, 170 bytes, and its proof, 64, all zero from an Xbox: OpenCE's network
 version 40) */
-DEFINE_NETWORK_GAME_MESSAGE(message_client_join_game_request, 0x70 + 170 + 64);
+DEFINE_NETWORK_GAME_MESSAGE(message_client_join_game_request, 0x70 + 170 + 64 + 2);
 #else
 DEFINE_NETWORK_GAME_MESSAGE(message_client_join_game_request, 0x70);
 #endif
@@ -444,8 +444,9 @@ static struct network_game_message_packet_definitions data_0030aa68 =
 		DATA_PACKET_FIELD(_data_packet_field_bytes, 16),
 		DATA_PACKET_FIELD(_data_packet_field_bytes, 32),
 #if defined(OXBOX_CROSSPLAY)
-		/* (the Discord pass, 170 bytes, and its proof, 64) */
+		/* (the Discord pass, 170 bytes, and its proof, 64; then the network version it joins with, OpenCE's 42) */
 		DATA_PACKET_FIELD(_data_packet_field_bytes, 234),
+		DATA_PACKET_FIELD(_data_packet_field_shorts, 1),
 #endif
 		DATA_PACKET_FIELD_END,
 	},

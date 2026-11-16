@@ -66,6 +66,8 @@ machine (their datum identifiers need not be).
 #include "game/player_queues_new.h"
 #include "networking/network_game_globals.h"
 #include "networking/network_connection.h"
+#include "networking/network_game_manager.h"
+#include "interface/ui_widget.h"
 #include "objects/objects.h"
 #include "objects/damage.h"
 #include "scenario/scenario.h"
@@ -248,6 +250,12 @@ enum
 	_distributed_unit_part_camouflage_bit,
 	/* (dead) who killed it, when anyone */
 	_distributed_unit_part_killer_bit,
+	/* (alive) OpenCE's (network version 42): the host's facing, aim and look for a unit whose input it holds, five
+	vectors (DISTRIBUTED_POSE_SIZE): read past here */
+	_distributed_unit_part_scripted_pose_bit,
+	/* (alive) OpenCE's (version 43): where on a vehicle's deck it stands (DISTRIBUTED_DECK_SIZE), for vehicle riding,
+	which this build doesn't play (it leaves a game that has it on: network_distributed_riding_refused): read past */
+	_distributed_unit_part_deck_bit,
 };
 
 /* world units: how far a client's own player's unit may be from the host's
@@ -386,8 +394,12 @@ enum
 	most it has, and a relayed action's (past the update each message has
 	first) */
 	DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE = 3,
-	DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE = 3 + 4 + (4 + 2) + (12 + 3 * 6) + 2 + 2 * 2 + 4 * 2 +
-		2 * NUMBER_OF_PLAYER_POWERUPS + 2 + 1,
+	/* (OpenCE's deck part, version 43: vehicle, node, point, forward, flags; and its scripted pose, version 42: five
+	direction vectors) */
+	DISTRIBUTED_DECK_SIZE = 4 + 2 + 12 + 6 + 1 + 1 + 2,
+	DISTRIBUTED_POSE_SIZE = 5 * 6,
+	DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE = 3 + 4 + (4 + 2) + (12 + 3 * 6) + DISTRIBUTED_DECK_SIZE + 2 + 2 * 2 + 4 * 2 +
+		2 * NUMBER_OF_PLAYER_POWERUPS + 2 + 1 + DISTRIBUTED_POSE_SIZE,
 	DISTRIBUTED_RELAYED_ACTION_MINIMUM_SIZE = 14,
 	DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE = 14 + 2 * (DISTRIBUTED_INPUT_HISTORY - 1),
 };
@@ -647,6 +659,12 @@ static struct distributed_client_identity distributed_client_identities[HALO_POR
 /* a client: its Discord user as last sent this game, and whether it was */
 static struct distributed_client_identity distributed_sent_identity;
 static boolean distributed_identity_sent;
+/* the checkpoint epoch (network version 42, network_distributed.h's header): the one this machine's messages carry
+and take (on a client 0 until the host's boundary comes: it then sends nothing but its ready), the host's own count,
+and whether a client's snapshot of the epoch's objects has all come (_distributed_message_objects_synchronized) */
+static unsigned long distributed_checkpoint_epoch;
+static unsigned long distributed_host_epoch;
+static boolean distributed_checkpoint_synchronized;
 static struct distributed_client_clock
 {
 	long latest_tick;
@@ -893,6 +911,7 @@ static void distributed_batch_flush(
 	header->type = _distributed_message_batch;
 	header->count = 0;
 	header->game_time = game_time_get();
+	header->checkpoint_epoch = distributed_checkpoint_epoch;
 	header->header = 0;
 	build_message_header(&header->header, batch->size, 2, 0);
 	if (sender == HOST_SENDER)
@@ -1002,7 +1021,9 @@ static void distributed_batches_flush(
 		distributed_batch_flush((short)((first + step) % MAXIMUM_SENDERS));
 }
 
-static void distributed_fill_header(
+/* FALSE: not to be sent (a client's, but its ready, before its snapshot of the epoch's objects has all come: its
+copies of the old ones can't supply input or hits for the new) */
+static boolean distributed_fill_header(
 	void *message,
 	byte type,
 	short count,
@@ -1010,12 +1031,19 @@ static void distributed_fill_header(
 {
 	struct distributed_message_header *header = (struct distributed_message_header *)message;
 
+	if (game_in_progress() && game_connection() == _game_connection_network_client &&
+		!distributed_checkpoint_synchronized && type != _distributed_message_client_ready)
+	{
+		return FALSE;
+	}
 	header->type = type;
 	header->count = (byte)count;
 	header->game_time = game_time_get();
+	header->checkpoint_epoch = distributed_checkpoint_epoch;
 	header->header = 0;
 	build_message_header(&header->header, size, 2, 0);
 	distributed_statistics.sent++;
+	return TRUE;
 }
 
 /* the size of each of a message's entries, when they are alike, else 0 */
@@ -1037,7 +1065,8 @@ void distributed_send(
 	word size,
 	short destination)
 {
-	distributed_fill_header(message, type, count, size);
+	if (!distributed_fill_header(message, type, count, size))
+		return;
 	switch (destination)
 	{
 	case _distributed_to_clients:
@@ -1067,7 +1096,8 @@ void distributed_send_to_machine(
 {
 	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
 		return;
-	distributed_fill_header(message, type, count, size);
+	if (!distributed_fill_header(message, type, count, size))
+		return;
 	distributed_batch_add((short)machine_index, message, size, distributed_entry_size(count, size));
 }
 
@@ -1078,8 +1108,30 @@ void distributed_send_to_machine_reliably(
 	short count,
 	word size)
 {
-	distributed_fill_header(message, type, count, size);
+	if (!distributed_fill_header(message, type, count, size))
+		return;
 	network_distributed_server_send_to_machine_reliably(machine_index, message, size);
+}
+
+/* the host: its checkpoint boundary to a client (the header alone, its epoch the current one), before a snapshot of
+the objects, so that the client takes the epoch (distributed_message_epoch_valid) */
+void distributed_checkpoint_to_machine(
+	long machine_index)
+{
+	struct distributed_message_header message;
+
+	if (game_connection() != _game_connection_network_server ||
+		machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+	{
+		return;
+	}
+	distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_checkpoint, 0, sizeof(message));
+}
+
+boolean distributed_checkpoint_ready(
+	void)
+{
+	return distributed_checkpoint_synchronized;
 }
 
 /* a packer's messages of the type, to the machine (or the host), each
@@ -1109,8 +1161,8 @@ static void distributed_packer_flush(
 
 	if (!packer->count)
 		return;
-	distributed_fill_header(&packer->message, packer->type, packer->count, size);
-	distributed_batch_add(packer->sender, &packer->message, size, 0);
+	if (distributed_fill_header(&packer->message, packer->type, packer->count, size))
+		distributed_batch_add(packer->sender, &packer->message, size, 0);
 	packer->count = 0;
 	packer->size = packer->prefix_size;
 }
@@ -1576,6 +1628,14 @@ static word distributed_unit_state_read(
 		{
 			return 0;
 		}
+		/* (where on a vehicle's deck it stands: not played here) */
+		if (TEST_FLAG(parts, _distributed_unit_part_deck_bit))
+		{
+			byte deck[DISTRIBUTED_DECK_SIZE];
+
+			if (!distributed_take(&cursor, end, deck, sizeof(deck)))
+				return 0;
+		}
 		if (TEST_FLAG(state->flags, _distributed_unit_predicted_bit) &&
 			!distributed_take(&cursor, end, &state->predicted_time, sizeof(state->predicted_time)))
 		{
@@ -1604,6 +1664,14 @@ static word distributed_unit_state_read(
 				!distributed_take(&cursor, end, &state->active_camouflage, sizeof(state->active_camouflage))))
 		{
 			return 0;
+		}
+		/* (the host's pose for a unit whose input it holds: its unit state otherwise as any) */
+		if (TEST_FLAG(parts, _distributed_unit_part_scripted_pose_bit))
+		{
+			byte pose[DISTRIBUTED_POSE_SIZE];
+
+			if (!distributed_take(&cursor, end, pose, sizeof(pose)))
+				return 0;
 		}
 	}
 	else if (TEST_FLAG(parts, _distributed_unit_part_killer_bit) &&
@@ -3565,6 +3633,18 @@ void network_distributed_new_game(
 	csmemset(distributed_client_clocks, 0, sizeof(distributed_client_clocks));
 	csmemset(distributed_client_identities, 0, sizeof(distributed_client_identities));
 	distributed_identity_sent = FALSE;
+	/* (a new epoch for the host's new game, told each client before its snapshot; a client has none until then) */
+	if (game_connection() == _game_connection_network_server)
+	{
+		if (++distributed_host_epoch == 0)
+			++distributed_host_epoch;
+		distributed_checkpoint_epoch = distributed_host_epoch;
+	}
+	else
+	{
+		distributed_checkpoint_epoch = 0;
+	}
+	distributed_checkpoint_synchronized = FALSE;
 	{
 		short machine_index;
 
@@ -4251,6 +4331,107 @@ not overtaken by the newer damage sent with the ticks since
 (distributed_message_stale) */
 static boolean distributed_handling_batch;
 
+/* whether a message belongs to this machine's epoch (network version 42; OpenCE's distributed_message_epoch_valid,
+without its co-op revert). Only the host's boundary, reliably and alone, changes a client's epoch: it then waits for
+the snapshot that follows (the objects synchronized, reliably and alone) before it takes the host's other messages or
+sends its own. A client's ready may come with no epoch yet: it asks for the boundary and the snapshot */
+static boolean distributed_message_epoch_valid(
+	long machine_index,
+	struct distributed_message_header const *header,
+	word size)
+{
+	if (header->type == _distributed_message_checkpoint)
+	{
+		if (machine_index != NONE || game_connection() != _game_connection_network_client ||
+			network_connection_last_read_was_unreliable() || distributed_handling_batch ||
+			size != sizeof(*header) || header->count != 0 || header->checkpoint_epoch == 0)
+		{
+			return FALSE;
+		}
+		if (distributed_checkpoint_epoch != 0 && (long)(header->checkpoint_epoch - distributed_checkpoint_epoch) <= 0)
+			return FALSE;
+		distributed_checkpoint_epoch = header->checkpoint_epoch;
+		distributed_checkpoint_synchronized = FALSE;
+		/* (its identity may have gone with no epoch, which the host refused) */
+		distributed_identity_sent = FALSE;
+		return FALSE;
+	}
+	if (header->type == _distributed_message_client_ready)
+	{
+		return game_connection() == _game_connection_network_server && distributed_handling_stream_message &&
+			!distributed_handling_batch && size == sizeof(*header) && header->count <= 1;
+	}
+	if (distributed_checkpoint_epoch == 0 || header->checkpoint_epoch != distributed_checkpoint_epoch)
+		return FALSE;
+	if (game_connection() == _game_connection_network_client)
+	{
+		if (machine_index != NONE)
+			return FALSE;
+		if (header->type == _distributed_message_object_changes &&
+			(network_connection_last_read_was_unreliable() || distributed_handling_batch))
+		{
+			return FALSE;
+		}
+		if (header->type == _distributed_message_objects_synchronized)
+		{
+			if (network_connection_last_read_was_unreliable() || distributed_handling_batch ||
+				size != sizeof(*header) || header->count != 0)
+			{
+				return FALSE;
+			}
+			if (!distributed_checkpoint_synchronized)
+			{
+				/* (hits and damage of the copies made while the snapshot came: gone) */
+				network_damage_new_game();
+				distributed_identity_sent = FALSE;
+			}
+			distributed_checkpoint_synchronized = TRUE;
+		}
+		/* (the world's own messages only once its snapshot has all come: a kill overtaking the snapshot's object
+		could bring it back) */
+		if (!distributed_checkpoint_synchronized)
+		{
+			return header->type == _distributed_message_object_changes ||
+				(header->type == _distributed_message_inventories &&
+					!network_connection_last_read_was_unreliable() && !distributed_handling_batch);
+		}
+	}
+	return TRUE;
+}
+
+/* ---------- vehicle riding (OpenCE's, network version 43): not played here. A client leaves a game whose host has it
+on (the game record's _network_game_cooperative_vehicle_riding_bit, set as a game starts), or whose map turns it on
+(_distributed_message_vehicle_riding_map, sent at a map's start: its map 2), as Halo leaves a game it loses, saying
+why. Llama, 2026-11-15: "If a server has vehicle riding enabled we can't join that server." */
+
+static boolean distributed_riding_left;
+
+static void distributed_riding_leave(
+	char const *why)
+{
+	if (distributed_riding_left || game_connection() != _game_connection_network_client)
+		return;
+	distributed_riding_left = TRUE;
+	error(_error_silent, "network: leaving the game: the host plays vehicle riding (%s), which this build doesn't", why);
+	display_error_text_when_main_menu_loaded(L"This game uses vehicle riding, which Halo 1 Unlimited doesn't play.");
+	network_game_client_all_local_players_have_quit();
+}
+
+/* each frame (map_share_update): a client's game with riding on, left */
+void network_distributed_riding_check(
+	void)
+{
+	struct network_game *game = network_game_get_game();
+
+	if (game_connection() != _game_connection_network_client)
+	{
+		distributed_riding_left = FALSE;
+		return;
+	}
+	if (game && TEST_FLAG(game->cooperative_flags, _network_game_cooperative_vehicle_riding_bit))
+		distributed_riding_leave("the game's");
+}
+
 /* a message of the distributed kind; machine_index is the sender's on the
 host, NONE on a client */
 void network_distributed_handle_message(
@@ -4281,6 +4462,19 @@ void network_distributed_handle_message(
 	if (size < sizeof(header) || !game_in_progress())
 		return;
 	csmemcpy(&header, message, sizeof(header));
+	/* (OpenCE's map riding choice, version 43: its map word 2 is a map that turns riding on) */
+	if (header.type == DISTRIBUTED_MESSAGE_VEHICLE_RIDING_MAP_OPENCE)
+	{
+		word map;
+
+		if (machine_index == NONE && size >= sizeof(header) + sizeof(map))
+		{
+			csmemcpy(&map, (byte const *)message + sizeof(header), sizeof(map));
+			if (map == 2)
+				distributed_riding_leave("the map's");
+		}
+		return;
+	}
 	/* a tick's messages in one: each as if it came alone */
 	if (header.type == _distributed_message_batch)
 	{
@@ -4340,6 +4534,7 @@ void network_distributed_handle_message(
 	case _distributed_message_game_state:
 	case _distributed_message_objects_synchronized:
 	case _distributed_message_notice:
+	case _distributed_message_checkpoint:
 	case _distributed_message_client_ready: entry_size = 0; break;
 	case _distributed_message_client_identity: entry_size = sizeof(struct distributed_client_identity); break;
 	case _distributed_message_damage_events:
@@ -4387,9 +4582,15 @@ void network_distributed_handle_message(
 			return;
 		/* (the host's latest tick, which this client's input messages tell
 		it back) */
-		if (distributed_host_time == NONE || header.game_time > distributed_host_time)
-			distributed_host_time = header.game_time;
 		break;
+	}
+	if (!distributed_message_epoch_valid(machine_index, &header, size))
+		return;
+	/* (the host's latest tick, which this client's input messages tell it back: of this epoch's messages) */
+	if (game_connection() == _game_connection_network_client &&
+		(distributed_host_time == NONE || header.game_time > distributed_host_time))
+	{
+		distributed_host_time = header.game_time;
 	}
 	if ((distributed_handling_batch || header.type != _distributed_message_damage_events) &&
 		distributed_message_stale(machine_index, &header))

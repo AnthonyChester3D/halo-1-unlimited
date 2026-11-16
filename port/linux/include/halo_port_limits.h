@@ -67,17 +67,18 @@ in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the Xboxes' own games' version: 31 since the game settings record carries OpenCE's gametypes (its options
-0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
-#define HALO_PORT_NETWORK_VERSION 31
+/* oxbox: the Xboxes' own games' version: 32 since the distributed messages carry OpenCE's checkpoint epoch (their
+header 12 bytes: its version 42) and the join request its version; 31 since the game settings record carries OpenCE's
+gametypes (its options 0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
+#define HALO_PORT_NETWORK_VERSION 32
 #else
 #define HALO_PORT_NETWORK_VERSION 29
 #endif
 #if defined(OXBOX_CROSSPLAY)
 /* oxbox: the crossplay experiment: the PC builds' version this Xbox's games say with crossplay = 1, and the oldest
-PC builds' version it joins (40: the join request's size) */
-#define OXBOX_CROSSPLAY_VERSION 41
-#define OXBOX_CROSSPLAY_VERSION_FIRST 40
+PC builds' version it joins (44: the distributed header's epoch, the join request's version, the record's MCC identity) */
+#define OXBOX_CROSSPLAY_VERSION 44
+#define OXBOX_CROSSPLAY_VERSION_FIRST 44
 /* ... and the advertisement's flag an Xbox host sets (HALO_PORT_ADVERTISED_FLAGS_OFFSET; the PC builds use the low
 three, and look at no other): an Xbox's game of the PC builds' version is still an Xbox's (its folder maps are shared
 with other Xboxes; the games list shows an Xbox beside it) */

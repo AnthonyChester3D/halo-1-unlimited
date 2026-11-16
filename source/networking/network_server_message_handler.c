@@ -444,6 +444,8 @@ struct message_client_join_game_request
 	/* oxbox: a Discord account's pass and its proof (OpenCE's network version 40), all zero from an Xbox */
 	byte link_pass[170];
 	byte link_proof[64];
+	/* oxbox: the network version the machine joins with (OpenCE's version 42: an OpenCE host refuses another) */
+	word network_version;
 #endif
 };
 
@@ -800,7 +802,9 @@ enum
 	PC_GAME_PLAYERS_END = PC_GAME_PLAYERS_OFFSET + PC_NETWORK_MAXIMUM * HALO_PORT_NETWORK_PLAYER_SIZE,
 	PC_GAME_VARIANT_OPTIONS_OFFSET = PC_GAME_PLAYERS_END + 0xA,
 	PC_GAME_LOCAL_DATA_OFFSET = PC_GAME_PLAYERS_END + 0x36,
-	PC_GAME_SIZE = PC_GAME_PLAYERS_END + 0x3A,
+	/* (then OpenCE's MCC content and metadata SHA-256, version 42: zero for an Xbox or Custom Edition map) */
+	PC_GAME_MCC_IDENTITY_OFFSET = PC_GAME_PLAYERS_END + 0x3A,
+	PC_GAME_SIZE = PC_GAME_PLAYERS_END + 0x3A + 64,
 };
 static byte crossplay_settings_out[PC_GAME_SIZE];
 

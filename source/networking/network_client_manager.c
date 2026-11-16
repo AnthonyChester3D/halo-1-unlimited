@@ -620,6 +620,8 @@ struct message_client_join_game_request
 	/* oxbox: a Discord account's pass and its proof (OpenCE's network version 40), all zero from an Xbox */
 	byte link_pass[170];
 	byte link_proof[64];
+	/* oxbox: the network version the machine joins with (OpenCE's version 42: an OpenCE host refuses another) */
+	word network_version;
 #endif
 };
 
@@ -749,7 +751,7 @@ typedef char message_client_ping_size_assert[
 	sizeof(struct message_client_ping) == 8 ? 1 : -1];
 typedef char message_client_join_game_request_size_assert[
 #if defined(OXBOX_CROSSPLAY)
-	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 ? 1 : -1];
+	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 + 2 ? 1 : -1];
 #else
 	sizeof(struct message_client_join_game_request) == 0x70 ? 1 : -1];
 #endif
@@ -3044,6 +3046,11 @@ static boolean network_game_client_idle_joining(
 					p2p_hardware_id(hardware_id, sizeof(hardware_id));
 					csmemcpy(join_game_request.hardware_id, hardware_id, csstrlen(hardware_id));
 				}
+#if defined(OXBOX_CROSSPLAY)
+				/* (oxbox: the version it joins with, which an OpenCE host checks: the PC builds' for a PC's game, as
+				the crossplay protocol is theirs; an Xbox host doesn't check it) */
+				join_game_request.network_version = OXBOX_CROSSPLAY_VERSION;
+#endif
 
 				message = create_network_game_message(
 					_message_client_join_game_request,
