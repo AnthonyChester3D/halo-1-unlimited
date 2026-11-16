@@ -1449,6 +1449,14 @@ static void cache_file_lend_free_tag_memory(
 
 	/* (the host's damage checks get none of it unless they're given it below: port/linux/game/network_damage.c) */
 	network_damage_check_memory(NULL, NULL);
+#if defined(OXBOX_CROSSPLAY)
+	{
+		extern void hmp_links_memory(void **idle, long *idle_size);
+
+		/* (nor a linked game's tables: port/linux/game/hmp_links.c) */
+		hmp_links_memory(NULL, NULL);
+	}
+#endif
 	if (!tag_header || tag_header->scenario_tag_index == NONE)
 		return;
 	scenario = tag_get(SCENARIO_TAG, tag_header->scenario_tag_index);
@@ -1461,6 +1469,14 @@ static void cache_file_lend_free_tag_memory(
 		game_state_ai_pools_lay_out(scenario, &idle, &idle_size);
 		/* (a network game's host takes the start of it for its damage checks) */
 		network_damage_check_memory(&idle, &idle_size);
+#if defined(OXBOX_CROSSPLAY)
+		/* (a client in someone else's PC game on a linked map, for its tag tables: port/linux/game/hmp_links.c) */
+		{
+			extern void hmp_links_memory(void **idle, long *idle_size);
+
+			hmp_links_memory(&idle, &idle_size);
+		}
+#endif
 		if (idle_size < 0x10000)
 			idle = NULL, idle_size = 0;
 	}
@@ -1949,6 +1965,21 @@ char *tag_get_name(
 	long tag_index)
 {
 	return cache_get_tag_instance(tag_index)->name;
+}
+
+/* port: the loaded map's tag's name, NULL when the ID is none of its tags (no assert: port/linux/game/hmp_links.c
+checks a link's tags against the map) */
+char const *cache_file_tag_name_if_any(
+	long tag_index)
+{
+	long absolute_index = tag_index & 0xFFFF;
+
+	if (!cache_file_globals.tags_loaded || !global_tag_instances || tag_index == NONE ||
+		absolute_index >= global_tag_count || global_tag_instances[absolute_index].tag_index != tag_index)
+	{
+		return NULL;
+	}
+	return global_tag_instances[absolute_index].name;
 }
 
 unsigned long tag_get_group_tag(

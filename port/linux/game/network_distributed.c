@@ -282,7 +282,7 @@ enum
 	vectors (DISTRIBUTED_POSE_SIZE): read past here */
 	_distributed_unit_part_scripted_pose_bit,
 	/* (alive) OpenCE's (version 43): where on a vehicle's deck it stands (DISTRIBUTED_DECK_SIZE), for vehicle riding,
-	which this build doesn't play (it leaves a game that has it on: network_distributed_riding_refused): read past */
+	which this build doesn't play: read past (the rider is drawn where the host puts it) */
 	_distributed_unit_part_deck_bit,
 };
 
@@ -1084,7 +1084,9 @@ sent at the tick's end (or sooner, full). A message of entries of
 entry_size bytes each is split where a batch is full, the rest going in
 the next; one not to be split (entry_size 0) goes whole, and one larger
 than a datagram, which is a mistake, is dropped. */
-#if !defined(HALO_XBOX_TARGET)
+/* (the server's for its Xboxes: linked_maps.c; the crossplay Xbox's for itself in someone else's PC game:
+hmp_links.c) */
+#if !defined(HALO_XBOX_TARGET) || defined(OXBOX_CROSSPLAY)
 /* oxbox: a linked map's tag IDs in a message (linked_maps.c), the Custom Edition map's (the host's) as the Xbox map's
 (to_xbox: the host's to an Xbox) or back (an Xbox's to the host): the entries of the kinds of message that name tags,
 each kind's own module translating them; nothing for the rest */
@@ -1093,6 +1095,7 @@ void network_damage_translate_tags(byte type, void *entries, short count, boolea
 void network_objects_translate_tags(byte type, void *entries, short count, boolean to_xbox);
 boolean linked_map_active(void);
 boolean linked_map_machine_is_xbox(long machine_index);
+void *linked_map_scratch(word size);
 
 /* whether a message's kind names tags (and so is translated) */
 boolean distributed_message_names_tags(
@@ -1309,6 +1312,15 @@ void distributed_send(
 		break;
 	}
 	case _distributed_to_clients_reliably: network_distributed_server_send_to_all_reliably(message, size); break;
+	}
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_CROSSPLAY)
+	/* oxbox: someone else's PC game on a linked map (hmp_links.c): this Xbox's message with the PC map's tag IDs (the
+	caller's own copy: none use it after) */
+	if ((destination == _distributed_to_host || destination == _distributed_to_host_reliably) && linked_map_active())
+		distributed_translate_linked_tags(message, size, FALSE);
+#endif
+	switch (destination)
+	{
 	case _distributed_to_host:
 		distributed_batch_add(HOST_SENDER, message, size, distributed_entry_size(count, size));
 		break;
@@ -5195,38 +5207,12 @@ static boolean distributed_message_epoch_valid(
 	return TRUE;
 }
 
-/* ---------- vehicle riding (OpenCE's, network version 43): not played here. A client leaves a game whose host has it
-on (the game record's _network_game_cooperative_vehicle_riding_bit, set as a game starts), or whose map turns it on
-(_distributed_message_vehicle_riding_map, sent at a map's start: its map 2), as Halo leaves a game it loses, saying
-why. Llama, 2026-11-15: "If a server has vehicle riding enabled we can't join that server." */
-
-static boolean distributed_riding_left;
-
-static void distributed_riding_leave(
-	char const *why)
-{
-	if (distributed_riding_left || game_connection() != _game_connection_network_client)
-		return;
-	distributed_riding_left = TRUE;
-	error(_error_silent, "network: leaving the game: the host plays vehicle riding (%s), which this build doesn't", why);
-	display_error_text_when_main_menu_loaded(L"This game uses vehicle riding, which Halo 1 Unlimited doesn't play.");
-	network_game_client_all_local_players_have_quit();
-}
-
-/* each frame (map_share_update): a client's game with riding on, left */
-void network_distributed_riding_check(
-	void)
-{
-	struct network_game *game = network_game_get_game();
-
-	if (game_connection() != _game_connection_network_client)
-	{
-		distributed_riding_left = FALSE;
-		return;
-	}
-	if (game && TEST_FLAG(game->cooperative_flags, _network_game_cooperative_vehicle_riding_bit))
-		distributed_riding_leave("the game's");
-}
+/* ---------- vehicle riding (OpenCE's, network version 43): not played here, and not left either (Llama,
+2026-11-16: "If it will just look like lag then it's fine. We don't have to leave those games"). A rider on a vehicle's
+deck is drawn where the host puts it, each update (its deck place read past: distributed_unit_state_read); this
+Xbox's own player there is put back where the host has them, as a late correction is. The game record's riding bit
+(_network_game_cooperative_vehicle_riding_bit) and the map's riding choice (DISTRIBUTED_MESSAGE_VEHICLE_RIDING_MAP_OPENCE)
+are ignored. */
 
 /* ---------- SWITCH TEAM: a dedicated server's player changes team by saying "!switch" in its text chat (OpenCE's
 server_team_switch.c: the server decides, and kills a living player for it, without a score). This build has no chat:
@@ -5340,19 +5326,9 @@ void network_distributed_handle_message(
 		}
 	}
 #endif
-	/* (OpenCE's map riding choice, version 43: its map word 2 is a map that turns riding on) */
+	/* (OpenCE's map riding choice, version 43: riding isn't played here, nor left: ignored) */
 	if (header.type == DISTRIBUTED_MESSAGE_VEHICLE_RIDING_MAP_OPENCE)
-	{
-		word map;
-
-		if (machine_index == NONE && size >= sizeof(header) + sizeof(map))
-		{
-			csmemcpy(&map, (byte const *)message + sizeof(header), sizeof(map));
-			if (map == 2)
-				distributed_riding_leave("the map's");
-		}
 		return;
-	}
 	/* a tick's messages in one: each as if it came alone */
 	if (header.type == _distributed_message_batch)
 	{
@@ -5383,6 +5359,21 @@ void network_distributed_handle_message(
 		}
 		return;
 	}
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_CROSSPLAY)
+	/* oxbox: someone else's PC game on a linked map (hmp_links.c): the host's message with the Xbox map's tag IDs (a
+	batch's each come here alone) */
+	if (machine_index == NONE && linked_map_active() && distributed_message_names_tags(message, size))
+	{
+		void *translated = linked_map_scratch(size);
+
+		if (!translated)
+			return;
+		csmemcpy(translated, message, size);
+		distributed_translate_linked_tags(translated, size, TRUE);
+		message = (word const *)translated;
+		entries = (byte const *)message + sizeof(header);
+	}
+#endif
 	/* (entries of a size of their own: their least here, and each read no
 	further than the message's end) */
 	switch (header.type)

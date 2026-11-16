@@ -37,6 +37,25 @@ The hash is map sharing's (`port/linux/game/map_share_files.c`): BLAKE2b-256 of 
 file's size (4 bytes, little-endian), and the BLAKE2b-256 of each 256 KiB piece in order, as 64 lowercase hex digits.
 Its first 32 bits are the version the game's settings carry.
 
+An MCC map's link names it on an `mcc` line in place of the `ce` line (the game's settings carry OpenCE's MCC
+identity, network version 42 on; its tag lines' first ID is the MCC map's as OpenCE's game has it):
+
+```
+mcc  mcc_maps\<package>\<level>   <content sha256>   <metadata sha256, or ->   <checksum, 8 hex digits>
+```
+
+## An Xbox in someone else's game (port/linux/game/hmp_links.c, Online)
+
+An Xbox needs no server of ours: a PC game anyone hosts (OpenCE's dedicated server, a PC) on a Custom Edition or MCC
+map is listed and joined when one of the Xbox's folder maps has a link naming that map. A Custom Edition map matches
+by its name and version (the hash's first 32 bits), an MCC map by its name, checksum (the game's version) and content
+SHA-256 (and metadata SHA-256 unless the link says `-`). The Xbox joins on its port, reports the PC map as precached
+(the name the host compares), and translates the host's tag IDs itself, both ways, from the link's tag lines (read as
+the map loads, in memory the map's AI leaves, checked tag by tag against the loaded port: the `xbox` line's size and
+hash aren't used, as Halo Map Porter writes them before its map's last steps). No link at the host's version: the
+Xbox doesn't join, and says why. On a server of ours with the link, the server translates as before (the Xbox is told
+the port's name and does nothing of its own).
+
 ## What the server does (port/linux/game/linked_maps.c)
 
 - An Xbox's copy of the game's settings names the Xbox map ("+folder") at its version as the Xbox works it out

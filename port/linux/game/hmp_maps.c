@@ -1224,6 +1224,10 @@ static boolean hmp_menus_running(void)
 	return !map || !map[0] || !ieq(map, "ui");
 }
 
+/* how many times the maps were scanned (hmp_links.c lists their links again after one) */
+static long hmp_maps_scans;
+long hmp_maps_generation(void) { return hmp_maps_scans; }
+
 void hmp_maps_scan(void)
 {
 	long i, j, n, old_count = hmp_maps_globals.map_count;
@@ -1237,6 +1241,7 @@ void hmp_maps_scan(void)
 		for (i = 0; i < PREVIEW_SLOTS; i++) hmp_maps_globals.previews[i].map_index = NONE;
 	}
 	hmp_maps_globals.scanned = TRUE;
+	hmp_maps_scans++;
 	previews_forget(NONE);
 	info_forget(NONE);
 	hmp_maps_globals.maps = NULL;

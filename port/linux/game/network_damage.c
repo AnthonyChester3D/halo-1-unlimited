@@ -554,7 +554,8 @@ static long damage_replaying_killer_score;
 
 /* ---------- common */
 
-#if !defined(HALO_XBOX_TARGET)
+/* (the server's for its Xboxes: linked_maps.c; the crossplay Xbox's for itself: hmp_links.c) */
+#if !defined(HALO_XBOX_TARGET) || defined(OXBOX_CROSSPLAY)
 /* oxbox: a linked map's tag IDs in the damage messages (the damage effect's), the Custom Edition map's as the Xbox
 map's or back (network_distributed.c's distributed_translate_linked_tags, linked_maps.c) */
 void network_damage_translate_tags(
