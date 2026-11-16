@@ -792,6 +792,23 @@ static void oxbox_advertised_linked_map(
 	unsigned long version = 0;
 	long index, length;
 
+#if defined(OXBOX_CROSSPLAY)
+	/* (a PC game on a Custom Edition or MCC map this Xbox has a port of, linked: by the port, hmp_links.c) */
+	if (!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & OXBOX_ADVERTISED_XBOX_FLAG))
+	{
+		extern boolean hmp_links_shown_name(char const *map, char *name, long size);
+		extern unsigned long hmp_share_map_version(char const *level_name);
+		char port[64];
+
+		if (hmp_links_shown_name(advertisement->map.name, port, sizeof(port)))
+		{
+			csmemset(advertisement->map.name, 0, sizeof(advertisement->map.name));
+			csstrncpy(advertisement->map.name, port, sizeof(advertisement->map.name) - 1);
+			advertisement->map.version = (long)hmp_share_map_version(port);
+		}
+		return;
+	}
+#endif
 	if (!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & OXBOX_ADVERTISED_XBOX_FLAG) ||
 		reserved[HALO_PORT_ADVERTISED_LINKED_KEY_OFFSET] != '+')
 	{
@@ -1099,6 +1116,14 @@ static boolean crossplay_settings_to_xbox(struct network_game *game)
 	/* (a PC game's most players, up to 128: the Xbox's 16 here; it leaves if the game grows past them) */
 	if (game->maximum_players > HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 		game->maximum_players = HALO_PORT_MAXIMUM_NETWORK_PLAYERS;
+	/* (a Custom Edition or MCC map's game: played on this Xbox's port of it, the link's (port/linux/game/hmp_links.c);
+	none at the game's version, not joined) */
+	{
+		extern boolean hmp_links_join(struct network_game *game, byte const *mcc);
+
+		if (!hmp_links_join(game, pc + PC_GAME_MCC_IDENTITY_OFFSET))
+			return FALSE;
+	}
 	return TRUE;
 }
 
@@ -1126,7 +1151,7 @@ static boolean crossplay_receive_game_settings_piece(
 #if defined(OXBOX_NET_TEST)
 		extern void oxbox_net_test_notice(const char *line);
 
-		oxbox_net_test_notice("JOIN REFUSED: PC game too big or OpenCE mode");
+		oxbox_net_test_notice("JOIN REFUSED: PC game too big, OpenCE mode, or no link for its map");
 #endif
 		return FALSE;
 	}

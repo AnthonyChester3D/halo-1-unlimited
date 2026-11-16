@@ -565,8 +565,11 @@ int oxbox_online_stock_map(char const *map);
 int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind)
 {
 	/* (its kind: none, or an OpenCE gametype's this build plays: a mode it knows, Hardcore or not, game_modes.h) */
+	extern boolean hmp_links_listed(char const *map);
+
+	/* (or a Custom Edition or MCC map this Xbox has a port of, linked: hmp_links.c) */
 	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= 16 &&
-		oxbox_online_stock_map(map);
+		(oxbox_online_stock_map(map) || hmp_links_listed(map));
 }
 
 /* whether a map is one of the Xbox's 13 multiplayer levels (by its name, or its path's last part), and no folder map
@@ -649,6 +652,12 @@ static int listed_rows(int known_count, void **known)
 		else
 			row_name(row->game_name, NUMBEROF(row->game_name), game->failed ? "(failed) " : "", game->name);
 		strncpy(row->map_name, game->map, sizeof(row->map_name) - 1);
+		/* (a PC game on a linked map: by this Xbox's port's name, hmp_links.c) */
+		{
+			extern boolean hmp_links_shown_name(char const *map, char *name, long size);
+
+			hmp_links_shown_name(game->map, row->map_name, sizeof(row->map_name));
+		}
 		row->engine_type = game->engine_type;
 		row->machine_count = game->player_count;
 		row->player_count = game->player_count;

@@ -964,6 +964,101 @@ sent at the tick's end (or sooner, full). A message of entries of
 entry_size bytes each is split where a batch is full, the rest going in
 the next; one not to be split (entry_size 0) goes whole, and one larger
 than a datagram, which is a mistake, is dropped. */
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_CROSSPLAY)
+/* (the crossplay Xbox's side: hmp_links.c, someone else's PC game on a linked map) */
+/* oxbox: a linked map's tag IDs in a message (linked_maps.c), the Custom Edition map's (the host's) as the Xbox map's
+(to_xbox: the host's to an Xbox) or back (an Xbox's to the host): the entries of the kinds of message that name tags,
+each kind's own module translating them; nothing for the rest */
+void network_coop_translate_tags(byte type, void *entries, short count, boolean to_xbox);
+void network_damage_translate_tags(byte type, void *entries, short count, boolean to_xbox);
+void network_objects_translate_tags(byte type, void *entries, short count, boolean to_xbox);
+boolean linked_map_active(void);
+void *linked_map_scratch(word size);
+
+/* whether a message's kind names tags (and so is translated) */
+boolean distributed_message_names_tags(
+	void const *message,
+	word size)
+{
+	struct distributed_message_header const *header = message;
+
+	if (size < sizeof(*header))
+		return FALSE;
+	switch (header->type)
+	{
+	case _distributed_message_object_changes:
+	case _distributed_message_pickups:
+	case _distributed_message_damage_events:
+	case _distributed_message_hit_reports:
+	case _distributed_message_coop_events:
+	case _distributed_message_coop_device_groups:
+	case _distributed_message_coop_object_transforms:
+	case _distributed_message_coop_object_looks:
+	case _distributed_message_coop_device_states:
+		return TRUE;
+	}
+	return FALSE;
+}
+
+void distributed_translate_linked_tags(
+	void *message,
+	word size,
+	boolean to_xbox)
+{
+	struct distributed_message_header *header = message;
+	byte *entries = (byte *)message + sizeof(*header);
+	word entry_size;
+	short count;
+
+	if (!distributed_message_names_tags(message, size))
+		return;
+	count = header->count;
+	switch (header->type)
+	{
+	case _distributed_message_object_changes: entry_size = network_objects_entry_size(header->type); break;
+	case _distributed_message_pickups: entry_size = sizeof(struct distributed_pickup); break;
+	case _distributed_message_damage_events:
+	case _distributed_message_hit_reports: entry_size = network_damage_entry_size(header->type); break;
+	case _distributed_message_coop_events: entry_size = network_coop_event_entry_size(); break;
+	case _distributed_message_coop_device_groups: entry_size = network_coop_device_group_entry_size(); break;
+	case _distributed_message_coop_object_transforms: entry_size = network_coop_object_transform_entry_size(); break;
+	case _distributed_message_coop_object_looks: entry_size = network_coop_object_look_entry_size(); break;
+	default: entry_size = network_coop_device_state_entry_size(); break;
+	}
+	/* (no further than the message's end) */
+	if (!entry_size || size < sizeof(*header) + count * entry_size)
+		count = (short)((size - sizeof(*header)) / (entry_size ? entry_size : 1));
+	switch (header->type)
+	{
+	case _distributed_message_object_changes:
+		network_objects_translate_tags(header->type, entries, count, to_xbox);
+		break;
+	case _distributed_message_pickups:
+	{
+		long linked_map_tag_to_xbox(long tag);
+		long linked_map_tag_to_ce(long tag);
+		short index;
+
+		for (index = 0; index < count; index++)
+		{
+			struct distributed_pickup *pickup = (struct distributed_pickup *)entries + index;
+
+			pickup->definition_index = to_xbox ? linked_map_tag_to_xbox(pickup->definition_index) :
+				linked_map_tag_to_ce(pickup->definition_index);
+		}
+		break;
+	}
+	case _distributed_message_damage_events:
+	case _distributed_message_hit_reports:
+		network_damage_translate_tags(header->type, entries, count, to_xbox);
+		break;
+	default:
+		network_coop_translate_tags(header->type, entries, count, to_xbox);
+		break;
+	}
+}
+#endif
+
 static void distributed_batch_add(
 	short sender,
 	void const *message,
@@ -1080,6 +1175,15 @@ void distributed_send(
 		break;
 	}
 	case _distributed_to_clients_reliably: network_distributed_server_send_to_all_reliably(message, size); break;
+	}
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_CROSSPLAY)
+	/* oxbox: someone else's PC game on a linked map (hmp_links.c): this Xbox's message with the PC map's tag IDs (the
+	caller's own copy: none use it after) */
+	if ((destination == _distributed_to_host || destination == _distributed_to_host_reliably) && linked_map_active())
+		distributed_translate_linked_tags(message, size, FALSE);
+#endif
+	switch (destination)
+	{
 	case _distributed_to_host:
 		distributed_batch_add(HOST_SENDER, message, size, distributed_entry_size(count, size));
 		break;
@@ -4516,6 +4620,21 @@ void network_distributed_handle_message(
 		}
 		return;
 	}
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_CROSSPLAY)
+	/* oxbox: someone else's PC game on a linked map (hmp_links.c): the host's message with the Xbox map's tag IDs (a
+	batch's each come here alone) */
+	if (machine_index == NONE && linked_map_active() && distributed_message_names_tags(message, size))
+	{
+		void *translated = linked_map_scratch(size);
+
+		if (!translated)
+			return;
+		csmemcpy(translated, message, size);
+		distributed_translate_linked_tags(translated, size, TRUE);
+		message = (word const *)translated;
+		entries = (byte const *)message + sizeof(header);
+	}
+#endif
 	/* (entries of a size of their own: their least here, and each read no
 	further than the message's end) */
 	switch (header.type)

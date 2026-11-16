@@ -2863,6 +2863,15 @@ static void network_game_client_update_precache_status(
 				map_is_precached.map_name,
 				map_name,
 				sizeof(map_is_precached.map_name));
+#if defined(OXBOX_CROSSPLAY)
+			/* oxbox: a PC game on a linked map: the PC map's name, which the host compares with its own (its port
+			loaded here: port/linux/game/hmp_links.c) */
+			{
+				extern boolean hmp_links_pc_name(char const *map, char *name, long size);
+
+				hmp_links_pc_name(map_name, map_is_precached.map_name, sizeof(map_is_precached.map_name));
+			}
+#endif
 
 			message = create_network_game_message(
 				_message_client_map_is_precached_pregame,
