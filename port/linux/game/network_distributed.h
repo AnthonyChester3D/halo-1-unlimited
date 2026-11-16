@@ -125,7 +125,10 @@ enum
 	_distributed_message_map_share_offer = 84,
 	_distributed_message_map_share_sources = 85,
 	_distributed_message_map_share_progress = 86,
-	/* (OpenCE's 87-95 and 97-106, which this build drops as kinds it does not know: chat, aim assist, shield effects,
+	/* OpenCE's text chat line to the host (network_chat.c's struct distributed_chat_line), which this build sends only
+	as a dedicated server's "!switch": its pause menu's SWITCH TEAM (network_distributed_switch_team) */
+	_distributed_message_chat_up = 87,
+	/* (OpenCE's 88-95 and 97-106, which this build drops as kinds it does not know: chat, aim assist, shield effects,
 	the client's build, fire origins, map votes, MCC's) */
 	/* the host's checkpoint boundary: the header alone, its epoch the new one (network version 42) */
 	_distributed_message_checkpoint = 96,
@@ -228,6 +231,9 @@ void distributed_send_to_machine_reliably(long machine_index, void *message, byt
 void distributed_checkpoint_to_machine(long machine_index);
 /* (a client, each frame) leaves a game that plays OpenCE's vehicle riding */
 void network_distributed_riding_check(void);
+/* (a client) whether a local player may ask a dedicated server to change their team, and the asking */
+boolean network_distributed_switch_team_offered(void);
+boolean network_distributed_switch_team(short local_player_index);
 /* a client: whether the snapshot of this epoch has all come (the objects synchronized), so its predictions count */
 boolean distributed_checkpoint_ready(void);
 /* the player at an absolute index, or NULL */

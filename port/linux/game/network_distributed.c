@@ -4432,6 +4432,53 @@ void network_distributed_riding_check(
 		distributed_riding_leave("the game's");
 }
 
+/* ---------- SWITCH TEAM: a dedicated server's player changes team by saying "!switch" in its text chat (OpenCE's
+server_team_switch.c: the server decides, and kills a living player for it, without a score). This build has no chat:
+its pause menu's SWITCH TEAM sends that one line (hmp_game.c). Only to a dedicated server's team game (a host with
+players of its own would show the line to everyone) */
+
+struct distributed_switch_team_message
+{
+	struct distributed_message_header header;
+	/* (OpenCE's struct distributed_chat_line: the sender's absolute index, flags, pad, the text) */
+	byte player_index;
+	byte flags;
+	byte pad[2];
+	char text[64];
+};
+
+typedef char distributed_switch_team_message_size_assert[
+	sizeof(struct distributed_switch_team_message) == sizeof(struct distributed_message_header) + 68 ? 1 : -1];
+
+boolean network_distributed_switch_team_offered(
+	void)
+{
+#if defined(OXBOX_CROSSPLAY)
+	extern boolean oxbox_crossplay_joined_dedicated;
+
+	return game_connection() == _game_connection_network_client && oxbox_crossplay_joined_dedicated &&
+		game_engine_running() && game_engine_has_teams() && distributed_checkpoint_synchronized;
+#else
+	return FALSE;
+#endif
+}
+
+boolean network_distributed_switch_team(
+	short local_player_index)
+{
+	struct distributed_switch_team_message message;
+	long player_index = local_player_get_player_index(local_player_index);
+
+	if (!network_distributed_switch_team_offered() || player_index == NONE)
+		return FALSE;
+	csmemset(&message, 0, sizeof(message));
+	message.player_index = distributed_player_to_byte(player_index);
+	csstrcpy(message.text, "!switch");
+	distributed_send(&message, _distributed_message_chat_up, 1, (word)sizeof(message), _distributed_to_host_reliably);
+	error(_error_silent, "network: asked the server to switch the team of local player %d", local_player_index);
+	return TRUE;
+}
+
 /* a message of the distributed kind; machine_index is the sender's on the
 host, NONE on a client */
 void network_distributed_handle_message(
@@ -4580,8 +4627,6 @@ void network_distributed_handle_message(
 	default:
 		if (game_connection() != _game_connection_network_client)
 			return;
-		/* (the host's latest tick, which this client's input messages tell
-		it back) */
 		break;
 	}
 	if (!distributed_message_epoch_valid(machine_index, &header, size))

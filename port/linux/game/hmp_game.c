@@ -26,6 +26,10 @@ dialog opens after the menus are done with that event (hmp_game_after_dispatch),
 #include "game/game_engine.h"
 #include "hmp.h"
 
+/* (network_distributed.c: SWITCH TEAM, a dedicated server's client's) */
+boolean network_distributed_switch_team_offered(void);
+boolean network_distributed_switch_team(short local_player_index);
+
 #include <string.h>
 #include <xtl.h>
 
@@ -42,7 +46,8 @@ enum
 	_string_options_header,              /* OPTIONS */
 	_string_key_done,                    /* =DONE */
 	_string_key_change,                  /* =CHANGE */
-	NUMBER_OF_GAME_STRINGS = 9,
+	_string_switch_item,                 /* SWITCH TEAM (a dedicated server's client's, in END GAME's place) */
+	NUMBER_OF_GAME_STRINGS = 10,
 	_string_options_text = HMP_STRING_BASE + NUMBER_OF_GAME_STRINGS   /* the options dialog's text (options_text) */
 };
 
@@ -105,12 +110,14 @@ void game_engine_end_game_now(void);
 /* ---------- globals */
 
 static char const *const game_strings[NUMBER_OF_GAME_STRINGS] =
-	{ "END GAME", "Are you sure?", "END GAME?", "=RESUME", "=QUIT", "OPTIONS", "OPTIONS", "=DONE", "=CHANGE" };
+	{ "END GAME", "Are you sure?", "END GAME?", "=RESUME", "=QUIT", "OPTIONS", "OPTIONS", "=DONE", "=CHANGE",
+	  "SWITCH TEAM" };
 
 static struct
 {
 	wchar_t strings[NUMBER_OF_GAME_STRINGS][16];
 	long item[4];                        /* the END GAME item's datum, each local player's (0: none) */
+	boolean switch_item[4];              /* ... which is SWITCH TEAM (a dedicated server's client's) */
 	boolean pending[4];                  /* A on the item: the dialog opens after this event */
 	struct widget_instance *dialog[4], *dialog_text[4];
 	long dialog_datum[4];
@@ -699,11 +706,14 @@ void hmp_game_pause_menu_opened(struct widget_instance *root, short local)
 	struct widget_instance *list = NULL, *c, *leave = NULL, *first, *item, *bar = NULL, *box = NULL;
 	char const *n;
 	short step, h;
+	boolean switch_team;
 	if (local < 0 || local > 3 || !root) return;
 	hmp_game_globals.item[local] = 0;
 	for (n = root->name ? root->name : ""; *n && !(n[0] >= '1' && n[0] <= '4' && n[1] == 'p' && n[2] == '_'); n++) ;
 	hmp_game_globals.size[local] = *n ? *n : '1';
-	if (!can_end()) return;
+	/* (the host's END GAME; or, a dedicated server's client in a team game, SWITCH TEAM in its place) */
+	switch_team = !can_end() && network_distributed_switch_team_offered();
+	if (!can_end() && !switch_team) return;
 	for (c = root->child; c; c = c->next)
 	{
 		if (c->type == 3 && !list) list = c;          /* the column list */
@@ -727,7 +737,7 @@ void hmp_game_pause_menu_opened(struct widget_instance *root, short local)
 	if (step <= 0 || step > 80) step = 35;
 	item->horizontal_offset = leave->horizontal_offset;
 	item->vertical_offset = (short)(leave->vertical_offset + step);
-	item->text_box.string_list_index = _string_item;
+	item->text_box.string_list_index = switch_team ? _string_switch_item : _string_item;
 	h = bounds_height(leave);
 	if (box && bar)                                  /* the rows centred between the box's top and the line over the buttons */
 	{
@@ -746,7 +756,9 @@ void hmp_game_pause_menu_opened(struct widget_instance *root, short local)
 		}
 	}
 	hmp_game_globals.item[local] = item->definition_tag_index;
-	hmp_log("game: END GAME added to the host's pause menu");
+	hmp_game_globals.switch_item[local] = switch_team;
+	hmp_log(switch_team ? "game: SWITCH TEAM added to the pause menu (a dedicated server's team game)" :
+		"game: END GAME added to the host's pause menu");
 }
 
 /* LEAVE GAME's A: TRUE when it was our END GAME item (the dialog opens after this event) */
@@ -754,6 +766,12 @@ boolean hmp_game_handles_leave(struct widget_instance *w)
 {
 	short local = w ? w->local_player_index : NONE;
 	if (local < 0 || local > 3 || !hmp_game_globals.item[local] || w->definition_tag_index != hmp_game_globals.item[local]) return FALSE;
+	/* (SWITCH TEAM: the server's answer is the player's next spawn on the other team, or nothing: no dialog) */
+	if (hmp_game_globals.switch_item[local])
+	{
+		network_distributed_switch_team(local);
+		return TRUE;
+	}
 	hmp_game_globals.pending[local] = TRUE;
 	return TRUE;
 }
