@@ -426,7 +426,7 @@ static struct
 } damage_explosions[MAXIMUM_TRACKED_PLAYERS];
 /* ... where each player's unit and vehicle were at each of the last ticks
 (and whether they drove it) */
-static struct damage_history_tick
+struct damage_history_tick
 {
 	long time;
 	struct
@@ -436,11 +436,31 @@ static struct damage_history_tick
 		real speed;
 		boolean driving;
 	} objects[MAXIMUM_TRACKED_PLAYERS][2];
-} damage_history[TARGET_HISTORY_TICKS];
+};
 /* ... and where each player's living unit was every few ticks, longer (NONE
 for no time: none), how fast it or its vehicle went, and the size of the
 vehicle it rode */
-static struct damage_trail_point
+#if defined(HALO_XBOX_TARGET)
+/* (oxbox: the vehicle's size, the eye's height and the muzzle (from the position) in hundredths of a world unit,
+32 bytes a point, not 44: the host's three fit in 4 pages, not 5) */
+#define TRAIL_SHORT_SCALE 100.0f
+#define TRAIL_SHORT(value) ((short)PIN((value) * TRAIL_SHORT_SCALE, -32767.0f, 32767.0f))
+struct damage_trail_point
+{
+	long time;
+	real_point3d position;
+	real speed;
+	short radius;
+	short eye;
+	short muzzle[3];
+	boolean mounted;
+};
+#define TRAIL_RADIUS(point) ((real)(point)->radius / TRAIL_SHORT_SCALE)
+#define TRAIL_EYE(point) ((real)(point)->eye / TRAIL_SHORT_SCALE)
+#define TRAIL_SET_RADIUS(point, value) ((point)->radius = TRAIL_SHORT(value))
+#define TRAIL_SET_EYE(point, value) ((point)->eye = TRAIL_SHORT(value))
+#else
+struct damage_trail_point
 {
 	long time;
 	real_point3d position;
@@ -449,18 +469,74 @@ static struct damage_trail_point
 	real eye;
 	boolean mounted;
 	real_point3d muzzle;
-} damage_trails[MAXIMUM_TRACKED_PLAYERS][PLAYER_TRAIL_POINTS];
+};
+#define TRAIL_RADIUS(point) ((point)->radius)
+#define TRAIL_EYE(point) ((point)->eye)
+#define TRAIL_SET_RADIUS(point, value) ((point)->radius = (value))
+#define TRAIL_SET_EYE(point, value) ((point)->eye = (value))
+#endif
+
+/* the trail point's muzzle */
+static void trail_muzzle(
+	struct damage_trail_point const *point,
+	real_point3d *muzzle)
+{
+#if defined(HALO_XBOX_TARGET)
+	muzzle->x = point->position.x + (real)point->muzzle[0] / TRAIL_SHORT_SCALE;
+	muzzle->y = point->position.y + (real)point->muzzle[1] / TRAIL_SHORT_SCALE;
+	muzzle->z = point->position.z + (real)point->muzzle[2] / TRAIL_SHORT_SCALE;
+#else
+	*muzzle = point->muzzle;
+#endif
+}
+
+/* ... set (after its position) */
+static void trail_set_muzzle(
+	struct damage_trail_point *point,
+	real_point3d const *muzzle)
+{
+#if defined(HALO_XBOX_TARGET)
+	point->muzzle[0] = TRAIL_SHORT(muzzle->x - point->position.x);
+	point->muzzle[1] = TRAIL_SHORT(muzzle->y - point->position.y);
+	point->muzzle[2] = TRAIL_SHORT(muzzle->z - point->position.z);
+#else
+	point->muzzle = *muzzle;
+#endif
+}
 /* ... what each weapon or grenade deals, as the tags have it (their walk
 is long): the hits a second of a damage effect from it, how it deals it
 (the _damage_source flags), and how far from its firer */
-static struct damage_rate_cache_entry
+struct damage_rate_cache_entry
 {
 	long source_index;
 	long damage_index;
 	real rate;
 	byte kinds;
 	struct damage_reach reach;
-} damage_rate_cache[DAMAGE_RATE_CACHE_SIZE];
+};
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the three are the host's alone, and the Xbox lends them the memory only while it hosts a network game on
+a map that isn't a campaign level (network_damage_check_memory: the AI's pools' room that map doesn't use, game
+state.c, which goes to the texture cache otherwise). A client, split screen, the campaign (co-op hosted too) and
+the menus have that memory for textures. With none (damage_check NULL), the host takes its clients' hits without
+the checks of where the shooter was (what they could fire from, a line to the target) and where a player target
+was (it is where it is now), and sends damage to a unit to every machine. */
+static struct damage_check
+{
+	struct damage_history_tick history[TARGET_HISTORY_TICKS];
+	struct damage_trail_point trails[MAXIMUM_TRACKED_PLAYERS][PLAYER_TRAIL_POINTS];
+	struct damage_rate_cache_entry rate_cache[DAMAGE_RATE_CACHE_SIZE];
+} *damage_check;
+#define damage_history (damage_check->history)
+#define damage_trails (damage_check->trails)
+#define damage_rate_cache (damage_check->rate_cache)
+#define DAMAGE_CHECKED (damage_check != NULL)
+#else
+static struct damage_history_tick damage_history[TARGET_HISTORY_TICKS];
+static struct damage_trail_point damage_trails[MAXIMUM_TRACKED_PLAYERS][PLAYER_TRAIL_POINTS];
+static struct damage_rate_cache_entry damage_rate_cache[DAMAGE_RATE_CACHE_SIZE];
+#define DAMAGE_CHECKED TRUE
+#endif
 /* ... the players each damage event of this tick goes to the machines of
 (NONE for every machine), and the machine of its owner */
 static struct
@@ -1174,6 +1250,8 @@ static real distributed_source_deals(
 	unsigned long hash = ((unsigned long)source_index * 2654435761u) ^ ((unsigned long)damage_index * 40503u);
 	short probe;
 
+	if (!DAMAGE_CHECKED)
+		return distributed_source_deals_uncached(source_index, damage_index, grenade, kinds, reach);
 	for (probe = 0; probe < 16; probe++)
 	{
 		struct damage_rate_cache_entry *entry =
@@ -1400,9 +1478,12 @@ drive it), noted; and every few ticks where their unit is */
 static void distributed_note_targets(
 	void)
 {
-	struct damage_history_tick *tick = &damage_history[game_time_get() & (TARGET_HISTORY_TICKS - 1)];
+	struct damage_history_tick *tick;
 	short player_index;
 
+	if (!DAMAGE_CHECKED)
+		return;
+	tick = &damage_history[game_time_get() & (TARGET_HISTORY_TICKS - 1)];
 	tick->time = game_time_get();
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 	{
@@ -1452,9 +1533,9 @@ static void distributed_note_targets(
 
 					point->position = tick->objects[player_index][0].position;
 					point->speed = tick->objects[player_index][0].speed;
-					point->radius = 0.0f;
+					TRAIL_SET_RADIUS(point, 0.0f);
 					unit_get_camera_position(unit_index, &camera);
-					point->eye = camera.z - point->position.z;
+					TRAIL_SET_EYE(point, camera.z - point->position.z);
 					point->mounted = FALSE;
 					if (tick->objects[player_index][1].object_index != NONE)
 					{
@@ -1463,11 +1544,15 @@ static void distributed_note_targets(
 							vehicle_index, _object_mask_vehicle);
 
 						point->speed = MAX(point->speed, tick->objects[player_index][1].speed);
-						point->radius = object_get(vehicle_index)->object.bounding_sphere_radius;
+						TRAIL_SET_RADIUS(point, object_get(vehicle_index)->object.bounding_sphere_radius);
 						if (vehicle && (vehicle->unit.driver_object_index == unit_index ||
 							vehicle->unit.gunner_object_index == unit_index))
 						{
-							point->mounted = distributed_vehicle_muzzle(vehicle_index, &point->muzzle);
+							real_point3d muzzle;
+
+							point->mounted = distributed_vehicle_muzzle(vehicle_index, &muzzle);
+							if (point->mounted)
+								trail_set_muzzle(point, &muzzle);
 						}
 					}
 				}
@@ -1587,6 +1672,8 @@ static short distributed_target_seen(
 	short column_slot = 0;
 	long back;
 
+	if (!DAMAGE_CHECKED)
+		return NONE;
 	for (back = 0; back <= ticks && back < TARGET_HISTORY_TICKS; back++)
 	{
 		long time = game_time_get() - back;
@@ -1647,6 +1734,8 @@ static boolean distributed_player_was_near(
 {
 	long back;
 
+	if (!DAMAGE_CHECKED)
+		return TRUE;
 	for (back = 0; back <= ticks && back < TARGET_HISTORY_TICKS; back++)
 	{
 		long time = game_time_get() - back;
@@ -1678,6 +1767,8 @@ static boolean distributed_player_drove_into(
 {
 	long back;
 
+	if (!DAMAGE_CHECKED)
+		return TRUE;
 	for (back = 0; back <= ticks && back < TARGET_HISTORY_TICKS; back++)
 	{
 		long time = game_time_get() - back;
@@ -1723,6 +1814,8 @@ static boolean distributed_player_could_fire(
 		PLAYER_TRAIL_REPORT_SLACK_TICKS;
 	short index;
 
+	if (!DAMAGE_CHECKED)
+		return TRUE;
 	if (host_time < latest_made)
 		host_time = latest_made;
 	if (!(ticks <= (real)PLAYER_TRAIL_TICKS))
@@ -1735,7 +1828,7 @@ static boolean distributed_player_could_fire(
 
 		if (trail_point->time == NONE || trail_point->time < earliest || trail_point->time > game_time_get())
 			continue;
-		distance = reach->distance + REPORT_RANGE_TOLERANCE + trail_point->radius + trail_point->speed *
+		distance = reach->distance + REPORT_RANGE_TOLERANCE + TRAIL_RADIUS(trail_point) + trail_point->speed *
 			(reach->carried_ticks + PLAYER_TRAIL_INTERVAL_TICKS + TARGET_HISTORY_SLACK_TICKS);
 		if (distributed_distance_squared(&trail_point->position, point) <= distance * distance)
 			return TRUE;
@@ -1976,6 +2069,8 @@ static boolean distributed_report_line_of_sight(
 	real_point3d impact = *impact_point;
 	struct collision_result collision;
 
+	if (!DAMAGE_CHECKED)
+		return TRUE;
 	{
 		real distance = (real)sqrt(distributed_distance_squared(centre, impact_point));
 
@@ -1995,17 +2090,20 @@ static boolean distributed_report_line_of_sight(
 		(bucket + 1) * PLAYER_TRAIL_INTERVAL_TICKS > earliest && traced < REPORT_LINE_OF_SIGHT_POINTS; bucket--)
 	{
 		struct damage_trail_point const *trail_point = &damage_trails[player_index][bucket & (PLAYER_TRAIL_POINTS - 1)];
-		real_point3d eye;
+		real_point3d eye, muzzle;
 
 		if (trail_point->time == NONE || trail_point->time / PLAYER_TRAIL_INTERVAL_TICKS != bucket)
 			continue;
 		traced++;
 		eye = trail_point->position;
-		eye.z += trail_point->eye;
+		eye.z += TRAIL_EYE(trail_point);
 		if (distributed_report_sight_clear(flags, &eye, &impact, centre))
 			return TRUE;
-		if (trail_point->mounted && !collision_test_line(flags, &eye, &trail_point->muzzle, NONE, &collision) &&
-			distributed_report_sight_clear(flags, &trail_point->muzzle, &impact, centre))
+		if (!trail_point->mounted)
+			continue;
+		trail_muzzle(trail_point, &muzzle);
+		if (!collision_test_line(flags, &eye, &muzzle, NONE, &collision) &&
+			distributed_report_sight_clear(flags, &muzzle, &impact, centre))
 		{
 			return TRUE;
 		}
@@ -2296,7 +2394,8 @@ blow to all (NONE) */
 static void distributed_note_event_destinations(
 	void)
 {
-	struct damage_history_tick const *tick = &damage_history[game_time_get() & (TARGET_HISTORY_TICKS - 1)];
+	struct damage_history_tick const *tick =
+		DAMAGE_CHECKED ? &damage_history[game_time_get() & (TARGET_HISTORY_TICKS - 1)] : NULL;
 	short index;
 
 	for (index = 0; index < damage_event_count; index++)
@@ -2349,6 +2448,12 @@ static void distributed_note_event_destinations(
 			}
 			if (unit_player_index != NONE)
 				player_indices[(*count)++] = (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(unit_player_index);
+		}
+		/* (no history: every machine) */
+		if (!tick)
+		{
+			*count = NONE;
+			continue;
 		}
 		if (tick->time != game_time_get())
 			continue;
@@ -2655,6 +2760,55 @@ void network_damage_note_grenade(
 	damage_players[player_index].throw_types[slot] = grenade_type;
 }
 
+/* the host's history, trails and rate cache emptied (none: nothing) */
+static void distributed_check_clear(
+	void)
+{
+	short index;
+
+	if (!DAMAGE_CHECKED)
+		return;
+	for (index = 0; index < TARGET_HISTORY_TICKS; index++)
+		damage_history[index].time = NONE;
+	for (index = 0; index < MAXIMUM_TRACKED_PLAYERS; index++)
+	{
+		short point;
+
+		for (point = 0; point < PLAYER_TRAIL_POINTS; point++)
+			damage_trails[index][point].time = NONE;
+	}
+	for (index = 0; index < DAMAGE_RATE_CACHE_SIZE; index++)
+		damage_rate_cache[index].source_index = NONE;
+}
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the memory for the host's history, trails and rate cache, taken from the start of the AI's pools' room
+the map leaves (*idle, whole 16 KB pages, before it goes to the texture cache: cache_files.c) while this Xbox hosts
+a network game (game_connection), none otherwise; called as each map loads */
+void network_damage_check_memory(
+	void **idle,
+	long *idle_size)
+{
+	static boolean logged = FALSE;
+	long size = (long)((sizeof(struct damage_check) + 0x3FFF) & ~0x3FFFUL);
+
+	damage_check = NULL;
+	if (idle && *idle && *idle_size >= size && game_connection() == _game_connection_network_server)
+	{
+		damage_check = (struct damage_check *)*idle;
+		*idle = (byte *)*idle + size;
+		*idle_size -= size;
+		distributed_check_clear();
+	}
+	if (idle && logged != DAMAGE_CHECKED)
+	{
+		logged = DAMAGE_CHECKED;
+		error(_error_silent, "damage: the host's line-of-sight checks %s (%ld KB)", DAMAGE_CHECKED ? "on" : "off",
+			size / 1024);
+	}
+}
+#endif
+
 void network_damage_new_game(
 	void)
 {
@@ -2665,8 +2819,7 @@ void network_damage_new_game(
 	damage_dealing_report = FALSE;
 	damage_replaying_kill = FALSE;
 	csmemset(damage_players, 0, sizeof(damage_players));
-	for (player_index = 0; player_index < TARGET_HISTORY_TICKS; player_index++)
-		damage_history[player_index].time = NONE;
+	distributed_check_clear();
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 	{
 		short index;
@@ -2682,9 +2835,5 @@ void network_damage_new_game(
 		damage_players[player_index].hit_seconds = HIT_REPORT_BURST_SECONDS;
 		damage_explosions[player_index].time = NONE;
 		damage_explosions[player_index].count = 0;
-		for (index = 0; index < PLAYER_TRAIL_POINTS; index++)
-			damage_trails[player_index][index].time = NONE;
 	}
-	for (player_index = 0; player_index < DAMAGE_RATE_CACHE_SIZE; player_index++)
-		damage_rate_cache[player_index].source_index = NONE;
 }
