@@ -279,6 +279,9 @@ void distributed_send_to_machine_reliably(long machine_index, void *message, byt
 void distributed_checkpoint_to_machine(long machine_index);
 /* (a client, each frame) leaves a game that plays OpenCE's vehicle riding */
 void network_distributed_riding_check(void);
+/* (a client) whether a local player may ask a dedicated server to change their team, and the asking */
+boolean network_distributed_switch_team_offered(void);
+boolean network_distributed_switch_team(short local_player_index);
 /* a client: whether the snapshot of this epoch has all come (the objects synchronized), so its predictions count */
 boolean distributed_checkpoint_ready(void);
 /* the player at an absolute index, or NULL */
