@@ -13,8 +13,9 @@ The link. Its first lines name the PC map and the Xbox map:
        identity of it: the game's settings carry it, version 42 on)
   xbox <folder>\<file>.map   <size>   <hash>
   tag <group> <PC map's tag ID> <Xbox map's tag ID> <path>         (hex, - where the map hasn't it)
-A Custom Edition game matches by its name and version (the hash's first 32 bits); an MCC game by its name, checksum
-(its version) and content SHA-256 (and metadata SHA-256 when the link gives one). The folder's .map is checked against the
+A Custom Edition game matches by its name and version (the hash's first 32 bits); an MCC game by its level's file name
+(not its package's folder name, which OpenCE's players may differ in), checksum (its version) and content SHA-256 (the map
+and the bitmaps/sounds files it uses); the metadata SHA-256 is read but not matched. The folder's .map is checked against the
 link's tag lines as it loads (each Xbox tag ID the map's tag of that path), not by the xbox line's size and hash.
 
 What it does:
@@ -121,6 +122,18 @@ static unsigned long link_name_hash(char const *name)
 		hash = (hash ^ (unsigned long)c) * 16777619UL;
 	}
 	return hash;
+}
+
+/* the name a PC map is matched by: an MCC map's level file name alone (OpenCE's players may keep a package
+under another folder name: the level and its contents decide), a Custom Edition map's whole name */
+static unsigned long link_match_hash(char const *name, short kind)
+{
+	char const *leaf = kind == _link_kind_mcc ? strrchr(name, '\\') : NULL;
+	char const *slash = kind == _link_kind_mcc ? strrchr(name, '/') : NULL;
+
+	if (slash && (!leaf || slash > leaf))
+		leaf = slash;
+	return link_name_hash(leaf ? leaf + 1 : name);
 }
 
 /* the PC map's kind by its name (0: neither: a stock or folder map) */
@@ -243,7 +256,7 @@ static boolean link_header_line(void *context, char const *line)
 		if (link_kind_of(name) != _link_kind_ce || strlen(b) != 64)
 			return TRUE;
 		header->entry.kind = _link_kind_ce;
-		header->entry.name_hash = link_name_hash(name);
+		header->entry.name_hash = link_match_hash(name, _link_kind_ce);
 		header->entry.version = hex_value(b, 8);
 		if (!header->entry.version)
 			header->entry.version = 1;      /* (map_share_hash_version: 0 is 1) */
@@ -258,7 +271,7 @@ static boolean link_header_line(void *context, char const *line)
 		if (link_kind_of(name) != _link_kind_mcc || strlen(a) != 64 || !c[0])
 			return TRUE;
 		header->entry.kind = _link_kind_mcc;
-		header->entry.name_hash = link_name_hash(name);
+		header->entry.name_hash = link_match_hash(name, _link_kind_mcc);
 		header->entry.content = hex_value(a, 8);
 		header->entry.metadata = strlen(b) == 64 ? hex_value(b, 8) : 0;
 		header->entry.version = strtoul(c, NULL, 16);
@@ -353,7 +366,7 @@ static struct link_entry const *links_find(char const *name, unsigned long versi
 	if (!kind)
 		return NULL;
 	links_build();
-	name_hash = link_name_hash(name);
+	name_hash = link_match_hash(name, kind);
 	for (index = 0; index < links.count; index++)
 	{
 		struct link_entry const *entry = &links.entries[index];
@@ -366,12 +379,12 @@ static struct link_entry const *links_find(char const *name, unsigned long versi
 			continue;
 		if (kind == _link_kind_mcc && mcc)
 		{
+			/* (the map's and its resources' contents: a package's metadata changes no gameplay, so it isn't
+			matched, nor is the package's folder name) */
 			unsigned long content = (unsigned long)mcc[0] << 24 | (unsigned long)mcc[1] << 16 |
 				(unsigned long)mcc[2] << 8 | mcc[3];
-			unsigned long metadata = (unsigned long)mcc[32] << 24 | (unsigned long)mcc[33] << 16 |
-				(unsigned long)mcc[34] << 8 | mcc[35];
 
-			if (entry->content != content || (entry->metadata && entry->metadata != metadata))
+			if (entry->content != content)
 				continue;
 		}
 		return entry;
