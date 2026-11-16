@@ -48,8 +48,11 @@ mcc  mcc_maps\<package>\<level>   <content sha256>   <metadata sha256, or ->   <
 
 An Xbox needs no server of ours: a PC game anyone hosts (OpenCE's dedicated server, a PC) on a Custom Edition or MCC
 map is listed and joined when one of the Xbox's folder maps has a link naming that map. A Custom Edition map matches
-by its name and version (the hash's first 32 bits), an MCC map by its name, checksum (the game's version) and content
-SHA-256 (and metadata SHA-256 unless the link says `-`). The Xbox joins on its port, reports the PC map as precached
+by its name and version (the hash's first 32 bits), an MCC map by its level's file name (the last part of
+`mcc_maps\<package>\<level>`: OpenCE's players may keep a package under another folder name), checksum (the game's
+version) and content SHA-256 (the map and the `bitmaps.map`/`sounds.map` it uses). The metadata SHA-256 changes no
+gameplay and isn't matched. One port may have several links beside it (one per PC map, e.g. its Custom Edition map's
+and its MCC version's), each naming one PC map on a `ce` or an `mcc` line. The Xbox joins on its port, reports the PC map as precached
 (the name the host compares), and translates the host's tag IDs itself, both ways, from the link's tag lines (read as
 the map loads, in memory the map's AI leaves, checked tag by tag against the loaded port: the `xbox` line's size and
 hash aren't used, as Halo Map Porter writes them before its map's last steps). No link at the host's version: the
