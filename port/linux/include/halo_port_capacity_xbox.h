@@ -79,9 +79,9 @@ buffers, and OpenCE code and data placed over the retail game's unused code as w
 #if defined(OXBOX_NET_P2P)
 /* (the online test builds with internet play: 17 pages, 272 KB, to OpenCE's p2p layer, Monocypher and KCP, so that a game
 has build 40's free memory) */
-#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x524
+#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x528
 #else
-#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x535
+#define HALO_PORT_TEXTURE_CACHE_PAGE_COUNT 0x539
 #endif
 /* (v1.89: 33 pages fewer, 528 KB, for the game state's AI pools at the Xbox's sizes; a map that doesn't need their
 room lends what it leaves back to the cache: game_state.c) */

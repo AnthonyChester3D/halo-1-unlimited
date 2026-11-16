@@ -1445,7 +1445,10 @@ static void cache_file_lend_free_tag_memory(
 	long index;
 	void *idle = NULL;
 	long idle_size = 0;
+	extern void network_damage_check_memory(void **idle, long *idle_size);
 
+	/* (the host's damage checks get none of it unless they're given it below: port/linux/game/network_damage.c) */
+	network_damage_check_memory(NULL, NULL);
 	if (!tag_header || tag_header->scenario_tag_index == NONE)
 		return;
 	scenario = tag_get(SCENARIO_TAG, tag_header->scenario_tag_index);
@@ -1456,6 +1459,8 @@ static void cache_file_lend_free_tag_memory(
 		extern void game_state_ai_pools_lay_out(struct scenario const *scenario, void **idle, long *idle_size);
 
 		game_state_ai_pools_lay_out(scenario, &idle, &idle_size);
+		/* (a network game's host takes the start of it for its damage checks) */
+		network_damage_check_memory(&idle, &idle_size);
 		if (idle_size < 0x10000)
 			idle = NULL, idle_size = 0;
 	}
