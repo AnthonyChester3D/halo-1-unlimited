@@ -310,6 +310,7 @@ struct distributed_player_statistics 2a44afb8f96c
 struct distributed_statistics_message 79134e6e9811
 struct distributed_structure_bsp 53f7d5067cc9
 struct distributed_structure_bsp_message 096278a05681
+struct distributed_switch_team_message 1724b66ca4ae
 struct distributed_vector e80d7f9fc970
 struct distributed_voice_config 665bdc14478b
 struct distributed_voice_down e3751d692f16
