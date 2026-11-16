@@ -60,7 +60,7 @@ enum
 	_network_game_cooperative_no_ally_friendly_fire_bit = 1,
 	_network_game_cooperative_dedicated_bit = 2,
 	/* OpenCE's (network version 43): players standing on a vehicle are carried by it, the host's decision for the
-	running game. This build doesn't carry them: a client leaves such a game (network_distributed_riding_check) */
+	running game. This build doesn't carry them: a client plays on, riders drawn where the host puts them (network_distributed.c) */
 	_network_game_cooperative_vehicle_riding_bit = 3,
 	/* oxbox: the host alone runs the scripts, in a multiplayer game too (a
 	dedicated server's server.host_scripts): network_scripts_host_only. The

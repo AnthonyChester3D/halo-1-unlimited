@@ -229,8 +229,6 @@ void distributed_send_to_machine(long machine_index, void *message, byte type, s
 void distributed_send_to_machine_reliably(long machine_index, void *message, byte type, short count, word size);
 /* the host: its checkpoint boundary to a client, before a snapshot of the objects (network_objects_client_asked) */
 void distributed_checkpoint_to_machine(long machine_index);
-/* (a client, each frame) leaves a game that plays OpenCE's vehicle riding */
-void network_distributed_riding_check(void);
 /* (a client) whether a local player may ask a dedicated server to change their team, and the asking */
 boolean network_distributed_switch_team_offered(void);
 boolean network_distributed_switch_team(short local_player_index);

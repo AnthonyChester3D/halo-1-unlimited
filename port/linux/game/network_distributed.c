@@ -254,7 +254,7 @@ enum
 	vectors (DISTRIBUTED_POSE_SIZE): read past here */
 	_distributed_unit_part_scripted_pose_bit,
 	/* (alive) OpenCE's (version 43): where on a vehicle's deck it stands (DISTRIBUTED_DECK_SIZE), for vehicle riding,
-	which this build doesn't play (it leaves a game that has it on: network_distributed_riding_refused): read past */
+	which this build doesn't play: read past (the rider is drawn where the host puts it) */
 	_distributed_unit_part_deck_bit,
 };
 
@@ -4399,38 +4399,12 @@ static boolean distributed_message_epoch_valid(
 	return TRUE;
 }
 
-/* ---------- vehicle riding (OpenCE's, network version 43): not played here. A client leaves a game whose host has it
-on (the game record's _network_game_cooperative_vehicle_riding_bit, set as a game starts), or whose map turns it on
-(_distributed_message_vehicle_riding_map, sent at a map's start: its map 2), as Halo leaves a game it loses, saying
-why. Llama, 2026-11-15: "If a server has vehicle riding enabled we can't join that server." */
-
-static boolean distributed_riding_left;
-
-static void distributed_riding_leave(
-	char const *why)
-{
-	if (distributed_riding_left || game_connection() != _game_connection_network_client)
-		return;
-	distributed_riding_left = TRUE;
-	error(_error_silent, "network: leaving the game: the host plays vehicle riding (%s), which this build doesn't", why);
-	display_error_text_when_main_menu_loaded(L"This game uses vehicle riding, which Halo 1 Unlimited doesn't play.");
-	network_game_client_all_local_players_have_quit();
-}
-
-/* each frame (map_share_update): a client's game with riding on, left */
-void network_distributed_riding_check(
-	void)
-{
-	struct network_game *game = network_game_get_game();
-
-	if (game_connection() != _game_connection_network_client)
-	{
-		distributed_riding_left = FALSE;
-		return;
-	}
-	if (game && TEST_FLAG(game->cooperative_flags, _network_game_cooperative_vehicle_riding_bit))
-		distributed_riding_leave("the game's");
-}
+/* ---------- vehicle riding (OpenCE's, network version 43): not played here, and not left either (Llama,
+2026-11-16: "If it will just look like lag then it's fine. We don't have to leave those games"). A rider on a vehicle's
+deck is drawn where the host puts it, each update (its deck place read past: distributed_unit_state_read); this
+Xbox's own player there is put back where the host has them, as a late correction is. The game record's riding bit
+(_network_game_cooperative_vehicle_riding_bit) and the map's riding choice (DISTRIBUTED_MESSAGE_VEHICLE_RIDING_MAP_OPENCE)
+are ignored. */
 
 /* ---------- SWITCH TEAM: a dedicated server's player changes team by saying "!switch" in its text chat (OpenCE's
 server_team_switch.c: the server decides, and kills a living player for it, without a score). This build has no chat:
@@ -4509,19 +4483,9 @@ void network_distributed_handle_message(
 	if (size < sizeof(header) || !game_in_progress())
 		return;
 	csmemcpy(&header, message, sizeof(header));
-	/* (OpenCE's map riding choice, version 43: its map word 2 is a map that turns riding on) */
+	/* (OpenCE's map riding choice, version 43: riding isn't played here, nor left: ignored) */
 	if (header.type == DISTRIBUTED_MESSAGE_VEHICLE_RIDING_MAP_OPENCE)
-	{
-		word map;
-
-		if (machine_index == NONE && size >= sizeof(header) + sizeof(map))
-		{
-			csmemcpy(&map, (byte const *)message + sizeof(header), sizeof(map));
-			if (map == 2)
-				distributed_riding_leave("the map's");
-		}
 		return;
-	}
 	/* a tick's messages in one: each as if it came alone */
 	if (header.type == _distributed_message_batch)
 	{
