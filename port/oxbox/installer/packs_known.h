@@ -4,5 +4,8 @@ static struct pack_known const known_packs[] = {
 	{0x167993feul, "Halo 1 CXEK", 26, 627ul, 153ul, 416ul},
 	{0x66ecf00aul, "Halo Covenant Edition v1.7", 12, 1826ul, 569ul, 1220ul},
 	{0x01edbb31ul, "Halo Zelda Pack v4", 11, 278ul, 102ul, 0ul},
-	{0x16968e99ul, "TLMP - Halo The Last Mappack", 8, 223ul, 78ul, 0ul},
+	{0x16968e99ul, "TLMP - Halo The Last Mappack", 8, 223ul, 78ul, 164ul},
+	{0x98aa88f7ul, "Halo Firefight", 1, 58ul, 26ul, 47ul},
+	{0xb9a9672bul, "HMP Collection v1", 26, 542ul, 140ul, 357ul},
+	{0xd4029b02ul, "Halo Lucario Multiplayer Mod Extended", 13, 428ul, 121ul, 286ul},
 };

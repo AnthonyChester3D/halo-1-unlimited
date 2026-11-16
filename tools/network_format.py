@@ -132,7 +132,8 @@ def items():
 
 def version():
     limits = (ROOT / "port/linux/include/halo_port_limits.h").read_text()
-    return int(re.search(r"#define HALO_PORT_NETWORK_VERSION (\d+)", limits).group(1))
+    # (the native builds' own, the last: the first is the Xbox games', under OXBOX_CROSSPLAY)
+    return int(re.findall(r"#define HALO_PORT_NETWORK_VERSION (\d+)", limits)[-1])
 
 
 def recorded():

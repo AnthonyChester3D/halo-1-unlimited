@@ -55,7 +55,7 @@ machines, 16 players) are 0x226 and 0x434. */
 /* (then the gametype's PC options, struct game_variant_options: 0x2C bytes, OpenCE's gametypes' included) */
 #define HALO_PORT_NETWORK_GAME_VARIANT_OPTIONS_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0xA)
 #define HALO_PORT_NETWORK_GAME_LOCAL_DATA_OFFSET (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x36)
-#define HALO_PORT_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x3A)
+#define HALO_PORT_NETWORK_GAME_SIZE (HALO_PORT_NETWORK_GAME_PLAYERS_END + 0x3A + 64) /* MCC content and metadata SHA-256 */
 
 /* ---------- system link protocol
 
@@ -73,17 +73,20 @@ in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the Xboxes' own games' version: 31 since the game settings record carries OpenCE's gametypes (its options
-0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
-#define HALO_PORT_NETWORK_VERSION 31
+/* oxbox: the Xboxes' own games' version: 32 since the distributed messages carry OpenCE's checkpoint epoch (their
+header 12 bytes: its version 42) and the join request its version; 31 since the game settings record carries OpenCE's
+gametypes (its options 0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
+#define HALO_PORT_NETWORK_VERSION 32
 #else
-#define HALO_PORT_NETWORK_VERSION 41
+/* (OpenCE's version 44: the distributed header's checkpoint epoch (42), the join request's version (42), the record's
+MCC identity (42), unit states' scripted pose (42) and deck (43) parts) */
+#define HALO_PORT_NETWORK_VERSION 44
 #endif
 #if defined(OXBOX_CROSSPLAY)
 /* oxbox: the crossplay experiment: the PC builds' version this Xbox's games say with crossplay = 1, and the oldest
-PC builds' version it joins (40: the join request's size) */
-#define OXBOX_CROSSPLAY_VERSION 41
-#define OXBOX_CROSSPLAY_VERSION_FIRST 40
+PC builds' version it joins (44: the distributed header's epoch, the join request's version, the record's MCC identity) */
+#define OXBOX_CROSSPLAY_VERSION 44
+#define OXBOX_CROSSPLAY_VERSION_FIRST 44
 /* ... and the advertisement's flag an Xbox host sets (HALO_PORT_ADVERTISED_FLAGS_OFFSET; the PC builds use the low
 three, and look at no other): an Xbox's game of the PC builds' version is still an Xbox's (its folder maps are shared
 with other Xboxes; the games list shows an Xbox beside it) */
@@ -127,7 +130,7 @@ header included; the per-tick update of 128 players is 3,857 */
 update of 128 players decodes to 0x1010 bytes */
 #define HALO_PORT_NETWORK_PACKET_SIZE 0x1100
 
-/* the game settings record (HALO_PORT_NETWORK_GAME_SIZE, 13,136 bytes at 128
+/* the game settings record (HALO_PORT_NETWORK_GAME_SIZE, 13,200 bytes at 128
 machines and players) does not fit one message; it is sent in pieces of
 this many bytes (4 pieces), each 3,594 bytes on the wire */
 #define HALO_PORT_NETWORK_GAME_SETTINGS_FRAGMENT_SIZE 0xE00

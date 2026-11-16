@@ -61,6 +61,9 @@ enum
 	/* the host is a dedicated server: its loading zones ask for most of the
 	players, not the host's (network_coop_host_dedicated) */
 	_network_game_cooperative_dedicated_bit = 2,
+	/* port: players standing on a vehicle are carried by it (OpenCE's network version 43, the host's decision for the
+	running game). Halo 1 Unlimited doesn't carry them: an Xbox client leaves such a game (network_distributed_riding_check) */
+	_network_game_cooperative_vehicle_riding_bit = 3,
 	/* oxbox: the host alone runs the scripts, in a multiplayer game too (a
 	dedicated server's server.host_scripts): network_scripts_host_only. The
 	byte's last bit, clear of the co-op bits OpenCE may add */
@@ -92,6 +95,10 @@ struct network_game
 	/* port: the gametype's PC options (game_engine.h) */
 	struct game_variant_options variant_options;
 	struct network_game_local_data local_data;
+	/* port: OpenCE's MCC identity (network version 42): the map's content and its package's metadata, SHA-256; zero
+	for an Xbox or Custom Edition map */
+	byte mcc_content_sha256[32];
+	byte mcc_metadata_sha256[32];
 };
 
 /* ---------- prototypes/EXAMPLE.C */

@@ -448,6 +448,8 @@ struct message_client_join_game_request
 	refused the machine for its VPN asks for it) */
 	byte link_pass[170];
 	byte link_proof[64];
+	/* port: the network version it joins with (OpenCE's version 42: a host refuses another) */
+	word network_version;
 };
 
 struct message_client_settings_request
@@ -811,7 +813,9 @@ enum
 	PC_GAME_PLAYERS_END = PC_GAME_PLAYERS_OFFSET + PC_NETWORK_MAXIMUM * HALO_PORT_NETWORK_PLAYER_SIZE,
 	PC_GAME_VARIANT_OPTIONS_OFFSET = PC_GAME_PLAYERS_END + 0xA,
 	PC_GAME_LOCAL_DATA_OFFSET = PC_GAME_PLAYERS_END + 0x36,
-	PC_GAME_SIZE = PC_GAME_PLAYERS_END + 0x3A,
+	/* (then OpenCE's MCC content and metadata SHA-256, version 42: zero for an Xbox or Custom Edition map) */
+	PC_GAME_MCC_IDENTITY_OFFSET = PC_GAME_PLAYERS_END + 0x3A,
+	PC_GAME_SIZE = PC_GAME_PLAYERS_END + 0x3A + 64,
 };
 static byte crossplay_settings_out[PC_GAME_SIZE];
 
@@ -2168,6 +2172,15 @@ static boolean network_game_server_handle_message_client_join_game_request(
 			the countdown for ever */
 			boolean full = network_game_server_get_state(server, NULL) == _network_game_server_state_pregame &&
 				!network_game_has_free_player_slot(network_game_server_get_game(server));
+
+			/* port: the network version it joins with: this host's alone (OpenCE's version 42; an Xbox says the PC
+			builds' version, OXBOX_CROSSPLAY_VERSION) */
+			if (join_game_request.network_version != HALO_PORT_NETWORK_VERSION)
+			{
+				network_event("join requires network version %u (client %u)",
+					HALO_PORT_NETWORK_VERSION, join_game_request.network_version);
+				return FALSE;
+			}
 
 			/* port: its hardware id, as it tells it: hex only (anything else
 			left out), no more than its field; the host logs it, and refuses

@@ -632,6 +632,8 @@ struct message_client_join_game_request
 	zero for none (port/linux/src/player_link.c) */
 	byte link_pass[170];
 	byte link_proof[64];
+	/* port: the network version it joins with (OpenCE's version 42: a host refuses another) */
+	word network_version;
 };
 
 struct message_client_map_is_precached_pregame
@@ -760,7 +762,7 @@ typedef char message_client_ping_size_assert[
 	sizeof(struct message_client_ping) == 8 ? 1 : -1];
 /* (port: and a Discord account's pass and proof after the Xbox's 0x70) */
 typedef char message_client_join_game_request_size_assert[
-	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 ? 1 : -1];
+	sizeof(struct message_client_join_game_request) == 0x70 + 170 + 64 + 2 ? 1 : -1];
 typedef char network_game_client_seconds_to_game_start_offset_assert[
 	offsetof(struct network_game_client, seconds_to_game_start) == NETWORK_GAME_CLIENT_TAIL_OFFSET + 0x10 ? 1 : -1];
 typedef char network_game_client_error_offset_assert[
@@ -1984,6 +1986,26 @@ boolean network_game_client_remove_player(
 				}
 			}
 
+			/* port: a local player who leaves while another remains no longer has
+			its slot: its entry in the local players is cleared here, as the datum
+			stays until a joiner takes the slot (network_game_spawn_player), which
+			then deletes it and makes another with a new identifier, and the entry
+			would name a player that no longer exists (player_get halts on it). The
+			last to leave ends the game, whose sounds and views still name it until
+			then, so its entry stays */
+			if (network_player_index != MAXIMUM_NUMBER_OF_PLAYERS &&
+				player->machine_index == client->machine_index &&
+				player->controller_index >= 0 && player->controller_index < MAXIMUM_LOCAL_PLAYERS &&
+				local_player_get_player_index(player->controller_index) == player_index)
+			{
+				local_player_set_player_index(player->controller_index, NONE);
+				/* (and its control, which names its unit: the datum no longer has a
+				local player index, so the host deleting the unit does not reset it
+				(network_player_detach_unit), and player_control_update would get a
+				unit that is gone) */
+				player_control_new_unit(player->controller_index, NONE);
+			}
+
 			/* port: a dedicated server's own machine never has a player
 			(port/linux/game/server_director.c): it leaves only when a player
 			of its own goes, which none is */
@@ -3149,6 +3171,8 @@ static boolean network_game_client_idle_joining(
 						(host >> 24) | ((host >> 8) & 0xFF00) | ((host << 8) & 0xFF0000) | (host << 24) : 0,
 						join_game_request.link_pass, join_game_request.link_proof);
 				}
+				/* (port: and the network version it joins with, which the host checks) */
+				join_game_request.network_version = HALO_PORT_NETWORK_VERSION;
 
 				message = create_network_game_message(
 					_message_client_join_game_request,

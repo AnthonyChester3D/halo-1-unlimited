@@ -156,6 +156,9 @@ enum
 	stream */
 	_distributed_message_map_vote = 94,
 	_distributed_message_map_vote_choice = 95,
+	/* (OpenCE's 97-106, which this build drops as kinds it does not know: MCC's) */
+	/* the host's checkpoint boundary: the header alone, its epoch the new one (network version 42) */
+	_distributed_message_checkpoint = 96,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
 };
@@ -178,6 +181,10 @@ struct distributed_client_build
 	char version[DISTRIBUTED_CLIENT_BUILD_VERSION_SIZE];
 	char mods[DISTRIBUTED_CLIENT_BUILD_MODS_SIZE];
 };
+
+/* (OpenCE's map riding choice, version 43, past the kinds this build handles, so outside NUMBER_OF_DISTRIBUTED_MESSAGES:
+network_distributed_handle_message reads it before the range check) */
+#define DISTRIBUTED_MESSAGE_VEHICLE_RIDING_MAP_OPENCE 107
 
 /* where a message goes */
 enum
@@ -219,6 +226,11 @@ struct distributed_message_header
 	byte type;
 	byte count;
 	long game_time;
+	/* (OpenCE's network version 42: the host's checkpoint epoch, the world a message belongs to. A host starts one with
+	each game (and each co-op revert) and tells each client with _distributed_message_checkpoint before its snapshot
+	of the objects; a message of another epoch is dropped, and a client sends nothing but its ready until its snapshot
+	has come: distributed_message_epoch_valid) */
+	unsigned long checkpoint_epoch;
 };
 
 /* a vector in 16-bit parts: a unit vector's of 1/32767, a velocity's of
@@ -232,9 +244,11 @@ struct distributed_vector
 
 /* (what goes on the wire, as it is on every machine) */
 typedef char distributed_message_header_size_assert[
-	sizeof(struct distributed_message_header) == 8 ? 1 : -1];
+	sizeof(struct distributed_message_header) == 12 ? 1 : -1];
 typedef char distributed_message_header_game_time_offset_assert[
 	offsetof(struct distributed_message_header, game_time) == 4 ? 1 : -1];
+typedef char distributed_message_header_epoch_offset_assert[
+	offsetof(struct distributed_message_header, checkpoint_epoch) == 8 ? 1 : -1];
 typedef char distributed_vector_size_assert[sizeof(struct distributed_vector) == 6 ? 1 : -1];
 
 /* ---------- macros */
@@ -261,6 +275,12 @@ void distributed_client_send_build(void);
 void distributed_send_to_machine(long machine_index, void *message, byte type, short count, word size);
 /* ... reliably to one client (the host) */
 void distributed_send_to_machine_reliably(long machine_index, void *message, byte type, short count, word size);
+/* the host: its checkpoint boundary to a client, before a snapshot of the objects (network_objects_client_asked) */
+void distributed_checkpoint_to_machine(long machine_index);
+/* (a client, each frame) leaves a game that plays OpenCE's vehicle riding */
+void network_distributed_riding_check(void);
+/* a client: whether the snapshot of this epoch has all come (the objects synchronized), so its predictions count */
+boolean distributed_checkpoint_ready(void);
 /* the player at an absolute index, or NULL */
 struct player_datum *distributed_player(short player_index);
 /* a player's absolute index for a message, NO_PLAYER for none; and back */

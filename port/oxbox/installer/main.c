@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 55
+#define INSTALLER_VERSION 57
 #endif
 __attribute__((used)) static struct
 {
@@ -86,7 +86,6 @@ static int developer_unsigned;     /* (its allow_unsigned = 1) */
 static int quiet;                  /* (a player's screen runs an operation: its details only in the log: say_in) */
 static char task_title[80];        /* (what that screen says it's doing: heading) */
 static int stepping;               /* (step: a line for the player, shown under the title) */
-static char task_line[256];        /* (that line, drawn again when the screen is: task_line_show) */
 static int task_problem;           /* (a warning or a problem in this task: its result waits for a button) */
 #define HALO_TITLE_ID 0x4D530004ul
 /* Halo 1 Unlimited's own title ID ('LJ' 'HU', 0x4C4A4855: tools/mkxbe.py), so its own save folder (E:\UDATA\4c4a4855)
@@ -151,31 +150,348 @@ static void say_line(unsigned long colour, char const *text, int length)
 	log_colours[log_count++] = colour;
 }
 
-/* a "how far along" line for the player ("Converting 3 of 14: x.map"; "bloodgulch (3 of 23): making it small..." as
-"Map 3 of 23: bloodgulch"); 0 when it's no such line */
-static int progress_line(char const *text, char *out, int size)
+/* ---- a task's receipt: what a player's screen shows under its title. Its steps (done as the next starts), the maps
+by name as they're made, grouped (Multiplayer maps, Campaign), a later pass over them as a count, and its result ---- */
+
+enum { RECEIPT_ACTION, RECEIPT_RESULT, RECEIPT_GROUP, RECEIPT_PROBLEM, RECEIPT_STATUS, RECEIPT_BLANK };
+#define RECEIPT_MOST 24
+static struct receipt_entry
 {
-	char const *of = strstr(text, " of ");
-	char const *open, *close;
+	int kind, done, n, m;
+	unsigned long colour;               /* (a problem's) */
+	char text[200];
+	char names[480];                    /* (a group's maps, ", " between) */
+	char right[24];                     /* (beside it, in place of "n of m": "12 of 40 MB") */
+} receipt[RECEIPT_MOST];
+static int receipt_count, receipt_plan;  /* (receipt_plan: entry 0 is the task's plan, until a step takes its place) */
+static int receipt_last_n;              /* (the map a pass is on: a lower one starts the next pass) */
+static int receipt_pass;
+static int receipt_later_total;         /* (a later pass's maps, when not all of them: Halo's 13 without the campaign) */
+static int receipt_batch;               /* (Consolidate all: one line a pack, its maps counted on it; its steps in the log) */
+
+/* Halo's maps, as the game calls them (the first 13 multiplayer, then the campaign) */
+static struct { char const *file, *name; } const receipt_stock[] = {
+	{"beavercreek", "Battle Creek"}, {"bloodgulch", "Blood Gulch"}, {"boardingaction", "Boarding Action"},
+	{"carousel", "Derelict"}, {"chillout", "Chill Out"}, {"damnation", "Damnation"}, {"hangemhigh", "Hang 'Em High"},
+	{"longest", "Longest"}, {"prisoner", "Prisoner"}, {"putput", "Chiron TL-34"}, {"ratrace", "Rat Race"},
+	{"sidewinder", "Sidewinder"}, {"wizard", "Wizard"},
+	{"a10", "The Pillar of Autumn"}, {"a30", "Halo"}, {"a50", "The Truth and Reconciliation"},
+	{"b30", "The Silent Cartographer"}, {"b40", "Assault on the Control Room"}, {"c10", "343 Guilty Spark"},
+	{"c20", "The Library"}, {"c40", "Two Betrayals"}, {"d20", "Keyes"}, {"d40", "The Maw"}};
+#define RECEIPT_STOCK_MP 13
+#define RECEIPT_STOCK (int)(sizeof(receipt_stock) / sizeof(receipt_stock[0]))
+
+static void receipt_clear(void)
+{
+	receipt_count = receipt_plan = receipt_last_n = receipt_pass = receipt_later_total = 0;
+}
+
+/* a new entry: everything before it is done; a group: the groups before it (a status line goes) */
+static struct receipt_entry *receipt_add(int kind)
+{
+	struct receipt_entry *e;
+	int i;
+	if (receipt_count && receipt[receipt_count - 1].kind == RECEIPT_STATUS)
+		receipt_count--;
+	if (kind != RECEIPT_STATUS && kind != RECEIPT_PROBLEM && kind != RECEIPT_BLANK)
+		for (i = 0; i < receipt_count; i++)
+			if (kind != RECEIPT_GROUP || receipt[i].kind == RECEIPT_GROUP)
+				receipt[i].done = 1;
+	if (receipt_count == RECEIPT_MOST)
+	{
+		memmove(&receipt[0], &receipt[1], sizeof(receipt[0]) * (RECEIPT_MOST - 1));
+		receipt_count--;
+		receipt_plan = 0;
+	}
+	e = &receipt[receipt_count++];
+	memset(e, 0, sizeof(*e));
+	e->kind = kind;
+	return e;
+}
+
+/* the entry running now (a group under its step, else the step), or NULL */
+static struct receipt_entry *receipt_running(void)
+{
+	int i;
+	for (i = receipt_count - 1; i >= 0; i--)
+		if ((receipt[i].kind == RECEIPT_ACTION || receipt[i].kind == RECEIPT_GROUP) && !receipt[i].done)
+			return &receipt[i];
+		else if (receipt[i].kind == RECEIPT_ACTION || receipt[i].kind == RECEIPT_RESULT)
+			return NULL;
+	return NULL;
+}
+
+/* a step for the player: "...." at its end: an action (done when the next comes), else a result */
+static void receipt_step(char const *text)
+{
+	int length = (int)strlen(text);
+	int action = length > 3 && !strcmp(text + length - 3, "...");
+	struct receipt_entry *e;
+	if (action && receipt_plan && receipt_count == 1)
+		receipt_count = 0;               /* (the plan said it: the steps say it better) */
+	receipt_plan = 0;
+	if (!action && receipt_count)
+		receipt_add(RECEIPT_BLANK);      /* (a line between the steps and the result) */
+	e = receipt_add(action ? RECEIPT_ACTION : RECEIPT_RESULT);
+	text_print(e->text, sizeof(e->text), "%s", text);
+	receipt_last_n = receipt_pass = 0;
+}
+
+/* a map made ("name (3 of 23): making it small...", "Converting 3 of 14: x.map"): its name in the receipt, under its
+group; a later pass over them, a count. 0: no such line */
+static int receipt_progress(char const *text)
+{
+	char const *of = strstr(text, " of "), *open, *close;
+	char name[64];
+	int n, m, k, length;
+	struct receipt_entry *e = NULL;
 	if (!of || of == text || of[-1] < '0' || of[-1] > '9' || of[4] < '0' || of[4] > '9')
 		return 0;
+	if (receipt_batch)
+	{
+		/* (all the packs: beside the pack, which pass over its maps and how far: "shrinking 5 of 14") */
+		static char const *const words[][2] = {{"Measuring", "measuring"}, {"Reading", "measuring"},
+			{"Converting", "shrinking"}, {"Checking", "checking"}, {"Shrinking", "shrinking"}};
+		int w;
+		if ((e = receipt_running()) == NULL)
+			return 1;
+		for (w = 0; w < 5 && strncmp(text, words[w][0], strlen(words[w][0])); w++)
+			;
+		for (open = of; open > text && open[-1] >= '0' && open[-1] <= '9'; open--)
+			;
+		n = atoi(open);
+		text_print(e->right, sizeof(e->right), "%s%s%d of %d", w < 5 ? words[w][1] : "", w < 5 ? " " : "", n,
+			atoi(of + 4));
+		return 1;
+	}
 	open = strstr(text, " (");
 	close = strstr(of, "):");
 	if (open && open < of && close)
 	{
-		text_print(out, size, "Map %.*s: %.*s", (int)(close - open - 2), open + 2, (int)(open - text), text);
+		/* "name (n of m): what" */
+		n = atoi(open + 2);
+		m = atoi(of + 4);
+		text_print(name, sizeof(name), "%.*s", (int)(open - text), text);
+	}
+	else if (!strncmp(text, "Converting ", 11) && (close = strstr(of, ": ")) != NULL)
+	{
+		n = atoi(text + 11);
+		m = atoi(of + 4);
+		text_print(name, sizeof(name), "%s", close + 2);
+	}
+	else
+	{
+		/* (another "how far along" line: under the step, in place of the last) */
+		if (!receipt_count || receipt[receipt_count - 1].kind != RECEIPT_STATUS)
+			e = receipt_add(RECEIPT_STATUS);
+		else
+			e = &receipt[receipt_count - 1];
+		text_print(e->text, sizeof(e->text), "%s", text);
 		return 1;
 	}
-	text_print(out, size, "%s", text);
+	length = (int)strlen(name);
+	if (length > 4 && !_stricmp(name + length - 4, ".map"))
+		name[length - 4] = 0;
+	if (n == receipt_last_n)
+		return 1;                        /* (the same map, its next part) */
+	if (n < receipt_last_n)
+	{
+		/* (a later pass over them: one line under the step, counted) */
+		receipt_pass++;
+		e = receipt_add(RECEIPT_GROUP);
+		text_print(e->text, sizeof(e->text), strstr(text, "putting the small map") ? "Putting them in place" :
+			"Checking them");
+	}
+	receipt_last_n = n;
+	if (receipt_pass)
+	{
+		e = receipt_running();
+		if (e)
+		{
+			e->n++;
+			e->m = receipt_later_total ? receipt_later_total : m;
+		}
+		return 1;
+	}
+	/* (the first pass: its name, under its group) */
+	for (k = 0; k < RECEIPT_STOCK && _stricmp(receipt_stock[k].file, name); k++)
+		;
+	{
+		char const *title = k == RECEIPT_STOCK ? "" : k < RECEIPT_STOCK_MP ? "Multiplayer maps" :
+			receipt_later_total && receipt_later_total <= RECEIPT_STOCK_MP ? "Campaign (its textures and sounds only)" :
+			"Campaign";
+		int total = k == RECEIPT_STOCK ? m : k < RECEIPT_STOCK_MP ? RECEIPT_STOCK_MP : RECEIPT_STOCK - RECEIPT_STOCK_MP;
+		e = receipt_running();
+		if (!e || e->kind != RECEIPT_GROUP || strcmp(e->text, title))
+		{
+			e = receipt_add(RECEIPT_GROUP);
+			text_print(e->text, sizeof(e->text), "%s", title);
+			e->m = total;
+		}
+		e->n++;
+		length = (int)strlen(e->names);
+		text_print(e->names + length, sizeof(e->names) - length, "%s%s", length ? ", " : "",
+			k == RECEIPT_STOCK ? name : receipt_stock[k].name);
+	}
 	return 1;
 }
 
-/* a task's line for the player, under its title */
+/* a problem or warning: in the receipt as it's said */
+static void receipt_problem(unsigned long colour, char const *text)
+{
+	struct receipt_entry *e = receipt_add(RECEIPT_PROBLEM);
+	e->colour = colour;
+	text_print(e->text, sizeof(e->text), "%s", text);
+}
+
+/* (lines of the receipt, as drawn) */
+#define RECEIPT_TOP (LOG_TOP - 1)
+#define RECEIPT_ROWS (SCREEN_ROWS - 1 - RECEIPT_TOP)  /* (the last row: task_wait's buttons) */
+static struct receipt_line
+{
+	unsigned long colour, right_colour;
+	int column;
+	char text[SCREEN_COLUMNS + 1];
+	char right[24];
+} receipt_lines[RECEIPT_ROWS * 4];
+static int receipt_line_count;
+
+static struct receipt_line *receipt_line(int column, unsigned long colour)
+{
+	struct receipt_line *l;
+	if (receipt_line_count == (int)(sizeof(receipt_lines) / sizeof(receipt_lines[0])))
+	{
+		memmove(&receipt_lines[0], &receipt_lines[1], sizeof(receipt_lines[0]) * (receipt_line_count - 1));
+		receipt_line_count--;
+	}
+	l = &receipt_lines[receipt_line_count++];
+	memset(l, 0, sizeof(*l));
+	l->column = column;
+	l->colour = colour;
+	return l;
+}
+
+/* text wrapped at its spaces from column to LOG_COLUMNS (a list: between its names, after their ", ") */
+static void receipt_wrap(int column, unsigned long colour, char const *text, int list)
+{
+	int width = LOG_COLUMNS - column;
+	for (;;)
+	{
+		int length = (int)strlen(text), cut = length;
+		if (length > width)
+		{
+			for (cut = width; cut > width / 3 && (text[cut] != ' ' || (list && text[cut - 1] != ',')); cut--)
+				;
+			if (cut == width / 3)
+				for (cut = width; cut > width / 2 && text[cut] != ' '; cut--)
+					;
+			if (text[cut] != ' ')
+				cut = width;
+		}
+		text_print(receipt_line(column, colour)->text, SCREEN_COLUMNS + 1, "%.*s", cut, text);
+		text += cut;
+		while (*text == ' ')
+			text++;
+		if (!*text)
+			return;
+	}
+}
+
+static void receipt_show(void)
+{
+	int i, first, r;
+	receipt_line_count = 0;
+	for (i = 0; i < receipt_count; i++)
+	{
+		struct receipt_entry const *e = &receipt[i];
+		struct receipt_line *l;
+		char label[200];
+		int length;
+		switch (e->kind)
+		{
+		case RECEIPT_ACTION:
+		case RECEIPT_GROUP:
+			text_print(label, sizeof(label), "%s", e->text);
+			if (e->done)
+			{
+				/* (done: without its "..." and "(about 5 minutes)") */
+				char *note;
+				length = (int)strlen(label);
+				if (length > 3 && !strcmp(label + length - 3, "..."))
+					label[length -= 3] = 0;
+				if (length && label[length - 1] == ')' && (note = strrchr(label, '(')) != NULL && note > label &&
+					note[-1] == ' ')
+					note[-1] = 0;
+			}
+			if (e->kind == RECEIPT_GROUP && !label[0] && !e->names[0])
+				break;
+			l = receipt_line(e->kind == RECEIPT_GROUP ? 4 : 2, e->done ? COLOUR_GREY : COLOUR_WHITE);
+			text_print(l->text, sizeof(l->text), "%s", label);
+			if (e->done)
+			{
+				text_print(l->right, sizeof(l->right), "%s", e->right[0] ? e->right : "done");
+				l->right_colour = COLOUR_GREEN;
+			}
+			else if (e->right[0])
+				text_print(l->right, sizeof(l->right), "%s", e->right);
+			else if (e->m)
+				text_print(l->right, sizeof(l->right), "%d of %d", e->n, e->m);
+			if (!l->right_colour)
+				l->right_colour = COLOUR_GREY;
+			if (e->kind == RECEIPT_GROUP && e->names[0])
+			{
+				if (!label[0])
+				{
+					/* (no group name: the names in its place, the count on the step's line) */
+					receipt_line_count--;
+					if (receipt_line_count && !e->done)
+					{
+						struct receipt_line *step_line = &receipt_lines[receipt_line_count - 1];
+						text_print(step_line->right, sizeof(step_line->right), "%d of %d", e->n, e->m);
+						step_line->right_colour = COLOUR_GREY;
+					}
+				}
+				receipt_wrap(6, COLOUR_DIM, e->names, 1);
+			}
+			break;
+		case RECEIPT_RESULT:
+			receipt_wrap(2, COLOUR_WHITE, e->text, 0);
+			break;
+		case RECEIPT_PROBLEM:
+			receipt_wrap(2, e->colour, e->text, 0);
+			break;
+		case RECEIPT_STATUS:
+			receipt_wrap(4, COLOUR_DIM, e->text, 0);
+			break;
+		case RECEIPT_BLANK:
+			receipt_line(0, COLOUR_DIM);
+			break;
+		}
+	}
+	/* (too many lines: its last ones) */
+	first = receipt_line_count > RECEIPT_ROWS ? receipt_line_count - RECEIPT_ROWS : 0;
+	for (r = 0; r < RECEIPT_ROWS; r++)
+	{
+		struct receipt_line const *l = first + r < receipt_line_count ? &receipt_lines[first + r] : NULL;
+		screen_row(RECEIPT_TOP + r, COLOUR_BLACK);
+		if (!l)
+			continue;
+		if (l->right[0])
+		{
+			int at = LOG_COLUMNS - (int)strlen(l->right);
+			screen_text(RECEIPT_TOP + r, l->column, l->colour, "%.*s", at - 1 - l->column, l->text);
+			screen_text(RECEIPT_TOP + r, at, l->right_colour, "%s", l->right);
+		}
+		else
+			screen_text(RECEIPT_TOP + r, l->column, l->colour, "%.*s", LOG_COLUMNS - l->column, l->text);
+	}
+	screen_show();
+}
+
+/* (the old name: a task's screen drawn again) */
 static void task_line_show(void)
 {
-	screen_row(LOG_TOP - 1, COLOUR_BLACK);
-	screen_text(LOG_TOP - 1, 2, COLOUR_DIM, "%.*s", LOG_COLUMNS - 2, task_line);
-	screen_show();
+	receipt_show();
 }
 
 static void say_in(unsigned long colour, char const *format, ...)
@@ -191,20 +507,29 @@ static void say_in(unsigned long colour, char const *format, ...)
 	problem shows below as it does) */
 	if (quiet && colour != COLOUR_RED && colour != COLOUR_YELLOW)
 	{
-		char shown[256];
 		for (at = text; *at == ' ' || *at == '('; at++)
 			;
 		/* (only what's for the player: a step, or how far along it is; the rest is in the log) */
 		if (stepping)
-			text_print(shown, sizeof(shown), "%s", at);
-		else if (!progress_line(at, shown, sizeof(shown)))
+		{
+			if (receipt_batch)
+				return;
+			receipt_step(at);
+		}
+		else if (!receipt_progress(at))
 			return;
-		text_print(task_line, sizeof(task_line), "%s", shown);
-		task_line_show();
+		receipt_show();
 		return;
 	}
 	if (quiet)
+	{
 		task_problem = 1;
+		for (at = text; *at == ' '; at++)
+			;
+		receipt_problem(colour, at);
+		receipt_show();
+		return;
+	}
 	/* (a long line wrapped at a space, the rest indented as it was) */
 	while (text[indent] == ' ')
 		indent++;
@@ -2053,12 +2378,17 @@ static void update_progress(void *context, unsigned long done, unsigned long tot
 	(void)context;
 	if (quiet)
 	{
+		struct receipt_entry *e = receipt_running();
+		if (!e)
+		{
+			e = receipt_add(RECEIPT_ACTION);
+			text_print(e->text, sizeof(e->text), "Downloading...");
+		}
 		if (total)
-			text_print(task_line, sizeof(task_line), "Downloading: %lu of %lu MB", (done + 524288) >> 20,
-				(total + 524288) >> 20);
+			text_print(e->right, sizeof(e->right), "%lu of %lu MB", (done + 524288) >> 20, (total + 524288) >> 20);
 		else
-			text_print(task_line, sizeof(task_line), "Downloading: %lu MB", (done + 524288) >> 20);
-		task_line_show();
+			text_print(e->right, sizeof(e->right), "%lu MB", (done + 524288) >> 20);
+		receipt_show();
 		return;
 	}
 	screen_row(4, COLOUR_BLACK);
@@ -2136,6 +2466,29 @@ chosen (check_updates). The network isn't used by two at once: check_wait first 
 
 static volatile unsigned long check_release, check_build;
 static unsigned char check_head[128];
+
+/* a package newer than the one beside the installer (none: any is). A test build (release 0) is replaced only by a
+newer test build, from a test location: a release is older code, as the game's own check holds (it doesn't look at
+all in a test build) */
+static int newer_package(unsigned long release, unsigned long build)
+{
+	if (!package_ok)
+		return 1;
+	if (!package.release && release)
+		return 0;
+	return release > package.release || (release == package.release && build > package.build);
+}
+
+/* the version the check found, as said to a player: "v1.126", or a release's name ("Halo 1 Unlimited, release 2") */
+static char const *check_version(void)
+{
+	static char text[72];
+	if (check_build)
+		text_print(text, sizeof(text), "v1.%lu", check_build);
+	else
+		text_print(text, sizeof(text), "%.64s", (char const *)check_head + 48);
+	return text;
+}
 static unsigned long check_got;
 static HANDLE check_thread;
 
@@ -2169,8 +2522,7 @@ static DWORD WINAPI check_main(LPVOID unused)
 	}
 	check_release = u32(check_head + 116);
 	check_build = u32(check_head + 124);
-	check_state = !package_ok || check_release > package.release ||
-		(check_release == package.release && check_build > package.build) ? CHECK_NEWER : CHECK_NEWEST;
+	check_state = newer_package(check_release, check_build) ? CHECK_NEWER : CHECK_NEWEST;
 	return 0;
 }
 
@@ -2265,10 +2617,10 @@ static int check_updates(void)
 		say_in(COLOUR_GREEN, "That's the package you have: it's up to date.");
 		goto discard;
 	}
-	if (package_ok && trusted(signature) && (fresh.release < package.release ||
-		(fresh.release == package.release && fresh.build < package.build)))
+	if (package_ok && trusted(signature) && !newer_package(fresh.release, fresh.build))
 	{
-		say_in(COLOUR_YELLOW, "That's older than yours (%s), so yours is kept.", package.name);
+		say_in(COLOUR_YELLOW, !package.release && fresh.release ? "That's a release, older than your test build (%s), "
+			"so yours is kept." : "That's older than yours (%s), so yours is kept.", package.name);
 		goto discard;
 	}
 	if (fresh.installer_version > INSTALLER_VERSION)
@@ -2372,7 +2724,13 @@ static int folder_map(char const *folder, char *out)
 /* where the measuring is, on the bottom row (a big pack takes minutes) */
 static void consolidate_progress(int warning, char const *text)
 {
-	(void)warning;
+	/* (a player's screen: how far along, in its receipt; a map's own warning is summed up at the end) */
+	if (quiet)
+	{
+		if (!warning && receipt_progress(text))
+			receipt_show();
+		return;
+	}
 	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
 	screen_text(SCREEN_ROWS - 1, 0, COLOUR_GREY, "%.70s", text);
 	screen_show();
@@ -2493,7 +2851,9 @@ static void consolidate_show(struct halo *h, struct pack_scan const *scan, char 
 /* a pack's multiplayer maps and modded campaign imported, then made small against the install's stock.shared
 (consolidate.c): their small maps beside their links in the starred install's maps folder (a level's too: a folder map
 the campaign picker plays), the blocks two or more use in the pack's shared file. The pack's own folder is left as it is */
-static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder)
+/* the maps made small (-1: it failed), and their MB before and after */
+static int consolidate_pack(struct halo *h, struct pack_scan *scan, char const *stock_folder, unsigned long *before_mb,
+	unsigned long *after_mb)
 {
 	static char folders[CONSOLIDATE_MAPS][220];
 	static char const *folder_list[CONSOLIDATE_MAPS];
@@ -2501,13 +2861,14 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	char error[256], pack_folder[220], link[240];
 	int k, count = 0;
 	DWORD started;
+	int made = -1;
 
-	step(scan->campaign ? "Importing its multiplayer maps and campaign (names and pictures)..." :
-		"Importing its multiplayer maps (names and pictures)...");
+	*before_mb = *after_mb = 0;
+	step(scan->campaign ? "Importing its maps and campaign..." : "Importing its maps...");
 	if (packs_import(scan, 1, scan->campaign != 0, packs_say, error))
 	{
 		say_in(COLOUR_RED, "%s", error);
-		return;
+		return -1;
 	}
 	text_print(pack_folder, sizeof(pack_folder), "%s\\maps\\%s", packs_storage, scan->key);
 	for (k = 0; k < scan->count && count < CONSOLIDATE_MAPS; k++)
@@ -2534,6 +2895,9 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 		say_in(COLOUR_RED, "%s", error);
 	else
 	{
+		made = r.converted;
+		*before_mb = (unsigned long)(r.before >> 20);
+		*after_mb = (unsigned long)((r.after + (1 << 20) - 1) >> 20);
 		if (r.converted)
 			say_in(COLOUR_GREEN, "Done: %d maps, %lu MB as they were, %lu MB small%s%s%s.", r.converted,
 				(unsigned long)(r.before >> 20), (unsigned long)((r.after + (1 << 20) - 1) >> 20),
@@ -2548,7 +2912,8 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 		if (r.unreadable)
 			say_in(COLOUR_YELLOW, "  %d can't be read: left as they are.", r.unreadable);
 		if (r.too_big)
-			say_in(COLOUR_YELLOW, "  %d would be too big to play: left as they are.", r.too_big);
+			say_in(COLOUR_YELLOW, r.too_big == 1 ? "  1 map is too big to shrink: it stays full size, and plays as it is." :
+				"  %d maps are too big to shrink: they stay full size, and play as they are.", r.too_big);
 		if (r.failed)
 			say_in(COLOUR_YELLOW, "  %d didn't read back right: left as they are.", r.failed);
 		say_in(COLOUR_GREY, "The game plays the small ones. %s\\maps is left as it is.", h->path);
@@ -2568,6 +2933,7 @@ static void consolidate_pack(struct halo *h, struct pack_scan *scan, char const 
 	}
 	screen_row(SCREEN_ROWS - 1, COLOUR_BLACK);
 	package_read();
+	return made;
 }
 
 /* ---- Shrink maps: full-size maps that a pack's file here was made from (its list names them: consolidate_shrink) ---- */
@@ -2891,7 +3257,10 @@ static void map_pack(struct halo *h)
 	if (choices[chosen] == MEASURE)
 		consolidate_show(h, &scan, stock);
 	else if (choices[chosen] == CONSOLIDATE)
-		consolidate_pack(h, &scan, stock);
+	{
+		unsigned long before, after;
+		consolidate_pack(h, &scan, stock, &before, &after);
+	}
 	else if (choices[chosen] == SHRINK)
 		shrink_maps(stock);
 	else if (choices[chosen] == REMOVE)
@@ -3246,7 +3615,7 @@ static void page(char const *title, char const *text)
 	int b;
 	player_heading(title);
 	wrapped(MENU_TOP, 1, SCREEN_COLUMNS - 2, SCREEN_ROWS - MENU_TOP - 2, COLOUR_WHITE, text);
-	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
+	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: continue");
 	screen_show();
 	while ((b = wait_input()) != A && b != B)
 		;
@@ -3262,8 +3631,14 @@ static void task_begin(char const *title, char const *plan)
 	player_heading(title);
 	if (plan)
 		log_file(plan);
-	text_print(task_line, sizeof(task_line), "%s", plan ? plan : "");
-	task_line_show();
+	receipt_clear();
+	if (plan)
+	{
+		/* (the plan: the first step, until the steps say it) */
+		text_print(receipt_add(RECEIPT_ACTION)->text, sizeof(receipt[0].text), "%s", plan);
+		receipt_plan = 1;
+	}
+	receipt_show();
 }
 
 static void task_end(void)
@@ -3280,7 +3655,7 @@ static void task_wait(void)
 		Sleep(1500);
 		return;
 	}
-	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: select");
+	screen_text(SCREEN_ROWS - 1, SCREEN_COLUMNS - 22, COLOUR_DIM, "B: back    A: continue");
 	screen_show();
 	while ((b = wait_input()) != A && b != B)
 		;
@@ -3503,7 +3878,8 @@ static int own_install(struct halo *source, char const *folder, int campaign)
 	}
 	movies_copy(source->path, folder, campaign);
 	/* the maps */
-	step("Building Halo 1 Unlimited's maps (about 5 minutes)...");
+	step("Building the maps (about 5 minutes)...");
+	receipt_later_total = campaign ? 0 : RECEIPT_STOCK_MP;
 	stockmaps_flush_drive = flush_drive;
 	stockmaps_log = log_file;
 	package_free(&package);
@@ -3593,6 +3969,8 @@ static int buildable(struct halo *h)
 }
 
 static void player_map_packs(void);
+static int packs_look(char *stock, int size);
+static unsigned long packs_saving(void);
 
 static int player_install_flow(void)
 {
@@ -3653,8 +4031,16 @@ static int player_install_flow(void)
 		go[1].disabled = 0;
 		text_print(go[2].text, sizeof(go[2].text), "Start install (about 6 minutes, needs %lu MB)",
 			(unsigned long)(need >> 20));
-		go[2].about = room ? "It runs to the end by itself: there's nothing more to choose. Your Halo isn't changed." :
-			"There isn't room on any drive. Free some space (or leave the campaign out), then try again.";
+		if (room)
+		{
+			static char summary[300];
+			own_folder_on(drives[drive], folder, sizeof(folder));
+			text_print(summary, sizeof(summary), "Installs Halo 1 Unlimited to %s. It will use %lu MB.", folder,
+				(unsigned long)(need >> 20));
+			go[2].about = summary;
+		}
+		else
+			go[2].about = "There isn't room on any drive. Free some space (or leave the campaign out), then try again.";
 		go[2].disabled = !room;
 		text_print(go[3].text, sizeof(go[3].text), "Back");
 		go[3].about = NULL;
@@ -3727,8 +4113,18 @@ static int player_install_flow(void)
 		{
 			text_print(done[count].text, sizeof(done[count].text), "We found %d map pack%s on your Xbox: set %s up",
 				packs, packs == 1 ? "" : "s", packs == 1 ? "it" : "them");
-			done[count].about = "Consolidate them (they're made small, and can be shared online), or link them as they "
-				"are.";
+			static char packs_about[400];
+			char stock[200], saving[32];
+			unsigned long saved = packs_look(stock, sizeof(stock)) ? packs_saving() : 0;
+			if (saved >= 1000)
+				text_print(saving, sizeof(saving), "%lu.%lu GB", saved / 1024, saved % 1024 * 10 / 1024);
+			else
+				text_print(saving, sizeof(saving), "%lu MB", saved);
+			text_print(packs_about, sizeof(packs_about), "Consolidate them: they're shrunk to fit in Halo 1 Unlimited and "
+				"use a lot less space%s%s%s. Or link them to Halo 1 Unlimited and leave your map packs as they are. "
+				"Either way, you can play them online in Halo 1 Unlimited.", saved ? " (around " : "",
+				saved ? saving : "", saved ? " less, once you delete the originals" : "");
+			done[count].about = packs_about;
 			done[count].disabled = 0;
 			actions[count++] = DONE_PACKS;
 		}
@@ -3798,8 +4194,7 @@ static void player_update(struct halo *h)
 		}
 	}
 	/* (the package beside the installer is installed: the online check's answer stands against it) */
-	if (check_state == CHECK_NEWER && package_ok && !(check_release > package.release ||
-		(check_release == package.release && check_build > package.build)))
+	if (check_state == CHECK_NEWER && package_ok && !newer_package(check_release, check_build))
 		check_state = CHECK_NEWEST;
 	text_print(task_title, sizeof(task_title), "Updating Halo 1 Unlimited");
 	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (about a minute)...");
@@ -3903,7 +4298,7 @@ static void update_prompt(void)
 	update_asked = 1;
 	if (!update_always())
 	{
-		text_print(intro, sizeof(intro), "There's a new update available (v1.%lu). Download and update?", check_build);
+		text_print(intro, sizeof(intro), "There's a new update available (%s). Download and update?", check_version());
 		k = menu("A new update is available", intro, items, 3, 0);
 		if (k == 2)
 			update_always_set();
@@ -3942,27 +4337,42 @@ packs (packs_known.h) show what consolidating saved and took on a console; other
 static struct pack_scan *pack_scans;        /* (MOST_PACKS: the packs found, kept while packs_listed) */
 static int pack_count;
 
-/* its maps' small copies there: 1 when it's consolidated (a pack's shared file in its folder) */
+static int unshrunk_small(struct pack_scan const *scan, char *missing, int *small);
+
+/* 1 when it's consolidated: its maps' small copies there (a pack's shared file in its folder, or a small copy beside a
+map's link: a pack of one map, or whose maps share nothing, has no shared file) */
 static int consolidated(struct pack_scan const *scan)
 {
-	char pattern[240];
+	char pattern[240], missing[40];
 	WIN32_FIND_DATAA found;
 	HANDLE find;
+	int small;
 	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*.shared", packs_storage, scan->key);
-	if ((find = FindFirstFileA(pattern, &found)) == INVALID_HANDLE_VALUE)
-		return 0;
-	FindClose(find);
-	return 1;
+	if ((find = FindFirstFileA(pattern, &found)) != INVALID_HANDLE_VALUE)
+	{
+		FindClose(find);
+		return 1;
+	}
+	unshrunk_small(scan, missing, &small);
+	return small > 0;
 }
 
 /* an imported map with no small copy beside its link (its name in missing[40]): 0 when every one has one */
 static int unshrunk(struct pack_scan const *scan, char *missing)
+{
+	int small;
+	return unshrunk_small(scan, missing, &small);
+}
+
+/* (and how many have one: small) */
+static int unshrunk_small(struct pack_scan const *scan, char *missing, int *small)
 {
 	WIN32_FIND_DATAA found, inner;
 	char pattern[240], path[260];
 	HANDLE find, maps;
 	int n = 0;
 	missing[0] = 0;
+	*small = 0;
 	text_print(pattern, sizeof(pattern), "%s\\maps\\%s\\*", packs_storage, scan->key);
 	if ((find = FindFirstFileA(pattern, &found)) == INVALID_HANDLE_VALUE)
 		return 0;
@@ -3977,6 +4387,7 @@ static int unshrunk(struct pack_scan const *scan, char *missing)
 		if ((maps = FindFirstFileA(path, &inner)) != INVALID_HANDLE_VALUE)
 		{
 			FindClose(maps);
+			(*small)++;
 			continue;
 		}
 		if (!n++)
@@ -4006,22 +4417,26 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 		struct menu_item items[6];
 		int actions[6], n = 0, k, imported = scan->multiplayer_imported || scan->campaign_imported, known, is_small;
 		unsigned long after, minutes, mb = (unsigned long)(scan->size >> 20);
-		char intro[300], stock_index[220], consolidate_about[300], name[64], missing[40];
+		char intro[300], stock_index[220], consolidate_about[300], name[64], missing[40], kinds[64];
 		enum { PACK_CONSOLIDATE, PACK_LINK, PACK_REMOVE, PACK_DELETE, PACK_BACK };
 		text_print(name, sizeof(name), "%s", strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path);
 		pack_numbers(scan, &after, &minutes, &known);
 		is_small = consolidated(scan);
 		text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
-		text_print(intro, sizeof(intro), "%d multiplayer map%s%s, %lu MB. %s", scan->multiplayer,
-			scan->multiplayer == 1 ? "" : "s", scan->campaign ? " and a campaign" : "", mb, is_small ?
+		if (scan->multiplayer)
+			text_print(kinds, sizeof(kinds), "%d multiplayer map%s%s", scan->multiplayer, scan->multiplayer == 1 ? "" :
+				"s", scan->campaign ? " and a campaign" : "");
+		else
+			text_print(kinds, sizeof(kinds), scan->campaign ? "A campaign" : "No maps");
+		text_print(intro, sizeof(intro), "%s, %lu MB. %s", kinds, mb, is_small ?
 			"It's consolidated: its maps are small in Halo 1 Unlimited." : imported ?
 			"It's linked: Halo 1 Unlimited plays its maps where they are." : "It isn't in Halo 1 Unlimited yet.");
 		if (!is_small && (scan->multiplayer || scan->campaign))
 		{
 			text_print(items[n].text, sizeof(items[n].text), "Consolidate (recommended)");
 			text_print(consolidate_about, sizeof(consolidate_about), "Shrinks %s from %s%lu MB to %s%lu MB (%s%lu "
-				"minute%s). Small maps are the ones Halo 1 Unlimited can share with other players online. The pack's "
-				"own folder isn't changed.", name, "", mb, known ? "" : "about ", after, known ? "" : "about ", minutes,
+				"minute%s). Small maps are quicker to send to other players online. The pack's own folder isn't "
+				"changed.", name, "", mb, known ? "" : "about ", after, known ? "" : "about ", minutes,
 				minutes == 1 ? "" : "s");
 			items[n].about = consolidate_about;
 			items[n].disabled = GetFileAttributesA(stock_index) == INVALID_FILE_ATTRIBUTES;
@@ -4072,8 +4487,9 @@ static void player_pack(struct halo *h, struct pack_scan *scan, char const *stoc
 		{
 			char title[80];
 			text_print(title, sizeof(title), "Consolidating %s", name);
+			unsigned long before, after;
 			task_begin(title, "Making its maps small...");
-			consolidate_pack(h, scan, stock);
+			consolidate_pack(h, scan, stock, &before, &after);
 			task_end();
 			task_wait();
 		}
@@ -4124,39 +4540,216 @@ static struct halo *halo_at(char const *path)
 	return NULL;
 }
 
+/* the packs, looked at (once: then only the one chosen, after what was done to it); stock: stock.index's path. 0: no
+room for the list */
+static int packs_look(char *stock, int size)
+{
+	int i;
+	if (!pack_scans)
+		pack_scans = malloc(MOST_PACKS * sizeof(*pack_scans));
+	if (!pack_scans)
+		return 0;
+	stock_maps_folder(stock, size);
+	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
+	if (packs_listed)
+		return 1;
+	for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
+	{
+		struct pack_scan *scan = &pack_scans[pack_count];
+		if (!can_import(&halos[i]) || halos[i].unfinished)
+			continue;
+		packs_scan(halos[i].path, stock, scan);
+		if (scan->multiplayer || scan->campaign || scan->multiplayer_imported || scan->campaign_imported)
+			pack_count++;
+	}
+	packs_listed = 1;
+	return 1;
+}
+
+/* what consolidating every pack that isn't yet would save, in MB (known packs' numbers, else estimates) */
+static unsigned long packs_saving(void)
+{
+	unsigned long saved = 0, after, minutes;
+	int n, known;
+	for (n = 0; n < pack_count; n++)
+	{
+		unsigned long mb = (unsigned long)(pack_scans[n].size >> 20);
+		if (consolidated(&pack_scans[n]))
+			continue;
+		pack_numbers(&pack_scans[n], &after, &minutes, &known);
+		if (mb > after)
+			saved += mb - after;
+	}
+	return saved;
+}
+
+/* "1 h 20 min", "45 min" */
+static void say_minutes(char *out, int size, unsigned long minutes)
+{
+	if (minutes >= 60)
+		text_print(out, size, "%lu h %lu min", minutes / 60, minutes % 60);
+	else
+		text_print(out, size, "%lu min", minutes ? minutes : 1);
+}
+
+/* the packs Consolidate all does (all = 1: not consolidated yet) or Link all does (all = 0: not in it at all) */
+static int pack_wanted(struct pack_scan const *scan, int consolidating)
+{
+	int linked = scan->multiplayer_imported || scan->campaign_imported;
+	if (!scan->multiplayer && !scan->campaign)
+		return 0;
+	return consolidating ? !consolidated(scan) : !linked && !consolidated(scan);
+}
+
+/* Consolidate all / Link all: every such pack in turn, one line each on the screen (its maps counted, then what it went
+from and to), with nothing to answer: started, it can be left to run. A pack that fails is said and passed. The end waits
+for a button, so what was done is there to read */
+static void packs_all(int consolidating, char const *stock)
+{
+	unsigned long total_before = 0, total_after = 0;
+	int n, done = 0, failed = 0, wanted = 0;
+	DWORD started = GetTickCount();
+	char took[32];
+	for (n = 0; n < pack_count; n++)
+		wanted += pack_wanted(&pack_scans[n], consolidating);
+	task_begin(consolidating ? "Consolidating all your map packs" : "Linking all your map packs", NULL);
+	log_file(consolidating ? "Consolidate all:" : "Link all:");
+	for (n = 0; n < pack_count; n++)
+	{
+		struct pack_scan *scan = &pack_scans[n];
+		struct halo *h = halo_at(scan->path);
+		struct receipt_entry *e;
+		char const *name = strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path;
+		unsigned long before = 0, after = 0;
+		int made;
+		if (!h || !pack_wanted(scan, consolidating))
+			continue;
+		receipt_batch = 0;
+		e = receipt_add(RECEIPT_ACTION);
+		text_print(e->text, sizeof(e->text), "%s", name);
+		/* (the title says which pack of them) */
+		text_print(task_title, sizeof(task_title), "%s (%d of %d)", consolidating ? "Consolidating all your map packs" :
+			"Linking all your map packs", done + failed + 1, wanted);
+		player_heading(task_title);
+		receipt_show();
+		receipt_batch = 1;
+		if (consolidating)
+		{
+			char title[300];
+			text_print(title, sizeof(title), "Consolidating %s", scan->path);
+			log_file(title);
+			made = consolidate_pack(h, scan, stock, &before, &after);
+		}
+		else
+		{
+			char error[256];
+			made = packs_import(scan, 1, scan->campaign != 0, packs_say, error) ? -1 : 1;
+			if (made < 0)
+				say_in(COLOUR_RED, "%s", error);
+		}
+		receipt_batch = 0;
+		/* (its line: what it went from and to; it's marked done by the next) */
+		for (e = &receipt[receipt_count - 1]; e > receipt && e->kind != RECEIPT_ACTION; e--)
+			;
+		if (made < 0)
+		{
+			failed++;
+			text_print(e->right, sizeof(e->right), "failed");
+		}
+		else
+		{
+			done++;
+			total_before += before;
+			total_after += after;
+			if (consolidating)
+				text_print(e->right, sizeof(e->right), made ? "%lu -> %lu MB" : "nothing to shrink", before, after);
+			else
+				text_print(e->right, sizeof(e->right), "linked");
+		}
+		e->done = 1;
+		packs_scan(h->path, stock, scan);
+		receipt_show();
+	}
+	say_minutes(took, sizeof(took), (GetTickCount() - started + 30000) / 60000);
+	if (consolidating)
+		step("Done: %d pack%s consolidated, %lu MB -> %lu MB, in %s.%s", done, done == 1 ? "" : "s", total_before,
+			total_after, took, failed ? "" : " Your map packs' own folders are left as they are.");
+	else
+		step("Done: %d pack%s linked.", done, done == 1 ? "" : "s");
+	if (failed)
+		say_in(COLOUR_YELLOW, "%d didn't work: installer_log.txt says why.", failed);
+	task_end();
+	task_problem = 1;                    /* (it was left to run: the end waits to be read) */
+	task_wait();
+}
+
 static void player_map_packs(void)
 {
 	struct menu_item *items;
 	char stock[200];
-	int n, i, k = 0;
-	if (!pack_scans)
-		pack_scans = malloc(MOST_PACKS * sizeof(*pack_scans));
-	items = malloc(MOST_PACKS * sizeof(*items));
-	if (!pack_scans || !items)
+	char (*abouts)[240];
+	static char consolidate_all_about[300], link_all_about[200];
+	int n, k = 0, first, to_consolidate, to_link, all_consolidate, all_link, pack_k = -1;
+	items = malloc((MOST_PACKS + 2) * sizeof(*items));
+	abouts = malloc(MOST_PACKS * sizeof(*abouts));
+	if (!items || !abouts)
 	{
 		free(items);
+		free(abouts);
 		return;
 	}
-	stock_maps_folder(stock, sizeof(stock));
-	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
 	for (;;)
 	{
-		/* (the packs are looked at once; then only the one chosen, after what was done to it) */
 		if (!packs_listed)
 		{
 			player_heading("Map Packs");
 			screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at your map packs...");
 			screen_show();
-			for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
+		}
+		if (!packs_look(stock, sizeof(stock)))
+			break;
+		/* (first: Consolidate all and Link all, when there's a pack for them) */
+		{
+			unsigned long minutes = 0, saved = 0, after, each;
+			char stock_index[220], took[32];
+			int known;
+			to_consolidate = to_link = 0;
+			for (n = 0; n < pack_count; n++)
 			{
-				struct pack_scan *scan = &pack_scans[pack_count];
-				if (!can_import(&halos[i]) || halos[i].unfinished)
-					continue;
-				packs_scan(halos[i].path, stock, scan);
-				if (scan->multiplayer || scan->campaign || scan->multiplayer_imported || scan->campaign_imported)
-					pack_count++;
+				if (pack_wanted(&pack_scans[n], 1))
+				{
+					to_consolidate++;
+					pack_numbers(&pack_scans[n], &after, &each, &known);
+					minutes += each;
+					if ((unsigned long)(pack_scans[n].size >> 20) > after)
+						saved += (unsigned long)(pack_scans[n].size >> 20) - after;
+				}
+				to_link += pack_wanted(&pack_scans[n], 0);
 			}
-			packs_listed = 1;
+			first = 0;
+			all_consolidate = all_link = -1;
+			if (to_consolidate > 1)
+			{
+				text_print(stock_index, sizeof(stock_index), "%s\\stock.index", stock);
+				say_minutes(took, sizeof(took), minutes);
+				text_print(items[first].text, sizeof(items[first].text), "Consolidate all (%d packs, about %s)",
+					to_consolidate, took);
+				text_print(consolidate_all_about, sizeof(consolidate_all_about), "Every pack that isn't consolidated yet, "
+					"one after another: about %s, nothing to answer, so you can leave it running. Saves around %lu MB once "
+					"you delete the originals. The packs' own folders aren't changed.", took, saved);
+				items[first].about = consolidate_all_about;
+				items[first].disabled = GetFileAttributesA(stock_index) == INVALID_FILE_ATTRIBUTES;
+				all_consolidate = first++;
+			}
+			if (to_link > 1)
+			{
+				text_print(items[first].text, sizeof(items[first].text), "Link all (%d packs)", to_link);
+				text_print(link_all_about, sizeof(link_all_about), "Every pack that isn't in Halo 1 Unlimited yet goes "
+					"in its map list as it is. Quick: a minute or so.");
+				items[first].about = link_all_about;
+				items[first].disabled = 0;
+				all_link = first++;
+			}
 		}
 		for (n = 0; n < pack_count; n++)
 		{
@@ -4164,14 +4757,24 @@ static void player_map_packs(void)
 			unsigned long after, minutes;
 			int known;
 			char const *last;
+			int small = consolidated(scan), linked = scan->multiplayer_imported || scan->campaign_imported;
+			unsigned long mb = (unsigned long)(scan->size >> 20);
 			last = strrchr(scan->path, '\\') ? strrchr(scan->path, '\\') + 1 : scan->path;
 			pack_numbers(scan, &after, &minutes, &known);
-			text_print(items[n].text, sizeof(items[n].text), "%-36.36s %5lu MB  %s", last,
-				(unsigned long)(scan->size >> 20), consolidated(scan) ? "Consolidated" :
-				scan->multiplayer_imported || scan->campaign_imported ? "Linked" : "Not added");
-			items[n].about = known ? "A known pack: its numbers are from consolidating it on a console." :
-				"Choose it to add it to Halo 1 Unlimited.";
-			items[n].disabled = 0;
+			text_print(items[first + n].text, sizeof(items[0].text), "%-36.36s %5lu MB  %s", last, mb,
+				small ? "Consolidated" : linked ? "Linked" : "Not added");
+			/* (what it is now, and what choosing it can do) */
+			if (small)
+				text_print(abouts[n], sizeof(abouts[n]), "It's in Halo 1 Unlimited, consolidated: its maps are small "
+					"and ready to play.");
+			else if (linked)
+				text_print(abouts[n], sizeof(abouts[n]), "It's in Halo 1 Unlimited, linked: its maps play from where "
+					"they are. Consolidate it to shrink it from %lu MB to %s%lu MB.", mb, known ? "" : "about ", after);
+			else
+				text_print(abouts[n], sizeof(abouts[n]), "It isn't in Halo 1 Unlimited yet. Consolidate it to shrink "
+					"it from %lu MB to %s%lu MB, or link it as it is.", mb, known ? "" : "about ", after);
+			items[first + n].about = abouts[n];
+			items[first + n].disabled = 0;
 		}
 		if (!n)
 		{
@@ -4179,8 +4782,26 @@ static void player_map_packs(void)
 				"default.xbe and maps) on E:, F: or G:.");
 			break;
 		}
-		if ((k = menu("Map Packs", "The map packs on your Xbox:", items, n, k)) < 0)
+		if (pack_k >= 0)
+			k = first + pack_k;         /* (the pack chosen last, wherever the rows above it went) */
+		pack_k = -1;
+		if ((k = menu("Map Packs", "The map packs on your Xbox:", items, first + n, k)) < 0)
 			break;
+		if (k == all_consolidate || k == all_link)
+		{
+			struct menu_item sure[2] = {{"Start", NULL, 0}, {"Back", NULL, 0}};
+			char line[300];
+			if (k == all_consolidate)
+				text_print(line, sizeof(line), "%d packs are made small, one after another. It takes a while: you can leave "
+					"it running. Your packs' own folders aren't changed.", to_consolidate);
+			else
+				text_print(line, sizeof(line), "%d packs go in Halo 1 Unlimited's map list as they are.", to_link);
+			if (menu(k == all_consolidate ? "Consolidate all your map packs?" : "Link all your map packs?", line, sure, 2,
+				0) == 0)
+				packs_all(k == all_consolidate, stock);
+			continue;
+		}
+		k -= first;
 		if (!halo_at(pack_scans[k].path))
 			packs_listed = 0;
 		else
@@ -4192,8 +4813,10 @@ static void player_map_packs(void)
 			pack_count--;
 			k = k < pack_count ? k : pack_count - 1;
 		}
+		pack_k = k;
 	}
 	free(items);
+	free(abouts);
 }
 
 /* Rebuild original Halo: their Halo made again from Halo 1 Unlimited (stockmaps_rebuild: each map exact), in a folder
@@ -4358,7 +4981,7 @@ static void player_main(void)
 			}
 			else if (check_state == CHECK_NEWER)
 			{
-				text_print(items[n].text, sizeof(items[n].text), "Update Halo 1 Unlimited (v1.%lu)", check_build);
+				text_print(items[n].text, sizeof(items[n].text), "Update Halo 1 Unlimited (%s)", check_version());
 				items[n].about = "A newer Halo 1 Unlimited is online: it's downloaded and installed (a minute or two).";
 			}
 			else if (check_state == CHECK_NEWEST)

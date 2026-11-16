@@ -329,6 +329,16 @@ game's flags also tell its clients whether the host is a dedicated server
 (`_network_game_cooperative_dedicated_bit`: its loading zones then ask for
 most of the living players).
 
+Then version 44 takes OpenCE's versions 42 to 44 as far as their wire goes, so that its clients and this server play
+together (Halo 1 Unlimited, 2026-11-15). The distributed header carries the host's checkpoint epoch (12 bytes): a host
+starts one with each game and sends its boundary (`_distributed_message_checkpoint`, 96, the header alone, reliably)
+to a client before the snapshot of the objects; a client takes the host's messages, and sends its own but its ready,
+only in its epoch once the snapshot is in, and a host takes a client's only in its own. The join request ends with the
+network version the machine joins with, and a host refuses another. The game settings record ends with OpenCE's MCC
+identity (two SHA-256, zero for Xbox and Custom Edition maps). A unit state may carry OpenCE's scripted pose (bit 6,
+five vectors) and vehicle deck (bit 7, 28 bytes) parts, which are read past: this build plays neither. An Xbox client
+leaves a game with OpenCE's vehicle riding on (the record's co-op flag 3, or the map's choice, message 107).
+
 `port/linux/network_format.txt` records the wire format of the current
 version (`tools/network_format.py`): `test_linux_port.py` fails when the
 sources' messages, kinds, bits, structs sent whole or the sizes of their

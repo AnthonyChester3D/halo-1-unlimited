@@ -1374,6 +1374,8 @@ void network_objects_client_asked(
 		return;
 	if (again)
 		OBJECTS_DIAGNOSTIC(("netobj: machine #%ld failed to make an object and asks for them all again", machine_index));
+	/* (the epoch's boundary first: the client takes the snapshot's messages, and sends its own, only in it) */
+	distributed_checkpoint_to_machine(machine_index);
 	player_list = machine_get_player_list(machine_index);
 	/* (another machine in its place has other players) */
 	if ((again && game_time_get() - objects_host_machines[machine_index].time >= HOST_OBJECTS_RESEND_TICKS) ||
@@ -3864,6 +3866,10 @@ void network_objects_client_tick(
 	/* (too many to look at one by one later: all of them) */
 	else if (objects_client_new_object_count >= MAXIMUM_CLIENT_NEW_OBJECTS)
 		objects_client_check_all = TRUE;
+	/* (no predictions from the old copies while the epoch's snapshot is still coming: its empty inventories aren't
+	the host's word on a throw or a shot of ours) */
+	if (!distributed_checkpoint_ready())
+		return;
 #if defined(HALO_XBOX_TARGET)
 	/* (oxbox: its own players' units holding weapons but none in hand, 3 seconds on and every 30 after: why) */
 	{

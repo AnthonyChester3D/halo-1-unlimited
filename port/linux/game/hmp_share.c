@@ -132,6 +132,7 @@ static void leave_game(char const *why);
 static int my_machine(void);
 static int host_in_game(void);
 boolean network_game_server_machine_joining(void);   /* network_server_manager.c (test build 24) */
+void network_distributed_riding_check(void);          /* network_distributed.c: a game with OpenCE's vehicle riding, left */
 static u32 host_rtt(void) { return 0; }   /* (the client's own measure: its connection's round trip) */
 
 /* ---- protocol ---- */
@@ -2522,6 +2523,7 @@ void map_share_update(void) {
     int priority;
     g_ticks++;
     crc_init();
+    network_distributed_riding_check();   /* (a game with OpenCE's vehicle riding: left) */
     if (!g_worker && !g_worker_failed) { maps_writable(); start_worker(); }
     priority = game_in_progress() ? 0 : WORKER_PRIORITY;
     if (g_worker && priority != g_worker_priority) { SetThreadPriority(g_worker, priority); g_worker_priority = priority; }
