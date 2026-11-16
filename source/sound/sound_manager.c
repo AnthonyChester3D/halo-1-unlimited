@@ -3313,8 +3313,12 @@ struct sound_obstruction_cache_entry
 	real_point3d position;
 };
 
+/* oxbox: not on the Xbox, which draws a frame a tick: each sound is tested once a tick anyway, and the two tables
+are 23 KB (sound_obstruction_cache_entry gives none: every sound is tested, as before) */
+#if !defined(HALO_XBOX_TARGET)
 static struct sound_obstruction_cache_entry sound_obstruction_cache[MAXIMUM_SOUND_DATUMS];
 static struct sound_obstruction_cache_entry looping_sound_obstruction_cache[MAXIMUM_LOOPING_SOUND_DATUMS];
+#endif
 
 static struct sound_obstruction_cache_entry *sound_obstruction_cache_entry(
 	short kind,
@@ -3324,11 +3328,13 @@ static struct sound_obstruction_cache_entry *sound_obstruction_cache_entry(
 
 	if (datum_index == NONE)
 		return NULL;
+#if !defined(HALO_XBOX_TARGET)
 	slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(datum_index);
 	if (kind == _sound_obstruction_cache_sound && slot < MAXIMUM_SOUND_DATUMS)
 		return &sound_obstruction_cache[slot];
 	if (kind == _sound_obstruction_cache_looping_sound && slot < MAXIMUM_LOOPING_SOUND_DATUMS)
 		return &looping_sound_obstruction_cache[slot];
+#endif
 	return NULL;
 }
 
