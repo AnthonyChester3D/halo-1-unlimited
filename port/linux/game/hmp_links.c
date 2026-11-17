@@ -63,7 +63,8 @@ enum
 
 struct link_entry
 {
-	unsigned long name_hash;                 /* the PC map's name (link_name_hash) */
+	unsigned long name_hash;                 /* the PC map's name (link_match_hash) */
+	unsigned long leaf_hash;                 /* its last part alone: an online listing's (link_match_hash) */
 	unsigned long version;                   /* a Custom Edition map's hash's first 32 bits; an MCC map's checksum */
 	unsigned long content;                   /* an MCC map's content SHA-256's first 4 bytes (0: none) */
 	unsigned long metadata;                  /* ... its metadata SHA-256's (0: the link doesn't say) */
@@ -257,6 +258,7 @@ static boolean link_header_line(void *context, char const *line)
 			return TRUE;
 		header->entry.kind = _link_kind_ce;
 		header->entry.name_hash = link_match_hash(name, _link_kind_ce);
+		header->entry.leaf_hash = link_match_hash(name, _link_kind_mcc);
 		header->entry.version = hex_value(b, 8);
 		if (!header->entry.version)
 			header->entry.version = 1;      /* (map_share_hash_version: 0 is 1) */
@@ -272,6 +274,7 @@ static boolean link_header_line(void *context, char const *line)
 			return TRUE;
 		header->entry.kind = _link_kind_mcc;
 		header->entry.name_hash = link_match_hash(name, _link_kind_mcc);
+		header->entry.leaf_hash = header->entry.name_hash;
 		header->entry.content = hex_value(a, 8);
 		header->entry.metadata = strlen(b) == 64 ? hex_value(b, 8) : 0;
 		header->entry.version = strtoul(c, NULL, 16);
@@ -356,6 +359,8 @@ static void links_build(void)
 		GetTickCount() - start);
 }
 
+int oxbox_online_stock_map(char const *map);   /* (hmp_online.c: one of the Xbox's 13 multiplayer levels) */
+
 /* the link for a PC map (version 0: any version; mcc: the record's 64 bytes of MCC identity, or NULL); NULL for none */
 static struct link_entry const *links_find(char const *name, unsigned long version, byte const *mcc)
 {
@@ -363,14 +368,22 @@ static struct link_entry const *links_find(char const *name, unsigned long versi
 	unsigned long name_hash;
 	long index;
 
-	if (!kind)
+	/* (a name with no custom_maps\ or mcc_maps\: an online listing's, which carries the map's last part alone: any
+	link whose PC map ends so, for the games list; the join's settings name it whole, and decide) */
+	if (!kind && (version || !name || !name[0] || name[0] == '+' || oxbox_online_stock_map(name)))
 		return NULL;
 	links_build();
-	name_hash = link_match_hash(name, kind);
+	name_hash = link_match_hash(name, kind ? kind : _link_kind_mcc);
 	for (index = 0; index < links.count; index++)
 	{
 		struct link_entry const *entry = &links.entries[index];
 
+		if (!kind)
+		{
+			if (entry->leaf_hash == name_hash)
+				return entry;
+			continue;
+		}
 		if (entry->kind != kind || entry->name_hash != name_hash)
 			continue;
 		if (!version)

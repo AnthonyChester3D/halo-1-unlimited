@@ -766,8 +766,84 @@ static void *oxbox_update_section(void)
 	return NULL;
 }
 
+#if defined(OXBOX_NET_P2P) && defined(OXBOX_CROSSPLAY)
+#include "halo_port_limits.h"
+
+/* the master servers' lists (net/oxbox_update.c, in OXUPD: OpenCE's dedicated servers list there, not with the
+brokers): while ONLINE PLAY's games list is on the screen (hmp_online_list_shown) in the menus, OXUPD is loaded and
+the masters are asked at once and every 30 seconds; the list closed, or a map loading, and it's stopped and unloaded
+(the kernel counts the section's loads: the update check's and this one's are each their own). Not while the update
+check runs (one TLS connection at a time: Mbed TLS isn't built for threads) */
+static struct
+{
+	int loaded;
+	unsigned long asked;               /* (when last asked: 0 none yet) */
+} oxbox_masters;
+
+static void oxbox_masters_frame(int menus)
+{
+	int oxbox_masters_start(int network_version);
+	int oxbox_masters_running(void);
+	void oxbox_masters_stop(void);
+	void oxbox_masters_done(void);
+	int p2p_lobby_browsing(void);
+	int hmp_online_list_shown(void);
+	extern int oxbox_online;
+	unsigned long now = GetTickCount();
+	int wanted = menus && oxbox_online && p2p_lobby_browsing() && hmp_online_list_shown();
+
+	if (!oxbox_masters.loaded)
+	{
+		oxbox_section_proc load_section;
+		void *section;
+		unsigned long address;
+		int dhcp;
+		int oxbox_lwip_address(unsigned long *address, int *dhcp);
+
+		if (!wanted || oxbox_update.state == 1 || !oxbox_lwip_address(&address, &dhcp))
+			return;
+		load_section = (oxbox_section_proc)oxbox_kernel_export(327);
+		section = oxbox_update_section();
+		if (!load_section || !section || load_section(section) < 0)
+		{
+			platform_log("masters: the OXUPD section couldn't be loaded: no master servers' lists");
+			oxbox_masters.asked = now;
+			return;
+		}
+		oxbox_masters.loaded = 1;
+		oxbox_masters.asked = 0;
+		platform_log("masters: OXUPD loaded for the online games list (%lu KB free)", free_kb());
+	}
+	if (wanted)
+	{
+		if (!oxbox_masters_running() && (!oxbox_masters.asked || now - oxbox_masters.asked >= 30000) &&
+			oxbox_update.state != 1 && oxbox_masters_start(OXBOX_CROSSPLAY_VERSION))
+		{
+			oxbox_masters.asked = now ? now : 1;
+		}
+		return;
+	}
+	oxbox_masters_stop();
+	if (oxbox_masters_running())
+		return;
+	oxbox_masters_done();
+	{
+		oxbox_section_proc unload_section = (oxbox_section_proc)oxbox_kernel_export(328);
+		void *section = oxbox_update_section();
+
+		if (unload_section && section)
+			unload_section(section);
+	}
+	oxbox_masters.loaded = 0;
+	platform_log("masters: OXUPD unloaded (the online games list closed)");
+}
+#endif
+
 void oxbox_update_frame(int menus)
 {
+#if defined(OXBOX_NET_P2P) && defined(OXBOX_CROSSPLAY)
+	oxbox_masters_frame(menus);
+#endif
 #if defined(OXBOX_NET_P2P)
 	int oxbox_update_check_start(char const *url);
 	int oxbox_update_check_running(void);
@@ -830,6 +906,15 @@ void oxbox_update_frame(int menus)
 		{
 			if (!menus)
 				goto unload;
+#if defined(OXBOX_CROSSPLAY)
+			{
+				/* (the masters' lists being asked for: after them, one connection at a time) */
+				int oxbox_masters_running(void);
+
+				if (oxbox_masters_running())
+					return;
+			}
+#endif
 			oxbox_update_found_release = -1;
 			oxbox_update_found_network = -1;
 			oxbox_update_found_build = 0;

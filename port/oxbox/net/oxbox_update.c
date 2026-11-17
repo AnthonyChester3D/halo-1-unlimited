@@ -12,6 +12,14 @@ answer): the first 128 bytes of the project's latest package, its header, which 
 - The server's certificate isn't checked (as the installer's isn't: download.h has why). What comes back only decides
   whether the player is asked; the installer installs only a package signed by a key it trusts.
 - Nothing is sent but the request: no player name, no hardware, no address of this Xbox's own.
+
+It also asks OpenCE's master servers for their lists of dedicated servers (the online games list's; oxbox_sdk.c
+oxbox_masters_frame: while the list is open, every 30 seconds), which list there and not with the brokers since
+OpenCE's network version 39 (OpenCE's docs/master_protocol.md, "The list"): GET /v1/servers over HTTPS (the masters
+send plain HTTP to HTTPS), each list taken only if its Ed25519 signature checks with the master's key pinned here, its
+key id is that key's, and (when the Xbox's clock is about right) it's at most 5 minutes old; its servers' own signed
+listings go to the games list as the brokers' do (p2p_lobby.c p2p_lobby_master_heard, which checks each again). The
+connection's certificate isn't checked: the list's signature is what's trusted.
 */
 
 #include "lwip/opt.h"
@@ -23,6 +31,7 @@ answer): the first 128 bytes of the project's latest package, its header, which 
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "mbedtls/platform_time.h"
 #include "mbedtls/ssl.h"
@@ -41,6 +50,11 @@ HANDLE NTAPI CreateThread(PVOID security, SIZE_T stack, PVOID start, PVOID param
 int NTAPI CloseHandle(HANDLE handle);
 /* (oxbox_sdk.c: the answer) */
 extern volatile long oxbox_update_found_release, oxbox_update_found_network, oxbox_update_found_build;
+/* (p2p_crypto.c, p2p.c, p2p_lobby.c: the masters' lists) */
+void p2p_sha256(const void *data, int size, unsigned char *digest);
+void p2p_hex(const unsigned char *bytes, int size, char *text);
+int p2p_ed25519_verify(const unsigned char *public_key, const void *message, int size, const unsigned char *signature);
+int p2p_lobby_master_heard(const unsigned char *payload, int size);
 
 /* ---------- constants */
 
@@ -69,6 +83,7 @@ struct update_connection
 {
 	int socket;
 	int tls;
+	volatile long *stop;               /* (its thread's: update.stop, or masters.stop) */
 	mbedtls_ssl_context ssl;
 	mbedtls_ssl_config config;
 };
@@ -139,11 +154,12 @@ int inet_pton(int family, char const *text, void *address)
 
 /* waits until the socket can be read (or written), a quarter of a second at a time, giving up when told to: 1 when it
 can, else 0 */
-static int update_wait(int s, int writing, unsigned long ms)
+static int update_wait(struct update_connection const *c, int writing, unsigned long ms)
 {
 	unsigned long start = GetTickCount();
+	int s = c->socket;
 
-	while (!update.stop && GetTickCount() - start < ms)
+	while (!*c->stop && GetTickCount() - start < ms)
 	{
 		fd_set set;
 		struct timeval timeout;
@@ -160,9 +176,10 @@ static int update_wait(int s, int writing, unsigned long ms)
 
 static int update_send(void *context, unsigned char const *data, size_t size)
 {
-	int s = ((struct update_connection *)context)->socket, n;
+	struct update_connection *c = (struct update_connection *)context;
+	int s = c->socket, n;
 
-	if (!update_wait(s, 1, UPDATE_TIMEOUT_MS))
+	if (!update_wait(c, 1, UPDATE_TIMEOUT_MS))
 		return MBEDTLS_ERR_SSL_TIMEOUT;
 	n = lwip_send(s, data, size, 0);
 	return n < 0 ? MBEDTLS_ERR_SSL_WANT_WRITE : n;
@@ -170,9 +187,10 @@ static int update_send(void *context, unsigned char const *data, size_t size)
 
 static int update_receive(void *context, unsigned char *data, size_t size, uint32_t timeout)
 {
-	int s = ((struct update_connection *)context)->socket, n;
+	struct update_connection *c = (struct update_connection *)context;
+	int s = c->socket, n;
 
-	if (!update_wait(s, 0, timeout ? timeout : UPDATE_TIMEOUT_MS))
+	if (!update_wait(c, 0, timeout ? timeout : UPDATE_TIMEOUT_MS))
 		return MBEDTLS_ERR_SSL_TIMEOUT;
 	n = lwip_recv(s, data, size, 0);
 	return n < 0 ? MBEDTLS_ERR_SSL_WANT_READ : n;
@@ -191,8 +209,9 @@ static void update_close(struct update_connection *c)
 	c->socket = -1;
 }
 
-/* connected (TLS over it when tls): 0, else 1 (said in the log) */
-static int update_open(struct update_connection *c, char const *host, unsigned short port, int tls)
+/* connected (TLS over it when tls): 0, else 1 (said in the log); stop: its thread's word to give up */
+static int update_open(struct update_connection *c, char const *host, unsigned short port, int tls,
+	volatile long *stop)
 {
 	struct hostent *found;
 	struct sockaddr_in to;
@@ -201,6 +220,7 @@ static int update_open(struct update_connection *c, char const *host, unsigned s
 
 	memset(c, 0, sizeof(*c));
 	c->socket = -1;
+	c->stop = stop;
 	found = lwip_gethostbyname(host);
 	if (!found || !found->h_addr_list || !found->h_addr_list[0])
 	{
@@ -220,7 +240,7 @@ static int update_open(struct update_connection *c, char const *host, unsigned s
 	flags = lwip_fcntl(c->socket, F_GETFL, 0);
 	lwip_fcntl(c->socket, F_SETFL, flags | O_NONBLOCK);
 	r = lwip_connect(c->socket, (struct sockaddr *)&to, sizeof(to));
-	if (r && !update_wait(c->socket, 1, UPDATE_TIMEOUT_MS))
+	if (r && !update_wait(c, 1, UPDATE_TIMEOUT_MS))
 	{
 		platform_log("update: couldn't connect to %s", host);
 		update_close(c);
@@ -264,7 +284,7 @@ static int update_open(struct update_connection *c, char const *host, unsigned s
 	start = GetTickCount();
 	while ((r = mbedtls_ssl_handshake(&c->ssl)) != 0)
 	{
-		if ((r != MBEDTLS_ERR_SSL_WANT_READ && r != MBEDTLS_ERR_SSL_WANT_WRITE) || update.stop ||
+		if ((r != MBEDTLS_ERR_SSL_WANT_READ && r != MBEDTLS_ERR_SSL_WANT_WRITE) || *c->stop ||
 			GetTickCount() - start > UPDATE_TIMEOUT_MS)
 			goto failed;
 	}
@@ -286,7 +306,7 @@ static int update_write(struct update_connection *c, char const *data, unsigned 
 
 		if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE)
 		{
-			if (update.stop || GetTickCount() - start > UPDATE_TIMEOUT_MS)
+			if (*c->stop || GetTickCount() - start > UPDATE_TIMEOUT_MS)
 				return 1;
 			continue;
 		}
@@ -311,7 +331,7 @@ static int update_read(struct update_connection *c, unsigned char *data, unsigne
 		if (n > 0)
 			return n;
 		if ((n != MBEDTLS_ERR_SSL_WANT_READ && n != MBEDTLS_ERR_SSL_WANT_WRITE &&
-			n != MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) || update.stop || GetTickCount() - start > UPDATE_TIMEOUT_MS)
+			n != MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) || *c->stop || GetTickCount() - start > UPDATE_TIMEOUT_MS)
 			return -1;
 	}
 }
@@ -382,7 +402,7 @@ static int update_get(int *got)
 			port = (unsigned short)strtoul(colon + 1, NULL, 10);
 		}
 	}
-	if (update_open(&c, host, port, tls))
+	if (update_open(&c, host, port, tls, &update.stop))
 		return 1;
 	n = halo_linux_snprintf(request, sizeof(request),
 		"GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Halo1Unlimited\r\nRange: bytes=0-%d\r\nAccept: */*\r\n"
@@ -509,6 +529,329 @@ static DWORD NTAPI update_thread(PVOID parameter)
 	return 0;
 }
 
+/* ---------- the master servers' lists */
+
+enum
+{
+	MASTERS_MOST_BODY = 256 * 1024,    /* (a list of 512 servers, the most a master gives, is some 350 KB: 45 are 25 KB) */
+	MASTERS_FRESH = 300,               /* seconds: OpenCE's FRESH_SECONDS */
+	MASTERS_CLOCK_WRONG = 86400,       /* an Xbox clock further off than this from a list's time isn't trusted */
+	MASTERS_LISTING_MOST = 300         /* bytes: a listing is 140 to 268 */
+};
+
+/* OpenCE's official masters, as master_list.c's master_list_read_defaults has them */
+static struct
+{
+	char const *host;
+	char const *key;                   /* (its Ed25519 public key, hex) */
+} const master_servers[] =
+{
+	{ "master.opencommunityedition.com", "89f4eda71229f11f3538679f49ef7fb0c2b407b380093f7f4fe02105b92225aa" },
+	{ "ocemaster.halobase.net", "1d018c4d1e182585948cd807f19133122c1a1484a74dcffa7792d18012573459" },
+	{ "masterce.unicade.io", "22aa04b7cf041af39c2e9765b5da10989254ed49fa23b730cd90e6d36a0a411a" },
+};
+
+static struct
+{
+	HANDLE thread;
+	volatile long stop, running;
+	int network_version;
+	char reply[UPDATE_HEADER + 1];
+	char headers[UPDATE_HEADER + 1];
+} masters;
+
+static int masters_hex_digit(int c)
+{
+	return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* base64 (RFC 4648, with = padding) up to its end or a '"': the bytes' count, -1 if it isn't base64 or won't fit */
+static int masters_base64(char const *text, unsigned char *out, int most)
+{
+	unsigned long bits = 0;
+	int count = 0, have = 0;
+
+	for (; *text && *text != '"' && *text != '\r' && *text != '\n'; text++)
+	{
+		int c = (unsigned char)*text, value;
+
+		if (c == '=')
+			break;
+		value = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 : c >= '0' && c <= '9' ?
+			c - '0' + 52 : c == '+' ? 62 : c == '/' ? 63 : -1;
+		if (value < 0)
+			return -1;
+		bits = bits << 6 | (unsigned long)value;
+		have += 6;
+		if (have >= 8)
+		{
+			have -= 8;
+			if (count >= most)
+				return -1;
+			out[count++] = (unsigned char)(bits >> have);
+		}
+	}
+	return count;
+}
+
+/* a header of the reply's (name with its colon, lowercase), copied into value: 1, else 0 */
+static int masters_header(char const *name, char *value, int size)
+{
+	char *found;
+
+	strcpy(masters.headers, masters.reply);
+	found = update_header(masters.headers, name);
+	if (!found || (int)strlen(found) >= size)
+		return 0;
+	strcpy(value, found);
+	return 1;
+}
+
+/* a number after "name": in the text from start to end (the body's master object), else -1 */
+static long masters_number(char const *start, char const *end, char const *name)
+{
+	char const *at = strstr(start, name);
+
+	if (!at || at >= end)
+		return -1;
+	at += strlen(name);
+	while (*at == ' ')
+		at++;
+	return *at >= '0' && *at <= '9' ? (long)strtoul(at, NULL, 10) : -1;
+}
+
+/* one master's list asked for, checked, and its servers given to the games list */
+static void masters_ask(int index)
+{
+	struct update_connection c;
+	char const *host = master_servers[index].host;
+	unsigned char key[32], digest[32], signature[64 + 4], listing[MASTERS_LISTING_MOST];
+	char request[512], key_id[17], said_signature[160], said_key[40];
+	char *body = NULL, *end, *object, *object_end, *at;
+	unsigned long start = GetTickCount(), body_size = 0, body_room = 0;
+	int size = 0, n, status, digit, listed = 0, taken = 0;
+	long list_time;
+	long now;
+
+	for (digit = 0; digit < 32; digit++)
+		key[digit] = (unsigned char)(masters_hex_digit(master_servers[index].key[2 * digit]) << 4 |
+			masters_hex_digit(master_servers[index].key[2 * digit + 1]));
+	p2p_sha256(key, 32, digest);
+	p2p_hex(digest, 8, key_id);
+	if (update_open(&c, host, 443, 1, &masters.stop))
+		return;
+	/* (HTTP/1.0: the whole body, then the connection closed: no chunks; no gzip asked for) */
+	n = halo_linux_snprintf(request, sizeof(request),
+		"GET /v1/servers?network_version=%d HTTP/1.0\r\nHost: %s\r\nUser-Agent: Halo1Unlimited\r\n"
+		"Accept: application/json\r\n\r\n", masters.network_version, host);
+	if (n <= 0 || n >= (int)sizeof(request) || update_write(&c, request, (unsigned long)n))
+	{
+		platform_log("masters: the request to %s didn't go", host);
+		update_close(&c);
+		return;
+	}
+	for (;;)
+	{
+		n = update_read(&c, (unsigned char *)masters.reply + size, UPDATE_HEADER - size);
+		if (n <= 0)
+			break;
+		size += n;
+		masters.reply[size] = 0;
+		if (strstr(masters.reply, "\r\n\r\n") || size >= UPDATE_HEADER)
+			break;
+	}
+	masters.reply[size] = 0;
+	end = strstr(masters.reply, "\r\n\r\n");
+	if (!end || strncmp(masters.reply, "HTTP/1.", 7) || size < 12)
+	{
+		platform_log("masters: no reply from %s", host);
+		update_close(&c);
+		return;
+	}
+	status = (int)strtoul(masters.reply + 9, NULL, 10);
+	{
+		int body_at = (int)(end + 4 - masters.reply), have = size - body_at;
+
+		*end = 0;
+		if (status != 200 || !masters_header("signature:", said_signature, sizeof(said_signature)) ||
+			!masters_header("signature-key:", said_key, sizeof(said_key)))
+		{
+			platform_log("masters: %s says %d%s", host, status, status == 200 ? " with no signature" : "");
+			update_close(&c);
+			return;
+		}
+		body_room = 32 * 1024;
+		body = (char *)malloc(body_room + 1);
+		if (!body)
+		{
+			platform_log("masters: no memory for %s's list", host);
+			update_close(&c);
+			return;
+		}
+		if (have > 0)
+		{
+			memcpy(body, masters.reply + body_at, (size_t)have);
+			body_size = (unsigned long)have;
+		}
+		for (;;)
+		{
+			if (body_size == body_room)
+			{
+				char *bigger;
+
+				if (body_room >= MASTERS_MOST_BODY)
+				{
+					platform_log("masters: %s's list is over %d KB: not taken", host, MASTERS_MOST_BODY / 1024);
+					free(body);
+					update_close(&c);
+					return;
+				}
+				bigger = (char *)realloc(body, body_room * 2 + 1);
+				if (!bigger)
+				{
+					platform_log("masters: no memory for %s's list (%lu KB)", host, body_room * 2 / 1024);
+					free(body);
+					update_close(&c);
+					return;
+				}
+				body = bigger;
+				body_room *= 2;
+			}
+			n = update_read(&c, (unsigned char *)body + body_size, body_room - body_size);
+			if (n < 0)
+			{
+				platform_log("masters: %s's list didn't all come", host);
+				free(body);
+				update_close(&c);
+				return;
+			}
+			if (n == 0)
+				break;
+			body_size += (unsigned long)n;
+		}
+		body[body_size] = 0;
+	}
+	update_close(&c);
+	/* the checks: the master's key id, its signature of the body, a list of protocol 1 by it, and fresh */
+	if (strcmp(said_key, key_id) || strncmp(said_signature, "ed25519=", 8) ||
+		masters_base64(said_signature + 8, signature, sizeof(signature)) != 64 ||
+		!p2p_ed25519_verify(key, body, (int)body_size, signature))
+	{
+		platform_log("masters: %s's list isn't signed by its key (%s): not taken", host, said_key);
+		free(body);
+		return;
+	}
+	object = strstr(body, "\"master\":{");
+	object_end = object ? strchr(object, '}') : NULL;
+	if (!strstr(body, "\"protocol\":1") || !object || !object_end)
+	{
+		platform_log("masters: %s's answer isn't a list of protocol 1", host);
+		free(body);
+		return;
+	}
+	{
+		char id_field[40];
+
+		halo_linux_snprintf(id_field, sizeof(id_field), "\"key_id\":\"%s\"", key_id);
+		at = strstr(object, id_field);
+		list_time = masters_number(object, object_end, "\"time\":");
+		if (!at || at > object_end || list_time < 0)
+		{
+			platform_log("masters: %s's list isn't its own", host);
+			free(body);
+			return;
+		}
+	}
+	now = (long)time(NULL);
+	if (now - list_time > MASTERS_FRESH || list_time - now > MASTERS_FRESH)
+	{
+		/* (an Xbox's clock that's far off, unset or wrong, can't say: taken; one about right says it's stale) */
+		if (now - list_time < MASTERS_CLOCK_WRONG && list_time - now < MASTERS_CLOCK_WRONG)
+		{
+			platform_log("masters: %s's list is %ld seconds from this Xbox's clock: not taken", host, now - list_time);
+			free(body);
+			return;
+		}
+		platform_log("masters: this Xbox's clock is %ld seconds from %s's (its list taken all the same)",
+			now - list_time, host);
+	}
+	/* each server's listing: the host-signed bytes the brokers would carry (base64) */
+	for (at = body; (at = strstr(at, "\"listing\":\"")) != NULL; )
+	{
+		at += 11;
+		n = masters_base64(at, listing, sizeof(listing));
+		listed++;
+		if (n > 0 && p2p_lobby_master_heard(listing, n))
+			taken++;
+		at = strchr(at, '"');
+		if (!at)
+			break;
+	}
+	platform_log("masters: %s lists %d servers, %d of them for this Xbox (%lu ms)", host, listed, taken,
+		GetTickCount() - start);
+	free(body);
+}
+
+static DWORD NTAPI masters_thread(PVOID parameter)
+{
+	int index;
+
+	(void)parameter;
+	for (index = 0; index < (int)(sizeof(master_servers) / sizeof(master_servers[0])) && !masters.stop; index++)
+		masters_ask(index);
+	masters.running = 0;
+	return 0;
+}
+
+/* the masters asked on their own thread (network_version: the lists' version wanted): 1, else 0 */
+int oxbox_masters_start(int network_version)
+{
+	unsigned long address;
+	int dhcp;
+
+	if (masters.running || update.running)
+		return masters.running != 0;
+	if (!oxbox_lwip_address(&address, &dhcp))
+		return 0;
+	if (masters.thread)
+	{
+		CloseHandle(masters.thread);
+		masters.thread = NULL;
+	}
+	masters.network_version = network_version;
+	masters.stop = 0;
+	masters.running = 1;
+	masters.thread = CreateThread(NULL, UPDATE_STACK, (PVOID)masters_thread, NULL, 0, NULL);
+	if (!masters.thread)
+	{
+		masters.running = 0;
+		return 0;
+	}
+	return 1;
+}
+
+int oxbox_masters_running(void)
+{
+	return masters.running != 0;
+}
+
+void oxbox_masters_stop(void)
+{
+	masters.stop = 1;
+}
+
+/* the thread's handle let go and Mbed TLS's randomness freed (the update check not running), before an unload */
+void oxbox_masters_done(void)
+{
+	if (masters.thread)
+		CloseHandle(masters.thread);
+	masters.thread = NULL;
+	if (update.psa_ready && !update.running)
+		mbedtls_psa_crypto_free();
+	if (!update.running)
+		update.psa_ready = 0;
+}
+
 /* ---------- the game's calls (oxbox_sdk.c) */
 
 /* the check started on its own thread: 1, else 0 (the network isn't up yet) */
@@ -519,7 +862,7 @@ int oxbox_update_check_start(char const *url)
 
 	if (update.running)
 		return 1;
-	if (!oxbox_lwip_address(&address, &dhcp))
+	if (masters.running || !oxbox_lwip_address(&address, &dhcp))
 		return 0;
 	if (update.thread)
 	{
@@ -557,7 +900,8 @@ void oxbox_update_check_done(void)
 	if (update.thread)
 		CloseHandle(update.thread);
 	update.thread = NULL;
-	if (update.psa_ready)
+	if (update.psa_ready && !masters.running)
 		mbedtls_psa_crypto_free();
-	update.psa_ready = 0;
+	if (!masters.running)
+		update.psa_ready = 0;
 }

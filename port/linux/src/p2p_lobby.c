@@ -652,6 +652,39 @@ void p2p_lobby_slot_heard(const char *hash_text, const unsigned char *payload, i
 }
 
 #if defined(OXBOX_CROSSPLAY)
+/* oxbox: a listing from a master server's list (port/oxbox/net/oxbox_update.c, the masters' lists: dedicated servers,
+which list there and not with the brokers since network version 39), taken as a PC game's slot is: queued, its
+signature checked by p2p.c's thread, kept while it's heard again (each list asked again in 30 seconds, GAME_EXPIRY 90).
+Only one this Xbox can join is queued (the queue holds 16 and a master lists dozens): the PC builds' version, no
+password, and oxbox_online_pc_game_listed's (a stock map or a linked one, at most 16 players, a gametype it plays).
+Any thread: 1 if queued */
+int p2p_lobby_master_heard(const unsigned char *payload, int size)
+{
+	extern int oxbox_online_pc_game_listed(const char *map, long maximum_players, long kind);
+	struct listing listing;
+	unsigned char key_hash[P2P_KEY_HASH_SIZE];
+	char text[2 * P2P_KEY_HASH_SIZE + 1];
+	int queued_before;
+
+	if (size < MINIMUM_LISTING_SIZE || size > MAXIMUM_LISTING_SIZE || !listing_read(payload, size, &listing) ||
+		listing.version < P2P_PC_LOBBY_VERSION_FIRST || listing.version > P2P_PC_LOBBY_VERSION_LAST ||
+		(listing.flags & (_listing_closed | _listing_password)) ||
+		!oxbox_online_pc_game_listed(listing.map, listing.maximum_player_count, listing.stamp[0]) ||
+		!signing_key_hash(listing.key, key_hash))
+	{
+		return 0;
+	}
+	p2p_hex(key_hash, P2P_KEY_HASH_SIZE, text);
+	pthread_mutex_lock(&p2p_lock);
+	queued_before = lobby.queue_count;
+	slot_heard(text, payload, size, 0, 1);
+	queued_before = lobby.queue_count != queued_before || find_game(key_hash) != NULL;
+	pthread_mutex_unlock(&p2p_lock);
+	return queued_before;
+}
+#endif
+
+#if defined(OXBOX_CROSSPLAY)
 /* oxbox: whether an Xbox's crossplay game's listing (its stamp's STAMP_XBOX) */
 static int listing_from_xbox(const struct listing *listing)
 {

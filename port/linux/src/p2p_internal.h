@@ -68,9 +68,10 @@ topic of queries (p2p_lobby.c) */
 version, which their listings carry) */
 #define P2P_PC_LOBBY_SLOT_PREFIX "hceu/3/lobby/s/"
 #define P2P_PC_LOBBY_QUERY_TOPIC "hceu/3/lobby/q"
-/* (40 and 41: 41 changes only the votes, which an Xbox drops) */
-#define P2P_PC_LOBBY_VERSION_FIRST 40
-#define P2P_PC_LOBBY_VERSION_LAST 41
+/* (the network version crossplay speaks: halo_port_limits.h OXBOX_CROSSPLAY_VERSION_FIRST and OXBOX_CROSSPLAY_VERSION,
+which these follow: a PC game of another version is one this Xbox can't join) */
+#define P2P_PC_LOBBY_VERSION_FIRST 44
+#define P2P_PC_LOBBY_VERSION_LAST 44
 #endif
 #else
 #define P2P_LOBBY_SLOT_PREFIX "hceu/3/lobby/s/"

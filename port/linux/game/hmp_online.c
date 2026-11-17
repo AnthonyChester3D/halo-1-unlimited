@@ -229,6 +229,8 @@ static struct
 	/* ONLINE PLAY chosen (else SYSTEM LINK PLAY: the LAN) */
 	boolean mode;
 	boolean browsing;
+	/* when ONLINE PLAY's list was last drawn (0: never) */
+	unsigned long shown_at;
 	/* a host being reached (its game's row: "JOINING..."), since when */
 	boolean joining;
 	unsigned char identifier[6];
@@ -591,6 +593,13 @@ int oxbox_online_stock_map(char const *map)
 	return FALSE;
 }
 
+/* whether ONLINE PLAY's games list is on the screen (drawn in the last 3 seconds): the master servers' lists are
+asked for while it is (oxbox_sdk.c oxbox_masters_frame) */
+int hmp_online_list_shown(void)
+{
+	return online.shown_at && system_milliseconds() - online.shown_at < 3000;
+}
+
 /* the games listed online, freed with the menus' memory (hmp_menu_memory_release: a game map loaded) */
 void hmp_online_release(void)
 {
@@ -716,6 +725,10 @@ int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *
 	all_count = count;
 	if (online.mode)
 	{
+		/* (the list on the screen now: the master servers' lists are asked for while it is, oxbox_sdk.c) */
+		online.shown_at = system_milliseconds();
+		if (!online.shown_at)
+			online.shown_at = 1;
 		if (!online.browsing)
 		{
 			/* (the listings are gathered from now on: ONLINE PLAY's first list) */
