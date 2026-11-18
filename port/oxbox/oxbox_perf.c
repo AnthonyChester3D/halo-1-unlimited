@@ -89,6 +89,7 @@ thread still never touches the disk. The format (tour_parse):
 #include "shell/shell.h"
 #include "input/input.h"
 #include "interface/hud_messaging.h"
+#include "interface/event_manager.h"
 #include "units/units.h"
 #include "oxbox_perf.h"
 
@@ -2387,6 +2388,15 @@ back when the run ends, however it ends (a watchdog restart boots with opence.in
 worked out from the rows (sweep_note: each map's slowest normal run, a broken one, run 4 still slow), so it carries on
 across boots, and maps measured before v1.134 get theirs when the sweep comes back to them.
 
+v1.136: a map that can't load in the showcase's system link game stalls the game while Halo retries it, its own
+client hears nothing from its own host for 8 seconds, and the game ends with "the game host went down": a "network
+connection" error held for the main menu, whose dialog waited for a press (an hour on the console). While the sweep
+goes on, sweep_menu_frame takes any error held for the main menu each frame (ui_widget_oxbox_take_main_menu_error,
+logged), and the watchdog stays on at the main menu between runs (SWEEP_MENU_SECONDS) until the next run starts; a
+press there stands it down (someone's at the menus). Campaign levels aren't put through the multiplayer list's check
+(v1.132-v1.135 skipped every one as a bad map, "it isn't a multiplayer map"; those rows aren't counted, so they're
+measured now).
+
 perf\sweep.csv: "#" lines, a "status,..." line naming the columns, then a row a run (fields with commas quoted):
 	status       ok, fail_fps (under 10 fps for 5 s), crashed, hung (the watchdog restarted H1U), bad_map (not loaded:
 	             the map browser's problem), no_start (the game didn't start: the map didn't load), left (the game
@@ -2458,6 +2468,7 @@ enum
 #define SWEEP_FAIL_SECONDS 5.0
 #define SWEEP_WATCH_SECONDS 360                 /* (a run: its load, up to the showcase's 180 s, warm-up, leaving) */
 #define SWEEP_RETURN_SECONDS 180                /* (back to the main menu after a run) */
+#define SWEEP_MENU_SECONDS 180                  /* (at the main menu: the next run started; a press stands it down) */
 #define SWEEP_SCALE_BELOW_FPS 29                /* a map whose slowest run is slower than this gets the scaling runs */
 #define SWEEP_SCALE_GPU 50                      /* ...if the graphics chip was busy this share (percent) of it, or more */
 #define SWEEP_SCALE_85 85                       /* run 4's res_scale; run 5's (when run 4 is still slow) */
@@ -2525,6 +2536,9 @@ static struct
 	boolean scaling;                            /* (perf_sweep_scaling: runs 4 and 5 for the slow maps) */
 	unsigned char needed_base, slow_run;        /* (the map's normal runs; the run the scaling runs repeat) */
 	long base_scale;                            /* (opence.ini's res_scale, put back after a scaling run) */
+	boolean halted;                             /* (stopped by a press, or every map done: errors shown again) */
+	boolean at_menu;                            /* (back at the main menu, the next run not started) */
+	unsigned long menu_input;                   /* (the input clock then: a press since stands the watchdog down) */
 	long scale;                                 /* (opence.ini res_scale, 1-99: a scaled pass; 0 the normal one) */
 	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
 } sweep;
@@ -2690,6 +2704,9 @@ static void sweep_read_line(
 	sweep_field(line, &at, identity, sizeof(identity));
 	sweep_field(line, &at, run, sizeof(run));
 	if (!status[0] || !key[0] || run[0] < '0' || run[0] >= '0' + SWEEP_RUNS)
+		return;
+	/* (v1.132-v1.135 skipped campaign levels as bad maps, the multiplayer list's reason: not counted) */
+	if (!strcmp(status, "bad_map") && strstr(line, "isn't a multiplayer map"))
 		return;
 	done = sweep_find(sweep_hash(key), strtoul(identity, NULL, 16), TRUE);
 	if (!done)
@@ -3148,6 +3165,40 @@ static void sweep_set_scale(
 	oxbox_setting_res_scale = run == 4 ? SWEEP_SCALE_85 : run == 5 ? SWEEP_SCALE_70 : (int)sweep.base_scale;
 }
 
+/* back at the main menu between runs: the watchdog on till the next run starts (SWEEP_MENU_SECONDS), unless a press
+says someone's at the menus */
+static void sweep_at_menu(
+	void)
+{
+	if (sweep.halted)
+		return;
+	sweep.at_menu = TRUE;
+	sweep.menu_input = event_manager_time_of_last_event();
+	sweep_watch_on(SWEEP_MENU_SECONDS);
+}
+
+/* each frame while the sweep goes on (perf_frame): an error Halo has waiting for the main menu dropped (logged), so no
+dialog waits for a press; and a press at the main menu between runs stands the watchdog down */
+static void sweep_menu_frame(
+	void)
+{
+	short ui_widget_oxbox_take_main_menu_error(void);
+	short error_code;
+
+	if (!sweep.initialized || sweep.halted)
+		return;
+	error_code = ui_widget_oxbox_take_main_menu_error();
+	if (error_code != NONE)
+		platform_log("perf sweep: Halo's error %d for the main menu dropped, not shown (%s run %ld): an unattended sweep "
+			"doesn't wait at its dialog", (int)error_code, sweep.key, sweep.run);
+	if (sweep.at_menu && event_manager_time_of_last_event() != sweep.menu_input)
+	{
+		sweep.at_menu = FALSE;
+		sweep_watch_off();
+		platform_log("perf sweep: a press at the main menu: the watchdog stands down till the next run");
+	}
+}
+
 /* the run ended (its row written with status); a failed one skips the map's later runs */
 static void sweep_finish(
 	char const *status)
@@ -3512,7 +3563,7 @@ static long sweep_next(
 		sweep_map_info();
 		sweep_clear_measures();
 		/* (a folder map the map browser won't choose isn't loaded: its rows say why) */
-		if (sweep.key[0] == '+' && sweep.cursor < hmp_maps_count() &&
+		if (sweep.key[0] == '+' && !sweep.solo && sweep.cursor < hmp_maps_count() &&
 			(sweep.problem = hmp_maps_problem(sweep.cursor)) != NULL)
 		{
 			platform_log("perf sweep: %s isn't loaded: %s", sweep.key, sweep.problem);
@@ -3521,6 +3572,7 @@ static long sweep_next(
 			continue;
 		}
 		sweep_marker(1);
+		sweep.at_menu = FALSE;
 		sweep_set_scale(run);
 		sweep_watch_on(sweep.seconds + SWEEP_WATCH_SECONDS);
 		sweep.active = TRUE;
@@ -3532,6 +3584,7 @@ static long sweep_next(
 		return sweep.solo ? _oxbox_sweep_solo : _oxbox_sweep_multiplayer;
 	}
 	sweep_watch_off();
+	sweep.halted = TRUE;
 	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\%s)",
 		sweep.drive, sweep.results);
 	return _oxbox_sweep_none;
@@ -3594,8 +3647,13 @@ static boolean sweep_frame(
 static void sweep_ended(
 	long how)
 {
-	if (how == _oxbox_sweep_ended_stopped || how == _oxbox_sweep_ended_menu)
+	if (how == _oxbox_sweep_ended_stopped)
+	{
 		sweep_watch_off();
+		sweep.halted = TRUE;
+	}
+	if (how == _oxbox_sweep_ended_menu)
+		sweep_at_menu();
 	if (!sweep.active)
 		return;
 	if (how == _oxbox_sweep_ended_stopped)
@@ -3609,7 +3667,7 @@ static void sweep_ended(
 	}
 	sweep_finish(how == _oxbox_sweep_ended_no_start ? "no_start" : "left");
 	if (how == _oxbox_sweep_ended_menu)
-		sweep_watch_off();
+		sweep_at_menu();
 }
 
 /* a frame of the run (perf_frame, while it measures) */
@@ -3974,6 +4032,8 @@ static void perf_frame(
 	unsigned long hook_start = cycles_now();
 
 	oxbox_perf_frames++;
+	if (sweep.on)
+		sweep_menu_frame();
 
 	QueryPerformanceCounter(&now_counter);
 	now = now_counter.QuadPart;

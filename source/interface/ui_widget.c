@@ -2022,6 +2022,22 @@ void display_error_text_when_main_menu_loaded(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the perf sweep (port/oxbox/oxbox_perf.c): the error waiting for the main menu taken (NONE: none), so an
+unattended sweep never stops at its dialog (a map that can't load in the showcase's system link game ends it with
+"the game host went down", a "network connection" error at the main menu). In the perf log's own section: loaded,
+and called, only with it */
+__attribute__((noinline, section(".oxperf_code"))) short ui_widget_oxbox_take_main_menu_error(
+	void)
+{
+	short error_code = widget_globals.main_menu_deferred_error_code;
+
+	widget_globals.main_menu_deferred_error_code = NONE;
+	ui_widget_port_error_pending_text = NULL;
+	return error_code;
+}
+#endif
+
 void display_error_abort_to_dashboard_deferred(
 	short error_code,
 	boolean optional)

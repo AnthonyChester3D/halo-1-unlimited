@@ -72,8 +72,10 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     a problem isn't loaded (`bad_map`, the reason in its row). A watchdog restarts H1U when a run hasn't ended
     6 minutes after its measuring time (or the main menu isn't back 3 minutes after it ended): the run is written
     `hung` and the log's last 16 KB go in `perf\sweep_hangs.txt`. A run the Xbox crashed in (and the watchdog
-    couldn't catch) is written as `crashed` at the next boot. A press stops the sweep until the next boot, which
-    carries on.
+    couldn't catch) is written as `crashed` at the next boot. An error Halo holds for the main menu (a map that can't
+    load in the showcase's game ends it with a "network connection" error) is logged and not shown, so no dialog
+    waits for a press; between runs the watchdog keeps watching until a press at the menus. A press stops the sweep
+    until the next boot, which carries on.
     `perf_sweep_detail = 1` also keeps each run's per-second CSV. On a PC,
     `python3 port/oxbox/tools/perf_sweep_report.py sweep.csv [--summary maps.csv] [--html report.html]` sorts the
     maps into perfect, a little work, a lot of work and probably never (plus crashed or didn't load).

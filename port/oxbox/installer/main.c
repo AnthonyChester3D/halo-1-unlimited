@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 58
+#define INSTALLER_VERSION 59
 #endif
 __attribute__((used)) static struct
 {
@@ -4328,7 +4328,7 @@ static void player_update(struct halo *h)
 	task_wait();
 }
 
-/* ---- the update asked about first thing: "There's a new update available. Download and update?" Yes / No / Always
+/* ---- the update asked about first thing: "There's a new update available. Update now?" Yes / No / Always
 (installer_settings.txt "update = always": from then on no question) ---- */
 
 static int update_asked;
@@ -4385,7 +4385,7 @@ CONTINUE_PATH); then Halo 1 Unlimited updated */
 static void update_go(void)
 {
 	int changed;
-	task_begin("Updating Halo 1 Unlimited", "Downloading the new version...");
+	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (a minute or two)...");
 	auto_mode = 1;
 	changed = check_updates();
 	if (changed && package_ok && package.installer_version > INSTALLER_VERSION && trusted(signature))
@@ -4410,15 +4410,15 @@ static void update_go(void)
 static void update_prompt(void)
 {
 	struct menu_item items[3] = {
-		{"Yes", "Updates Halo 1 Unlimited now (a minute or two: it's already downloading).", 0},
+		{"Yes", "Updates Halo 1 Unlimited now (a minute or two).", 0},
 		{"No", "Not now: the main menu offers it.", 0},
-		{"Always", "Yes, and from now on updates are downloaded and installed without asking.", 0}};
+		{"Always", "Yes, and from now on updates are installed without asking.", 0}};
 	char intro[160];
 	int k;
 	update_asked = 1;
 	if (!update_always())
 	{
-		text_print(intro, sizeof(intro), "There's a new update available (%s). Download and update?", check_version());
+		text_print(intro, sizeof(intro), "There's a new update available (%s). Update now?", check_version());
 		fetch_start();                   /* (downloading while it's asked about) */
 		k = menu("A new update is available", intro, items, 3, 0);
 		if (k == 2)
