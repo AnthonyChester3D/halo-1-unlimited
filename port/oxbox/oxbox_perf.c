@@ -2373,6 +2373,12 @@ SWEEP_RETURN_SECONDS after it ended. Before that, the last 16 KB of oxbox_log.tx
 replaces the file) go on the end of perf\sweep_hangs.txt, and sweep_now.txt is marked, so the run is written "hung"
 at the next boot. A hang the writer thread can't run through (the processor stopped) still needs a reboot by hand.
 
+v1.133, the resolution scaling test: with opence.ini res_scale (1-99) the sweep is a pass of its own: its rows go in
+perf\sweep_r<scale>.csv (its first line says the scale) and its marker in sweep_now_r<scale>.txt, so the normal
+pass's sweep.csv is untouched and every map is measured again at that scale; and when perf\sweep_list.txt is there it
+plays only the maps it names (a key a line, as sweep.csv's key column; perf_sweep_report.py --write-list makes it).
+perf_sweep_report.py --compare sets the passes side by side.
+
 perf\sweep.csv: "#" lines, a "status,..." line naming the columns, then a row a run (fields with commas quoted):
 	status       ok, fail_fps (under 10 fps for 5 s), crashed, hung (the watchdog restarted H1U), bad_map (not loaded:
 	             the map browser's problem), no_start (the game didn't start: the map didn't load), left (the game
@@ -2498,6 +2504,8 @@ static struct
 	double low_seconds, under10_seconds, longest_low;
 	char status[12];
 	char const *problem;                        /* (a bad_map row's reason: the map browser's) */
+	long scale;                                 /* (opence.ini res_scale, 1-99: a scaled pass; 0 the normal one) */
+	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
 } sweep;
 
 /* the watchdog (sweep_watch, on the writer thread): on while a run is under way or coming back from one */
@@ -2626,7 +2634,7 @@ static void sweep_read_results(
 	unsigned long got;
 	HANDLE file;
 
-	sweep_path(path, sizeof(path), "sweep.csv");
+	sweep_path(path, sizeof(path), sweep.results);
 	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE)
 		return;
@@ -2695,7 +2703,7 @@ static void sweep_append(
 	unsigned long put;
 	HANDLE file;
 
-	sweep_path(path, sizeof(path), "sweep.csv");
+	sweep_path(path, sizeof(path), sweep.results);
 	file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE)
 	{
@@ -2704,9 +2712,12 @@ static void sweep_append(
 	}
 	if (!GetFileSize(file, NULL))
 	{
-		static char const head[] = "# Halo 1 Unlimited perf sweep v1 (port/oxbox/oxbox_perf.c)\r\n";
+		char head[96];
 
-		WriteFile(file, head, sizeof(head) - 1, &put, NULL);
+		_snprintf(head, sizeof(head), "# Halo 1 Unlimited perf sweep v1 (port/oxbox/oxbox_perf.c), res_scale %ld\r\n",
+			sweep.scale ? sweep.scale : 100L);
+		head[sizeof(head) - 1] = 0;
+		WriteFile(file, head, (unsigned long)strlen(head), &put, NULL);
 		WriteFile(file, sweep_fields, sizeof(sweep_fields) - 1, &put, NULL);
 		WriteFile(file, "\r\n", 2, &put, NULL);
 	}
@@ -2720,7 +2731,7 @@ static void sweep_marker(
 {
 	char path[64];
 
-	sweep_path(path, sizeof(path), "sweep_now.txt");
+	sweep_path(path, sizeof(path), sweep.marker);
 	if (set)
 	{
 		char text[96];
@@ -3100,6 +3111,48 @@ static unsigned long sweep_identity(
 }
 
 /* the map at the cursor: its runs, and which have rows */
+/* a scaled pass's maps: perf\sweep_list.txt's keys, a line each (perf_sweep_report.py --write-list makes it); every
+map without one. Read for each map (no memory kept: the sweep's console was short of it) */
+static boolean sweep_listed(
+	char const *key)
+{
+	char path[64], buffer[1024], line[SWEEP_KEY_LENGTH + 2];
+	long length = 0;
+	unsigned long got, k;
+	boolean found = FALSE;
+	HANDLE file;
+
+	sweep_path(path, sizeof(path), "sweep_list.txt");
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return TRUE;
+	while (!found && ReadFile(file, buffer, sizeof(buffer), &got, NULL) && got)
+	{
+		for (k = 0; k < got && !found; k++)
+		{
+			if (buffer[k] == '\n' || buffer[k] == '\r')
+			{
+				while (length && line[length - 1] == ' ')
+					length--;
+				line[length] = 0;
+				found = length && !csstrcasecmp(line, key);
+				length = 0;
+			}
+			else if (length < (long)sizeof(line) - 1 && (length || buffer[k] != ' '))
+			{
+				line[length++] = buffer[k];
+			}
+		}
+	}
+	if (!found && length)
+	{
+		line[length] = 0;
+		found = !csstrcasecmp(line, key);
+	}
+	CloseHandle(file);
+	return found;
+}
+
 static boolean sweep_map_ready(
 	void)
 {
@@ -3107,6 +3160,8 @@ static boolean sweep_map_ready(
 	short players;
 
 	if (!sweep_map_key(sweep.cursor, sweep.key, &sweep.solo))
+		return FALSE;
+	if (sweep.scale && !sweep_listed(sweep.key))
 		return FALSE;
 	sweep.identity = sweep.key[0] == '+' ? sweep_identity(sweep.key) : 1;
 	if (sweep.solo)
@@ -3147,6 +3202,22 @@ static void sweep_initialize(
 		sweep.drive = 'T';
 		CreateDirectoryA("T:\\perf", NULL);
 	}
+	/* (a scaled pass, opence.ini res_scale: its own rows, and only perf\sweep_list.txt's maps when there's one) */
+	{
+		extern int oxbox_setting_res_scale;
+
+		sweep.scale = oxbox_setting_res_scale >= 1 && oxbox_setting_res_scale < 100 ? oxbox_setting_res_scale : 0;
+		if (sweep.scale)
+		{
+			_snprintf(sweep.results, sizeof(sweep.results), "sweep_r%ld.csv", sweep.scale);
+			_snprintf(sweep.marker, sizeof(sweep.marker), "sweep_now_r%ld.txt", sweep.scale);
+		}
+		else
+		{
+			strcpy(sweep.results, "sweep.csv");
+			strcpy(sweep.marker, "sweep_now.txt");
+		}
+	}
 	/* (the column names: the P rows' own) */
 	{
 		char const *names = strstr(frame_fields, "tick_units_ms");
@@ -3164,10 +3235,11 @@ static void sweep_initialize(
 	}
 	sweep_read_results();
 	sweep.map_count = hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO;
-	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\sweep.csv; %ld maps here", sweep.done_count,
-		sweep.drive, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER);
+	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\%s; %ld maps here%s", sweep.done_count,
+		sweep.drive, sweep.results, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER,
+		sweep.scale ? " (res_scale: only perf\\sweep_list.txt's maps, when it's there)" : "");
 	/* (a run the last boot started and never wrote: the Xbox crashed or hung in it) */
-	sweep_path(path, sizeof(path), "sweep_now.txt");
+	sweep_path(path, sizeof(path), sweep.marker);
 	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file != INVALID_HANDLE_VALUE)
 	{
@@ -3352,8 +3424,8 @@ static long sweep_next(
 		return sweep.solo ? _oxbox_sweep_solo : _oxbox_sweep_multiplayer;
 	}
 	sweep_watch_off();
-	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\sweep.csv)",
-		sweep.drive);
+	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\%s)",
+		sweep.drive, sweep.results);
 	return _oxbox_sweep_none;
 }
 

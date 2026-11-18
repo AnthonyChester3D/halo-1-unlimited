@@ -4,6 +4,14 @@
 # and the maps that crashed or didn't load (not a frame-rate verdict).
 #
 #   python3 perf_sweep_report.py sweep.csv [more.csv ...] [--summary maps.csv] [--html report.html]
+#   python3 perf_sweep_report.py sweep.csv --write-list sweep_list.txt
+#   python3 perf_sweep_report.py sweep.csv --compare sweep_r70.csv [--compare-csv fill.csv]
+#
+# The resolution scaling test: a pass with opence.ini res_scale = 70 (say) writes perf\sweep_r70.csv, and plays only
+# perf\sweep_list.txt's maps when there's one (--write-list: the maps under the "perfect" line whose slowest run kept
+# the graphics chip busy, --list-gpu percent or more). --compare then says, per map, how its frame rate and the
+# graphics chip's time a frame changed with the pixels: the share of that time that scaled with them (1.0 = all of
+# it: fill-limited), and whether the map reaches the "perfect" line at that scale.
 #
 # Several files (from several Xboxes, or older copies) are read together; a map's newest version counts, and its
 # newest row for each run. The thresholds below are the starting ones: change them here, or with --perfect, --little
@@ -12,6 +20,8 @@ import argparse
 import csv
 import html
 import io
+import os
+import re
 import sys
 
 GROUPS = [
@@ -200,6 +210,103 @@ def html_report(lines, path, args):
         f.write(''.join(parts))
 
 
+def gpu_ms(row):
+    """the graphics chip's busy time a frame (its busy share of the frame time)"""
+    fps, busy = number(row, 'avg_fps'), number(row, 'gpu_busy_pct')
+    if not fps or busy is None:
+        return None
+    return busy / 100.0 * 1000.0 / fps
+
+
+def file_scale(path):
+    """a results file's res_scale: its first line's, else its name's (sweep_r70.csv)"""
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            m = re.search(r'res_scale (\d+)', f.readline())
+        if m:
+            return int(m.group(1))
+    except OSError:
+        pass
+    m = re.search(r'_r(\d+)\.csv$', os.path.basename(path))
+    return int(m.group(1)) if m else None
+
+
+def write_list(maps, path, args):
+    keys = []
+    for key, runs in maps.items():
+        group, slowest = judge(runs, args.perfect, args.little, args.lot)
+        if group in ('little', 'lot', 'never') and slowest is not None and \
+                (number(slowest, 'gpu_busy_pct', 0) or 0) >= args.list_gpu:
+            keys.append(slowest['key'])
+    with open(path, 'w', encoding='utf-8', newline='\r\n') as f:
+        f.write(''.join(k + '\n' for k in sorted(keys, key=str.lower)))
+    print('\nWrote %s: %d maps under %g fps whose slowest run kept the graphics chip %g%%+ busy'
+          % (path, len(keys), args.perfect, args.list_gpu))
+
+
+def compare(base_maps, scaled_paths, args):
+    scale = file_scale(scaled_paths[0]) or args.scale
+    if not scale:
+        print('--compare: the scale is unknown (no "res_scale N" line or _rN name): give --scale', file=sys.stderr)
+        return 1
+    pixels = (scale / 100.0) ** 2
+    scaled_maps = maps_from(read_rows(scaled_paths))
+    lines = []
+    for key, scaled_runs in scaled_maps.items():
+        base_runs = base_maps.get(key)
+        if not base_runs:
+            continue
+        group, base_slowest = judge(base_runs, args.perfect, args.little, args.lot)
+        runs = []
+        for run, srow in sorted(scaled_runs.items()):
+            brow = base_runs.get(run)
+            if not brow or brow['identity'] != srow['identity'] or srow['status'] not in ('ok', 'fail_fps') or \
+                    brow['status'] not in ('ok', 'fail_fps'):
+                continue
+            bg, sg = gpu_ms(brow), gpu_ms(srow)
+            share = None
+            if bg and sg is not None and pixels < 1.0:
+                share = max(0.0, min(1.0, (bg - sg) / (bg * (1.0 - pixels))))
+            runs.append((run, number(brow, 'avg_fps', 0), number(srow, 'avg_fps', 0), bg, sg, share))
+        if not runs:
+            continue
+        slow = min(runs, key=lambda r: r[1])
+        shares = [r[5] for r in runs if r[5] is not None]
+        share = sum(shares) / len(shares) if shares else None
+        verdict = 'unknown' if share is None else 'fill-limited' if share >= 0.6 else \
+            'partly fill-limited' if share >= 0.3 else 'not fill-limited'
+        reaches = slow[1] < args.perfect <= slow[2]
+        lines.append({'name': base_slowest['name'] if base_slowest else key, 'key': key, 'group': group,
+                      'verdict': verdict, 'share': share, 'reaches': reaches, 'runs': runs,
+                      'gain': slow[2] - slow[1]})
+    lines.sort(key=lambda m: -m['gain'])
+    print('\nResolution scaling test: res_scale %d (%.0f%% of the pixels), %d maps in both' % (scale, pixels * 100,
+                                                                                         len(lines)))
+    for m in lines:
+        print('  %s  [%s, %s%s]' % (m['name'], m['verdict'],
+                                     'share %.2f' % m['share'] if m['share'] is not None else 'no GPU data',
+                                     ', REACHES %g fps' % args.perfect if m['reaches'] else ''))
+        for run, bf, sf, bg, sg, sh in m['runs']:
+            print('      %s: %.1f -> %.1f fps; graphics chip %s -> %s ms a frame' % (
+                RUN_NAMES[run], bf, sf, '%.1f' % bg if bg else '?', '%.1f' % sg if sg is not None else '?'))
+    slow = [m for m in lines if m['group'] in ('little', 'lot', 'never')]
+    print('\n%d of the %d maps under %g fps reach it at res_scale %d; %d are fill-limited, %d partly, %d not'
+          % (sum(m['reaches'] for m in slow), len(slow), args.perfect, scale,
+             sum(m['verdict'] == 'fill-limited' for m in slow), sum(m['verdict'] == 'partly fill-limited' for m in slow),
+             sum(m['verdict'] == 'not fill-limited' for m in slow)))
+    if args.compare_csv:
+        with open(args.compare_csv, 'w', encoding='utf-8', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['name', 'key', 'group', 'verdict', 'fill_share', 'reaches', 'run', 'fps', 'fps_scaled',
+                        'gpu_ms', 'gpu_ms_scaled'])
+            for m in lines:
+                for run, bf, sf, bg, sg, sh in m['runs']:
+                    w.writerow([m['name'], m['key'], m['group'], m['verdict'],
+                                '%.2f' % m['share'] if m['share'] is not None else '', 'yes' if m['reaches'] else '',
+                                RUN_NAMES[run], bf, sf, '%.2f' % bg if bg else '', '%.2f' % sg if sg is not None else ''])
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('files', nargs='+', help="perf\\sweep.csv files from the Xbox")
@@ -208,9 +315,19 @@ def main():
     parser.add_argument('--perfect', type=float, default=29.0)
     parser.add_argument('--little', type=float, default=22.0)
     parser.add_argument('--lot', type=float, default=15.0)
+    parser.add_argument('--write-list', help='write sweep_list.txt: the maps for a res_scale pass')
+    parser.add_argument('--list-gpu', type=float, default=80.0, help="the list's graphics chip busy line (percent)")
+    parser.add_argument('--compare', nargs='+', help="a res_scale pass's sweep_rNN.csv: compared with the files")
+    parser.add_argument('--compare-csv', help="write the comparison as a CSV")
+    parser.add_argument('--scale', type=int, help="the compared pass's res_scale, when its file doesn't say")
     args = parser.parse_args()
-    lines = summary_rows(maps_from(read_rows(args.files)), args.perfect, args.little, args.lot)
+    maps = maps_from(read_rows(args.files))
+    lines = summary_rows(maps, args.perfect, args.little, args.lot)
     text_report(lines, args)
+    if args.write_list:
+        write_list(maps, args.write_list, args)
+    if args.compare:
+        return compare(maps, args.compare, args)
     if args.summary:
         with open(args.summary, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=list(lines[0].keys()) if lines else ['group'])
