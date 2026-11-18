@@ -77,6 +77,12 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     `perf_sweep_detail = 1` also keeps each run's per-second CSV. On a PC,
     `python3 port/oxbox/tools/perf_sweep_report.py sweep.csv [--summary maps.csv] [--html report.html]` sorts the
     maps into perfect, a little work, a lot of work and probably never (plus crashed or didn't load).
+  - The resolution scaling test: `perf_sweep = 1` with `res_scale = 70` (say) is a pass of its own, its rows in
+    `perf\sweep_r70.csv`, and plays only the maps `perf\sweep_list.txt` names when it's there (one key a line, as
+    in `sweep.csv`; `perf_sweep_report.py sweep.csv --write-list sweep_list.txt` lists the slow maps that kept the
+    graphics chip busy). `perf_sweep_report.py sweep.csv --compare sweep_r70.csv` shows each map's frame rate and
+    graphics chip time at both, the share of that time that scaled with the pixels (fill-limited or not), and
+    which maps reach 30 fps at that scale.
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 
