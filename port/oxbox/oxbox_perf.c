@@ -4,7 +4,7 @@ OXBOX_PERF.C
 The developers' performance and memory log (test build 31), for Halo Map Porter: how much a converted map really
 costs on a real Xbox, and what limits its frame rate (the CPU's game ticks or drawing, or the graphics chip).
 
-Off unless opence.ini says perf_log = 1. Everything here (code, data, the ring buffer) is in the XBE section
+Off unless opence.ini says perf_log = 1 (or perf_sweep = 1: the perf sweep, v1.131, its section below). Everything here (code, data, the ring buffer) is in the XBE section
 OXPERF (link.ld, mkxbe.py), which isn't loaded at boot: with the log off it takes no memory, and the game's one hook
 (main_loop: oxbox_perf.h) finds oxbox_perf NULL. With it on, start-up loads the section (oxbox_sdk.c
 oxbox_perf_load) and calls oxbox_perf_start once.
@@ -302,6 +302,7 @@ static struct
 	unsigned __int64 session_cycles; /* at the session's start */
 	unsigned __int64 session_log_cycles, session_gpu_samples;
 	long seconds_reported;
+	boolean quiet;                   /* (the perf sweep without perf_sweep_detail: no per-second files) */
 } perf;
 
 /* phase 2: the game's profile sections the log times (the others are left alone), the steps the marks end, and the
@@ -522,6 +523,8 @@ static void ring_put(
 {
 	unsigned long head = ring_head, index;
 
+	if (perf.quiet)
+		return;
 	if (RING_SIZE - (head - ring_tail) < length)
 	{
 		ring_dropped_bytes += length;
@@ -2340,6 +2343,1037 @@ static void session_end(
 	perf.slow_lines_skipped = 0;
 }
 
+/* ---------- the perf sweep (v1.131)
+
+opence.ini perf_sweep = 1 (with or without perf_log): soon after the main menu is up, the showcase (showcase.c) plays
+every map this log hasn't measured yet at its current version, one run after another, and this log measures each run
+and writes a row for it to perf\sweep.csv beside the XBE (T:\perf when the XBE's folder can't be written). A press
+stops it until the Xbox restarts; the next boot carries on where it stopped.
+
+The runs: a multiplayer map plays three, with no bots, with 4 and with its suggested players' count (info.txt's
+"Players:", else 8; at most 15; this run is left out when that's 4 or fewer), in a system link game the showcase hosts
+(its camera shots, or a turn at each of up to 8 spawn points for a map without a showcase.txt). A campaign level plays
+one, from its start at Normal, the player deathless and still, its own view. Each run's first SWEEP_WARMUP_SECONDS
+aren't measured (the textures streaming in); then perf_sweep_seconds (60) are. A run that has stayed under 10 frames
+a second for 5 seconds in a row fails at once, and the map's later runs are skipped (more bots are only slower).
+
+A map is done, for this sweep, when perf\sweep.csv has a row for each of its runs at its current version (map
+sharing's: the .map's size and its header's checksum; a stock map's never changes). A crash: before each run its key
+goes in perf\sweep_now.txt, deleted after its row is written; one still there at the next boot is a run that never
+ended (the Xbox crashed or hung there), written as "crashed", and the map's later runs skipped.
+
+perf\sweep.csv: "#" lines, a "status,..." line naming the columns, then a row a run (fields with commas quoted):
+	status       ok, fail_fps (under 10 fps for 5 s), crashed, no_start (the game didn't start: the map didn't load),
+	             left (the game went away while it played), skipped (an earlier run failed)
+	key          the map as the game knows it ("+pack/folder", a stock level's name)
+	identity     its version (hex), run (0 no bots, 1 four, 2 the suggested count, 3 a campaign level's), bots
+	build, utc   this XBE's build and the time (the Xbox's clock)
+	name, path   its menu name, its .map's path on the Xbox; origin: ce / mcc / ce+mcc from its .h1ulink, xbox for a
+	             stock map, unknown without a link file; file_kb (the .map's size), map_kb (its header's: unpacked);
+	             type (mp / sp), bsps, encounters (the scenario's AI encounters)
+	seconds, frames, avg_fps, low1_fps (the 99th percentile frame's rate), worst_ms; under30_pct...under15_pct (the
+	             share of the time in frames longer than 34, 41, 51 and 68 ms); under10_s (seconds in seconds under
+	             10 fps), longest_under10_s
+	tick_ms, draw_ms, present_ms, vsync_ms (a frame's parts, the P rows' columns), gpu_busy_pct
+	top1..top3   the three steps of a game tick or of drawing that took the most time (the P rows' column names), ms a frame
+	objects_peak, actors_peak, particles_peak, effects_peak; level_triangles (a frame); texture_read_kb, texture_waits
+	             (reads the game waited for), free_kb_min; limits (oxbox_diagnostics.c's: "particle x12;...")
+The per-second CSVs (perf\<map>_<time>.csv) aren't written during a sweep unless perf_sweep_detail = 1: some hundreds
+of maps would make thousands of them. port/oxbox/tools/perf_sweep_report.py reads perf\sweep.csv on a PC. */
+
+/* the limits hit in this map so far (oxbox_diagnostics.c's): "particle x12;texture cache x3" */
+extern struct oxbox_limit { char name[32]; long limit, times; } oxbox_limits[];
+extern int oxbox_limit_count;
+
+static void oxbox_limits_text(
+	char *out,
+	long size)
+{
+	long k, n = 0;
+
+	out[0] = 0;
+	for (k = 0; k < oxbox_limit_count; k++)
+	{
+		long length = (long)strlen(oxbox_limits[k].name);
+
+		if (n + length + 16 >= size)
+			break;
+		n += _snprintf(out + n, size - n, "%s%s x%ld", k ? ";" : "", oxbox_limits[k].name, oxbox_limits[k].times);
+	}
+	out[size - 1] = 0;
+}
+long hmp_maps_count(void);
+void hmp_maps_scan(void);
+char const *hmp_maps_key(long map_index);
+long hmp_maps_find(char const *level_name);
+char const *hmp_maps_stock_level(long stock_index);
+wchar_t const *hmp_maps_title(char const *level_name);
+boolean hmp_maps_map_path(long map_index, short root, char *path, long size);
+char const *hmp_browse_stock_title(char const *level_name);
+short hmp_browse_suggested_players(char const *level_name);
+boolean custom_edition_maps_level_campaign(char const *level_name);
+unsigned long hmp_share_map_version(char const *level_name);
+
+enum
+{
+	SWEEP_STOCK_MULTIPLAYER = 13,               /* (hmp.h's HMP_STOCK_LEVELS) */
+	SWEEP_STOCK_SOLO = 10,
+	SWEEP_MAXIMUM_MAPS = 2048 + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO,
+	SWEEP_KEY_LENGTH = 48,                      /* (showcase.c's SHOWCASE_KEY_LENGTH) */
+	SWEEP_RUNS = 4,
+	SWEEP_HISTOGRAM = 256,                      /* frame times, 1 ms each, the last everything longer */
+	SWEEP_COLUMN_NAME = 40
+};
+#define SWEEP_WARMUP_SECONDS 4.5f               /* (the showcase's 1.5 s settle, then 3 s of textures streaming) */
+#define SWEEP_FAIL_FPS 10.0
+#define SWEEP_FAIL_SECONDS 5.0
+
+static char const *const sweep_solo_levels[SWEEP_STOCK_SOLO] =
+{
+	"levels\\a10\\a10", "levels\\a30\\a30", "levels\\a50\\a50", "levels\\b30\\b30", "levels\\b40\\b40",
+	"levels\\c10\\c10", "levels\\c20\\c20", "levels\\c40\\c40", "levels\\d20\\d20", "levels\\d40\\d40"
+};
+
+static char const sweep_fields[] =
+	"status,key,identity,run,bots,build,utc,name,path,origin,file_kb,map_kb,type,bsps,encounters,seconds,frames,"
+	"avg_fps,low1_fps,worst_ms,under30_pct,under25_pct,under20_pct,under15_pct,under10_s,longest_under10_s,tick_ms,"
+	"draw_ms,present_ms,vsync_ms,gpu_busy_pct,top1,top1_ms,top2,top2_ms,top3,top3_ms,objects_peak,actors_peak,"
+	"particles_peak,effects_peak,level_triangles,texture_read_kb,texture_waits,free_kb_min,limits";
+
+struct sweep_done
+{
+	unsigned long key_hash, identity;
+	unsigned char runs;                         /* (a bit a run with a row) */
+};
+
+static struct
+{
+	boolean on, detail, initialized;
+	long seconds;                               /* measured a run (perf_sweep_seconds) */
+	char drive;                                 /* where perf\ is: 'D' or 'T' */
+	long done_count;
+	struct sweep_done done[SWEEP_MAXIMUM_MAPS];
+	char column_names[NUMBEROF(window_time_columns)][SWEEP_COLUMN_NAME];
+	/* the map at the cursor */
+	long cursor, map_count;
+	boolean map_ready;
+	char key[SWEEP_KEY_LENGTH];
+	boolean solo;
+	unsigned long identity;
+	unsigned char needed, have;                 /* (its runs: wanted, and with a row) */
+	short full_bots;
+	/* the run under way */
+	boolean active, measuring, over;
+	long run;
+	short bots;
+	char name[96], path[200], origin[12];
+	unsigned long file_kb, map_kb;
+	long bsps, encounters;
+	/* its measures */
+	__int64 time, frame_worst, ticks, drawing, present, vsync;
+	__int64 under[4];                           /* (frames longer than 34, 41, 51, 68 ms) */
+	unsigned long frames, histogram[SWEEP_HISTOGRAM];
+	unsigned long gpu_busy, gpu_samples, texture_bytes, texture_waits;
+	unsigned long objects_peak, actors_peak, particles_peak, effects_peak, free_kb_min;
+	unsigned __int64 columns[NUMBEROF(window_time_columns)];
+	unsigned long level_triangles, window_frames;   /* (the P rows' seconds the run measured, and their frames) */
+	__int64 second_start;
+	unsigned long second_frames;
+	double low_seconds, under10_seconds, longest_low;
+	char status[12];
+} sweep;
+
+static unsigned long sweep_hash(
+	char const *text)
+{
+	unsigned long hash = 2166136261ul;
+
+	for (; *text; text++)
+		hash = (hash ^ (unsigned char)(*text >= 'A' && *text <= 'Z' ? *text + 32 : *text)) * 16777619ul;
+	return hash;
+}
+
+static void sweep_path(
+	char *path,
+	long size,
+	char const *file)
+{
+	_snprintf(path, size, "%c:\\perf\\%s", sweep.drive ? sweep.drive : 'D', file);
+	path[size - 1] = 0;
+}
+
+static struct sweep_done *sweep_find(
+	unsigned long key_hash,
+	unsigned long identity,
+	boolean add)
+{
+	long index;
+
+	for (index = 0; index < sweep.done_count; index++)
+		if (sweep.done[index].key_hash == key_hash && sweep.done[index].identity == identity)
+			return &sweep.done[index];
+	if (!add || sweep.done_count >= SWEEP_MAXIMUM_MAPS)
+		return NULL;
+	sweep.done[sweep.done_count].key_hash = key_hash;
+	sweep.done[sweep.done_count].identity = identity;
+	sweep.done[sweep.done_count].runs = 0;
+	return &sweep.done[sweep.done_count++];
+}
+
+/* a CSV field: its text from line (at), up to its comma; at moves past it */
+static long sweep_field(
+	char const *line,
+	long *at,
+	char *out,
+	long size)
+{
+	long n = 0, k = *at;
+	boolean quoted = line[k] == '"';
+
+	if (quoted)
+		k++;
+	for (; line[k]; k++)
+	{
+		if (quoted && line[k] == '"')
+		{
+			if (line[k + 1] == '"')
+			{
+				k++;
+			}
+			else
+			{
+				quoted = FALSE;
+				continue;
+			}
+		}
+		else if (!quoted && line[k] == ',')
+		{
+			break;
+		}
+		if (n < size - 1)
+			out[n++] = line[k];
+	}
+	out[n] = 0;
+	*at = line[k] == ',' ? k + 1 : k;
+	return n;
+}
+
+static void sweep_read_line(
+	char const *line)
+{
+	char status[16], key[SWEEP_KEY_LENGTH + 8], identity[16], run[8];
+	long at = 0;
+	struct sweep_done *done;
+
+	if (line[0] == '#' || !strncmp(line, "status,", 7))
+		return;
+	sweep_field(line, &at, status, sizeof(status));
+	sweep_field(line, &at, key, sizeof(key));
+	sweep_field(line, &at, identity, sizeof(identity));
+	sweep_field(line, &at, run, sizeof(run));
+	if (!status[0] || !key[0] || run[0] < '0' || run[0] >= '0' + SWEEP_RUNS)
+		return;
+	done = sweep_find(sweep_hash(key), strtoul(identity, NULL, 16), TRUE);
+	if (done)
+		done->runs |= (unsigned char)(1 << (run[0] - '0'));
+}
+
+/* perf\sweep.csv's rows: the runs done */
+static void sweep_read_results(
+	void)
+{
+	char path[64], buffer[4096], line[512];
+	long line_length = 0;
+	unsigned long got;
+	HANDLE file;
+
+	sweep_path(path, sizeof(path), "sweep.csv");
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return;
+	while (ReadFile(file, buffer, sizeof(buffer), &got, NULL) && got)
+	{
+		unsigned long k;
+
+		for (k = 0; k < got; k++)
+		{
+			if (buffer[k] == '\n' || buffer[k] == '\r')
+			{
+				line[line_length] = 0;
+				if (line_length)
+					sweep_read_line(line);
+				line_length = 0;
+			}
+			else if (line_length < (long)sizeof(line) - 1)
+			{
+				line[line_length++] = buffer[k];
+			}
+		}
+	}
+	line[line_length] = 0;
+	if (line_length)
+		sweep_read_line(line);
+	CloseHandle(file);
+}
+
+/* the CSV's text field: quoted when it has a comma or a quote */
+static void sweep_put_text(
+	struct perf_line *line,
+	char const *text)
+{
+	char const *p;
+
+	if (!strchr(text, ',') && !strchr(text, '"'))
+	{
+		put_text(line, text);
+		return;
+	}
+	put_char(line, '"');
+	for (p = text; *p; p++)
+	{
+		if (*p == '"')
+			put_char(line, '"');
+		put_char(line, *p);
+	}
+	put_char(line, '"');
+}
+
+static void sweep_put_hex(
+	struct perf_line *line,
+	unsigned long value)
+{
+	long shift;
+
+	for (shift = 28; shift >= 0; shift -= 4)
+		put_char(line, "0123456789abcdef"[(value >> shift) & 15]);
+}
+
+static void sweep_append(
+	char const *text,
+	long length)
+{
+	char path[64];
+	unsigned long put;
+	HANDLE file;
+
+	sweep_path(path, sizeof(path), "sweep.csv");
+	file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+	{
+		platform_log("perf sweep: %s couldn't be written (error %lu)", path, (unsigned long)GetLastError());
+		return;
+	}
+	if (!GetFileSize(file, NULL))
+	{
+		static char const head[] = "# Halo 1 Unlimited perf sweep v1 (port/oxbox/oxbox_perf.c)\r\n";
+
+		WriteFile(file, head, sizeof(head) - 1, &put, NULL);
+		WriteFile(file, sweep_fields, sizeof(sweep_fields) - 1, &put, NULL);
+		WriteFile(file, "\r\n", 2, &put, NULL);
+	}
+	SetFilePointer(file, 0, NULL, FILE_END);
+	WriteFile(file, text, (unsigned long)length, &put, NULL);
+	CloseHandle(file);
+}
+
+static void sweep_marker(
+	boolean set)
+{
+	char path[64];
+
+	sweep_path(path, sizeof(path), "sweep_now.txt");
+	if (set)
+	{
+		char text[96];
+		unsigned long put;
+		HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+		if (file == INVALID_HANDLE_VALUE)
+			return;
+		_snprintf(text, sizeof(text), "%s\t%ld\t%08lx\r\n", sweep.key, sweep.run, sweep.identity);
+		text[sizeof(text) - 1] = 0;
+		WriteFile(file, text, (unsigned long)strlen(text), &put, NULL);
+		CloseHandle(file);
+	}
+	else
+	{
+		DeleteFileA(path);
+	}
+}
+
+/* the .h1ulink files beside the map: which games' maps it was made from */
+static void sweep_origin(
+	char const *folder)
+{
+	WIN32_FIND_DATAA found;
+	char pattern[220];
+	boolean ce = FALSE, mcc = FALSE;
+	HANDLE find;
+
+	strcpy(sweep.origin, "unknown");
+	_snprintf(pattern, sizeof(pattern), "%s\\*.h1ulink", folder);
+	pattern[sizeof(pattern) - 1] = 0;
+	find = FindFirstFileA(pattern, &found);
+	if (find == INVALID_HANDLE_VALUE)
+		return;
+	do
+	{
+		char path[260], text[2049];
+		unsigned long got = 0;
+		HANDLE file;
+		long k;
+
+		_snprintf(path, sizeof(path), "%s\\%s", folder, found.cFileName);
+		path[sizeof(path) - 1] = 0;
+		file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (file == INVALID_HANDLE_VALUE)
+			continue;
+		if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+			got = 0;
+		CloseHandle(file);
+		text[got] = 0;
+		for (k = 0; k < (long)got; k++)
+		{
+			if (k && text[k - 1] != '\n')
+				continue;
+			if (!strncmp(text + k, "ce ", 3) || !strncmp(text + k, "ce\t", 3))
+				ce = TRUE;
+			else if (!strncmp(text + k, "mcc ", 4) || !strncmp(text + k, "mcc\t", 4))
+				mcc = TRUE;
+		}
+	}
+	while (FindNextFileA(find, &found));
+	CloseHandle(find);
+	strcpy(sweep.origin, ce && mcc ? "ce+mcc" : ce ? "ce" : mcc ? "mcc" : "unknown");
+}
+
+/* the map at index in the sweep's order: the folder maps, then Halo's multiplayer maps, then its campaign's levels
+(the ones this Xbox has) */
+static boolean sweep_map_key(
+	long index,
+	char *key,
+	boolean *solo)
+{
+	long folder_maps = hmp_maps_count();
+	char const *name = NULL;
+
+	*solo = FALSE;
+	if (index < folder_maps)
+	{
+		name = hmp_maps_key(index);
+		*solo = name && custom_edition_maps_level_campaign(name);
+	}
+	else if (index < folder_maps + SWEEP_STOCK_MULTIPLAYER)
+	{
+		name = hmp_maps_stock_level(index - folder_maps);
+	}
+	else if (index < folder_maps + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO)
+	{
+		name = sweep_solo_levels[index - folder_maps - SWEEP_STOCK_MULTIPLAYER];
+		*solo = TRUE;
+	}
+	if (!name || !name[0])
+		return FALSE;
+	/* (Halo's own maps this Xbox has: maps\<name>.map) */
+	if (index >= folder_maps)
+	{
+		char path[48];
+		char const *leaf = strrchr(name, '\\');
+
+		_snprintf(path, sizeof(path), "d:\\maps\\%s.map", leaf ? leaf + 1 : name);
+		path[sizeof(path) - 1] = 0;
+		if (GetFileAttributesA(path) == (DWORD)-1)
+			return FALSE;
+	}
+	if ((long)strlen(name) >= SWEEP_KEY_LENGTH)
+	{
+		platform_log("perf sweep: %s left out: its key is longer than %d characters", name, SWEEP_KEY_LENGTH - 1);
+		return FALSE;
+	}
+	strcpy(key, name);
+	return TRUE;
+}
+
+/* the run's map: its name, path, origin, sizes and type */
+static void sweep_map_info(
+	void)
+{
+	char const *leaf = strrchr(sweep.key, '\\');
+	unsigned char header[0x800];
+	unsigned long got = 0;
+	HANDLE file;
+
+	leaf = leaf ? leaf + 1 : sweep.key;
+	sweep.name[0] = sweep.path[0] = 0;
+	sweep.file_kb = sweep.map_kb = 0;
+	if (sweep.key[0] == '+')
+	{
+		wchar_t const *title = hmp_maps_title(sweep.key);
+		long index = hmp_maps_find(sweep.key), k;
+
+		for (k = 0; title && title[k] && k < (long)sizeof(sweep.name) - 1; k++)
+			sweep.name[k] = (char)(title[k] >= 32 && title[k] < 127 ? title[k] : '?');
+		sweep.name[k] = 0;
+		if (index == NONE || !hmp_maps_map_path(index, NONE, sweep.path, sizeof(sweep.path)))
+			sweep.path[0] = 0;
+	}
+	else
+	{
+		char const *title = hmp_browse_stock_title(sweep.key);
+
+		csstrcpy(sweep.name, title ? title : leaf);
+		_snprintf(sweep.path, sizeof(sweep.path), "d:\\maps\\%s.map", leaf);
+		sweep.path[sizeof(sweep.path) - 1] = 0;
+	}
+	if (!sweep.name[0])
+		csstrcpy(sweep.name, leaf[0] == '+' ? leaf + 1 : leaf);
+	strcpy(sweep.origin, sweep.key[0] == '+' ? "unknown" : "xbox");
+	if (!sweep.path[0])
+		return;
+	file = CreateFileA(sweep.path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file != INVALID_HANDLE_VALUE)
+	{
+		sweep.file_kb = (GetFileSize(file, NULL) + 1023) / 1024;
+		if (ReadFile(file, header, sizeof(header), &got, NULL) && got == sizeof(header))
+			sweep.map_kb = (*(unsigned long const *)(header + 8) + 1023) / 1024;
+		CloseHandle(file);
+	}
+	if (sweep.key[0] == '+')
+	{
+		char folder[200];
+		char *end;
+
+		csstrcpy(folder, sweep.path);
+		end = strrchr(folder, '\\');
+		if (end)
+		{
+			*end = 0;
+			sweep_origin(folder);
+		}
+	}
+}
+
+/* the measures cleared, for a run starting (or written without one) */
+static void sweep_clear_measures(
+	void)
+{
+	sweep.time = sweep.frame_worst = sweep.ticks = sweep.drawing = sweep.present = sweep.vsync = 0;
+	memset(sweep.under, 0, sizeof(sweep.under));
+	sweep.frames = 0;
+	memset(sweep.histogram, 0, sizeof(sweep.histogram));
+	sweep.gpu_busy = sweep.gpu_samples = sweep.texture_bytes = sweep.texture_waits = 0;
+	sweep.objects_peak = sweep.actors_peak = sweep.particles_peak = sweep.effects_peak = 0;
+	sweep.free_kb_min = 0;
+	memset(sweep.columns, 0, sizeof(sweep.columns));
+	sweep.level_triangles = sweep.window_frames = 0;
+	sweep.second_frames = 0;
+	sweep.second_start = 0;
+	sweep.low_seconds = sweep.under10_seconds = sweep.longest_low = 0.0;
+	sweep.bsps = sweep.encounters = -1;
+}
+
+/* the run's row in perf\sweep.csv */
+static void sweep_row(
+	char const *status)
+{
+	struct perf_line line;
+	double seconds = ticks_to_ms(sweep.time) / 1000.0;
+	double frames = sweep.frames ? (double)sweep.frames : 1.0;
+	double window_frames = sweep.window_frames ? (double)sweep.window_frames : 1.0;
+	SYSTEMTIME time;
+	char text[96];
+	long column, top[3] = { NONE, NONE, NONE }, rank;
+
+	line.length = 0;
+	put_text(&line, status); put_comma(&line);
+	sweep_put_text(&line, sweep.key); put_comma(&line);
+	sweep_put_hex(&line, sweep.identity); put_comma(&line);
+	put_signed(&line, sweep.run); put_comma(&line);
+	put_signed(&line, sweep.bots); put_comma(&line);
+	put_text(&line, "v1."); put_unsigned(&line, OXBOX_BUILD_NUMBER); put_comma(&line);
+	GetSystemTime(&time);
+	_snprintf(text, sizeof(text), "%04d-%02d-%02d %02d:%02d:%02d", time.wYear, time.wMonth, time.wDay, time.wHour,
+		time.wMinute, time.wSecond);
+	text[sizeof(text) - 1] = 0;
+	put_text(&line, text); put_comma(&line);
+	sweep_put_text(&line, sweep.name); put_comma(&line);
+	sweep_put_text(&line, sweep.path); put_comma(&line);
+	put_text(&line, sweep.origin); put_comma(&line);
+	put_unsigned(&line, sweep.file_kb); put_comma(&line);
+	put_unsigned(&line, sweep.map_kb); put_comma(&line);
+	put_text(&line, sweep.solo ? "sp" : "mp"); put_comma(&line);
+	if (sweep.bsps >= 0)
+		put_signed(&line, sweep.bsps);
+	put_comma(&line);
+	if (sweep.encounters >= 0)
+		put_signed(&line, sweep.encounters);
+	put_comma(&line);
+	if (sweep.frames)
+	{
+		unsigned long count = 0, low_ms = SWEEP_HISTOGRAM - 1;
+		long k;
+
+		/* (the 99th percentile frame: the frame time 1% of the frames are longer than) */
+		for (k = SWEEP_HISTOGRAM - 1; k >= 0; k--)
+		{
+			count += sweep.histogram[k];
+			if (count * 100 >= sweep.frames)
+			{
+				low_ms = (unsigned long)k;
+				break;
+			}
+		}
+		put_fixed(&line, seconds, 1); put_comma(&line);
+		put_unsigned(&line, sweep.frames); put_comma(&line);
+		put_fixed(&line, seconds > 0.0 ? sweep.frames / seconds : 0.0, 1); put_comma(&line);
+		put_fixed(&line, 1000.0 / (low_ms + 1), 1); put_comma(&line);
+		put_fixed(&line, ticks_to_ms(sweep.frame_worst), 1); put_comma(&line);
+		for (k = 0; k < 4; k++)
+		{
+			put_fixed(&line, sweep.time ? 100.0 * (double)sweep.under[k] / (double)sweep.time : 0.0, 1);
+			put_comma(&line);
+		}
+		put_fixed(&line, sweep.under10_seconds, 1); put_comma(&line);
+		put_fixed(&line, sweep.longest_low, 1); put_comma(&line);
+		put_fixed(&line, ticks_to_ms(sweep.ticks) / frames, 2); put_comma(&line);
+		put_fixed(&line, ticks_to_ms(sweep.drawing) / frames, 2); put_comma(&line);
+		put_fixed(&line, ticks_to_ms(sweep.present) / frames, 2); put_comma(&line);
+		put_fixed(&line, ticks_to_ms(sweep.vsync) / frames, 2); put_comma(&line);
+		if (sweep.gpu_samples)
+			put_unsigned(&line, (sweep.gpu_busy * 100 + sweep.gpu_samples / 2) / sweep.gpu_samples);
+		put_comma(&line);
+		/* (the three biggest steps: not the profile sections, which are parts of the steps) */
+		for (rank = 0; rank < 3; rank++)
+		{
+			for (column = 0; column < (long)NUMBEROF(window_time_columns); column++)
+			{
+				if (window_time_columns[column] >= 0 && window_time_columns[column] < NUMBER_OF_SECTIONS)
+					continue;
+				if ((rank > 0 && column == top[0]) || (rank > 1 && column == top[1]))
+					continue;
+				if (top[rank] == NONE || sweep.columns[column] > sweep.columns[top[rank]])
+					top[rank] = column;
+			}
+			if (top[rank] != NONE)
+				put_text(&line, sweep.column_names[top[rank]]);
+			put_comma(&line);
+			if (top[rank] != NONE)
+				put_fixed(&line, cycles_to_ms((double)(__int64)sweep.columns[top[rank]]) / window_frames, 2);
+			put_comma(&line);
+		}
+		put_unsigned(&line, sweep.objects_peak); put_comma(&line);
+		put_unsigned(&line, sweep.actors_peak); put_comma(&line);
+		put_unsigned(&line, sweep.particles_peak); put_comma(&line);
+		put_unsigned(&line, sweep.effects_peak); put_comma(&line);
+		if (sweep.window_frames)
+			put_unsigned(&line, sweep.level_triangles / sweep.window_frames);
+		put_comma(&line);
+		put_unsigned(&line, sweep.texture_bytes / 1024); put_comma(&line);
+		put_unsigned(&line, sweep.texture_waits); put_comma(&line);
+		put_unsigned(&line, sweep.free_kb_min); put_comma(&line);
+	}
+	else
+	{
+		put_text(&line, ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,");
+	}
+	text[0] = 0;
+	if (strcmp(status, "skipped") && strcmp(status, "crashed"))
+		oxbox_limits_text(text, sizeof(text));
+	sweep_put_text(&line, text);
+	line.text[line.length++] = '\r';
+	line.text[line.length++] = '\n';
+	sweep_append(line.text, line.length);
+	{
+		struct sweep_done *done = sweep_find(sweep_hash(sweep.key), sweep.identity, TRUE);
+
+		if (done)
+			done->runs |= (unsigned char)(1 << sweep.run);
+		sweep.have |= (unsigned char)(1 << sweep.run);
+	}
+}
+
+/* the run's bots (run 0, 1 or 2) */
+static short sweep_run_bots(
+	long run)
+{
+	return run == 0 || run == 3 ? 0 : run == 1 ? 4 : sweep.full_bots;
+}
+
+/* the run ended (its row written with status); a failed one skips the map's later runs */
+static void sweep_finish(
+	char const *status)
+{
+	boolean passed = !strcmp(status, "ok");
+	long run;
+
+	sweep_row(status);
+	if (sweep.frames)
+		platform_log("perf sweep: %s run %ld (%d bots): %s, %.1f fps over %.1f s", sweep.key, sweep.run, (int)sweep.bots,
+			status, ticks_to_ms(sweep.time) > 0.0 ? sweep.frames * 1000.0 / ticks_to_ms(sweep.time) : 0.0,
+			ticks_to_ms(sweep.time) / 1000.0);
+	else
+		platform_log("perf sweep: %s run %ld (%d bots): %s", sweep.key, sweep.run, (int)sweep.bots, status);
+	if (!passed)
+	{
+		long failed_run = sweep.run;
+
+		for (run = failed_run + 1; run < SWEEP_RUNS; run++)
+		{
+			if (!(sweep.needed & (1 << run)) || (sweep.have & (1 << run)))
+				continue;
+			sweep.run = run;
+			sweep.bots = sweep_run_bots(run);
+			sweep_clear_measures();
+			sweep_row("skipped");
+		}
+		sweep.run = failed_run;
+	}
+	sweep_marker(FALSE);
+	sweep.active = sweep.measuring = FALSE;
+	sweep.over = TRUE;
+}
+
+/* a folder map's version: map sharing's (its size and checksum, the standalone map's for a converted one), else (a
+map that can't say, such as one whose shared files aren't here) its file's size and its header's checksum */
+static unsigned long sweep_identity(
+	char const *key)
+{
+	unsigned long identity = hmp_share_map_version(key), got = 0;
+	unsigned char header[0x800];
+	char path[200];
+	long index = hmp_maps_find(key);
+	HANDLE file;
+
+	if (identity || index == NONE || !hmp_maps_map_path(index, NONE, path, sizeof(path)))
+		return identity;
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return 0;
+	if (ReadFile(file, header, sizeof(header), &got, NULL) && got == sizeof(header))
+		identity = (GetFileSize(file, NULL) * 2654435761ul ^ *(unsigned long const *)(header + 0x64)) | 1;
+	CloseHandle(file);
+	return identity;
+}
+
+/* the map at the cursor: its runs, and which have rows */
+static boolean sweep_map_ready(
+	void)
+{
+	struct sweep_done *done;
+	short players;
+
+	if (!sweep_map_key(sweep.cursor, sweep.key, &sweep.solo))
+		return FALSE;
+	sweep.identity = sweep.key[0] == '+' ? sweep_identity(sweep.key) : 1;
+	if (sweep.solo)
+	{
+		sweep.needed = 1 << 3;
+		sweep.full_bots = 0;
+	}
+	else
+	{
+		players = hmp_browse_suggested_players(sweep.key);
+		if (players <= 0)
+			players = 8;
+		sweep.full_bots = players > 15 ? 15 : players;
+		sweep.needed = (unsigned char)(sweep.full_bots > 4 ? 7 : 3);
+	}
+	done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
+	sweep.have = done ? done->runs : 0;
+	return TRUE;
+}
+
+/* once, at the first run: the rows so far, and a run the last boot never ended */
+static void sweep_initialize(
+	void)
+{
+	char path[64], text[128];
+	unsigned long got = 0;
+	HANDLE file;
+
+	if (sweep.initialized)
+		return;
+	sweep.initialized = TRUE;
+	if (!hmp_maps_count())
+		hmp_maps_scan();
+	/* (perf\ on D:, else T:) */
+	sweep.drive = 'D';
+	if (!CreateDirectoryA("D:\\perf", NULL) && GetFileAttributesA("D:\\perf") == (DWORD)-1)
+	{
+		sweep.drive = 'T';
+		CreateDirectoryA("T:\\perf", NULL);
+	}
+	/* (the column names: the P rows' own) */
+	{
+		char const *names = strstr(frame_fields, "tick_units_ms");
+		long column, n;
+
+		for (column = 0; names && column < (long)NUMBEROF(window_time_columns); column++)
+		{
+			for (n = 0; names[n] && names[n] != ',' && n < SWEEP_COLUMN_NAME - 1; n++)
+				sweep.column_names[column][n] = names[n];
+			sweep.column_names[column][n] = 0;
+			names = strchr(names, ',');
+			if (names)
+				names++;
+		}
+	}
+	sweep_read_results();
+	sweep.map_count = hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO;
+	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\sweep.csv; %ld maps here", sweep.done_count,
+		sweep.drive, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER);
+	/* (a run the last boot started and never wrote: the Xbox crashed or hung in it) */
+	sweep_path(path, sizeof(path), "sweep_now.txt");
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file != INVALID_HANDLE_VALUE)
+	{
+		char *tab, *tab2;
+
+		if (!ReadFile(file, text, sizeof(text) - 1, &got, NULL))
+			got = 0;
+		CloseHandle(file);
+		text[got] = 0;
+		tab = strchr(text, '\t');
+		tab2 = tab ? strchr(tab + 1, '\t') : NULL;
+		if (tab && tab2 && tab - text < SWEEP_KEY_LENGTH)
+		{
+			*tab = 0;
+			strcpy(sweep.key, text);
+			sweep.run = strtol(tab + 1, NULL, 10);
+			sweep.identity = strtoul(tab2 + 1, NULL, 16);
+			if (sweep.run >= 0 && sweep.run < SWEEP_RUNS)
+			{
+				short players = sweep.key[0] == '+' || hmp_browse_stock_title(sweep.key) ? hmp_browse_suggested_players(sweep.key) : 0;
+
+				sweep.solo = sweep.run == 3;
+				sweep.full_bots = players <= 0 ? 8 : players > 15 ? 15 : players;
+				sweep.needed = (unsigned char)(sweep.solo ? 1 << 3 : sweep.full_bots > 4 ? 7 : 3);
+				sweep.have = 0;
+				sweep.bots = sweep_run_bots(sweep.run);
+				sweep_map_info();
+				sweep_clear_measures();
+				platform_log("perf sweep: %s run %ld never ended (the Xbox crashed or hung there)", sweep.key, sweep.run);
+				sweep_finish("crashed");
+			}
+		}
+		sweep_marker(FALSE);
+	}
+	sweep.over = FALSE;
+}
+
+static long sweep_next(
+	char *key,
+	long size,
+	short *bots)
+{
+	sweep_initialize();
+	sweep.active = sweep.measuring = sweep.over = FALSE;
+	for (; sweep.cursor < sweep.map_count; sweep.cursor++, sweep.map_ready = FALSE)
+	{
+		long run;
+
+		if (!sweep.map_ready)
+		{
+			if (!sweep_map_ready())
+				continue;
+			sweep.map_ready = TRUE;
+		}
+		for (run = 0; run < SWEEP_RUNS && (!(sweep.needed & (1 << run)) || (sweep.have & (1 << run))); run++)
+			;
+		if (run == SWEEP_RUNS)
+			continue;
+		if ((long)strlen(sweep.key) >= size)
+			continue;
+		sweep.run = run;
+		sweep.bots = sweep_run_bots(run);
+		sweep_map_info();
+		sweep_clear_measures();
+		sweep_marker(TRUE);
+		sweep.active = TRUE;
+		strcpy(key, sweep.key);
+		*bots = sweep.bots;
+		platform_log("perf sweep: map %ld of %ld, %s (%s, %s), run %ld: %d bots", sweep.cursor + 1, sweep.map_count,
+			sweep.key, sweep.name, sweep.solo ? "campaign" : "multiplayer", run, (int)sweep.bots);
+		return sweep.solo ? _oxbox_sweep_solo : _oxbox_sweep_multiplayer;
+	}
+	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\sweep.csv)",
+		sweep.drive);
+	return _oxbox_sweep_none;
+}
+
+/* a map without a showcase.txt (showcase.c): shots at up to maximum of its spawn points (spread over its list), each
+two keys (showcase.c's: seconds, x, y, z, yaw, pitch, field of view) a turn round at eye height in 8 seconds; how many */
+static long sweep_spawn_shots(
+	float (*keys)[7],
+	long maximum)
+{
+	struct scenario *scenario = global_scenario_try_and_get();
+	long count = scenario ? scenario->players.count : 0, index;
+	long shots = count < maximum ? count : maximum;
+
+	for (index = 0; index < shots; index++)
+	{
+		struct player_starting_location const *spawn = TAG_BLOCK_GET_ELEMENT(&scenario->players, index * count / shots,
+			struct player_starting_location);
+		long key;
+
+		for (key = 0; key < 2; key++)
+		{
+			float *v = keys[index * 2 + key];
+
+			v[0] = key ? 8.0f : 0.0f;
+			v[1] = spawn->position.x;
+			v[2] = spawn->position.y;
+			v[3] = spawn->position.z + 0.62f;
+			v[4] = (float)(spawn->facing * (180.0 / 3.14159265358979)) + (key ? 360.0f : 0.0f);
+			v[5] = 0.0f;
+			v[6] = 70.0f;
+		}
+	}
+	platform_log("perf sweep: %s has no showcase.txt: shots at %ld of its %ld spawn points", sweep.key, shots, count);
+	return shots;
+}
+
+static boolean sweep_frame(
+	float seconds)
+{
+	if (!sweep.active || sweep.over)
+		return TRUE;
+	if (!sweep.measuring && seconds >= SWEEP_WARMUP_SECONDS)
+	{
+		struct scenario *scenario = global_scenario_try_and_get();
+
+		sweep_clear_measures();
+		if (scenario)
+		{
+			sweep.bsps = scenario->structure_bsp_references.count;
+			sweep.encounters = scenario->ai_encounters.count;
+		}
+		sweep.free_kb_min = free_kb(NULL);
+		sweep.measuring = TRUE;
+	}
+	return FALSE;
+}
+
+static void sweep_ended(
+	long how)
+{
+	if (!sweep.active)
+		return;
+	if (how == _oxbox_sweep_ended_stopped)
+	{
+		platform_log("perf sweep: stopped by a press (%s run %ld isn't counted); it carries on at the next boot", sweep.key,
+			sweep.run);
+		sweep_marker(FALSE);
+		sweep.active = sweep.measuring = FALSE;
+		return;
+	}
+	sweep_finish(how == _oxbox_sweep_ended_no_start ? "no_start" : "left");
+}
+
+/* a frame of the run (perf_frame, while it measures) */
+static void sweep_sample(
+	struct perf_sample const *sample,
+	__int64 now)
+{
+	double ms = ticks_to_ms(sample->frame);
+	unsigned long bucket = ms < 0.0 ? 0 : ms >= SWEEP_HISTOGRAM - 1 ? SWEEP_HISTOGRAM - 1 : (unsigned long)ms;
+
+	sweep.frames++;
+	sweep.time += sample->frame;
+	if (sample->frame > sweep.frame_worst)
+		sweep.frame_worst = sample->frame;
+	sweep.histogram[bucket]++;
+	if (ms > 34.0)
+		sweep.under[0] += sample->frame;
+	if (ms > 41.0)
+		sweep.under[1] += sample->frame;
+	if (ms > 51.0)
+		sweep.under[2] += sample->frame;
+	if (ms > 68.0)
+		sweep.under[3] += sample->frame;
+	sweep.ticks += sample->ticks;
+	sweep.drawing += sample->drawing;
+	sweep.present += sample->present;
+	sweep.vsync += sample->vsync;
+	sweep.gpu_busy += sample->gpu_busy;
+	sweep.gpu_samples += sample->gpu_samples;
+	sweep.texture_bytes += sample->texture_bytes;
+	sweep.texture_waits += sample->texture_waits;
+	if (object_header_data && (unsigned long)object_header_data->actual_count > sweep.objects_peak)
+		sweep.objects_peak = object_header_data->actual_count;
+	if (actor_data && (unsigned long)actor_data->actual_count > sweep.actors_peak)
+		sweep.actors_peak = actor_data->actual_count;
+	if (particle_data && (unsigned long)particle_data->actual_count > sweep.particles_peak)
+		sweep.particles_peak = particle_data->actual_count;
+	if (effect_data && (unsigned long)effect_data->actual_count > sweep.effects_peak)
+		sweep.effects_peak = effect_data->actual_count;
+
+	/* the frame rate a second: under 10 for 5 seconds in a row fails the run */
+	if (!sweep.second_start)
+		sweep.second_start = now - sample->frame;
+	sweep.second_frames++;
+	if (now - sweep.second_start >= perf.frequency)
+	{
+		double seconds = ticks_to_ms(now - sweep.second_start) / 1000.0;
+		double fps = sweep.second_frames / seconds;
+		unsigned long free = free_kb(NULL);
+
+		if (free < sweep.free_kb_min)
+			sweep.free_kb_min = free;
+		if (fps < SWEEP_FAIL_FPS)
+		{
+			sweep.low_seconds += seconds;
+			sweep.under10_seconds += seconds;
+			if (sweep.low_seconds > sweep.longest_low)
+				sweep.longest_low = sweep.low_seconds;
+		}
+		else
+		{
+			sweep.low_seconds = 0.0;
+		}
+		sweep.second_start = now;
+		sweep.second_frames = 0;
+		if (sweep.low_seconds >= SWEEP_FAIL_SECONDS)
+		{
+			sweep_finish("fail_fps");
+			return;
+		}
+	}
+	if (ticks_to_ms(sweep.time) >= sweep.seconds * 1000.0)
+		sweep_finish("ok");
+}
+
+/* a second's steps (window_row, while a run measures) */
+static void sweep_window(
+	void)
+{
+	long column;
+
+	for (column = 0; column < (long)NUMBEROF(window_time_columns); column++)
+	{
+		long source = window_time_columns[column];
+		unsigned __int64 cycles = 0;
+
+		if (source == HUD_COLUMN)
+		{
+			long step;
+
+			for (step = _oxbox_perf_hud_screen_effect; step <= _oxbox_perf_draw_ui_widgets; step++)
+				cycles += window.steps[step];
+		}
+		else
+		{
+			cycles = source < NUMBER_OF_SECTIONS ? window.sections[source] : window.steps[source - NUMBER_OF_SECTIONS];
+			if (source == STEP_COLUMN(_oxbox_perf_draw_other))
+				cycles += window.steps[_oxbox_perf_draw_end];
+		}
+		sweep.columns[column] += cycles;
+	}
+	sweep.level_triangles += window.level_triangles;
+	sweep.window_frames += (unsigned long)perf.second.frames;
+}
+
 /* ---------- phase 2's hooks: the profile sections and the steps' marks */
 
 /* the log's slot for a profile section (NONE: one it leaves alone), found by its name the first time */
@@ -2561,6 +3595,8 @@ static void window_row(
 		cost_report();
 	window.hook_calls = session_hook_calls - hook_calls_at_window_start;
 	hook_calls_at_window_start = session_hook_calls;
+	if (sweep.measuring && kind == 'P')
+		sweep_window();
 	frame_row(kind, ticks_to_ms(now - perf.session_start) / 1000.0, &perf.second);
 	window_reset();
 	perf.second_start = now;
@@ -2663,6 +3699,8 @@ static void perf_frame(
 	frame_counts(sample.game_ticks);
 	objects_fold();
 	session_frames++;
+	if (sweep.measuring)
+		sweep_sample(&sample, now);
 
 	/* this second */
 	perf.second.frames++;
@@ -2781,6 +3819,12 @@ static void read_settings(
 			perf.slow_frame_ms = value;
 		else if (!strcmp(name, "perf_gpu_sample_ms"))
 			perf.gpu_sample_ms = value > 100 ? 100 : value;
+		else if (!strcmp(name, "perf_sweep"))
+			sweep.on = value != 0;
+		else if (!strcmp(name, "perf_sweep_detail"))
+			sweep.detail = value != 0;
+		else if (!strcmp(name, "perf_sweep_seconds") && value >= 10)
+			sweep.seconds = value > 600 ? 600 : value;
 	}
 }
 
@@ -2799,6 +3843,8 @@ struct oxbox_perf_hooks *oxbox_perf_start(
 	perf.slow_frame_ms = 34;
 	perf.gpu_sample_ms = 1;
 	perf.cycle_frequency = 733333333.0;
+	memset(&sweep, 0, sizeof(sweep));
+	sweep.seconds = 60;
 	read_settings("D:\\opence.ini");
 	read_settings("T:\\opence.ini");
 	QueryPerformanceFrequency(&frequency);
@@ -2826,6 +3872,16 @@ struct oxbox_perf_hooks *oxbox_perf_start(
 		platform_log("perf: the kernel's timer functions weren't found: no gpu_busy_pct");
 	}
 	calibrate_hooks();
+	/* the perf sweep (opence.ini perf_sweep = 1): its hooks for the showcase */
+	if (sweep.on)
+	{
+		perf_hooks.sweep_next = sweep_next;
+		perf_hooks.sweep_frame = sweep_frame;
+		perf_hooks.sweep_ended = sweep_ended;
+		perf_hooks.sweep_spawn_shots = sweep_spawn_shots;
+		perf.quiet = !sweep.detail;
+		platform_log("perf sweep: on: %ld s a run%s", sweep.seconds, perf.quiet ? ", no per-second files" : "");
+	}
 	platform_log("perf: on (OXPERF loaded at %p, %lu KB, and a %lu KB writer stack); slow frames over %ld ms; "
 		"a GPU sample every %ld ms; an object mark costs %lu cycles, a hook call %lu", __oxperf_start,
 		(unsigned long)(((__oxperf_end - __oxperf_start) + 0xFFF) & ~0xFFF) / 1024,

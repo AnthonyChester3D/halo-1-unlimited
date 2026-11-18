@@ -55,6 +55,28 @@ struct oxbox_perf_hooks
 	unsigned long translate_start, translate_cycles, translate_count;
 	/* (while object_translate runs: structure_clusters_in_sphere's queries and the clusters they found) */
 	unsigned long translate_active, translate_cluster_queries, translate_clusters;
+	/* the perf sweep (v1.131, opence.ini perf_sweep = 1; NULL without it): the showcase (showcase.c) plays the runs it
+	picks, and the log measures them. next: the next run, its map's key (size bytes at most) and its bots: 0 when every
+	map is done, _oxbox_sweep_multiplayer or _oxbox_sweep_solo. frame: once a frame while the run's map plays, seconds
+	since it started: TRUE when the run is over (measured, or failed). ended: the run stopped otherwise (how) */
+	long (*sweep_next)(char *key, long size, short *bots);
+	boolean (*sweep_frame)(float seconds);
+	void (*sweep_ended)(long how);
+	/* a map without a showcase.txt: up to maximum shots at its spawn points, their keys (two a shot: seconds, x, y, z,
+	yaw, pitch, field of view, as showcase.c's), 8 seconds each; how many */
+	long (*sweep_spawn_shots)(float (*keys)[7], long maximum);
+};
+
+/* the perf sweep's kinds of run (sweep_next) and how a run stopped (sweep_ended) */
+enum
+{
+	_oxbox_sweep_none = 0,
+	_oxbox_sweep_multiplayer,       /* a system link game with bots, the showcase's camera */
+	_oxbox_sweep_solo,              /* a campaign level from its start, the player's own view (deathless) */
+
+	_oxbox_sweep_ended_no_start = 1,   /* the game didn't start (the map didn't load) */
+	_oxbox_sweep_ended_left,           /* the game went away while it played */
+	_oxbox_sweep_ended_stopped         /* a press stopped the sweep: the run isn't counted */
 };
 
 /* the steps OXBOX_PERF_MARK ends (a game tick's start is its profile section game_update's start) */

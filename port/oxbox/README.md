@@ -60,6 +60,19 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     around it is the same every run. Holding Back and clicking the right stick stops a tour, or, when none is
     running, adds the current view to the map's tour file. The log's code and buffers are in an XBE section of their
     own (OXPERF), loaded only when the setting is on: with it off, the game has the same free memory as without it.
+  - `perf_sweep = 1` (builds with the showcase) runs the perf sweep: soon after the main menu is up, every map not
+    yet measured at its current version plays in turn, unattended: a multiplayer map three runs (no bots, 4 bots,
+    its suggested player count) in the showcase's bot game and camera (shots at its spawn points when it has no
+    `showcase.txt`), a campaign level one from its start at Normal (the player deathless, its own view). Each run is
+    measured for `perf_sweep_seconds` (60) after a few seconds' warm-up; one under 10 frames a second for 5 seconds
+    in a row fails, and the map's later runs are skipped. A row a run goes in `perf\sweep.csv` (the map's name,
+    path, CE/MCC origin from its `.h1ulink`, sizes, type, BSPs, AI encounters; the frame rate, its 1% low, time
+    under 30/25/20/15/10 fps; ticks, drawing and graphics-chip time and the three costliest steps; peak objects,
+    AI, particles and effects; texture reads, free memory, `limit:` hits). A run the Xbox crashed or hung in is
+    written as `crashed` at the next boot. A press stops the sweep until the next boot, which carries on.
+    `perf_sweep_detail = 1` also keeps each run's per-second CSV. On a PC,
+    `python3 port/oxbox/tools/perf_sweep_report.py sweep.csv [--summary maps.csv] [--html report.html]` sorts the
+    maps into perfect, a little work, a lot of work and probably never (plus crashed or didn't load).
 
 Saves use retail Halo's formats and title ID, so profiles and gametypes are shared with the retail game.
 

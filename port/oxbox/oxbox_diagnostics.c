@@ -61,12 +61,13 @@ static void oxbox_where(char *text, int size)
 
 #define LIMIT_KINDS 24
 
-static struct
+/* (the perf sweep's rows read them too: oxbox_perf.c) */
+struct oxbox_limit
 {
 	char name[32];
 	long limit, times;
 } oxbox_limits[LIMIT_KINDS];
-static int oxbox_limit_count;
+int oxbox_limit_count;
 
 void oxbox_limit_hit(char const *what, long limit)
 {

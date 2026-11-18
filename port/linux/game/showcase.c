@@ -80,6 +80,7 @@ The log (oxbox_log.txt): a line when it starts, each map, and when it ends, and 
 #include "game/game_engine.h"
 #include "game/players.h"
 #include "scenario/scenario.h"
+#include "scenario/scenario_definitions.h"
 #include "camera/observer.h"
 #include "cutscene/cinematics.h"
 #include "interface/hud.h"
@@ -88,6 +89,8 @@ The log (oxbox_log.txt): a line when it starts, each map, and when it ends, and 
 #include "text/draw_string.h"
 #include "hmp.h"
 #include "oxbox_showcase.h"
+#include "oxbox_perf.h"
+#include "game/cheats.h"
 #if defined(OXBOX_NET_P2P)
 #include "../src/p2p.h" /* port: port/linux/src/p2p_lobby.c */
 #endif
@@ -116,6 +119,7 @@ int oxbox_setting_showcase_map_seconds = 90;   /* showcase_map_seconds = N: each
 int oxbox_setting_showcase_preview = 0;   /* showcase_preview = 1: White on a map in the map list plays its showcase */
 int oxbox_setting_showcase_train = 0;     /* showcase_train = 1: the bot trainer (each map showcase_train_minutes) */
 int oxbox_setting_showcase_train_minutes = 10;
+extern int oxbox_setting_perf_sweep;     /* perf_sweep = 1: the perf sweep (oxbox_entry.c; oxbox_perf.c picks the runs) */
 
 /* ---------- constants */
 
@@ -246,7 +250,26 @@ static struct
 	unsigned long fps_window_start;
 	long fps_frames;
 	real drop_seconds;
+	/* the perf sweep (opence.ini perf_sweep = 1, oxbox_perf.c): this run's kind (0: not a sweep's), its bots; a press
+	stopped it (until the next boot), or every map is done; a campaign level's game has left the main menu */
+	short sweep_kind;
+	short sweep_bots;
+	boolean sweep_stopped;
+	boolean sweep_left_menu;
 } showcase;
+
+/* the perf sweep's own code here is in the perf log's XBE section (OXPERF: link.ld's .oxperf_code), loaded only
+with the perf log, and called only while the sweep runs: the image (always loaded) carries just the calls */
+#define SHOWCASE_SWEEP_CODE __attribute__((noinline, section(".oxperf_code")))
+
+/* the perf sweep's hooks while it runs (opence.ini perf_sweep = 1 loads the perf log, which has them), else NULL */
+static __attribute__((noinline)) struct oxbox_perf_hooks *showcase_sweep(
+	void)
+{
+	if (!oxbox_setting_perf_sweep || showcase.sweep_stopped || showcase.preview || !oxbox_perf || !oxbox_perf->sweep_next)
+		return NULL;
+	return oxbox_perf;
+}
 
 /* ---------- private code: the file */
 
@@ -1149,11 +1172,48 @@ static void showcase_find_maps(
 		showcase_swap_maps(0, 1);
 }
 
+/* the perf sweep's next run: its map the only one in the list (a campaign level's an empty name: no showcase.txt
+read); none left, the sweep is over until the next boot */
+static SHOWCASE_SWEEP_CODE void showcase_sweep_pick(
+	struct oxbox_perf_hooks *sweep)
+{
+	char key[SHOWCASE_KEY_LENGTH];
+	short bots = 0;
+	long kind = sweep->sweep_next(key, (long)sizeof(key), &bots);
+
+	showcase.sweep_kind = (short)kind;
+	if (kind == _oxbox_sweep_none)
+	{
+		showcase.sweep_stopped = TRUE;
+		return;
+	}
+	showcase.sweep_bots = bots;
+	strcpy(showcase.key, key);
+	showcase.map_count = 1;
+	showcase.map_next = 0;
+	strcpy(showcase_maps[0], key);
+	if (kind == _oxbox_sweep_solo)
+		showcase_maps[0][0] = 0;
+}
+
 /* the next map to show, its showcase.txt read: FALSE when there's none */
 static boolean showcase_next_map(
 	void)
 {
 	long tries;
+	boolean loaded;
+	struct oxbox_perf_hooks *sweep = showcase_sweep();
+
+	/* (the perf sweep: the run it picks; a map without a showcase.txt gets shots at its spawn points once it has
+	loaded, a campaign level none, its player's own view; no fades between shots: they'd darken what's measured) */
+	if (sweep)
+	{
+		showcase_sweep_pick(sweep);
+		if (!showcase.sweep_kind)
+			return FALSE;
+	}
+	else
+		showcase.sweep_kind = 0;
 
 	for (tries = 0; tries <= SHOWCASE_MAXIMUM_MAPS; tries++)
 	{
@@ -1163,8 +1223,17 @@ static boolean showcase_next_map(
 			if (!showcase.map_count)
 				return FALSE;
 		}
-		if (showcase_load(showcase_maps[showcase.map_next]))
+		loaded = showcase_load(showcase_maps[showcase.map_next]);
+		if (loaded || sweep)
 		{
+			if (sweep)
+			{
+				if (!loaded)
+					memset(&showcase_file, 0, sizeof(showcase_file));
+				showcase_file.fade = 0.0f;
+				showcase.map_next = 1;
+				return TRUE;
+			}
 			strcpy(showcase.key, showcase_maps[showcase.map_next++]);
 			return TRUE;
 		}
@@ -1245,6 +1314,7 @@ static void showcase_plan(
 }
 
 static void showcase_leave(boolean next_map);
+static SHOWCASE_SWEEP_CODE void showcase_sweep_outside(void);
 
 /* each shot as it starts: a line in the log (which of the file's shots, where the camera is), and one whose camera
 starts outside the map (no cluster of its BSP holds that point: the screen showed the sky's colour, or black, and a
@@ -1276,7 +1346,13 @@ static void showcase_shot_check(
 		platform_log("showcase: shot %d of %d (the file's shot %d) starts outside the map at (%.2f %.2f %.2f): skipped",
 			(int)showcase.shot_index + 1, (int)showcase.plan_count, (int)file_index + 1, showcase.camera.position.x,
 			showcase.camera.position.y, showcase.camera.position.z);
-		if (++showcase.skipped_in_row >= showcase.plan_count)
+		if (++showcase.skipped_in_row >= showcase.plan_count && showcase.sweep_kind == _oxbox_sweep_multiplayer &&
+			showcase_sweep())
+		{
+			showcase_sweep_outside();
+			return;
+		}
+		if (showcase.skipped_in_row >= showcase.plan_count)
 		{
 			platform_log("showcase: every shot starts outside the map: the next map");
 			showcase.alpha = 1.0f;
@@ -1331,6 +1407,15 @@ static boolean showcase_memory_take(
 static void showcase_failed(
 	void)
 {
+	struct oxbox_perf_hooks *sweep = showcase.sweep_kind ? showcase_sweep() : NULL;
+
+	/* (the perf sweep: the run didn't start, which its row says; then the next run) */
+	if (sweep)
+	{
+		sweep->sweep_ended(_oxbox_sweep_ended_no_start);
+		showcase.failures = 0;
+		return;
+	}
 	if (++showcase.failures >= 2)
 	{
 		showcase.failures = 0;
@@ -1413,11 +1498,62 @@ static void showcase_frame_rate(
 		fps10 % 10, elapsed / 1000, oxbox_setting_showcase_min_fps, (int)showcase.bots);
 }
 
+/* the perf sweep, a map without a showcase.txt, once it has loaded: the sweep's shots at its spawn points */
+static SHOWCASE_SWEEP_CODE void showcase_spawn_shots(
+	void)
+{
+	short index;
+
+	memset(&showcase_file, 0, sizeof(showcase_file));
+	showcase_file.shot_count = (short)oxbox_perf->sweep_spawn_shots((float (*)[7])showcase_file.keys, 8);
+	showcase_file.key_count = (short)(showcase_file.shot_count * 2);
+	for (index = 0; index < showcase_file.shot_count; index++)
+	{
+		showcase_file.shots[index].seconds = 8.0f;
+		showcase_file.shots[index].first_key = (short)(index * 2);
+		showcase_file.shots[index].key_count = 2;
+	}
+}
+
+/* the perf sweep: every shot of the map's showcase.txt starts outside it: the spawn points' shots instead, the run
+measured all the same */
+static SHOWCASE_SWEEP_CODE void showcase_sweep_outside(
+	void)
+{
+	showcase_spawn_shots();
+	showcase_plan();
+	showcase.shot_index = 0;
+	showcase.shot_serial++;
+	showcase.skipped_in_row = 0;
+	showcase.shot_time = 0.0f;
+	if (!showcase.plan_count)
+		showcase.camera_valid = FALSE;
+}
+
+/* the perf sweep, a campaign level: started as the campaign's new game is (start_new_game), at Normal */
+static SHOWCASE_SWEEP_CODE void showcase_host_solo(
+	void)
+{
+	showcase.camera_valid = FALSE;
+	showcase.sweep_left_menu = FALSE;
+	main_set_difficulty(1);
+	main_set_map_name(showcase.key);
+	game_connection_set(_game_connection_local);
+	main_menu_switch_to_single_player();
+	showcase_set_state(_showcase_loading);
+}
+
 /* the lobby, as the menus' fast setup makes it (network_test.c's host) */
 static void showcase_host(
 	void)
 {
 	short players = hmp_browse_suggested_players(showcase.key);
+
+	if (showcase.sweep_kind == _oxbox_sweep_solo)
+	{
+		showcase_host_solo();
+		return;
+	}
 
 	main_set_multiplayer_map_name(showcase.key);
 	player_ui_fast_setup_network_server();
@@ -1438,6 +1574,8 @@ static void showcase_host(
 		players++;
 	if (oxbox_setting_showcase_bots >= 0)
 		players = (short)((oxbox_setting_showcase_bots > 15 ? 15 : oxbox_setting_showcase_bots) + 1);
+	if (showcase.sweep_kind)
+		players = (short)(showcase.sweep_bots + 1);
 	showcase.bots = (short)(players - 1);
 	bots_showcase(showcase.bots);
 	showcase_title_read();
@@ -1473,10 +1611,24 @@ static void showcase_leave(
 	}
 }
 
+/* the perf sweep, back at the main menu: a run that ended some other way than its own, written as one that left
+(after a press it has already stopped) */
+static SHOWCASE_SWEEP_CODE void showcase_sweep_back(
+	void)
+{
+	struct oxbox_perf_hooks *sweep = showcase_sweep();
+
+	if (sweep)
+		sweep->sweep_ended(_oxbox_sweep_ended_left);
+	cheat.deathless_player = FALSE;
+}
+
 /* back at the main menu with no game: the next map, or the main menu itself */
 static void showcase_back_at_menu(
 	void)
 {
+	if (showcase.sweep_kind)
+		showcase_sweep_back();
 	showcase.camera_valid = FALSE;
 	if (showcase.chain && !showcase.user_ended && showcase_next_map())
 	{
@@ -1494,11 +1646,47 @@ static void showcase_back_at_menu(
 	showcase_set_state(_showcase_menu_return);
 }
 
+/* the perf sweep: a press stops it until the next boot, the run under way not counted */
+static SHOWCASE_SWEEP_CODE void showcase_sweep_stop(
+	void)
+{
+	if (showcase.sweep_kind)
+		oxbox_perf->sweep_ended(_oxbox_sweep_ended_stopped);
+	showcase.sweep_stopped = TRUE;
+}
+
+/* the perf sweep, each frame its run's map plays: TRUE when the run is over (measured, or failed). A campaign
+level's player can't die, and its view is the player's own once it has settled */
+static SHOWCASE_SWEEP_CODE boolean showcase_sweep_playing(
+	struct oxbox_perf_hooks *sweep)
+{
+	if (showcase.sweep_kind == _oxbox_sweep_solo)
+		cheat.deathless_player = TRUE;
+	if (!showcase.plan_count)
+		showcase.alpha = showcase.map_seconds < SHOWCASE_SETTLE_SECONDS ? 1.0f : 0.0f;
+	if (!sweep->sweep_frame(showcase.map_seconds))
+		return FALSE;
+	showcase.alpha = 1.0f;
+	return TRUE;
+}
+
+/* the perf sweep, a campaign level faded out: the main menu back (no network game to leave) */
+static SHOWCASE_SWEEP_CODE void showcase_sweep_leave_solo(
+	boolean main_menu_loaded)
+{
+	if (game_in_progress() && !main_menu_loaded)
+		main_goto_main_menu();
+	cheat.deathless_player = FALSE;
+}
+
 /* ---------- public code */
 
 unsigned long showcase_idle_milliseconds(
 	void)
 {
+	/* (the perf sweep: its next run soon after the main menu is back) */
+	if (showcase_sweep())
+		return 5000ul;
 #if defined(HALO_XBOX_TARGET)
 	/* (the main menu's OPTIONS' ATTRACT MODE WAIT, over opence.ini's: hmp_game.c; for Halo's movies too) */
 	extern void hmp_settings_ready(void);
@@ -1528,14 +1716,14 @@ boolean showcase_start(
 {
 	if (showcase.state != _showcase_off)
 		return TRUE;
-	if (!oxbox_setting_showcase)
+	if (!oxbox_setting_showcase && !showcase_sweep())
 		return FALSE;
 	{
 		extern int oxbox_update_prompt_showing(void);   /* (oxbox_sdk.c: the offer of a newer release waits for an answer) */
 		if (oxbox_update_prompt_showing())
 			return FALSE;
 	}
-	if (showcase.retry_after && (long)(system_milliseconds() - showcase.retry_after) < 0)
+	if (showcase.retry_after && (long)(system_milliseconds() - showcase.retry_after) < 0 && !showcase_sweep())
 		return FALSE;
 	showcase.retry_after = 0;
 	if (!showcase_memory_take() || !showcase_next_map())
@@ -1636,6 +1824,9 @@ void showcase_update(
 			showcase.input_time = event_manager_time_of_last_event();
 			if (!showcase.user_ended)
 			{
+				/* (the perf sweep: stopped until the next boot, this run not counted) */
+				if (showcase_sweep())
+					showcase_sweep_stop();
 				showcase.user_ended = TRUE;
 				showcase_leave(FALSE);
 			}
@@ -1763,8 +1954,13 @@ void showcase_update(
 
 	case _showcase_loading:
 		showcase.alpha = 1.0f;
-		if (game_in_progress() && !main_menu_loaded && game_engine_running())
+		if (!main_menu_loaded)
+			showcase.sweep_left_menu = TRUE;
+		if (game_in_progress() && !main_menu_loaded &&
+			(game_engine_running() || showcase.sweep_kind == _oxbox_sweep_solo))
 		{
+			if (showcase.sweep_kind == _oxbox_sweep_multiplayer && !showcase_file.shot_count)
+				showcase_spawn_shots();
 			showcase_plan();
 			showcase.shot_index = 0;
 			showcase.shot_serial++;
@@ -1775,10 +1971,14 @@ void showcase_update(
 			showcase.fps_window_start = now;
 			showcase.fps_frames = 0;
 			showcase.failures = 0;
-			showcase_camera_update(TRUE);
+			if (showcase.plan_count)
+				showcase_camera_update(TRUE);
 			showcase_set_state(_showcase_playing);
 		}
-		else if (showcase.state_seconds > 30.0f || (main_menu_loaded && !global_network_game_server_get()))
+		else if (showcase.sweep_kind == _oxbox_sweep_solo ?
+			showcase.state_seconds > 180.0f || (main_menu_loaded && showcase.sweep_left_menu) :
+			showcase.state_seconds > (showcase.sweep_kind ? 120.0f : 30.0f) ||
+				(main_menu_loaded && !global_network_game_server_get()))
 		{
 			platform_log("showcase: %s didn't start", showcase.key);
 			showcase_leave(TRUE);
@@ -1787,31 +1987,51 @@ void showcase_update(
 		break;
 
 	case _showcase_playing:
+	{
+		struct oxbox_perf_hooks *sweep = showcase.sweep_kind ? showcase_sweep() : NULL;
+
 		if (main_menu_loaded || !game_in_progress())
 		{
 			/* (the game went away) */
+			if (sweep)
+				sweep->sweep_ended(_oxbox_sweep_ended_left);
 			showcase.chain = TRUE;
 			showcase_set_state(_showcase_returning);
 			break;
 		}
-		/* (a game that ended: 999 kills, after hours) */
-		if (!game_engine_running() || !game_engine_can_score())
+		/* (a game that ended: 999 kills, after hours; a campaign level has no game engine) */
+		if (showcase.sweep_kind != _oxbox_sweep_solo && (!game_engine_running() || !game_engine_can_score()))
 		{
+			if (sweep)
+				sweep->sweep_ended(_oxbox_sweep_ended_left);
 			showcase.alpha = 1.0f;
 			showcase_leave(TRUE);
 			break;
 		}
 		showcase.shot_time += seconds;
 		showcase.map_seconds += seconds;
-		showcase_frame_rate(now);
+		if (sweep)
+		{
+			if (showcase_sweep_playing(sweep))
+			{
+				showcase_leave(TRUE);
+				break;
+			}
+		}
+		else
+		{
+			showcase_frame_rate(now);
+		}
 		/* (its limit reached, a shot or not: on to the next map, fading as a press does) */
-		if (showcase_map_limit() > 0 && (showcase.map_count > 1 || showcase.preview || oxbox_setting_showcase_train) &&
+		if (!sweep && showcase_map_limit() > 0 &&
+			(showcase.map_count > 1 || showcase.preview || oxbox_setting_showcase_train) &&
 			showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= (real)showcase_map_limit())
 		{
 			showcase_leave(TRUE);
 			break;
 		}
-		while (showcase.shot_time >= showcase_file.shots[showcase.plan[showcase.shot_index]].seconds)
+		while (showcase.plan_count &&
+			showcase.shot_time >= showcase_file.shots[showcase.plan[showcase.shot_index]].seconds)
 		{
 			showcase.shot_time -= showcase_file.shots[showcase.plan[showcase.shot_index]].seconds;
 			showcase.shot_serial++;
@@ -1820,7 +2040,7 @@ void showcase_update(
 				showcase.shot_index = 0;
 				/* the plan played through: the next map, once this one has played a minute or its limit (with only
 				one, it plays on, shuffled again) */
-				if (showcase.preview || (!oxbox_setting_showcase_train &&
+				if (showcase.preview || (!oxbox_setting_showcase_train && !sweep &&
 					showcase.map_seconds - SHOWCASE_SETTLE_SECONDS >= showcase_minimum_seconds() &&
 					(showcase.map_count > 1 || showcase.map_next < showcase.map_count)))
 				{
@@ -1832,17 +2052,18 @@ void showcase_update(
 				showcase_plan();
 			}
 		}
-		if (showcase.state == _showcase_playing)
+		if (showcase.state == _showcase_playing && showcase.plan_count)
 		{
 			showcase_camera_update(TRUE);
 			showcase_shot_check();
 		}
 		break;
+	}
 
 	case _showcase_leaving:
 		showcase.alpha += seconds / SHOWCASE_LEAVE_FADE_SECONDS;
 		/* (the camera flies on while it fades) */
-		if (showcase.camera_valid && game_in_progress() && !main_menu_loaded &&
+		if (showcase.camera_valid && showcase.plan_count && game_in_progress() && !main_menu_loaded &&
 			showcase.shot_time + seconds < showcase_file.shots[showcase.plan[showcase.shot_index]].seconds)
 		{
 			showcase.shot_time += seconds;
@@ -1853,6 +2074,8 @@ void showcase_update(
 			showcase.alpha = 1.0f;
 			if (global_network_game_client_get() || global_network_game_server_get())
 				network_game_abort();
+			else if (showcase.sweep_kind == _oxbox_sweep_solo)
+				showcase_sweep_leave_solo(main_menu_loaded);
 			showcase.menu_seconds = 0.0f;
 			showcase_set_state(_showcase_returning);
 		}
@@ -1925,7 +2148,7 @@ static void showcase_title_render(
 	rectangle2d bar;
 	long font;
 
-	if (showcase.state != _showcase_playing && showcase.state != _showcase_leaving)
+	if ((showcase.state != _showcase_playing && showcase.state != _showcase_leaving) || showcase.sweep_kind)
 		return;
 	t = showcase.map_seconds - SHOWCASE_SETTLE_SECONDS;
 	if (t <= 0.0f || t >= SHOWCASE_TITLE_SECONDS + SHOWCASE_TITLE_SLIDE_SECONDS)
