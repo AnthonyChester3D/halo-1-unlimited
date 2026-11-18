@@ -2379,12 +2379,21 @@ pass's sweep.csv is untouched and every map is measured again at that scale; and
 plays only the maps it names (a key a line, as sweep.csv's key column; perf_sweep_report.py --write-list makes it).
 perf_sweep_report.py --compare sets the passes side by side.
 
+v1.134, the scaling runs (perf_sweep_scaling, on by default; never in a res_scale pass): once a map's normal runs all
+have rows, one whose slowest run averaged under SWEEP_SCALE_BELOW_FPS with the graphics chip busy SWEEP_SCALE_GPU% of
+it or more (not one the CPU holds back) plays that run again with the 3D view drawn at 85% (run 4), and when that's
+still under the line, at 70% (run 5). res_scale is read each frame, so it's set for the run (sweep_set_scale) and put
+back when the run ends, however it ends (a watchdog restart boots with opence.ini's anyway). Which maps want them is
+worked out from the rows (sweep_note: each map's slowest normal run, a broken one, run 4 still slow), so it carries on
+across boots, and maps measured before v1.134 get theirs when the sweep comes back to them.
+
 perf\sweep.csv: "#" lines, a "status,..." line naming the columns, then a row a run (fields with commas quoted):
 	status       ok, fail_fps (under 10 fps for 5 s), crashed, hung (the watchdog restarted H1U), bad_map (not loaded:
 	             the map browser's problem), no_start (the game didn't start: the map didn't load), left (the game
 	             went away while it played), skipped (an earlier run failed)
 	key          the map as the game knows it ("+pack/folder", a stock level's name)
-	identity     its version (hex), run (0 no bots, 1 four, 2 the suggested count, 3 a campaign level's), bots
+	identity     its version (hex), run (0 no bots, 1 four, 2 the suggested count, 3 a campaign level's, 4 and 5 the
+	             scaling runs: the slowest of those again at 85% and 70%), bots
 	build, utc   this XBE's build and the time (the Xbox's clock)
 	name, path   its menu name, its .map's path on the Xbox; origin: ce / mcc / ce+mcc from its .h1ulink, xbox for a
 	             stock map, unknown without a link file; file_kb (the .map's size), map_kb (its header's: unpacked);
@@ -2440,7 +2449,7 @@ enum
 	SWEEP_STOCK_SOLO = 10,
 	SWEEP_MAXIMUM_MAPS = 2048 + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO,
 	SWEEP_KEY_LENGTH = 48,                      /* (showcase.c's SHOWCASE_KEY_LENGTH) */
-	SWEEP_RUNS = 4,
+	SWEEP_RUNS = 6,                             /* (0-3 as ever; 4 and 5 the scaling runs: 85% and 70%) */
 	SWEEP_HISTOGRAM = 256,                      /* frame times, 1 ms each, the last everything longer */
 	SWEEP_COLUMN_NAME = 40
 };
@@ -2449,6 +2458,13 @@ enum
 #define SWEEP_FAIL_SECONDS 5.0
 #define SWEEP_WATCH_SECONDS 360                 /* (a run: its load, up to the showcase's 180 s, warm-up, leaving) */
 #define SWEEP_RETURN_SECONDS 180                /* (back to the main menu after a run) */
+#define SWEEP_SCALE_BELOW_FPS 29                /* a map whose slowest run is slower than this gets the scaling runs */
+#define SWEEP_SCALE_GPU 50                      /* ...if the graphics chip was busy this share (percent) of it, or more */
+#define SWEEP_SCALE_85 85                       /* run 4's res_scale; run 5's (when run 4 is still slow) */
+#define SWEEP_SCALE_70 70
+#define SWEEP_RUNS_ROUGH 0x40                   /* (sweep_done.runs: run 4 was still slower than SWEEP_SCALE_BELOW_FPS) */
+#define SWEEP_RUNS_BROKEN 0x80                  /* (a normal run crashed, hung or didn't load: no scaling runs) */
+#define SWEEP_RUNS_MASK 0x3f
 
 static char const *const sweep_solo_levels[SWEEP_STOCK_SOLO] =
 {
@@ -2465,7 +2481,9 @@ static char const sweep_fields[] =
 struct sweep_done
 {
 	unsigned long key_hash, identity;
-	unsigned char runs;                         /* (a bit a run with a row) */
+	unsigned char runs;                         /* (a bit a run with a row; SWEEP_RUNS_ROUGH, SWEEP_RUNS_BROKEN) */
+	unsigned char slow_run;                     /* its slowest normal run (0-3), 0xff none yet */
+	unsigned char slow_fps4, slow_gpu;          /* (that run's frame rate, in quarters of a frame a second; its busy %) */
 };
 
 static struct
@@ -2504,6 +2522,9 @@ static struct
 	double low_seconds, under10_seconds, longest_low;
 	char status[12];
 	char const *problem;                        /* (a bad_map row's reason: the map browser's) */
+	boolean scaling;                            /* (perf_sweep_scaling: runs 4 and 5 for the slow maps) */
+	unsigned char needed_base, slow_run;        /* (the map's normal runs; the run the scaling runs repeat) */
+	long base_scale;                            /* (opence.ini's res_scale, put back after a scaling run) */
 	long scale;                                 /* (opence.ini res_scale, 1-99: a scaled pass; 0 the normal one) */
 	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
 } sweep;
@@ -2564,6 +2585,8 @@ static struct sweep_done *sweep_find(
 	sweep.done[sweep.done_count].key_hash = key_hash;
 	sweep.done[sweep.done_count].identity = identity;
 	sweep.done[sweep.done_count].runs = 0;
+	sweep.done[sweep.done_count].slow_run = 0xff;
+	sweep.done[sweep.done_count].slow_fps4 = sweep.done[sweep.done_count].slow_gpu = 0;
 	return &sweep.done[sweep.done_count++];
 }
 
@@ -2605,11 +2628,59 @@ static long sweep_field(
 	return n;
 }
 
+/* a row's results, for the map's scaling runs: its slowest normal run (frame rate, graphics chip), whether one
+broke, and whether run 4 (85%) was still slow */
+static void sweep_note(
+	struct sweep_done *done,
+	long run,
+	char const *status,
+	double fps,
+	long gpu)
+{
+	boolean measured = !strcmp(status, "ok") || !strcmp(status, "fail_fps");
+	long fps4 = fps <= 0.0 ? 0 : fps >= 63.0 ? 252 : (long)(fps * 4.0 + 0.5);
+
+	if (!done)
+		return;
+	if (run <= 3)
+	{
+		if (!measured && strcmp(status, "skipped"))
+			done->runs |= SWEEP_RUNS_BROKEN;
+		else if (measured && fps > 0.0 && (done->slow_run == 0xff || fps4 < done->slow_fps4))
+		{
+			done->slow_run = (unsigned char)run;
+			done->slow_fps4 = (unsigned char)fps4;
+			done->slow_gpu = (unsigned char)(gpu < 0 ? 0 : gpu > 100 ? 100 : gpu);
+		}
+	}
+	else if (run == 4 && !strcmp(status, "ok") && fps4 < SWEEP_SCALE_BELOW_FPS * 4)
+	{
+		done->runs |= SWEEP_RUNS_ROUGH;
+	}
+}
+
+/* the scaling runs the map wants now (runs 4 and 5's bits), once its normal runs all have rows */
+static unsigned char sweep_extra(
+	struct sweep_done const *done)
+{
+	unsigned char extra;
+
+	if (!done || !sweep.scaling || sweep.scale || (done->runs & sweep.needed_base) != sweep.needed_base ||
+		(done->runs & SWEEP_RUNS_BROKEN) || done->slow_run == 0xff ||
+		done->slow_fps4 >= SWEEP_SCALE_BELOW_FPS * 4 || done->slow_gpu < SWEEP_SCALE_GPU)
+		return 0;
+	extra = 1 << 4;
+	if ((done->runs & (1 << 4)) && (done->runs & SWEEP_RUNS_ROUGH))
+		extra |= 1 << 5;
+	return extra;
+}
+
 static void sweep_read_line(
 	char const *line)
 {
-	char status[16], key[SWEEP_KEY_LENGTH + 8], identity[16], run[8];
-	long at = 0;
+	char status[16], key[SWEEP_KEY_LENGTH + 8], identity[16], run[8], field[64];
+	long at = 0, k, gpu = 0;
+	double fps = 0.0;
 	struct sweep_done *done;
 
 	if (line[0] == '#' || !strncmp(line, "status,", 7))
@@ -2621,8 +2692,19 @@ static void sweep_read_line(
 	if (!status[0] || !key[0] || run[0] < '0' || run[0] >= '0' + SWEEP_RUNS)
 		return;
 	done = sweep_find(sweep_hash(key), strtoul(identity, NULL, 16), TRUE);
-	if (done)
-		done->runs |= (unsigned char)(1 << (run[0] - '0'));
+	if (!done)
+		return;
+	done->runs |= (unsigned char)(1 << (run[0] - '0'));
+	/* (its avg_fps, the 18th column, and gpu_busy_pct, the 31st) */
+	for (k = 4; k <= 30; k++)
+	{
+		sweep_field(line, &at, field, sizeof(field));
+		if (k == 17)
+			fps = atof(field);
+		else if (k == 30)
+			gpu = strtol(field, NULL, 10);
+	}
+	sweep_note(done, run[0] - '0', status, fps, gpu);
 }
 
 /* perf\sweep.csv's rows: the runs done */
@@ -3043,6 +3125,8 @@ static void sweep_row(
 		if (done)
 			done->runs |= (unsigned char)(1 << sweep.run);
 		sweep.have |= (unsigned char)(1 << sweep.run);
+		sweep_note(done, sweep.run, status, sweep.frames && seconds > 0.0 ? sweep.frames / seconds : 0.0,
+			sweep.gpu_samples ? (long)((sweep.gpu_busy * 100 + sweep.gpu_samples / 2) / sweep.gpu_samples) : 0);
 	}
 }
 
@@ -3050,7 +3134,18 @@ static void sweep_row(
 static short sweep_run_bots(
 	long run)
 {
+	if (run >= 4)
+		run = sweep.slow_run;
 	return run == 0 || run == 3 ? 0 : run == 1 ? 4 : sweep.full_bots;
+}
+
+/* the scale this run draws at (a scaling run's; else opence.ini's) */
+static void sweep_set_scale(
+	long run)
+{
+	extern int oxbox_setting_res_scale;
+
+	oxbox_setting_res_scale = run == 4 ? SWEEP_SCALE_85 : run == 5 ? SWEEP_SCALE_70 : (int)sweep.base_scale;
 }
 
 /* the run ended (its row written with status); a failed one skips the map's later runs */
@@ -3085,6 +3180,7 @@ static void sweep_finish(
 	sweep_marker(0);
 	sweep.active = sweep.measuring = FALSE;
 	sweep.over = TRUE;
+	sweep_set_scale(0);
 	sweep_watch_on(SWEEP_RETURN_SECONDS);
 }
 
@@ -3166,7 +3262,7 @@ static boolean sweep_map_ready(
 	sweep.identity = sweep.key[0] == '+' ? sweep_identity(sweep.key) : 1;
 	if (sweep.solo)
 	{
-		sweep.needed = 1 << 3;
+		sweep.needed = sweep.needed_base = 1 << 3;
 		sweep.full_bots = 0;
 	}
 	else
@@ -3175,10 +3271,10 @@ static boolean sweep_map_ready(
 		if (players <= 0)
 			players = 8;
 		sweep.full_bots = players > 15 ? 15 : players;
-		sweep.needed = (unsigned char)(sweep.full_bots > 4 ? 7 : 3);
+		sweep.needed = sweep.needed_base = (unsigned char)(sweep.full_bots > 4 ? 7 : 3);
 	}
 	done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
-	sweep.have = done ? done->runs : 0;
+	sweep.have = done ? done->runs & SWEEP_RUNS_MASK : 0;
 	return TRUE;
 }
 
@@ -3207,6 +3303,7 @@ static void sweep_initialize(
 		extern int oxbox_setting_res_scale;
 
 		sweep.scale = oxbox_setting_res_scale >= 1 && oxbox_setting_res_scale < 100 ? oxbox_setting_res_scale : 0;
+		sweep.base_scale = oxbox_setting_res_scale;
 		if (sweep.scale)
 		{
 			_snprintf(sweep.results, sizeof(sweep.results), "sweep_r%ld.csv", sweep.scale);
@@ -3265,9 +3362,12 @@ static void sweep_initialize(
 			{
 				short players = sweep.key[0] == '+' || hmp_browse_stock_title(sweep.key) ? hmp_browse_suggested_players(sweep.key) : 0;
 
-				sweep.solo = sweep.run == 3;
+				struct sweep_done const *done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
+
+				sweep.slow_run = done && done->slow_run != 0xff ? done->slow_run : 0;
+				sweep.solo = sweep.run == 3 || (sweep.run >= 4 && sweep.slow_run == 3);
 				sweep.full_bots = players <= 0 ? 8 : players > 15 ? 15 : players;
-				sweep.needed = (unsigned char)(sweep.solo ? 1 << 3 : sweep.full_bots > 4 ? 7 : 3);
+				sweep.needed = sweep.needed_base = (unsigned char)(sweep.solo ? 1 << 3 : sweep.full_bots > 4 ? 7 : 3);
 				sweep.have = 0;
 				sweep.bots = sweep_run_bots(sweep.run);
 				sweep_map_info();
@@ -3395,6 +3495,12 @@ static long sweep_next(
 				continue;
 			sweep.map_ready = TRUE;
 		}
+		{
+			struct sweep_done const *done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
+
+			sweep.needed = (unsigned char)(sweep.needed_base | sweep_extra(done));
+			sweep.slow_run = done && done->slow_run != 0xff ? done->slow_run : 0;
+		}
 		for (run = 0; run < SWEEP_RUNS && (!(sweep.needed & (1 << run)) || (sweep.have & (1 << run))); run++)
 			;
 		if (run == SWEEP_RUNS)
@@ -3415,12 +3521,14 @@ static long sweep_next(
 			continue;
 		}
 		sweep_marker(1);
+		sweep_set_scale(run);
 		sweep_watch_on(sweep.seconds + SWEEP_WATCH_SECONDS);
 		sweep.active = TRUE;
 		strcpy(key, sweep.key);
 		*bots = sweep.bots;
-		platform_log("perf sweep: map %ld of %ld, %s (%s, %s), run %ld: %d bots", sweep.cursor + 1, sweep.map_count,
-			sweep.key, sweep.name, sweep.solo ? "campaign" : "multiplayer", run, (int)sweep.bots);
+		platform_log("perf sweep: map %ld of %ld, %s (%s, %s), run %ld: %d bots%s", sweep.cursor + 1, sweep.map_count,
+			sweep.key, sweep.name, sweep.solo ? "campaign" : "multiplayer", run, (int)sweep.bots,
+			run == 4 ? ", drawn at 85% (its slowest run was under 29 fps)" : run == 5 ? ", drawn at 70% (still under 29 at 85%)" : "");
 		return sweep.solo ? _oxbox_sweep_solo : _oxbox_sweep_multiplayer;
 	}
 	sweep_watch_off();
@@ -3496,6 +3604,7 @@ static void sweep_ended(
 			sweep.run);
 		sweep_marker(0);
 		sweep.active = sweep.measuring = FALSE;
+		sweep_set_scale(0);
 		return;
 	}
 	sweep_finish(how == _oxbox_sweep_ended_no_start ? "no_start" : "left");
@@ -4055,6 +4164,8 @@ static void read_settings(
 			sweep.on = value != 0;
 		else if (!strcmp(name, "perf_sweep_detail"))
 			sweep.detail = value != 0;
+		else if (!strcmp(name, "perf_sweep_scaling"))
+			sweep.scaling = value != 0;
 		else if (!strcmp(name, "perf_sweep_seconds") && value >= 10)
 			sweep.seconds = value > 600 ? 600 : value;
 	}
@@ -4077,6 +4188,7 @@ struct oxbox_perf_hooks *oxbox_perf_start(
 	perf.cycle_frequency = 733333333.0;
 	memset(&sweep, 0, sizeof(sweep));
 	sweep.seconds = 60;
+	sweep.scaling = TRUE;
 	read_settings("D:\\opence.ini");
 	read_settings("T:\\opence.ini");
 	QueryPerformanceFrequency(&frequency);

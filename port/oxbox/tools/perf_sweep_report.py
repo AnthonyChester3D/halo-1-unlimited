@@ -32,7 +32,8 @@ GROUPS = [
     ('broken', 'Crashed, hung or didn\'t load (not a frame-rate verdict)'),
     ('partial', 'Not finished (runs left)'),
 ]
-RUN_NAMES = {0: 'no bots', 1: '4 bots', 2: 'full bots', 3: 'campaign'}
+RUN_NAMES = {0: 'no bots', 1: '4 bots', 2: 'full bots', 3: 'campaign', 4: 'at 85%', 5: 'at 70%'}
+RUN_SCALES = {4: 85, 5: 70}   # (the scaling runs: the map's slowest run again, its 3D view drawn smaller)
 LARGE_MP_KB = 47 * 1024   # (a multiplayer map over 47 MiB unpacked goes in a campaign cache file)
 
 
@@ -90,7 +91,34 @@ def cause(row):
     return where + ('; ' + tops if tops else '')
 
 
+def fill_share(base, scaled, scale):
+    """the share of the graphics chip's time a frame that shrank with the pixels (1.0: all of it), or None"""
+    pixels = (scale / 100.0) ** 2
+    bg, sg = gpu_ms(base), gpu_ms(scaled)
+    if not bg or sg is None or pixels >= 1.0:
+        return None
+    return max(0.0, min(1.0, (bg - sg) / (bg * (1.0 - pixels))))
+
+
+def scaling(runs, slowest, perfect):
+    """the scaling runs (4: 85%, 5: 70%) against the slowest normal run: (fps at 85, fps at 70, share, verdict)"""
+    scaled = [(RUN_SCALES[r], runs[r]) for r in (4, 5) if r in runs]
+    if not scaled or not slowest:
+        return '', '', None, ''
+    fps = {sc: row['avg_fps'] if row['status'] in ('ok', 'fail_fps') else row['status'] for sc, row in scaled}
+    shares = [fill_share(slowest, row, sc) for sc, row in scaled if row['status'] in ('ok', 'fail_fps')]
+    shares = [x for x in shares if x is not None]
+    share = sum(shares) / len(shares) if shares else None
+    reached = [sc for sc, row in scaled if row['status'] == 'ok' and number(row, 'avg_fps', 0) >= perfect]
+    kind = '' if share is None else 'fill-limited' if share >= 0.6 else 'partly fill-limited' if share >= 0.3 else \
+        'not fill-limited'
+    verdict = ('reaches %g fps at %d%%' % (perfect, max(reached)) if reached else
+               'still under %g fps at %d%%' % (perfect, min(sc for sc, _ in scaled)))
+    return fps.get(85, ''), fps.get(70, ''), share, verdict + (', ' + kind if kind else '')
+
+
 def judge(runs, perfect, little, lot):
+    runs = {run: row for run, row in runs.items() if run <= 3}   # (the verdict is the normal runs')
     needed = [3] if 3 in runs else [0, 1, 2]
     statuses = {run: row['status'] for run, row in runs.items()}
     first = runs.get(3) or runs.get(0)
@@ -147,7 +175,10 @@ def summary_rows(maps, perfect, little, lot):
             'limits': ' '.join(sorted({row['limits'] for row in runs.values() if row.get('limits')})),
             'build': info['build'],
         }
-        for run in (0, 1, 2, 3):
+        fps85, fps70, share, verdict = scaling(runs, slowest, perfect)
+        line.update({'fps_85': fps85, 'fps_70': fps70, 'fill_share': '%.2f' % share if share is not None else '',
+                     'scaling': verdict})
+        for run in (0, 1, 2, 3, 4, 5):
             row = runs.get(run)
             if row is None:
                 line['run%d' % run] = ''
@@ -172,7 +203,7 @@ def text_report(lines, args):
             continue
         print('\n== %s (%d)' % (title, len(members)))
         for m in members:
-            runs = '; '.join('%s: %s' % (RUN_NAMES[r], m['run%d' % r]) for r in (0, 1, 2, 3) if m['run%d' % r])
+            runs = '; '.join('%s: %s' % (RUN_NAMES[r], m['run%d' % r]) for r in (0, 1, 2, 3, 4, 5) if m['run%d' % r])
             flags = ', '.join(x for x in (m['type'].upper(), m['origin'], '%s MB' % m['map_mb'],
                                           'LARGE' if m['large'] else '', 'AI' if m['ai'] == 'yes' else '') if x)
             print('  %s  [%s]' % (m['name'], flags))
@@ -181,8 +212,17 @@ def text_report(lines, args):
                 print('      %s' % runs)
             if m['cause']:
                 print('      slowest: %s' % m['cause'])
+            if m['scaling']:
+                print('      scaling: %s%s' % (m['scaling'], ' (share %s)' % m['fill_share'] if m['fill_share'] else ''))
             if m['limits']:
                 print('      limits: %s' % m['limits'])
+    scaled = [m for m in lines if m['scaling']]
+    if scaled:
+        print('\nScaling runs: %d maps; %d reach %g fps at 85%%, %d more at 70%%; %d fill-limited, %d partly, %d not'
+              % (len(scaled), sum('at 85%' in m['scaling'] and 'reaches' in m['scaling'] for m in scaled), args.perfect,
+                 sum('at 70%' in m['scaling'] and 'reaches' in m['scaling'] for m in scaled),
+                 sum(m['scaling'].endswith(', fill-limited') for m in scaled),
+                 sum('partly' in m['scaling'] for m in scaled), sum('not fill-limited' in m['scaling'] for m in scaled)))
 
 
 def html_report(lines, path, args):
@@ -196,15 +236,18 @@ def html_report(lines, path, args):
         if not members:
             continue
         parts.append('<h2>%s (%d)</h2><table><tr><th>Map</th><th>Type</th><th>Size</th><th>No bots</th><th>4 bots</th>'
-                     '<th>Full bots / campaign</th><th>Slowest part</th></tr>' % (html.escape(title), len(members)))
+                     '<th>Full bots / campaign</th><th>Slowest part</th><th>85%% / 70%%</th></tr>' % (html.escape(title),
+                                                                                              len(members)))
         for m in members:
             parts.append('<tr><td>%s<div class="p">%s</div></td><td>%s %s%s</td><td>%s MB%s</td><td>%s</td><td>%s</td>'
-                         '<td>%s</td><td>%s%s</td></tr>' % (
+                         '<td>%s</td><td>%s%s</td><td>%s</td></tr>' % (
                              html.escape(m['name']), html.escape(m['path']), m['type'].upper(), html.escape(m['origin']),
                              ', AI' if m['ai'] == 'yes' else '', m['map_mb'], ' (large)' if m['large'] else '',
                              html.escape(m['run0']), html.escape(m['run1']), html.escape(m['run2'] or m['run3']),
                              html.escape(m['cause']),
-                             '<div class="p">limits: %s</div>' % html.escape(m['limits']) if m['limits'] else ''))
+                             '<div class="p">limits: %s</div>' % html.escape(m['limits']) if m['limits'] else '',
+                             html.escape(' / '.join(x for x in (m['run4'], m['run5']) if x) +
+                                         ('; ' + m['scaling'] if m['scaling'] else ''))))
         parts.append('</table>')
     with open(path, 'w', encoding='utf-8') as f:
         f.write(''.join(parts))
@@ -264,9 +307,7 @@ def compare(base_maps, scaled_paths, args):
                     brow['status'] not in ('ok', 'fail_fps'):
                 continue
             bg, sg = gpu_ms(brow), gpu_ms(srow)
-            share = None
-            if bg and sg is not None and pixels < 1.0:
-                share = max(0.0, min(1.0, (bg - sg) / (bg * (1.0 - pixels))))
+            share = fill_share(brow, srow, scale)
             runs.append((run, number(brow, 'avg_fps', 0), number(srow, 'avg_fps', 0), bg, sg, share))
         if not runs:
             continue
