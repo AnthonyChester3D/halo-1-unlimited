@@ -68,8 +68,12 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     in a row fails, and the map's later runs are skipped. A row a run goes in `perf\sweep.csv` (the map's name,
     path, CE/MCC origin from its `.h1ulink`, sizes, type, BSPs, AI encounters; the frame rate, its 1% low, time
     under 30/25/20/15/10 fps; ticks, drawing and graphics-chip time and the three costliest steps; peak objects,
-    AI, particles and effects; texture reads, free memory, `limit:` hits). A run the Xbox crashed or hung in is
-    written as `crashed` at the next boot. A press stops the sweep until the next boot, which carries on.
+    AI, particles and effects; texture reads, free memory, `limit:` hits). A folder map the map browser marks with
+    a problem isn't loaded (`bad_map`, the reason in its row). A watchdog restarts H1U when a run hasn't ended
+    6 minutes after its measuring time (or the main menu isn't back 3 minutes after it ended): the run is written
+    `hung` and the log's last 16 KB go in `perf\sweep_hangs.txt`. A run the Xbox crashed in (and the watchdog
+    couldn't catch) is written as `crashed` at the next boot. A press stops the sweep until the next boot, which
+    carries on.
     `perf_sweep_detail = 1` also keeps each run's per-second CSV. On a PC,
     `python3 port/oxbox/tools/perf_sweep_report.py sweep.csv [--summary maps.csv] [--html report.html]` sorts the
     maps into perfect, a little work, a lot of work and probably never (plus crashed or didn't load).

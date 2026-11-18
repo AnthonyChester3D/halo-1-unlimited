@@ -1854,7 +1854,7 @@ void progress_bar_display(
 			progress_bar_globals.initial_progress= progress;
 		}
 
-		if (progress_bar_rendering_enabled)
+		if (progress_bar_rendering_enabled && progress_bar_mode.texture0)
 		{
 			progress_bar_render((progress - progress_bar_globals.initial_progress) /
 				(1.f - progress_bar_globals.initial_progress));
@@ -2140,6 +2140,8 @@ static void progress_bar_create_mask_texture(
 
 	IDirect3DDevice8_CreateTexture(global_d3d_device, 128, 16, 1, 0, D3DFMT_LIN_A8B8G8R8, 0,
 		&progress_bar_mode.texture1);
+	if (!progress_bar_mode.texture1)   /* oxbox: no memory for it: none */
+		return;
 	IDirect3DTexture8_LockRect(progress_bar_mode.texture1, 0, &locked_rect, NULL, 0);
 	pixel= locked_rect.pBits;
 	for (y= 0; y<16; y++)
@@ -2175,6 +2177,8 @@ static void progress_bar_make_stuff_ready(
 	D3DXMatrixOrthoLH(&progress_bar_globals.projection, 2.f, 2.f, -1.f, 2.f);
 	D3DXMatrixPerspectiveLH(&progress_bar_globals.screen_transform, 0.64f, 0.48f, 1.f, 1000.f);
 	progress_bar_load_loading_texture(&progress_bar_mode.texture0);
+	if (!progress_bar_mode.texture0)   /* oxbox: no memory for its picture: nothing made (it's tried again next frame) */
+		return;
 	progress_bar_create_noise_texture();
 	progress_bar_create_mask_texture();
 	IDirect3DDevice8_SetRenderState(global_d3d_device, D3DRS_ALPHABLENDENABLE, TRUE);
@@ -2282,6 +2286,10 @@ static void progress_bar_load_loading_texture(
 
 	IDirect3DDevice8_CreateTexture(global_d3d_device, *RETAIL_LOADING_WIDTH, *RETAIL_LOADING_HEIGHT, 1, 0,
 		D3DFMT_LIN_A8B8G8R8, 0, texture);
+	/* oxbox: no memory for it (300 KB; the perf sweep's console had 272 KB free starting a campaign level, v1.131):
+	none, and no loading picture this load (progress_bar_display) */
+	if (!*texture)
+		return;
 	IDirect3DTexture8_LockRect(*texture, 0, &locked_rect, NULL, 0);
 	pixel= locked_rect.pBits;
 	for (index= 0; index<RETAIL_LOADING_DATA_SIZE; index++)

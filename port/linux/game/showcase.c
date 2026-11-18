@@ -1619,7 +1619,7 @@ static SHOWCASE_SWEEP_CODE void showcase_sweep_back(
 	struct oxbox_perf_hooks *sweep = showcase_sweep();
 
 	if (sweep)
-		sweep->sweep_ended(_oxbox_sweep_ended_left);
+		sweep->sweep_ended(_oxbox_sweep_ended_menu);
 	cheat.deathless_player = FALSE;
 }
 

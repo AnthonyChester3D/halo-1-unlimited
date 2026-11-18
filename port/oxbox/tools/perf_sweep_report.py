@@ -19,7 +19,7 @@ GROUPS = [
     ('little', 'A little work'),
     ('lot', 'A lot of work'),
     ('never', 'Probably never'),
-    ('broken', 'Crashed or didn\'t load (not a frame-rate verdict)'),
+    ('broken', 'Crashed, hung or didn\'t load (not a frame-rate verdict)'),
     ('partial', 'Not finished (runs left)'),
 ]
 RUN_NAMES = {0: 'no bots', 1: '4 bots', 2: 'full bots', 3: 'campaign'}
@@ -84,7 +84,7 @@ def judge(runs, perfect, little, lot):
     needed = [3] if 3 in runs else [0, 1, 2]
     statuses = {run: row['status'] for run, row in runs.items()}
     first = runs.get(3) or runs.get(0)
-    if any(statuses.get(r) in ('crashed', 'no_start') for r in needed):
+    if any(statuses.get(r) in ('crashed', 'hung', 'bad_map', 'no_start') for r in needed):
         return 'broken', None
     if any(statuses.get(r) == 'left' for r in needed):
         return 'broken', None
