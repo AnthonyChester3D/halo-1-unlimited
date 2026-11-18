@@ -12,10 +12,11 @@ SECTIONS {
   .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .bss .bss.* COMMON)
                     __oxbox_bss_end = .; }
   /* the developers' perf log (port/oxbox/oxbox_perf.c), code, data and buffers, in its own XBE section (OXPERF, tools/mkxbe.py)
-     after the image: not loaded at boot, only when opence.ini says perf_log = 1 (oxbox_sdk.c oxbox_perf_load) */
+     after the image: not loaded at boot, only when opence.ini says perf_log = 1 or perf_sweep = 1 (oxbox_sdk.c
+     oxbox_perf_load); .oxperf_code is other files' code only the perf sweep calls (showcase.c's SHOWCASE_SWEEP_CODE) */
   . = ALIGN(0x1000);
   __oxperf_start = .;
-  .oxperf : { *oxbox_perf.o(.text .text.* .rodata .rodata.* .data .data.*) }
+  .oxperf : { *oxbox_perf.o(.text .text.* .rodata .rodata.* .data .data.*) *(.oxperf_code) }
   __oxperf_load_end = .;
   .oxperf.bss (NOLOAD) : { *oxbox_perf.o(.bss .bss.* COMMON) }
   __oxperf_end = .;

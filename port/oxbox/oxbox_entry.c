@@ -498,6 +498,7 @@ tools/check_opence_ini.py (build.sh runs it) stops the build while one read here
 int oxbox_setting_audio_effects = 1;
 int oxbox_setting_bot_log = 0;
 static int oxbox_setting_perf_log = 0;
+int oxbox_setting_perf_sweep = 0;   /* (the perf sweep: oxbox_perf.c, played by showcase.c) */
 extern unsigned char display_framerate;   /* (main.c's, a boolean) */
 
 /* a whole file written beside the logs (the XBE's folder, else T:); FALSE when neither could be written */
@@ -700,6 +701,8 @@ static void read_settings(const char *path)
 			oxbox_setting_bot_log = value != 0;
 		else if (same_text(name, "perf_log"))
 			oxbox_setting_perf_log = value != 0;
+		else if (same_text(name, "perf_sweep"))
+			oxbox_setting_perf_sweep = value != 0;
 		else if (same_text(name, "log_pools"))
 		{
 			extern int oxbox_setting_log_pools;   /* (oxbox_diagnostics.c) */
@@ -950,8 +953,8 @@ int oxbox_entry(int argc, char **argv, char **envp)
 	read_settings("T:\\opence.ini");
 	if (!oxbox_setting_audio_effects)
 		platform_log("settings: no DirectSound effects image (audio_effects = 0)");
-	/* (the developers' perf log: its section loaded and started only with perf_log = 1, oxbox_sdk.c) */
-	if (oxbox_setting_perf_log)
+	/* (the developers' perf log: its section loaded and started only with perf_log = 1, or perf_sweep = 1, oxbox_sdk.c) */
+	if (oxbox_setting_perf_log || oxbox_setting_perf_sweep)
 	{
 		void oxbox_perf_load(void);
 
