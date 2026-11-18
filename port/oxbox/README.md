@@ -77,7 +77,11 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     `perf_sweep_detail = 1` also keeps each run's per-second CSV. On a PC,
     `python3 port/oxbox/tools/perf_sweep_report.py sweep.csv [--summary maps.csv] [--html report.html]` sorts the
     maps into perfect, a little work, a lot of work and probably never (plus crashed or didn't load).
-  - The resolution scaling test: `perf_sweep = 1` with `res_scale = 70` (say) is a pass of its own, its rows in
+  - Scaling runs (`perf_sweep_scaling`, on): a map whose slowest run averaged under 29 fps with the graphics chip
+    busy half the time or more plays that run again with the 3D view drawn at 85% (run 4), and at 70% (run 5) when
+    that's still under 29; the scale is put back after each. The report shows each map's fps at each scale, how much
+    of the graphics chip's time shrank with the pixels, and which maps reach 29.
+  - The resolution scaling test by hand: `perf_sweep = 1` with `res_scale = 70` (say) is a pass of its own, its rows in
     `perf\sweep_r70.csv`, and plays only the maps `perf\sweep_list.txt` names when it's there (one key a line, as
     in `sweep.csv`; `perf_sweep_report.py sweep.csv --write-list sweep_list.txt` lists the slow maps that kept the
     graphics chip busy). `perf_sweep_report.py sweep.csv --compare sweep_r70.csv` shows each map's frame rate and
