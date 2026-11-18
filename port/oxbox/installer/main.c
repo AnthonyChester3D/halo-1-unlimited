@@ -50,7 +50,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 57
+#define INSTALLER_VERSION 58
 #endif
 __attribute__((used)) static struct
 {
@@ -2544,6 +2544,122 @@ static void check_start(void)
 		check_state = CHECK_FAILED;
 }
 
+/* ---- the update downloaded while it's asked about (update_prompt): on a thread of its own, into DOWNLOAD_PATH, as
+check_updates would; Yes (or Always) takes what it got (check_updates waits for the rest, its progress shown), No stops
+it and deletes it. Nothing is checked or put in place until the answer: that's check_updates', as before ---- */
+
+static HANDLE fetch_thread;
+static volatile int fetch_stop, fetch_result;           /* (0 still going, 1 all in, 2 failed or stopped) */
+static volatile unsigned long fetch_done, fetch_total;
+static unsigned long fetch_size;
+static char fetch_error[256];
+
+static int fetch_put(void *context, unsigned char const *data, unsigned long size)
+{
+	return fetch_stop || write_part(context, data, size);
+}
+
+static void fetch_step(void *context, char const *text)
+{
+	(void)context;
+	(void)text;
+}
+
+static void fetch_progress(void *context, unsigned long done, unsigned long total)
+{
+	(void)context;
+	fetch_done = done;
+	fetch_total = total;
+}
+
+static DWORD WINAPI fetch_main(LPVOID unused)
+{
+	static struct writer w;
+	struct download_report report = {fetch_step, fetch_progress, NULL};
+	char url[512], address[32];
+	(void)unused;
+	update_url(url, sizeof(url));
+	if (download_network(NULL, address, fetch_error))
+	{
+		fetch_result = 2;
+		return 0;
+	}
+	w.file = create(DOWNLOAD_PATH);
+	if (w.file == INVALID_HANDLE_VALUE)
+	{
+		text_print(fetch_error, sizeof(fetch_error), "couldn't write beside the installer");
+		fetch_result = 2;
+		return 0;
+	}
+	if (download(url, 64ul * 1024 * 1024, fetch_put, &w, &report, &fetch_size, fetch_error) || fetch_stop)
+	{
+		CloseHandle(w.file);
+		DeleteFileA(DOWNLOAD_PATH);
+		if (fetch_stop)
+			text_print(fetch_error, sizeof(fetch_error), "stopped");
+		fetch_result = 2;
+		return 0;
+	}
+	if (!finish(w.file))
+	{
+		DeleteFileA(DOWNLOAD_PATH);
+		text_print(fetch_error, sizeof(fetch_error), "couldn't finish writing it");
+		fetch_result = 2;
+		return 0;
+	}
+	fetch_result = 1;
+	return 0;
+}
+
+static void fetch_start(void)
+{
+	check_wait();
+	fetch_stop = 0;
+	fetch_result = 0;
+	fetch_done = fetch_total = 0;
+	fetch_error[0] = 0;
+	fetch_thread = CreateThread(NULL, 0, fetch_main, NULL, 0, NULL);
+	if (!fetch_thread)
+		fetch_result = 2;
+	log_file("updates: downloading while asked");
+}
+
+/* (No: stopped, and what it got deleted) */
+static void fetch_cancel(void)
+{
+	if (!fetch_thread)
+		return;
+	fetch_stop = 1;
+	WaitForSingleObject(fetch_thread, INFINITE);
+	CloseHandle(fetch_thread);
+	fetch_thread = NULL;
+	DeleteFileA(DOWNLOAD_PATH);
+	log_file("updates: the download stopped (No)");
+}
+
+/* (Yes: the rest waited for, its progress shown; 1 when it's all in DOWNLOAD_PATH, its size in *size) */
+static int fetch_finish(unsigned long *size)
+{
+	if (!fetch_thread)
+		return 0;
+	while (!fetch_result)
+	{
+		update_progress(NULL, fetch_done, fetch_total);
+		Sleep(100);
+	}
+	WaitForSingleObject(fetch_thread, INFINITE);
+	CloseHandle(fetch_thread);
+	fetch_thread = NULL;
+	if (fetch_result != 1)
+	{
+		say_in(COLOUR_YELLOW, "The download didn't finish (%s): trying again.", fetch_error);
+		return 0;
+	}
+	update_progress(NULL, fetch_size, fetch_size);
+	*size = fetch_size;
+	return 1;
+}
+
 /* looks for a newer package online; 1 when opence.oxpk was replaced */
 static int check_updates(void)
 {
@@ -2560,6 +2676,9 @@ static int check_updates(void)
 	log_clear();
 	update_url(url, sizeof(url));
 	say("From %s", url);
+	/* (downloaded while the update was asked about: the rest waited for) */
+	if (fetch_finish(&size))
+		goto downloaded;
 	if (download_network(&report, address, error))
 	{
 		say_in(COLOUR_RED, "No network: %s.", error);
@@ -2585,6 +2704,7 @@ static int check_updates(void)
 		say_in(COLOUR_RED, "Couldn't finish writing what was downloaded.");
 		goto back;
 	}
+downloaded:
 	say("  %lu KB downloaded", size / 1024);
 	if (package_load(DOWNLOAD_PATH, &fresh, error))
 	{
@@ -4290,7 +4410,7 @@ static void update_go(void)
 static void update_prompt(void)
 {
 	struct menu_item items[3] = {
-		{"Yes", "Downloads it and updates Halo 1 Unlimited now (a minute or two).", 0},
+		{"Yes", "Updates Halo 1 Unlimited now (a minute or two: it's already downloading).", 0},
 		{"No", "Not now: the main menu offers it.", 0},
 		{"Always", "Yes, and from now on updates are downloaded and installed without asking.", 0}};
 	char intro[160];
@@ -4299,11 +4419,15 @@ static void update_prompt(void)
 	if (!update_always())
 	{
 		text_print(intro, sizeof(intro), "There's a new update available (%s). Download and update?", check_version());
+		fetch_start();                   /* (downloading while it's asked about) */
 		k = menu("A new update is available", intro, items, 3, 0);
 		if (k == 2)
 			update_always_set();
 		else if (k != 0)
+		{
+			fetch_cancel();
 			return;
+		}
 	}
 	update_go();
 }
