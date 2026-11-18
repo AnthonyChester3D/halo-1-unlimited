@@ -142,6 +142,78 @@ void *datum_try_and_get(
 	return header;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.137): the checks and the message for an index that doesn't check out, out of datum_get's way: datum_get
+is called thousands of times a tick (a quarter of a game tick's lookups), and its stack frame for the message cost
+every call */
+static __attribute__((noinline)) void *datum_get_checked(
+	struct data_array *data,
+	long index,
+	void *caller)
+{
+	struct datum_header *header;
+	short identifier;
+	short absolute_index;
+
+	identifier = index>>16;
+	absolute_index = index;
+	match_assert("c:\\halo\\SOURCE\\memory\\data.c", 396, data->valid);
+	match_assert(
+		"c:\\halo\\SOURCE\\memory\\data.c",
+		397,
+		identifier || !data->identifier_zero_invalid);
+
+	if (absolute_index>=0 && absolute_index<data->count)
+	{
+		header = (struct datum_header *)((byte *)data->data+data->size*absolute_index);
+		if (header->identifier && (!identifier || identifier==header->identifier))
+		{
+			return header;
+		}
+	}
+
+#ifdef HALO_RELEASE
+	/* port: a release build's message too, and where it was asked from
+	(debug.txt's reference address places it in the build): the caller
+	goes on with the NULL and crashes, with nothing else to say which
+	array and which caller it was */
+	{
+		char message[128];
+
+		csprintf(
+			message,
+			"%.32s index #%d (0x%x) is unused or changed (asked from %p)",
+			data->name,
+			index&0xFFFF,
+			index,
+			caller);
+		release_assert_failed(message, "c:\\halo\\SOURCE\\memory\\data.c", 412, TRUE);
+	}
+#else
+	match_vassert(
+		"c:\\halo\\SOURCE\\memory\\data.c",
+		412,
+		FALSE,
+		csprintf(
+			temporary,
+			"%s index #%d (0x%x) is unused or changed",
+			data->name,
+			index&0xFFFF,
+			index));
+#endif
+
+	return NULL;
+}
+
+void *datum_get(
+	struct data_array *data,
+	long index)
+{
+	void *header = datum_get_fast(data, index);
+
+	return header ? header : datum_get_checked(data, index, __builtin_return_address(0));
+}
+#else
 void *datum_get(
 	struct data_array *data,
 	long index)
@@ -199,6 +271,7 @@ void *datum_get(
 
 	return NULL;
 }
+#endif
 
 void data_verify(
 	struct data_array *data)

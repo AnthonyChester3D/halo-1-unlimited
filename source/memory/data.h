@@ -57,6 +57,23 @@ void data_initialize(struct data_array *data, const char *name, short maximum_co
 void *datum_try_and_get(struct data_array *data, long index);
 void data_verify(struct data_array *data);
 void *datum_get(struct data_array *data, long index);
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.137): datum_get's answer when everything checks out, else NULL (datum_get then says why): datum_get's own
+fast path, and the hottest callers' (objects.c's object_get_and_verify_type), without a call or a stack frame */
+static __inline__ void *datum_get_fast(
+	struct data_array *data,
+	long index)
+{
+	short identifier = (short)(index >> 16), absolute_index = (short)index;
+	struct datum_header *header;
+
+	if (!data->valid || (!identifier && data->identifier_zero_invalid) || absolute_index < 0 ||
+		absolute_index >= data->count)
+		return NULL;
+	header = (struct datum_header *)((char *)data->data + data->size * absolute_index);
+	return header->identifier && (!identifier || identifier == header->identifier) ? header : NULL;
+}
+#endif
 struct data_array *data_new(const char *name, short maximum_count, short size);
 void data_dispose(struct data_array *data);
 void data_make_invalid(struct data_array *data);
