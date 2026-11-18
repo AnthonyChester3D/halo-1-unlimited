@@ -858,6 +858,8 @@ static void tour_add(
 	CloseHandle(file);
 }
 
+static void sweep_watch(void);
+
 static unsigned long __stdcall writer_thread(
 	void *unused)
 {
@@ -873,6 +875,7 @@ static unsigned long __stdcall writer_thread(
 		oxbox_perf_writer_state = 1;
 		Sleep(250);
 		oxbox_perf_writer_passes++;
+		sweep_watch();
 		head = ring_head;
 		PERF_BARRIER();
 		tail = ring_tail;
@@ -2362,9 +2365,18 @@ sharing's: the .map's size and its header's checksum; a stock map's never change
 goes in perf\sweep_now.txt, deleted after its row is written; one still there at the next boot is a run that never
 ended (the Xbox crashed or hung there), written as "crashed", and the map's later runs skipped.
 
+v1.132: a folder map the map browser says has a problem (hmp_maps_problem: its header's quick check, or it failed to
+load on this Xbox before) isn't loaded: its row is "bad_map", the reason in its limits column. And a watchdog: the
+perf log's writer thread (sweep_watch) restarts H1U (a quick reboot into this XBE, as the updater is started) when a
+run hasn't ended SWEEP_WATCH_SECONDS after perf_sweep_seconds from its start, or the main menu isn't back
+SWEEP_RETURN_SECONDS after it ended. Before that, the last 16 KB of oxbox_log.txt (its ring; the next boot's log
+replaces the file) go on the end of perf\sweep_hangs.txt, and sweep_now.txt is marked, so the run is written "hung"
+at the next boot. A hang the writer thread can't run through (the processor stopped) still needs a reboot by hand.
+
 perf\sweep.csv: "#" lines, a "status,..." line naming the columns, then a row a run (fields with commas quoted):
-	status       ok, fail_fps (under 10 fps for 5 s), crashed, no_start (the game didn't start: the map didn't load),
-	             left (the game went away while it played), skipped (an earlier run failed)
+	status       ok, fail_fps (under 10 fps for 5 s), crashed, hung (the watchdog restarted H1U), bad_map (not loaded:
+	             the map browser's problem), no_start (the game didn't start: the map didn't load), left (the game
+	             went away while it played), skipped (an earlier run failed)
 	key          the map as the game knows it ("+pack/folder", a stock level's name)
 	identity     its version (hex), run (0 no bots, 1 four, 2 the suggested count, 3 a campaign level's), bots
 	build, utc   this XBE's build and the time (the Xbox's clock)
@@ -2403,6 +2415,8 @@ static void oxbox_limits_text(
 	out[size - 1] = 0;
 }
 long hmp_maps_count(void);
+char const *hmp_maps_problem(long map_index);
+void oxbox_log_flush(void);
 void hmp_maps_scan(void);
 char const *hmp_maps_key(long map_index);
 long hmp_maps_find(char const *level_name);
@@ -2427,6 +2441,8 @@ enum
 #define SWEEP_WARMUP_SECONDS 4.5f               /* (the showcase's 1.5 s settle, then 3 s of textures streaming) */
 #define SWEEP_FAIL_FPS 10.0
 #define SWEEP_FAIL_SECONDS 5.0
+#define SWEEP_WATCH_SECONDS 360                 /* (a run: its load, up to the showcase's 180 s, warm-up, leaving) */
+#define SWEEP_RETURN_SECONDS 180                /* (back to the main menu after a run) */
 
 static char const *const sweep_solo_levels[SWEEP_STOCK_SOLO] =
 {
@@ -2481,7 +2497,30 @@ static struct
 	unsigned long second_frames;
 	double low_seconds, under10_seconds, longest_low;
 	char status[12];
+	char const *problem;                        /* (a bad_map row's reason: the map browser's) */
 } sweep;
+
+/* the watchdog (sweep_watch, on the writer thread): on while a run is under way or coming back from one */
+static volatile long sweep_watching;
+static volatile __int64 sweep_watch_deadline;
+
+static void sweep_watch_on(
+	long seconds)
+{
+	LARGE_INTEGER now;
+
+	sweep_watching = 0;
+	QueryPerformanceCounter(&now);
+	sweep_watch_deadline = now.QuadPart + perf.frequency * seconds;
+	PERF_BARRIER();
+	sweep_watching = seconds;
+}
+
+static void sweep_watch_off(
+	void)
+{
+	sweep_watching = 0;
+}
 
 static unsigned long sweep_hash(
 	char const *text)
@@ -2677,7 +2716,7 @@ static void sweep_append(
 }
 
 static void sweep_marker(
-	boolean set)
+	long set)                                   /* (0 deleted, 1 written, 2 written as hung: the watchdog's) */
 {
 	char path[64];
 
@@ -2690,7 +2729,8 @@ static void sweep_marker(
 
 		if (file == INVALID_HANDLE_VALUE)
 			return;
-		_snprintf(text, sizeof(text), "%s\t%ld\t%08lx\r\n", sweep.key, sweep.run, sweep.identity);
+		_snprintf(text, sizeof(text), "%s\t%ld\t%08lx%s\r\n", sweep.key, sweep.run, sweep.identity,
+			set == 2 ? "\thung" : "");
 		text[sizeof(text) - 1] = 0;
 		WriteFile(file, text, (unsigned long)strlen(text), &put, NULL);
 		CloseHandle(file);
@@ -2858,6 +2898,7 @@ static void sweep_clear_measures(
 	void)
 {
 	sweep.time = sweep.frame_worst = sweep.ticks = sweep.drawing = sweep.present = sweep.vsync = 0;
+	sweep.problem = NULL;
 	memset(sweep.under, 0, sizeof(sweep.under));
 	sweep.frames = 0;
 	memset(sweep.histogram, 0, sizeof(sweep.histogram));
@@ -2977,7 +3018,9 @@ static void sweep_row(
 		put_text(&line, ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,");
 	}
 	text[0] = 0;
-	if (strcmp(status, "skipped") && strcmp(status, "crashed"))
+	if (sweep.problem)
+		_snprintf(text, sizeof(text), "problem: %s", sweep.problem), text[sizeof(text) - 1] = 0;
+	else if (strcmp(status, "skipped") && strcmp(status, "crashed") && strcmp(status, "hung"))
 		oxbox_limits_text(text, sizeof(text));
 	sweep_put_text(&line, text);
 	line.text[line.length++] = '\r';
@@ -3028,9 +3071,10 @@ static void sweep_finish(
 		}
 		sweep.run = failed_run;
 	}
-	sweep_marker(FALSE);
+	sweep_marker(0);
 	sweep.active = sweep.measuring = FALSE;
 	sweep.over = TRUE;
+	sweep_watch_on(SWEEP_RETURN_SECONDS);
 }
 
 /* a folder map's version: map sharing's (its size and checksum, the standalone map's for a converted one), else (a
@@ -3137,10 +3181,14 @@ static void sweep_initialize(
 		tab2 = tab ? strchr(tab + 1, '\t') : NULL;
 		if (tab && tab2 && tab - text < SWEEP_KEY_LENGTH)
 		{
+			char *end = NULL;
+			boolean hung;
+
 			*tab = 0;
 			strcpy(sweep.key, text);
 			sweep.run = strtol(tab + 1, NULL, 10);
-			sweep.identity = strtoul(tab2 + 1, NULL, 16);
+			sweep.identity = strtoul(tab2 + 1, &end, 16);
+			hung = end && !strncmp(end, "\thung", 5);
 			if (sweep.run >= 0 && sweep.run < SWEEP_RUNS)
 			{
 				short players = sweep.key[0] == '+' || hmp_browse_stock_title(sweep.key) ? hmp_browse_suggested_players(sweep.key) : 0;
@@ -3152,13 +3200,110 @@ static void sweep_initialize(
 				sweep.bots = sweep_run_bots(sweep.run);
 				sweep_map_info();
 				sweep_clear_measures();
-				platform_log("perf sweep: %s run %ld never ended (the Xbox crashed or hung there)", sweep.key, sweep.run);
-				sweep_finish("crashed");
+				platform_log(hung ? "perf sweep: %s run %ld hung: the watchdog restarted H1U (perf\\sweep_hangs.txt has its log)" :
+					"perf sweep: %s run %ld never ended (the Xbox crashed or hung there)", sweep.key, sweep.run);
+				sweep_finish(hung ? "hung" : "crashed");
+				sweep_watch_off();
 			}
 		}
-		sweep_marker(FALSE);
+		sweep_marker(0);
 	}
 	sweep.over = FALSE;
+}
+
+/* the watchdog's restart: this XBE again, from its own folder, as a dashboard starts a title (oxbox_sdk.c's
+oxbox_launch_updater: the launch data page, then a quick reboot). Returns only when it couldn't */
+static void sweep_restart(
+	void)
+{
+	typedef struct { unsigned short Length, MaximumLength; char *Buffer; } ansi_string;
+	ansi_string *image = (ansi_string *)oxbox_kernel_export(326);                        /* XeImageFileName */
+	unsigned char **launch_page = (unsigned char **)oxbox_kernel_export(164);            /* LaunchDataPage */
+	void *(WINAPI *allocate)(unsigned long) = (void *(WINAPI *)(unsigned long))oxbox_kernel_export(165);
+	void (WINAPI *persist)(void *, unsigned long, int) = (void (WINAPI *)(void *, unsigned long, int))oxbox_kernel_export(178);
+	void (WINAPI *reboot)(int) = (void (WINAPI *)(int))oxbox_kernel_export(49);         /* HalReturnToFirmware */
+	unsigned char const *certificate = *(unsigned char const *const *)((unsigned char const *)0x10000 + 0x118);
+	char folder[300], *slash, *semicolon;
+	unsigned char *page;
+	int length;
+
+	if (!image || !image->Buffer || !launch_page || !allocate || !persist || !reboot)
+		return;
+	length = image->Length < sizeof(folder) - 1 ? image->Length : sizeof(folder) - 1;
+	memcpy(folder, image->Buffer, length);
+	folder[length] = 0;
+	if ((semicolon = strchr(folder, ';')) != NULL)
+		*semicolon = '\\';
+	if (strncmp(folder, "\\Device\\", 8) || (slash = strrchr(folder, '\\')) == NULL)
+		return;
+	*slash = 0;
+	if (!*launch_page && !(*launch_page = (unsigned char *)allocate(0x1000)))
+		return;
+	page = *launch_page;
+	persist(page, 0x1000, 1);
+	memset(page, 0, 0x1000);
+	*(unsigned long *)(page + 4) = *(unsigned long const *)(certificate + 8);
+	if (_snprintf((char *)page + 8, 520, "%s;%s", folder, slash + 1) < 0)
+		return;
+	platform_log("perf sweep: restarting %s", (char *)page + 8);
+	oxbox_log_flush();
+	reboot(2);
+}
+
+/* the writer thread's look, every pass: a run that hasn't ended in time (the game hung, or sits on a black screen)
+restarts H1U, its log's last 16 KB kept and the run marked hung */
+static void sweep_watch(
+	void)
+{
+	extern char oxbox_log_ring[0x4000];
+	extern unsigned long oxbox_log_ring_position;
+	LARGE_INTEGER now;
+	long seconds = sweep_watching;
+
+	if (!seconds)
+		return;
+	QueryPerformanceCounter(&now);
+	if (now.QuadPart < sweep_watch_deadline)
+		return;
+	sweep_watching = 0;
+	if (sweep.active)
+		platform_log("perf sweep: %s run %ld hasn't ended in %ld s: the watchdog restarts H1U", sweep.key, sweep.run, seconds);
+	else
+		platform_log("perf sweep: the main menu isn't back %ld s after %s run %ld: the watchdog restarts H1U", seconds,
+			sweep.key, sweep.run);
+	if (sweep.active)
+		sweep_marker(2);
+	oxbox_log_flush();
+	{
+		char path[64], head[160];
+		unsigned long put, end = oxbox_log_ring_position, size = end < sizeof(oxbox_log_ring) ? end : sizeof(oxbox_log_ring);
+		unsigned long start = (end - size) & (sizeof(oxbox_log_ring) - 1);
+		SYSTEMTIME time;
+		HANDLE file;
+
+		sweep_path(path, sizeof(path), "sweep_hangs.txt");
+		file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (file != INVALID_HANDLE_VALUE)
+		{
+			GetSystemTime(&time);
+			_snprintf(head, sizeof(head), "\r\n==== %04d-%02d-%02d %02d:%02d:%02d v1.%d: %s run %ld%s; the log's last %lu bytes:\r\n",
+				time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond, OXBOX_BUILD_NUMBER, sweep.key,
+				sweep.run, sweep.active ? "" : " (after it ended)", size);
+			head[sizeof(head) - 1] = 0;
+			SetFilePointer(file, 0, NULL, FILE_END);
+			WriteFile(file, head, (unsigned long)strlen(head), &put, NULL);
+			if (start + size > sizeof(oxbox_log_ring))
+			{
+				WriteFile(file, oxbox_log_ring + start, sizeof(oxbox_log_ring) - start, &put, NULL);
+				WriteFile(file, oxbox_log_ring, start + size - sizeof(oxbox_log_ring), &put, NULL);
+			}
+			else
+				WriteFile(file, oxbox_log_ring + start, size, &put, NULL);
+			CloseHandle(file);
+		}
+	}
+	sweep_restart();
+	platform_log("perf sweep: the watchdog couldn't restart H1U");
 }
 
 static long sweep_next(
@@ -3188,7 +3333,17 @@ static long sweep_next(
 		sweep.bots = sweep_run_bots(run);
 		sweep_map_info();
 		sweep_clear_measures();
-		sweep_marker(TRUE);
+		/* (a folder map the map browser won't choose isn't loaded: its rows say why) */
+		if (sweep.key[0] == '+' && sweep.cursor < hmp_maps_count() &&
+			(sweep.problem = hmp_maps_problem(sweep.cursor)) != NULL)
+		{
+			platform_log("perf sweep: %s isn't loaded: %s", sweep.key, sweep.problem);
+			sweep_finish("bad_map");
+			sweep_watch_off();
+			continue;
+		}
+		sweep_marker(1);
+		sweep_watch_on(sweep.seconds + SWEEP_WATCH_SECONDS);
 		sweep.active = TRUE;
 		strcpy(key, sweep.key);
 		*bots = sweep.bots;
@@ -3196,6 +3351,7 @@ static long sweep_next(
 			sweep.key, sweep.name, sweep.solo ? "campaign" : "multiplayer", run, (int)sweep.bots);
 		return sweep.solo ? _oxbox_sweep_solo : _oxbox_sweep_multiplayer;
 	}
+	sweep_watch_off();
 	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\sweep.csv)",
 		sweep.drive);
 	return _oxbox_sweep_none;
@@ -3258,17 +3414,21 @@ static boolean sweep_frame(
 static void sweep_ended(
 	long how)
 {
+	if (how == _oxbox_sweep_ended_stopped || how == _oxbox_sweep_ended_menu)
+		sweep_watch_off();
 	if (!sweep.active)
 		return;
 	if (how == _oxbox_sweep_ended_stopped)
 	{
 		platform_log("perf sweep: stopped by a press (%s run %ld isn't counted); it carries on at the next boot", sweep.key,
 			sweep.run);
-		sweep_marker(FALSE);
+		sweep_marker(0);
 		sweep.active = sweep.measuring = FALSE;
 		return;
 	}
 	sweep_finish(how == _oxbox_sweep_ended_no_start ? "no_start" : "left");
+	if (how == _oxbox_sweep_ended_menu)
+		sweep_watch_off();
 }
 
 /* a frame of the run (perf_frame, while it measures) */

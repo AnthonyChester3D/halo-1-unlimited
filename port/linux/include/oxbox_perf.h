@@ -76,7 +76,8 @@ enum
 
 	_oxbox_sweep_ended_no_start = 1,   /* the game didn't start (the map didn't load) */
 	_oxbox_sweep_ended_left,           /* the game went away while it played */
-	_oxbox_sweep_ended_stopped         /* a press stopped the sweep: the run isn't counted */
+	_oxbox_sweep_ended_stopped,        /* a press stopped the sweep: the run isn't counted */
+	_oxbox_sweep_ended_menu            /* back at the main menu (v1.132: the watchdog's off; a run still under way left) */
 };
 
 /* the steps OXBOX_PERF_MARK ends (a game tick's start is its profile section game_update's start) */
