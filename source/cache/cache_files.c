@@ -1898,7 +1898,36 @@ void scenario_structure_bsp_unload(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+static __attribute__((noinline)) void *tag_get_checked(
+	long group_tag,
+	long tag_index);
+
+/* oxbox (v1.137): a loaded tag of the group asked for, its data, without the checks' stack frame (tag_get is called
+thousands of times a tick); anything else as before (tag_get_checked: its checks, its messages, the empty tag) */
 void *tag_get(
+	long group_tag,
+	long tag_index)
+{
+	short absolute_index = (short)tag_index;
+
+	if (cache_file_globals.tags_loaded && global_tag_instances && absolute_index >= 0 &&
+		absolute_index < global_tag_count)
+	{
+		struct cache_file_tag_instance *tag_instance = &global_tag_instances[absolute_index];
+
+		if ((!(tag_index & 0xFFFF0000) || tag_instance->tag_index == tag_index) && tag_instance->base_address &&
+			(tag_instance->group_tag == group_tag || tag_instance->parent_group_tags[0] == group_tag ||
+				tag_instance->parent_group_tags[1] == group_tag))
+			return tag_instance->base_address;
+	}
+	return tag_get_checked(group_tag, tag_index);
+}
+
+static void *tag_get_checked(
+#else
+void *tag_get(
+#endif
 	long group_tag,
 	long tag_index)
 {

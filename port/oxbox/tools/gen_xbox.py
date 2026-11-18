@@ -32,7 +32,7 @@ abi = ['--target=i686-linux-gnu', '-m32', '-fms-extensions', '-fshort-wchar', '-
        # Xbox code (MSVC, the libraries, the kernel) keeps the stack 4-byte aligned, not 16
        '-mstack-alignment=4',
        '-ffunction-sections', '-fdata-sections', '-fno-stack-protector', '-fno-asynchronous-unwind-tables',
-       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=136', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
+       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=137', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
 abi += [f'-fno-builtin-{n}' for n in ('wcslen', 'wcsnlen', 'wcschr', 'wcsrchr', 'wcscmp', 'wcsncmp', 'wcscpy', 'wcsncpy',
                                       'wcscat', 'wcsncat', 'wmemchr', 'wmemcmp', 'wmemcpy', 'wmemmove', 'wmemset')]
 gflags = ['-std=gnu89', '-D__STRICT_ANSI__', '-w', '-Wno-error=incompatible-pointer-types',
@@ -84,6 +84,9 @@ def add(s, rule, sub=''):
 # (test build 18: debug and profiling units in those folders, never run in a game, compiled for size too)
 COLD = ('render_debug', 'rasterizer_xbox_profile', 'profile', 'collision_usage', 'rasterizer_debug', 'collision_debug')
 HOT = ('rasterizer', 'render', 'math', 'physics', 'models', 'structures', 'effects', 'memory', 'cseries', 'objects')
+# (v1.137: the units' and items' hottest files too, a game tick's per-object updates: bipeds and their weapons, ~11 KB;
+# the rest of those folders stays -Os, all of them -O2 was 51 KB)
+HOT_FILES = (('units', 'units'), ('units', 'bipeds'), ('items', 'weapons'), ('items', 'items'))
 # (test build 33's experiment: OXBOX_HOT_EXTRA="units devices items ai interface" compiles those folders -O2 too;
 # that build says so, in the menus' build number and in its perf logs' build line)
 HOT_EXTRA = tuple(os.environ.get('OXBOX_HOT_EXTRA', '').split())
@@ -94,7 +97,8 @@ for s in srcs + port_game + [Path('port/third_party/stb_vorbis/stb_vorbis.c')]:
     add(s, 'game')
     parts = Path(s).parts
     flags = []
-    if not (len(parts) > 1 and parts[0] == 'source' and parts[1] in HOT) or Path(s).stem in COLD:
+    hot_file = len(parts) > 2 and parts[0] == 'source' and (parts[1], Path(s).stem) in HOT_FILES
+    if not (len(parts) > 1 and parts[0] == 'source' and (parts[1] in HOT or hot_file)) or Path(s).stem in COLD:
         flags.append('-Os')
     if Path(s).stem in VARIANT_UNITS:
         flags += VARIANT

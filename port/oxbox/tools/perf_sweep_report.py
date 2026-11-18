@@ -6,6 +6,7 @@
 #   python3 perf_sweep_report.py sweep.csv [more.csv ...] [--summary maps.csv] [--html report.html]
 #   python3 perf_sweep_report.py sweep.csv --write-list sweep_list.txt
 #   python3 perf_sweep_report.py sweep.csv --compare sweep_r70.csv [--compare-csv fill.csv]
+#   python3 perf_sweep_report.py sweep.csv --compare sweep_p1.csv      (another build: opence.ini perf_sweep_pass = 1)
 #
 # The resolution scaling test: a pass with opence.ini res_scale = 70 (say) writes perf\sweep_r70.csv, and plays only
 # perf\sweep_list.txt's maps when there's one (--write-list: the maps under the "perfect" line whose slowest run kept
@@ -287,8 +288,49 @@ def write_list(maps, path, args):
           % (path, len(keys), args.perfect, args.list_gpu))
 
 
+def compare_builds(base_maps, other_paths, args):
+    """a pass on another build (perf_sweep_pass: sweep_p1.csv) against the files: each map's runs, fps and the
+    processor's time a frame (game ticks, drawing), and the change overall"""
+    other_maps = maps_from(read_rows(other_paths))
+    builds = sorted({row['build'] for runs in other_maps.values() for row in runs.values()})
+    print('\nBuild comparison: %s against %s' % (', '.join(other_paths), ', '.join(args.files)))
+    print('  (the pass: %s)' % ', '.join(builds))
+    changes = []
+    for key, other_runs in sorted(other_maps.items()):
+        base_runs = base_maps.get(key)
+        if not base_runs:
+            continue
+        name = next(iter(other_runs.values()))['name'] or key
+        lines = []
+        for run, orow in sorted(other_runs.items()):
+            brow = base_runs.get(run)
+            if not brow or brow['identity'] != orow['identity'] or orow['status'] != 'ok' or brow['status'] != 'ok':
+                continue
+            bf, of = number(brow, 'avg_fps', 0), number(orow, 'avg_fps', 0)
+            bt, ot = number(brow, 'tick_ms', 0), number(orow, 'tick_ms', 0)
+            bd, od = number(brow, 'draw_ms', 0), number(orow, 'draw_ms', 0)
+            changes.append((bf, of, bt, ot, bd, od))
+            lines.append('      %s: %.1f -> %.1f fps; game ticks %.2f -> %.2f ms a frame (%+.0f%%), drawing %.2f -> %.2f ms' % (
+                RUN_NAMES[run], bf, of, bt, ot, 100.0 * (ot - bt) / bt if bt else 0.0, bd, od))
+        if lines:
+            print('  %s' % name)
+            print('\n'.join(lines))
+    if changes:
+        n = len(changes)
+        print('\n%d runs in both: fps %.1f -> %.1f on average; game ticks %.2f -> %.2f ms a frame (%+.1f%%); drawing '
+              '%.2f -> %.2f ms (%+.1f%%)' % (
+                  n, sum(c[0] for c in changes) / n, sum(c[1] for c in changes) / n,
+                  sum(c[2] for c in changes) / n, sum(c[3] for c in changes) / n,
+                  100.0 * (sum(c[3] for c in changes) - sum(c[2] for c in changes)) / max(sum(c[2] for c in changes), 1e-9),
+                  sum(c[4] for c in changes) / n, sum(c[5] for c in changes) / n,
+                  100.0 * (sum(c[5] for c in changes) - sum(c[4] for c in changes)) / max(sum(c[4] for c in changes), 1e-9)))
+    return 0
+
+
 def compare(base_maps, scaled_paths, args):
     scale = file_scale(scaled_paths[0]) or args.scale
+    if scale == 100 or re.search(r'_p\d+\.csv$', os.path.basename(scaled_paths[0])):
+        return compare_builds(base_maps, scaled_paths, args)
     if not scale:
         print('--compare: the scale is unknown (no "res_scale N" line or _rN name): give --scale', file=sys.stderr)
         return 1

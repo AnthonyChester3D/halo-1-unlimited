@@ -2378,7 +2378,9 @@ v1.133, the resolution scaling test: with opence.ini res_scale (1-99) the sweep 
 perf\sweep_r<scale>.csv (its first line says the scale) and its marker in sweep_now_r<scale>.txt, so the normal
 pass's sweep.csv is untouched and every map is measured again at that scale; and when perf\sweep_list.txt is there it
 plays only the maps it names (a key a line, as sweep.csv's key column; perf_sweep_report.py --write-list makes it).
-perf_sweep_report.py --compare sets the passes side by side.
+perf_sweep_report.py --compare sets the passes side by side. v1.137: perf_sweep_pass (1-99) is a pass of its own the
+same way (sweep_p<pass>.csv, sweep_now_p<pass>.txt, the list), at full size and without scaling runs: the same maps
+measured again on another build, for --compare.
 
 v1.134, the scaling runs (perf_sweep_scaling, on by default; never in a res_scale pass): once a map's normal runs all
 have rows, one whose slowest run averaged under SWEEP_SCALE_BELOW_FPS with the graphics chip busy SWEEP_SCALE_GPU% of
@@ -2540,6 +2542,7 @@ static struct
 	boolean at_menu;                            /* (back at the main menu, the next run not started) */
 	unsigned long menu_input;                   /* (the input clock then: a press since stands the watchdog down) */
 	long scale;                                 /* (opence.ini res_scale, 1-99: a scaled pass; 0 the normal one) */
+	long pass;                                  /* (opence.ini perf_sweep_pass, 1-99: a pass of its own; 0 the normal one) */
 	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
 } sweep;
 
@@ -2679,7 +2682,7 @@ static unsigned char sweep_extra(
 {
 	unsigned char extra;
 
-	if (!done || !sweep.scaling || sweep.scale || (done->runs & sweep.needed_base) != sweep.needed_base ||
+	if (!done || !sweep.scaling || sweep.scale || sweep.pass || (done->runs & sweep.needed_base) != sweep.needed_base ||
 		(done->runs & SWEEP_RUNS_BROKEN) || done->slow_run == 0xff ||
 		done->slow_fps4 >= SWEEP_SCALE_BELOW_FPS * 4 || done->slow_gpu < SWEEP_SCALE_GPU)
 		return 0;
@@ -3308,7 +3311,7 @@ static boolean sweep_map_ready(
 
 	if (!sweep_map_key(sweep.cursor, sweep.key, &sweep.solo))
 		return FALSE;
-	if (sweep.scale && !sweep_listed(sweep.key))
+	if ((sweep.scale || sweep.pass) && !sweep_listed(sweep.key))
 		return FALSE;
 	sweep.identity = sweep.key[0] == '+' ? sweep_identity(sweep.key) : 1;
 	if (sweep.solo)
@@ -3360,6 +3363,11 @@ static void sweep_initialize(
 			_snprintf(sweep.results, sizeof(sweep.results), "sweep_r%ld.csv", sweep.scale);
 			_snprintf(sweep.marker, sizeof(sweep.marker), "sweep_now_r%ld.txt", sweep.scale);
 		}
+		else if (sweep.pass)
+		{
+			_snprintf(sweep.results, sizeof(sweep.results), "sweep_p%ld.csv", sweep.pass);
+			_snprintf(sweep.marker, sizeof(sweep.marker), "sweep_now_p%ld.txt", sweep.pass);
+		}
 		else
 		{
 			strcpy(sweep.results, "sweep.csv");
@@ -3385,7 +3393,7 @@ static void sweep_initialize(
 	sweep.map_count = hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO;
 	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\%s; %ld maps here%s", sweep.done_count,
 		sweep.drive, sweep.results, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER,
-		sweep.scale ? " (res_scale: only perf\\sweep_list.txt's maps, when it's there)" : "");
+		sweep.scale || sweep.pass ? " (a pass of its own: only perf\\sweep_list.txt's maps, when it's there)" : "");
 	/* (a run the last boot started and never wrote: the Xbox crashed or hung in it) */
 	sweep_path(path, sizeof(path), sweep.marker);
 	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -4226,6 +4234,8 @@ static void read_settings(
 			sweep.detail = value != 0;
 		else if (!strcmp(name, "perf_sweep_scaling"))
 			sweep.scaling = value != 0;
+		else if (!strcmp(name, "perf_sweep_pass"))
+			sweep.pass = value >= 1 && value <= 99 ? value : 0;
 		else if (!strcmp(name, "perf_sweep_seconds") && value >= 10)
 			sweep.seconds = value > 600 ? 600 : value;
 	}

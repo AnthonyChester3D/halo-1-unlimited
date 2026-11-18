@@ -342,7 +342,18 @@ void *object_get_and_verify_type(
 	long object_index,
 	unsigned long valid_type_flags)
 {
-	struct object_datum *result = object_header_get(object_index)->datum;
+	struct object_datum *result;
+
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.137): the usual case (the object there, of a type asked for) without datum_get's call */
+	{
+		struct object_header_datum *header = (struct object_header_datum *)datum_get_fast(object_header_data, object_index);
+
+		if (header && TEST_FLAG(valid_type_flags, header->datum->object.type))
+			return header->datum;
+	}
+#endif
+	result = object_header_get(object_index)->datum;
 
 	match_vassert(
 		"c:\\halo\\SOURCE\\objects\\objects.c",
