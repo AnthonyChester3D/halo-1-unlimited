@@ -65,6 +65,9 @@ struct oxbox_perf_hooks
 	/* a map without a showcase.txt: up to maximum shots at its spawn points, their keys (two a shot: seconds, x, y, z,
 	yaw, pitch, field of view, as showcase.c's), 8 seconds each; how many */
 	long (*sweep_spawn_shots)(float (*keys)[7], long maximum);
+	/* (v1.138) the game crashed or halted (why: "crash", "halt"), its report written: a sweep under way restarts H1U
+	(the run written "crashed" at the next boot) rather than leave the console stopped; returns when it doesn't */
+	void (*sweep_fatal)(char const *why);
 };
 
 /* the perf sweep's kinds of run (sweep_next) and how a run stopped (sweep_ended) */
