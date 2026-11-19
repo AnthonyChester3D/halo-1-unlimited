@@ -50,6 +50,10 @@ typedef void (*packs_say_t)(int warning, char const *text);
 
 /* the maps in path\maps (their headers), next to the install's own in stock_folder (its maps folder: "" for none),
 and what's imported from it already; 0 when it read */
+/* the install's own maps, as packs_scan compares a pack's with them, read again when next asked (the installer changed
+something) */
+void packs_forget(void);
+
 int packs_scan(char const *path, char const *stock_folder, struct pack_scan *scan);
 
 /* imports its multiplayer maps and/or its campaign (again: what was there is replaced); 0 when done, else error[256] */
