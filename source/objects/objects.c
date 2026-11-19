@@ -344,7 +344,7 @@ void *object_get_and_verify_type(
 {
 	struct object_datum *result;
 
-#if defined(HALO_XBOX_TARGET)
+#if defined(HALO_XBOX_TARGET) && !defined(OXBOX_NO_FAST_LOOKUPS)
 	/* oxbox (v1.137): the usual case (the object there, of a type asked for) without datum_get's call */
 	{
 		struct object_header_datum *header = (struct object_header_datum *)datum_get_fast(object_header_data, object_index);

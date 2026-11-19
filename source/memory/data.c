@@ -142,7 +142,7 @@ void *datum_try_and_get(
 	return header;
 }
 
-#if defined(HALO_XBOX_TARGET)
+#if defined(HALO_XBOX_TARGET) && !defined(OXBOX_NO_FAST_LOOKUPS)
 /* oxbox (v1.137): the checks and the message for an index that doesn't check out, out of datum_get's way: datum_get
 is called thousands of times a tick (a quarter of a game tick's lookups), and its stack frame for the message cost
 every call */

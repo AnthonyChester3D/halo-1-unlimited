@@ -983,13 +983,24 @@ static long bots_grid_bucket(long x, long y)
 }
 
 /* whether `bytes` more leaves the game its reserve of free memory (the Xbox's; elsewhere, yes) */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.139): the developers' perf log's own memory (its section and its writer's stack; 0 without it), counted
+as free here: the bots get the room they'd have in a player's game, so the perf sweep measures bots that know the
+map (its 164 KB had left ~250 KB free, under the reserve: about 1 game in 20 went without waypoints). Never under
+BOTS_MEMORY_FLOOR really free. And whether this host's bots came up short (the sweep notes it in its row) */
+unsigned long oxbox_perf_footprint;
+long bots_oxbox_short;
+#define BOTS_MEMORY_FLOOR (64UL * 1024UL)
+#endif
+
 static boolean bots_memory_allows(unsigned long bytes)
 {
 #if defined(HALO_XBOX_TARGET)
 	MEMORYSTATUS memory;
 
 	GlobalMemoryStatus(&memory);
-	return memory.dwAvailPhys > bytes + BOTS_MEMORY_RESERVE;
+	return memory.dwAvailPhys > bytes + BOTS_MEMORY_FLOOR &&
+		memory.dwAvailPhys + oxbox_perf_footprint > bytes + BOTS_MEMORY_RESERVE;
 #else
 	(void)bytes;
 	return TRUE;
@@ -1546,6 +1557,10 @@ static void bots_route_build(
 			bots_route.map, (int)bots_route.waypoint_count);
 		bots_route.waypoint_count = 0;
 	}
+#if defined(HALO_XBOX_TARGET)
+	if (!bots_route.waypoint_count || bots_route.waypoints_capped)
+		bots_oxbox_short = bots_route.waypoint_count ? 1 : 2;
+#endif
 	bots_log("bots: %s: %d waypoints%s, %lu KB, built in %lu ms", bots_route.map, (int)bots_route.waypoint_count,
 		bots_route.waypoints_capped ? " (some left out: no room for more)" : "",
 		((unsigned long)bots_route.waypoint_capacity * sizeof(struct bots_waypoint) +

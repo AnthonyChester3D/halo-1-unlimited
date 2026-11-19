@@ -32,7 +32,7 @@ abi = ['--target=i686-linux-gnu', '-m32', '-fms-extensions', '-fshort-wchar', '-
        # Xbox code (MSVC, the libraries, the kernel) keeps the stack 4-byte aligned, not 16
        '-mstack-alignment=4',
        '-ffunction-sections', '-fdata-sections', '-fno-stack-protector', '-fno-asynchronous-unwind-tables',
-       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=138', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
+       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=140', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
 abi += [f'-fno-builtin-{n}' for n in ('wcslen', 'wcsnlen', 'wcschr', 'wcsrchr', 'wcscmp', 'wcsncmp', 'wcscpy', 'wcsncpy',
                                       'wcscat', 'wcsncat', 'wmemchr', 'wmemcmp', 'wmemcpy', 'wmemmove', 'wmemset')]
 gflags = ['-std=gnu89', '-D__STRICT_ANSI__', '-w', '-Wno-error=incompatible-pointer-types',
@@ -87,6 +87,9 @@ HOT = ('rasterizer', 'render', 'math', 'physics', 'models', 'structures', 'effec
 # (v1.137: the units' and items' hottest files too, a game tick's per-object updates: bipeds and their weapons, ~11 KB;
 # the rest of those folders stays -Os, all of them -O2 was 51 KB)
 HOT_FILES = (('units', 'units'), ('units', 'bipeds'), ('items', 'weapons'), ('items', 'items'))
+# (OXBOX_EXTRA=-DOXBOX_NO_FAST_LOOKUPS: v1.137's speedups off, a baseline build to measure them against)
+if '-DOXBOX_NO_FAST_LOOKUPS' in os.environ.get('OXBOX_EXTRA', '').split():
+    HOT_FILES = ()
 # (test build 33's experiment: OXBOX_HOT_EXTRA="units devices items ai interface" compiles those folders -O2 too;
 # that build says so, in the menus' build number and in its perf logs' build line)
 HOT_EXTRA = tuple(os.environ.get('OXBOX_HOT_EXTRA', '').split())
