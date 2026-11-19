@@ -17,6 +17,7 @@ map_data, mp_map_grafix) in the order of the pack's XBE's multiplayer levels (a 
 names: Halo's 13 in a retail XBE, more in a modded one), the campaign's (map_list, solo_level_select's map_data,
 sp_levels) in Halo's level order. A map Halo has already (Halo's 13, or a file the same as the install's) isn't
 imported. */
+#include "scancache.h"
 #include "packs.h"
 #include "packart.h"
 #include "pictures.h"
@@ -220,6 +221,15 @@ static void new_key(char const *path, char *key)
 #define SHARED_REFERENCE_OFFSET 0x700
 #define SHARED_REFERENCE_SIGNATURE 0x73687264ul
 
+static struct { char path[200]; int ok; unsigned long checksum, length; int small; } seen[48];
+static int seen_count;
+
+/* the install's maps may have changed (the installer did something): read them again when next asked */
+void packs_forget(void)
+{
+	seen_count = 0;
+}
+
 static int halos_own(struct pack_map const *map, char const *stock_folder)
 {
 	unsigned char header[MAP_HEADER];
@@ -239,9 +249,27 @@ static int halos_own(struct pack_map const *map, char const *stock_folder)
 	if (!stock_folder || !stock_folder[0])
 		return 0;
 	text_print(path, sizeof(path), "%s\\%s.map", stock_folder, map->name);
-	if (map_header(path, header) || u32(header + 0x64) != map->checksum)
-		return 0;
-	return map->small || u32(header + SHARED_REFERENCE_OFFSET) == SHARED_REFERENCE_SIGNATURE || u32(header + 8) == map->length;
+	/* (the install's own maps of that name, read once (till packs_forget): every pack names the same few) */
+	{
+		int i;
+		for (i = 0; i < seen_count && _stricmp(seen[i].path, path); i++)
+			;
+		if (i == seen_count)
+		{
+			if (seen_count == 48)
+				i = 47;
+			else
+				seen_count++;
+			text_print(seen[i].path, sizeof(seen[i].path), "%s", path);
+			seen[i].ok = !map_header(path, header);
+			seen[i].checksum = seen[i].ok ? u32(header + 0x64) : 0;
+			seen[i].length = seen[i].ok ? u32(header + 8) : 0;
+			seen[i].small = seen[i].ok && u32(header + SHARED_REFERENCE_OFFSET) == SHARED_REFERENCE_SIGNATURE;
+		}
+		if (!seen[i].ok || seen[i].checksum != map->checksum)
+			return 0;
+		return map->small || seen[i].small || seen[i].length == map->length;
+	}
 }
 
 static int count_links(char const *key)
@@ -309,15 +337,29 @@ int packs_scan(char const *path, char const *stock_folder, struct pack_scan *sca
 				scan->count == PACK_MAPS)
 				continue;
 			text_print(file, sizeof(file), "%s\\maps\\%s", path, found.cFileName);
-			if (map_header(file, header))
-				continue;
+			/* (a map not changed since a run looked at it: its header's facts kept, nothing read: scancache.h) */
+			{
+				struct { long type; unsigned long length, checksum; long small; } facts;
+				unsigned long key = scan_cache_hash(scan_cache_hash(0, &found.nFileSizeLow, 4), &found.ftLastWriteTime,
+					sizeof(found.ftLastWriteTime));
+				if (!scan_cache_get(file, key, &facts, sizeof(facts)))
+				{
+					if (map_header(file, header))
+						continue;
+					facts.type = s16(header + 0x60);
+					facts.length = u32(header + 8);
+					facts.checksum = u32(header + 0x64);
+					facts.small = u32(header + SHARED_REFERENCE_OFFSET) == SHARED_REFERENCE_SIGNATURE;
+					scan_cache_put(file, key, &facts, sizeof(facts));
+				}
+				map->type = (short)facts.type;
+				map->length = facts.length;
+				map->checksum = facts.checksum;
+				map->small = (int)facts.small;
+			}
 			memcpy(map->name, found.cFileName, n - 4);
 			map->name[n - 4] = 0;
-			map->type = s16(header + 0x60);
 			map->size = found.nFileSizeLow;
-			map->length = u32(header + 8);
-			map->checksum = u32(header + 0x64);
-			map->small = u32(header + SHARED_REFERENCE_OFFSET) == SHARED_REFERENCE_SIGNATURE;
 			if (map->type != 0 && map->type != 1)
 				continue;
 			map->halos = halos_own(map, stock_folder);

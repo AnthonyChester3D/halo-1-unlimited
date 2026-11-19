@@ -38,6 +38,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #include "package.h"
 #include "packs.h"
 #include "pictures.h"
+#include "scancache.h"
 #include "screen.h"
 #include "sha256.h"
 #include "stockmaps.h"
@@ -50,7 +51,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 59
+#define INSTALLER_VERSION 60
 #endif
 __attribute__((used)) static struct
 {
@@ -63,6 +64,7 @@ static char const *own_path(char const *name);
 #define PACKAGE_PATH own_path("opence.oxpk")
 #define OLD_PACKAGE_PATH own_path("opence_old.oxpk") /* (the package a download replaced) */
 #define DOWNLOAD_PATH own_path("opence_download.oxpk")
+#define SCAN_CACHE_PATH own_path("scan_cache.bin") /* (what was found in the Halo folders and packs: scancache.h) */
 #define URL_PATH own_path("update_url.txt") /* (a test update location: download.h) */
 #define OLD_URL_PATH own_path("installer_url.txt") /* (its earlier name) */
 #define OLD_INSTALLER_PATH own_path("installer_old.xbe") /* (the installer an update replaced) */
@@ -1146,7 +1148,8 @@ static int can_restore(struct halo const *h)
 	return h->state == INSTALLED || h->state == OTHER || h->state == MISSING || stock_maps_back(h);
 }
 
-static void examine(struct halo *h)
+/* what examine looks at, and finds, of a Halo folder (examine_measure: its XBEs read, its stock maps' headers) */
+static void examine_measure(struct halo *h)
 {
 	{
 		char mark[220];
@@ -1200,6 +1203,11 @@ static void examine(struct halo *h)
 		h->state = UNKNOWN;
 		h->retail = NULL;
 	}
+}
+
+/* its note and lines, as the lists show them */
+static void examine_describe(struct halo *h)
+{
 	switch (h->state)
 	{
 	case RETAIL:
@@ -1250,6 +1258,98 @@ static void examine(struct halo *h)
 				text_print(h->detail[1], sizeof(h->detail[1]), "X puts the retail stock maps back.");
 		}
 	}
+}
+
+/* v1.142: what examine_measure found, kept between runs (scancache.h) by the folder's key: its two XBEs' sizes and
+write times, its maps folder's listing (names, sizes, write times: an unfinished swap's temporary files change it, so
+the power-cut recovery runs) and the package's build. Nothing of an unchanged folder is read: before, every Halo
+folder's XBEs were read whole and hashed, and its 23 stock maps' headers read, at every start. A folder the installer
+has just changed is looked at afresh (examine_fresh) */
+struct halo_facts
+{
+	long state, patched, backup_in_the_way, opence, up_to_date, has_retail;
+	unsigned char retail_sha256[32];
+	struct stockmaps_look stock;
+};
+static int examine_fresh;
+
+static unsigned long examine_key(char const *path)
+{
+	static char const *const xbes[] = {"default.xbe", "default_retail.xbe"};
+	WIN32_FIND_DATAA found;
+	char pattern[240];
+	HANDLE find;
+	unsigned long key = 0;
+	int i;
+	for (i = 0; i < 2; i++)
+	{
+		text_print(pattern, sizeof(pattern), "%s\\%s", path, xbes[i]);
+		find = FindFirstFileA(pattern, &found);
+		if (find == INVALID_HANDLE_VALUE)
+			key = scan_cache_hash(key, "-", 1);
+		else
+		{
+			key = scan_cache_hash(key, &found.nFileSizeLow, 4);
+			key = scan_cache_hash(key, &found.ftLastWriteTime, sizeof(found.ftLastWriteTime));
+			FindClose(find);
+		}
+	}
+	text_print(pattern, sizeof(pattern), "%s\\maps\\*", path);
+	find = FindFirstFileA(pattern, &found);
+	if (find != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			char name[MAX_PATH];
+			int n;
+			for (n = 0; found.cFileName[n] && n < MAX_PATH - 1; n++)
+				name[n] = (char)(found.cFileName[n] >= 'A' && found.cFileName[n] <= 'Z' ? found.cFileName[n] + 32 :
+					found.cFileName[n]);
+			key = scan_cache_hash(key, name, (unsigned long)n);
+			key = scan_cache_hash(key, &found.nFileSizeLow, 4);
+			key = scan_cache_hash(key, &found.ftLastWriteTime, sizeof(found.ftLastWriteTime));
+		} while (FindNextFileA(find, &found));
+		FindClose(find);
+	}
+	key = scan_cache_hash(key, &package.build, sizeof(package.build));
+	key = scan_cache_hash(key, &package_ok, sizeof(package_ok));
+	return key;
+}
+
+static void examine(struct halo *h)
+{
+	struct halo_facts facts;
+	unsigned long key = examine_key(h->path);
+	char mark[220];
+	if (!examine_fresh && scan_cache_get(h->path, key, &facts, sizeof(facts)) &&
+		(!facts.has_retail || (package_ok && package_find(&package, facts.retail_sha256))))
+	{
+		h->state = (int)facts.state;
+		h->patched = (int)facts.patched;
+		h->backup_in_the_way = (int)facts.backup_in_the_way;
+		h->opence = (int)facts.opence;
+		h->up_to_date = (int)facts.up_to_date;
+		h->retail = facts.has_retail ? package_find(&package, facts.retail_sha256) : NULL;
+		h->stock = facts.stock;
+		text_print(mark, sizeof(mark), "%s\\" BUILDING_MARK, h->path);
+		h->unfinished = GetFileAttributesA(mark) != INVALID_FILE_ATTRIBUTES;
+	}
+	else
+	{
+		examine_measure(h);
+		memset(&facts, 0, sizeof(facts));
+		facts.state = h->state;
+		facts.patched = h->patched;
+		facts.backup_in_the_way = h->backup_in_the_way;
+		facts.opence = h->opence;
+		facts.up_to_date = h->up_to_date;
+		facts.has_retail = h->retail != NULL;
+		if (h->retail)
+			memcpy(facts.retail_sha256, h->retail->retail_sha256, 32);
+		facts.stock = h->stock;
+		scan_cache_put(h->path, examine_key(h->path), &facts, sizeof(facts));   /* (after the recovery's changes) */
+	}
+	examine_describe(h);
 }
 
 static int skipped_folder(char const *name)
@@ -1413,10 +1513,13 @@ static int packs_listed;                     /* (Map Packs' list is up to date: 
 
 /* the drives looked round for Halo folders, ONCE a run: nothing but the installer changes them while it runs, so from
 then on the list is kept, and what the installer changes is looked at again by halo_changed */
+static struct halo *player_install(void);
+
 static void find_halos(void)
 {
 	static int looked;
 	char own[260], *slash, path[260];
+	unsigned long started = GetTickCount();
 	int i;
 	if (looked)
 		return;
@@ -1439,6 +1542,45 @@ static void find_halos(void)
 	}
 	looking = 0;
 	sort_halos();
+	scan_cache_save(SCAN_CACHE_PATH);
+	{
+		unsigned long hits, misses;
+		char line[160];
+		scan_cache_counts(&hits, &misses);
+		text_print(line, sizeof(line), "time: looked round the drives: %d Halo folders in %lu ms (kept facts so far: %lu used, "
+			"%lu looked at)", halo_count, GetTickCount() - started, hits, misses);
+		log_file(line);
+	}
+}
+
+/* v1.142: only what the main menu and an update need, at the start: the installer's own folder's Halo and the last
+install's (each checked: still there, still Halo 1 Unlimited). The drives are looked round (find_halos) only when a
+screen needs every Halo folder (Install, Map Packs, More, Developer), or when there's no install where the last one
+was */
+static void find_install(void)
+{
+	char own[260], *slash, path[260];
+	unsigned long started = GetTickCount();
+	int i;
+	if (halo_count)
+		return;
+	own_image(own, sizeof(own));
+	for (i = 0; i < 2 && (slash = strrchr(own, '\\')); i++)
+		*slash = 0;
+	if (from_device(own, path, sizeof(path)))
+		add_halo(path);
+	if (last_install[0])
+		add_halo(last_install);
+	sort_halos();
+	{
+		char line[160];
+		text_print(line, sizeof(line), "time: the install looked at: %d Halo folders in %lu ms", halo_count,
+			GetTickCount() - started);
+		log_file(line);
+	}
+	if (!player_install())
+		find_halos();
+	scan_cache_save(SCAN_CACHE_PATH);
 }
 
 /* the installer has changed this Halo folder (NULL: any of them): it's looked at again, added when it's new, dropped
@@ -1466,7 +1608,11 @@ static void halo_changed(char const *changed, int packs)
 			if (!halo_in(halos[i].path, &has_main))
 				continue;                  /* (gone) */
 			if (!added)
+			{
+				examine_fresh = 1;
 				examine(&halos[i]);
+				examine_fresh = 0;
+			}
 		}
 		if (n != i)
 			halos[n] = halos[i];
@@ -1476,6 +1622,8 @@ static void halo_changed(char const *changed, int packs)
 	sort_halos();
 	if (packs)
 		packs_listed = 0;
+	packs_forget();
+	scan_cache_save(SCAN_CACHE_PATH);
 }
 
 /* ---- installing ---- */
@@ -3482,7 +3630,11 @@ static void look_again(struct halo *h)
 	char path[160];
 	int i;
 	flush_drive(h->path);
+	examine_fresh = 1;
 	examine(h);
+	examine_fresh = 0;
+	packs_forget();
+	scan_cache_save(SCAN_CACHE_PATH);
 	text_print(path, sizeof(path), "%s", h->path);
 	sort_halos();
 	for (i = 0; i < halo_count; i++)
@@ -4364,7 +4516,7 @@ static void update_always_set(void)
 static void update_installed(void)
 {
 	struct halo *h;
-	find_halos();
+	find_install();                      /* (v1.142: the last install, not the drives looked round) */
 	h = player_install();
 	check_state = CHECK_NEWEST;
 	if (!h || h->up_to_date)
@@ -4677,14 +4829,23 @@ static int packs_look(char *stock, int size)
 	text_print(packs_storage, sizeof(packs_storage), "%.*s", stock[0] ? (int)strlen(stock) - 5 : 0, stock);
 	if (packs_listed)
 		return 1;
-	for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
 	{
-		struct pack_scan *scan = &pack_scans[pack_count];
-		if (!can_import(&halos[i]) || halos[i].unfinished)
-			continue;
-		packs_scan(halos[i].path, stock, scan);
-		if (scan->multiplayer || scan->campaign || scan->multiplayer_imported || scan->campaign_imported)
-			pack_count++;
+		unsigned long started = GetTickCount(), hits, misses;
+		char line[160];
+		for (i = 0, pack_count = 0; i < halo_count && pack_count < MOST_PACKS; i++)
+		{
+			struct pack_scan *scan = &pack_scans[pack_count];
+			if (!can_import(&halos[i]) || halos[i].unfinished)
+				continue;
+			packs_scan(halos[i].path, stock, scan);
+			if (scan->multiplayer || scan->campaign || scan->multiplayer_imported || scan->campaign_imported)
+				pack_count++;
+		}
+		scan_cache_save(SCAN_CACHE_PATH);
+		scan_cache_counts(&hits, &misses);
+		text_print(line, sizeof(line), "time: Map Packs looked at: %d packs in %lu ms (kept facts so far: %lu used, %lu "
+			"looked at)", pack_count, GetTickCount() - started, hits, misses);
+		log_file(line);
 	}
 	packs_listed = 1;
 	return 1;
@@ -5157,6 +5318,12 @@ static void player_main(void)
 			launch(NULL);
 		}
 		chosen = k;
+		/* (v1.142: these need every Halo folder: the drives looked round now, once a run; the list is made again) */
+		if (actions[k] == INSTALL || actions[k] == PACKS || actions[k] == MORE)
+		{
+			find_halos();
+			h = player_install();
+		}
 		switch (actions[k])
 		{
 		case INSTALL:
@@ -5257,6 +5424,7 @@ int main(void)
 		text_print(line, sizeof(line), "last install: %s", last_install);
 		log_file(line);
 	}
+	scan_cache_load(SCAN_CACHE_PATH);
 	if (exists(CONTINUE_PATH))
 	{
 		/* (started by the update it came with: Halo 1 Unlimited updated from the new package) */
@@ -5268,7 +5436,7 @@ int main(void)
 	}
 	else
 		startup_update_check();
-	find_halos();
+	find_install();                      /* (v1.142: the drives looked round only when a screen needs them) */
 	player_main();
 	return 0;
 }
