@@ -1124,6 +1124,14 @@ void main_menu_unload(
 void main_menu_load(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: nothing carried past the main menu (port/linux/game/hmp_carry.c) */
+	{
+		void hmp_carry_clear(void);
+
+		hmp_carry_clear();
+	}
+#endif
 	if (!main_globals.main_menu_scenario_loaded)
 		main_load_ui_scenario(FALSE);
 	main_screen_shell_load();
@@ -1510,6 +1518,9 @@ static void main_new_map(
 static void main_change_map_name(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	boolean from_main_menu = main_globals.main_menu_scenario_loaded;
+#endif
 	if (main_globals.main_menu_scenario_loaded == TRUE)
 	{
 		if (!main_globals.map_change_load_timer)
@@ -1557,6 +1568,20 @@ static void main_change_map_name(
 				NUMBEROF(options.map_name) - 1);
 			options.map_name[NUMBEROF(options.map_name) - 1] = 0;
 			options.difficulty = global_difficulty_level;
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: a game's script switching maps (a Halo Map Porter split level's next piece) carries the players'
+			weapons, grenades, vitality and vehicle to it; a game started from the main menu carries nothing
+			(port/linux/game/hmp_carry.c) */
+			{
+				void hmp_carry_record(void);
+				void hmp_carry_clear(void);
+
+				if (from_main_menu)
+					hmp_carry_clear();
+				else
+					hmp_carry_record();
+			}
+#endif
 			game_dispose_from_old_map();
 			game_precache_new_map(options.map_name, TRUE);
 			game_unload();
@@ -2876,6 +2901,14 @@ static void main_initialize_time(
 static void main_reset_map_private(
 	void)
 {
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: Restart mission starts the piece with its profile (port/linux/game/hmp_carry.c) */
+	{
+		void hmp_carry_clear(void);
+
+		hmp_carry_clear();
+	}
+#endif
 	if (!game_time_get_paused())
 	{
 		scenario_switch_structure_bsp(0);
