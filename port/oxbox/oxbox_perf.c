@@ -2392,6 +2392,11 @@ waypoints"): their numbers flatter the map. An earlier build's measured bot runs
 the rows are read: most of them had bots without waypoints, and they're measured again; no-bot and campaign runs, and
 the skips after a failed run, stand.
 
+v1.141: a press during a run interrupts it (not counted: showcase.c sends _oxbox_sweep_ended_interrupted) and the sweep
+goes on once the main menu has had no press for 2 minutes (showcase_idle_milliseconds): a cat on the controller costs
+a run, not the night. Back held 3 seconds on any controller (sweep_menu_frame) stops it until the next boot (at the
+main menu: a hold begun in a run is broken by the menu's loading, which a moment up of a second doesn't count).
+
 v1.134, the scaling runs (perf_sweep_scaling, on by default; never in a res_scale pass): once a map's normal runs all
 have rows, one whose slowest run averaged under SWEEP_SCALE_BELOW_FPS with the graphics chip busy SWEEP_SCALE_GPU% of
 it or more (not one the CPU holds back) plays that run again with the 3D view drawn at 85% (run 4), and when that's
@@ -2480,7 +2485,7 @@ enum
 #define SWEEP_FAIL_SECONDS 5.0
 #define SWEEP_WATCH_SECONDS 360                 /* (a run: its load, up to the showcase's 180 s, warm-up, leaving) */
 #define SWEEP_RETURN_SECONDS 180                /* (back to the main menu after a run) */
-#define SWEEP_MENU_SECONDS 180                  /* (at the main menu: the next run started; a press stands it down) */
+#define SWEEP_MENU_SECONDS 300                  /* (at the main menu: the next run started; a press stands it down) */
 #define SWEEP_SCALE_BELOW_FPS 29                /* a map whose slowest run is slower than this gets the scaling runs */
 #define SWEEP_SCALE_GPU 50                      /* ...if the graphics chip was busy this share (percent) of it, or more */
 #define SWEEP_SCALE_85 85                       /* run 4's res_scale; run 5's (when run 4 is still slow) */
@@ -2551,6 +2556,7 @@ static struct
 	boolean halted;                             /* (stopped by a press, or every map done: errors shown again) */
 	boolean at_menu;                            /* (back at the main menu, the next run not started) */
 	unsigned long menu_input;                   /* (the input clock then: a press since stands the watchdog down) */
+	__int64 back_since, back_seen;              /* (Back held since then, last seen down: 3 seconds stop it till the next boot) */
 	long scale;                                 /* (opence.ini res_scale, 1-99: a scaled pass; 0 the normal one) */
 	long pass;                                  /* (opence.ini perf_sweep_pass, 1-99: a pass of its own; 0 the normal one) */
 	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
@@ -3223,6 +3229,39 @@ static void sweep_menu_frame(
 	short ui_widget_oxbox_take_main_menu_error(void);
 	short error_code;
 
+	if (sweep.halted)
+		return;
+	/* (Back held 3 seconds on any controller: the sweep stops until the next boot) */
+	{
+		boolean back = FALSE;
+		short pad;
+		LARGE_INTEGER now;
+
+		for (pad = 0; pad < 4; pad++)
+		{
+			struct gamepad_state const *state = input_has_gamepad(pad) ? input_get_gamepad_state(pad) : NULL;
+
+			if (state && state->buttons[_gamepad_binary_button_back])
+				back = TRUE;
+		}
+		QueryPerformanceCounter(&now);
+		/* (a moment up doesn't count: the press that ends a run reloads the main menu, and the button reads up through it) */
+		if (!back)
+		{
+			if (sweep.back_since && now.QuadPart - sweep.back_seen > perf.frequency)
+				sweep.back_since = 0;
+		}
+		else if (!sweep.back_since)
+			sweep.back_since = sweep.back_seen = now.QuadPart | 1;
+		else if ((sweep.back_seen = now.QuadPart) - sweep.back_since >= perf.frequency * 3)
+		{
+			sweep.halted = TRUE;
+			sweep.at_menu = FALSE;
+			sweep_watch_off();
+			sweep_set_scale(0);
+			platform_log("perf sweep: Back held 3 seconds: the sweep stops until the next boot");
+		}
+	}
 	if (!sweep.initialized || sweep.halted)
 		return;
 	error_code = ui_widget_oxbox_take_main_menu_error();
@@ -3235,6 +3274,7 @@ static void sweep_menu_frame(
 		sweep_watch_off();
 		platform_log("perf sweep: a press at the main menu: the watchdog stands down till the next run");
 	}
+
 }
 
 /* the run ended (its row written with status); a failed one skips the map's later runs */
@@ -3603,6 +3643,8 @@ static long sweep_next(
 {
 	sweep_initialize();
 	sweep.active = sweep.measuring = sweep.over = FALSE;
+	if (sweep.halted)
+		return _oxbox_sweep_none;
 	for (; sweep.cursor < sweep.map_count; sweep.cursor++, sweep.map_ready = FALSE)
 	{
 		long run;
@@ -3728,6 +3770,15 @@ static void sweep_ended(
 		sweep_at_menu();
 	if (!sweep.active)
 		return;
+	if (how == _oxbox_sweep_ended_interrupted)
+	{
+		platform_log("perf sweep: a press interrupted %s run %ld (not counted): the sweep goes on after 2 minutes without a "
+			"press (hold Back 3 seconds at the main menu to stop it until the next boot)", sweep.key, sweep.run);
+		sweep_marker(0);
+		sweep.active = sweep.measuring = FALSE;
+		sweep_set_scale(0);
+		return;
+	}
 	if (how == _oxbox_sweep_ended_stopped)
 	{
 		platform_log("perf sweep: stopped by a press (%s run %ld isn't counted); it carries on at the next boot", sweep.key,

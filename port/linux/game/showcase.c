@@ -256,6 +256,7 @@ static struct
 	short sweep_bots;
 	boolean sweep_stopped;
 	boolean sweep_left_menu;
+	boolean sweep_paused;               /* (a press interrupted it: it goes on after 2 minutes idle) */
 } showcase;
 
 /* the perf sweep's own code here is in the perf log's XBE section (OXPERF: link.ld's .oxperf_code), loaded only
@@ -1181,6 +1182,7 @@ static SHOWCASE_SWEEP_CODE void showcase_sweep_pick(
 	short bots = 0;
 	long kind = sweep->sweep_next(key, (long)sizeof(key), &bots);
 
+	showcase.sweep_paused = FALSE;
 	showcase.sweep_kind = (short)kind;
 	if (kind == _oxbox_sweep_none)
 	{
@@ -1646,13 +1648,15 @@ static void showcase_back_at_menu(
 	showcase_set_state(_showcase_menu_return);
 }
 
-/* the perf sweep: a press stops it until the next boot, the run under way not counted */
+/* the perf sweep: a press interrupts it (v1.141: a cat on the controller), the run under way not counted; it goes on
+once the main menu has had no press for 2 minutes (showcase_idle_milliseconds). Back held 3 seconds at the main
+menu stops it until the next boot (oxbox_perf.c sweep_menu_frame) */
 static SHOWCASE_SWEEP_CODE void showcase_sweep_stop(
 	void)
 {
 	if (showcase.sweep_kind)
-		oxbox_perf->sweep_ended(_oxbox_sweep_ended_stopped);
-	showcase.sweep_stopped = TRUE;
+		oxbox_perf->sweep_ended(_oxbox_sweep_ended_interrupted);
+	showcase.sweep_paused = TRUE;
 }
 
 /* the perf sweep, each frame its run's map plays: TRUE when the run is over (measured, or failed). A campaign
@@ -1684,9 +1688,9 @@ static SHOWCASE_SWEEP_CODE void showcase_sweep_leave_solo(
 unsigned long showcase_idle_milliseconds(
 	void)
 {
-	/* (the perf sweep: its next run soon after the main menu is back) */
+	/* (the perf sweep: its next run soon after the main menu is back; after a press, 2 minutes without one) */
 	if (showcase_sweep())
-		return 5000ul;
+		return showcase.sweep_paused ? 120000ul : 5000ul;
 #if defined(HALO_XBOX_TARGET)
 	/* (the main menu's OPTIONS' ATTRACT MODE WAIT, over opence.ini's: hmp_game.c; for Halo's movies too) */
 	extern void hmp_settings_ready(void);
