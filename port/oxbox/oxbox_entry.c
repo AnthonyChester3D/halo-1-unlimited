@@ -14,6 +14,7 @@ calls oxbox_entry where it called the retail main; oxbox_entry runs OpenCE's mai
 #include <stdlib.h>
 
 #include "oxbox_overlay.h"
+#include "oxbox_perf.h"
 
 int main(void);
 int halo_linux_vsnprintf(char *buffer, size_t count, const char *format, va_list arguments);
@@ -881,6 +882,8 @@ struct oxbox_exception_registration
 	int (__cdecl *handler)(unsigned long *, void *, unsigned char *, void *);
 };
 
+void oxbox_sweep_fatal(char const *why);
+
 static int __cdecl oxbox_crash_handler(unsigned long *record, void *frame, unsigned char *context, void *dispatcher)
 {
 	static int reported;
@@ -909,7 +912,16 @@ static int __cdecl oxbox_crash_handler(unsigned long *record, void *frame, unsig
 		oxbox_log_stack("crash", &local);
 	platform_log("crash: (look the addresses up in this build's oxbox.elf)");
 	oxbox_log_flush();
+	oxbox_sweep_fatal("crash");
 	return 1;   /* (ExceptionContinueSearch) */
+}
+
+/* the game crashed (above) or halted (main.c), its report written: the perf sweep restarts H1U and goes on, rather than
+the console stopped till someone comes (oxbox_perf.c sweep_fatal); returns when there's no sweep */
+void oxbox_sweep_fatal(char const *why)
+{
+	if (oxbox_perf && oxbox_perf->sweep_fatal)
+		oxbox_perf->sweep_fatal(why);
 }
 
 int oxbox_entry(int argc, char **argv, char **envp)

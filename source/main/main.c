@@ -3146,6 +3146,12 @@ void halt_and_catch_fire(
 
 		oxbox_log_stack("halt", &here);
 		oxbox_log_flush();
+		/* (the perf sweep restarts H1U and goes on: port/oxbox/oxbox_entry.c) */
+		{
+			void oxbox_sweep_fatal(char const *why);
+
+			oxbox_sweep_fatal("halt");
+		}
 	}
 #endif
 	if (!global_screenshot_count.halt_recursion_lock)

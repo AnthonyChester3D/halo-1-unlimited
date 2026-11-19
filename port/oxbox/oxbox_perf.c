@@ -2382,6 +2382,10 @@ perf_sweep_report.py --compare sets the passes side by side. v1.137: perf_sweep_
 same way (sweep_p<pass>.csv, sweep_now_p<pass>.txt, the list), at full size and without scaling runs: the same maps
 measured again on another build, for --compare.
 
+v1.138: a crash (oxbox_entry.c's handler) or a halt (main.c) stops the console where the watchdog's thread can't run:
+both call sweep_fatal after their report, which keeps the log (sweep_hangs.txt, ", crashed") and restarts H1U; the
+run's marker stays, so the next boot writes it "crashed" and the sweep goes on.
+
 v1.134, the scaling runs (perf_sweep_scaling, on by default; never in a res_scale pass): once a map's normal runs all
 have rows, one whose slowest run averaged under SWEEP_SCALE_BELOW_FPS with the graphics chip busy SWEEP_SCALE_GPU% of
 it or more (not one the CPU holds back) plays that run again with the 3D view drawn at 85% (run 4), and when that's
@@ -3481,13 +3485,47 @@ static void sweep_restart(
 	reboot(2);
 }
 
+/* the log's last 16 KB (its ring: the next boot's log replaces oxbox_log.txt) on the end of perf\sweep_hangs.txt, headed
+with the run and what (" (after it ended)", ", crashed"...) */
+static void sweep_save_log(
+	char const *what)
+{
+	extern char oxbox_log_ring[0x4000];
+	extern unsigned long oxbox_log_ring_position;
+
+	char path[64], head[160];
+	unsigned long put, end = oxbox_log_ring_position, size = end < sizeof(oxbox_log_ring) ? end : sizeof(oxbox_log_ring);
+	unsigned long start = (end - size) & (sizeof(oxbox_log_ring) - 1);
+	SYSTEMTIME time;
+	HANDLE file;
+
+	sweep_path(path, sizeof(path), "sweep_hangs.txt");
+	file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file != INVALID_HANDLE_VALUE)
+	{
+		GetSystemTime(&time);
+		_snprintf(head, sizeof(head), "\r\n==== %04d-%02d-%02d %02d:%02d:%02d v1.%d: %s run %ld%s; the log's last %lu bytes:\r\n",
+			time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond, OXBOX_BUILD_NUMBER, sweep.key,
+			sweep.run, what, size);
+		head[sizeof(head) - 1] = 0;
+		SetFilePointer(file, 0, NULL, FILE_END);
+		WriteFile(file, head, (unsigned long)strlen(head), &put, NULL);
+		if (start + size > sizeof(oxbox_log_ring))
+		{
+			WriteFile(file, oxbox_log_ring + start, sizeof(oxbox_log_ring) - start, &put, NULL);
+			WriteFile(file, oxbox_log_ring, start + size - sizeof(oxbox_log_ring), &put, NULL);
+		}
+		else
+			WriteFile(file, oxbox_log_ring + start, size, &put, NULL);
+		CloseHandle(file);
+	}
+}
+
 /* the writer thread's look, every pass: a run that hasn't ended in time (the game hung, or sits on a black screen)
 restarts H1U, its log's last 16 KB kept and the run marked hung */
 static void sweep_watch(
 	void)
 {
-	extern char oxbox_log_ring[0x4000];
-	extern unsigned long oxbox_log_ring_position;
 	LARGE_INTEGER now;
 	long seconds = sweep_watching;
 
@@ -3505,36 +3543,26 @@ static void sweep_watch(
 	if (sweep.active)
 		sweep_marker(2);
 	oxbox_log_flush();
-	{
-		char path[64], head[160];
-		unsigned long put, end = oxbox_log_ring_position, size = end < sizeof(oxbox_log_ring) ? end : sizeof(oxbox_log_ring);
-		unsigned long start = (end - size) & (sizeof(oxbox_log_ring) - 1);
-		SYSTEMTIME time;
-		HANDLE file;
-
-		sweep_path(path, sizeof(path), "sweep_hangs.txt");
-		file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (file != INVALID_HANDLE_VALUE)
-		{
-			GetSystemTime(&time);
-			_snprintf(head, sizeof(head), "\r\n==== %04d-%02d-%02d %02d:%02d:%02d v1.%d: %s run %ld%s; the log's last %lu bytes:\r\n",
-				time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond, OXBOX_BUILD_NUMBER, sweep.key,
-				sweep.run, sweep.active ? "" : " (after it ended)", size);
-			head[sizeof(head) - 1] = 0;
-			SetFilePointer(file, 0, NULL, FILE_END);
-			WriteFile(file, head, (unsigned long)strlen(head), &put, NULL);
-			if (start + size > sizeof(oxbox_log_ring))
-			{
-				WriteFile(file, oxbox_log_ring + start, sizeof(oxbox_log_ring) - start, &put, NULL);
-				WriteFile(file, oxbox_log_ring, start + size - sizeof(oxbox_log_ring), &put, NULL);
-			}
-			else
-				WriteFile(file, oxbox_log_ring + start, size, &put, NULL);
-			CloseHandle(file);
-		}
-	}
+	sweep_save_log(sweep.active ? "" : " (after it ended)");
 	sweep_restart();
 	platform_log("perf sweep: the watchdog couldn't restart H1U");
+}
+
+/* the game crashed or halted (oxbox_entry.c's crash handler, main.c's halt, their report written): a sweep under way
+restarts H1U, its log kept, rather than leave the console stopped (a crash stops it: the watchdog's thread doesn't
+run). The run's marker stays: the next boot writes it "crashed" */
+static void sweep_fatal(
+	char const *why)
+{
+	if (!sweep.on || !sweep.initialized || sweep.halted)
+		return;
+	sweep_watching = 0;
+	platform_log("perf sweep: the game stopped (%s) in %s run %ld: restarting H1U", why, sweep.key, sweep.run);
+	oxbox_log_flush();
+	sweep_save_log(!strcmp(why, "crash") ? ", crashed" : ", halted");
+	sweep_restart();
+	platform_log("perf sweep: couldn't restart H1U after the %s", why);
+	oxbox_log_flush();
 }
 
 static long sweep_next(
@@ -4293,6 +4321,7 @@ struct oxbox_perf_hooks *oxbox_perf_start(
 		perf_hooks.sweep_frame = sweep_frame;
 		perf_hooks.sweep_ended = sweep_ended;
 		perf_hooks.sweep_spawn_shots = sweep_spawn_shots;
+		perf_hooks.sweep_fatal = sweep_fatal;
 		perf.quiet = !sweep.detail;
 		platform_log("perf sweep: on: %ld s a run%s", sweep.seconds, perf.quiet ? ", no per-second files" : "");
 	}
