@@ -51,7 +51,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 60
+#define INSTALLER_VERSION 61
 #endif
 __attribute__((used)) static struct
 {
@@ -2533,7 +2533,19 @@ static void update_progress(void *context, unsigned long done, unsigned long tot
 			text_print(e->text, sizeof(e->text), "Downloading...");
 		}
 		if (total)
-			text_print(e->right, sizeof(e->right), "%lu of %lu MB", (done + 524288) >> 20, (total + 524288) >> 20);
+		{
+			/* (a bar on the row's left, the MB on its right) */
+			int bar = (int)((unsigned long long)done * 30 / total), i;
+			for (i = 0; i < 30; i++)
+				e->text[i] = i < bar ? '#' : '.';
+			e->text[30] = 0;
+			/* (tenths of a MB for a small one: a 3 MB update isn't "0 of 3" for a while) */
+			if (total < (100ul << 20))
+				text_print(e->right, sizeof(e->right), "%lu.%lu of %lu.%lu MB", done >> 20, (done % (1ul << 20)) * 10 >> 20,
+					total >> 20, (total % (1ul << 20)) * 10 >> 20);
+			else
+				text_print(e->right, sizeof(e->right), "%lu of %lu MB", (done + 524288) >> 20, (total + 524288) >> 20);
+		}
 		else
 			text_print(e->right, sizeof(e->right), "%lu MB", (done + 524288) >> 20);
 		receipt_show();
@@ -4537,7 +4549,7 @@ CONTINUE_PATH); then Halo 1 Unlimited updated */
 static void update_go(void)
 {
 	int changed;
-	task_begin("Updating Halo 1 Unlimited", "Updating Halo 1 Unlimited (a minute or two)...");
+	task_begin("Updating Halo 1 Unlimited", "Updating...");
 	auto_mode = 1;
 	changed = check_updates();
 	if (changed && package_ok && package.installer_version > INSTALLER_VERSION && trusted(signature))
