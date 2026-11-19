@@ -1820,7 +1820,7 @@ void scenario_structure_bsp_unload(
 	return;
 }
 
-#if defined(HALO_XBOX_TARGET)
+#if defined(HALO_XBOX_TARGET) && !defined(OXBOX_NO_FAST_LOOKUPS)
 static __attribute__((noinline)) void *tag_get_checked(
 	long group_tag,
 	long tag_index);

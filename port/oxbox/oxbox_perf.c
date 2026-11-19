@@ -2386,6 +2386,12 @@ v1.138: a crash (oxbox_entry.c's handler) or a halt (main.c) stops the console w
 both call sweep_fatal after their report, which keeps the log (sweep_hangs.txt, ", crashed") and restarts H1U; the
 run's marker stays, so the next boot writes it "crashed" and the sweep goes on.
 
+v1.139: the bots count the perf log's own memory as free (bots.c oxbox_perf_footprint), as a player's game would have
+it, and a row whose bots still came up short says so in its limits ("bots without waypoints", "bots missing
+waypoints"): their numbers flatter the map. An earlier build's measured bot runs (1, 2, 4, 5) aren't counted when
+the rows are read: most of them had bots without waypoints, and they're measured again; no-bot and campaign runs, and
+the skips after a failed run, stand.
+
 v1.134, the scaling runs (perf_sweep_scaling, on by default; never in a res_scale pass): once a map's normal runs all
 have rows, one whose slowest run averaged under SWEEP_SCALE_BELOW_FPS with the graphics chip busy SWEEP_SCALE_GPU% of
 it or more (not one the CPU holds back) plays that run again with the 3D view drawn at 85% (run 4), and when that's
@@ -2715,6 +2721,23 @@ static void sweep_read_line(
 	/* (v1.132-v1.135 skipped campaign levels as bad maps, the multiplayer list's reason: not counted) */
 	if (!strcmp(status, "bad_map") && strstr(line, "isn't a multiplayer map"))
 		return;
+	/* (before v1.139 the sweep's bots mostly went without waypoints, the sweep's own memory under their reserve: an
+	earlier build's measured bot run isn't counted, and is measured again) */
+	if ((run[0] == '1' || run[0] == '2' || run[0] == '4' || run[0] == '5') &&
+		(!strcmp(status, "ok") || !strcmp(status, "fail_fps")))
+	{
+		char const *build = line;
+		long field;
+
+		for (field = 0; field < 5 && build; field++)
+		{
+			build = strchr(build, ',');
+			if (build)
+				build++;
+		}
+		if (build && !strncmp(build, "v1.", 3) && strtol(build + 3, NULL, 10) < 139)
+			return;
+	}
 	done = sweep_find(sweep_hash(key), strtoul(identity, NULL, 16), TRUE);
 	if (!done)
 		return;
@@ -3138,7 +3161,15 @@ static void sweep_row(
 	if (sweep.problem)
 		_snprintf(text, sizeof(text), "problem: %s", sweep.problem), text[sizeof(text) - 1] = 0;
 	else if (strcmp(status, "skipped") && strcmp(status, "crashed") && strcmp(status, "hung"))
+	{
+		extern long bots_oxbox_short;
+
 		oxbox_limits_text(text, sizeof(text));
+		/* (the bots short of memory: their numbers flatter the map) */
+		if (bots_oxbox_short && strlen(text) < sizeof(text) - 40)
+			strcat(text, bots_oxbox_short == 2 ? (text[0] ? ";bots without waypoints" : "bots without waypoints") :
+				(text[0] ? ";bots missing waypoints" : "bots missing waypoints"));
+	}
 	sweep_put_text(&line, text);
 	line.text[line.length++] = '\r';
 	line.text[line.length++] = '\n';
@@ -3609,6 +3640,11 @@ static long sweep_next(
 		}
 		sweep_marker(1);
 		sweep.at_menu = FALSE;
+		{
+			extern long bots_oxbox_short;
+
+			bots_oxbox_short = 0;
+		}
 		sweep_set_scale(run);
 		sweep_watch_on(sweep.seconds + SWEEP_WATCH_SECONDS);
 		sweep.active = TRUE;
@@ -4315,6 +4351,11 @@ struct oxbox_perf_hooks *oxbox_perf_start(
 	}
 	calibrate_hooks();
 	/* the perf sweep (opence.ini perf_sweep = 1): its hooks for the showcase */
+	{
+		extern unsigned long oxbox_perf_footprint;
+
+		oxbox_perf_footprint = (unsigned long)(((__oxperf_end - __oxperf_start) + 0xFFF) & ~0xFFF) + WRITER_STACK_SIZE;
+	}
 	if (sweep.on)
 	{
 		perf_hooks.sweep_next = sweep_next;
