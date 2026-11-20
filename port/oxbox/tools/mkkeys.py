@@ -1,4 +1,5 @@
-"""mkkeys.py keys.txt keys.h: the public keys the installer trusts, as C (port/oxbox/installer/nxdk.mk runs it).
+"""mkkeys.py keys.txt keys.h [PREFIX]: the public keys the installer trusts, as C (port/oxbox/installer/nxdk.mk runs it;
+PREFIX names the table, PREFIX_keys and PREFIX_key_count: "trusted" by default, "library" for library_keys.txt).
 keys.txt has a "name id public" line for each (port/oxbox/tools/oxsign.py keygen prints it); keys.h is written only
 when it changes."""
 import hashlib, os, sys
@@ -6,6 +7,7 @@ import hashlib, os, sys
 
 def main():
     source, out = sys.argv[1], sys.argv[2]
+    prefix = sys.argv[3] if len(sys.argv) > 3 else 'trusted'
     keys = []
     for number, text in enumerate(open(source, encoding='ascii'), 1):
         text = text.split('#', 1)[0].strip()
@@ -19,12 +21,12 @@ def main():
         keys.append(parts)
     hexes = lambda h: ', '.join('0x' + h[i:i + 2] for i in range(0, len(h), 2))
     lines = ['/* keys.h: the public keys the installer trusts, made by port/oxbox/tools/mkkeys.py from %s */' %
-             os.path.basename(source), 'static struct package_key const trusted_keys[] = {']
+             os.path.basename(source), 'static struct package_key const %s_keys[] = {' % prefix]
     for name, kid, public in keys:
         lines.append('\t{"%s", {%s},\n\t\t{%s}},' % (name, hexes(kid), hexes(public)))
     if not keys:
         lines.append('\t{"", {0}, {0}},')
-    lines += ['};', 'static int const trusted_key_count = %d;' % len(keys), '']
+    lines += ['};', 'static int const %s_key_count = %d;' % (prefix, len(keys)), '']
     text = '\n'.join(lines)
     if not os.path.exists(out) or open(out).read() != text:
         open(out, 'w').write(text)
