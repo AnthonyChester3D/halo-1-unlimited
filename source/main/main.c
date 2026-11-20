@@ -1131,11 +1131,12 @@ void main_menu_load(
 	void)
 {
 #if defined(HALO_XBOX_TARGET)
-	/* oxbox: nothing carried past the main menu (port/linux/game/hmp_carry.c) */
+	/* oxbox: nothing carried past the main menu, but a network co-op host's lobby between pieces
+	(port/linux/game/hmp_carry.c) */
 	{
-		void hmp_carry_clear(void);
+		void hmp_carry_menu(void);
 
-		hmp_carry_clear();
+		hmp_carry_menu();
 	}
 #endif
 	if (!main_globals.main_menu_scenario_loaded)
@@ -1579,13 +1580,13 @@ static void main_change_map_name(
 			weapons, grenades, vitality and vehicle to it; a game started from the main menu carries nothing
 			(port/linux/game/hmp_carry.c) */
 			{
-				void hmp_carry_record(void);
+				void hmp_carry_record(char const *target);
 				void hmp_carry_clear(void);
 
 				if (from_main_menu)
 					hmp_carry_clear();
 				else
-					hmp_carry_record();
+					hmp_carry_record(options.map_name);
 			}
 #endif
 			game_dispose_from_old_map();
@@ -2453,10 +2454,24 @@ void main_set_map_name(
 		extern boolean hmp_maps_resolve(char const *name, char const *current, char *out, long size);
 		static char resolved[256];
 
+		/* (a network co-op game's map is the network game's) */
+		struct network_game *network = main_globals.connection == _game_connection_network_server &&
+			network_coop_active() ? network_game_get_game() : NULL;
+
 		if (map_name && (map_name[0] == '+' || main_get_solo_level_from_name(map_name) == NONE) &&
-			hmp_maps_resolve(map_name, main_globals.soloplayer_map_name, resolved, (long)sizeof(resolved)))
+			hmp_maps_resolve(map_name, network ? network->map.name : main_globals.soloplayer_map_name, resolved,
+				(long)sizeof(resolved)))
 		{
 			map_name = resolved;
+		}
+		/* oxbox (v1.144): a network co-op host's script switches every console's map: done from the main loop
+		(port/linux/game/hmp_carry.c hmp_carry_coop_update) */
+		if (map_name && network && game_in_progress())
+		{
+			void hmp_carry_coop_switch_ask(char const *map_name);
+
+			hmp_carry_coop_switch_ask(map_name);
+			return;
 		}
 	}
 #endif
@@ -3710,6 +3725,14 @@ static boolean main_loop_iteration(
 			{
 				main_change_map_name();
 			}
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: a network co-op host's script's map switch (port/linux/game/hmp_carry.c) */
+			{
+				void hmp_carry_coop_update(void);
+
+				hmp_carry_coop_update();
+			}
+#endif
 
 			if (main_globals.revert_map)
 			{
@@ -3785,6 +3808,9 @@ static boolean main_loop_iteration(
 			render_frame = TRUE;
 
 			/* automated system link tests (port/linux/game/network_test.c) */
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_COOP_TEST)
+			network_test_update(main_globals.main_menu_scenario_loaded, main_globals.seconds_elapsed);
+#endif
 #if !defined(HALO_XBOX_TARGET) /* oxbox: no network tests, voice chat or PC map sharing on the Xbox */
 			network_test_update(main_globals.main_menu_scenario_loaded, main_globals.seconds_elapsed);
 			/* port: a dedicated server's hosting, rotation and commands

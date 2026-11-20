@@ -2466,6 +2466,11 @@ boolean network_game_server_game_is_open(
 	match_assert(NETWORK_SERVER_MANAGER_FILE, 0x214, server);
 
 	game_is_open = TEST_FLAG(server->flags, _network_game_server_game_open_bit);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a locked co-op game takes no console new to it (network_game_server_port_lock) */
+	if (TEST_FLAG(server->game.cooperative_flags, _network_game_locked_bit))
+		game_is_open = FALSE;
+#endif
 	/* port: the game stays open in progress (a machine may join it), but
 	not while the machines load it, nor once it is over */
 	if ((server->state == _network_game_server_state_pregame && server->sent_start_game_message) ||
@@ -5347,6 +5352,20 @@ void network_game_server_port_set_settings(
 		network_game_server_port_settings_apply(server);
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.144): a network co-op host's script's map_name (port/linux/game/hmp_carry.c): the round ends as when a
+level is won, the piece the next map, and the next round starts by itself once every console has the map (a console
+without it downloads it from the host first): network_game_server_idle_pregame_tasks */
+static boolean network_game_server_cooperative_autostart;
+
+void network_game_server_port_cooperative_switch(
+	char const *next_map)
+{
+	network_game_server_port_cooperative_won(next_map);
+	network_game_server_cooperative_autostart = TRUE;
+}
+#endif
+
 void network_game_server_port_cooperative_won(
 	char const *next_map)
 {
@@ -5400,14 +5419,41 @@ void network_game_server_port_set_cooperative(
 	if (!server || server->state != _network_game_server_state_pregame)
 		return;
 	server->game.difficulty = difficulty;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: four (a campaign level's AI and the host's syncing of it leave no room for more on a console); open */
+	server->game.maximum_players = MIN(4, MAXIMUM_NETWORK_PLAYER_COUNT);
+	SET_FLAG(server->game.cooperative_flags, _network_game_locked_bit, FALSE);
+#else
 	/* (Server Setup's default for co-op, menu_functions.c's
 	COOPERATIVE_DEFAULT_PLAYERS, until it sets its own) */
 	server->game.maximum_players = MIN(16, MAXIMUM_NETWORK_PLAYER_COUNT);
+#endif
 	if (!network_game_server_send_game_data_pregame(server))
 		network_event("network_game_server_port_set_cooperative() failed to send updated game settings to clients");
 
 	return;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: HOST CO-OP GAME's lock (the lobby's Y, port/linux/game/bots.c): locked, no console new to the game joins it,
+in the lobby or in the game; the consoles in it stay, and the lobby says it's locked on all of them */
+void network_game_server_port_lock(
+	boolean locked)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	extern void platform_log(char const *format, ...);
+
+	if (!server)
+		return;
+	SET_FLAG(server->game.cooperative_flags, _network_game_locked_bit, locked);
+	platform_log("co-op: %slocked", locked ? "" : "un");
+	if (server->state == _network_game_server_state_pregame &&
+		!network_game_server_send_game_data_pregame(server))
+	{
+		network_event("the lock's settings weren't sent");
+	}
+}
+#endif
 
 void network_game_server_port_set_cooperative_friendly_fire(
 	short friendly_fire)
@@ -6137,6 +6183,61 @@ static boolean network_game_server_idle_pregame_tasks(
 	if (!server->sent_start_game_message)
 	{
 		network_game_server_update_download_marks(server);
+		/* oxbox: a co-op piece's switch starts the next round itself, once every console has the map */
+		/* (kept till the start goes out: the lobby's countdown is cleared whenever a console isn't ready yet, so the
+		start is asked again each time; the countdown then waits for every console to have the map precached) */
+		if (network_game_server_cooperative_autostart && server->sent_start_game_message)
+			network_game_server_cooperative_autostart = FALSE;
+#if defined(OXBOX_COOP_TEST)
+		if (network_game_server_cooperative_autostart)
+		{
+			static unsigned long said;
+			unsigned long now_ms = system_milliseconds();
+			long m;
+
+			if (now_ms - said > 10000)
+			{
+				extern void platform_log(char const *format, ...);
+
+				said = now_ms;
+				platform_log("co-op test: server: state %d, countdown %s %ld ms (paused %d), ok %d, all precached %d, map %s",
+					(int)server->state, server->countdown_state.active ? "on" : "off",
+					countdown_timer_get_time_remaining(&server->countdown_state.timer), (int)server->countdown_state.paused,
+					(int)server_ok_to_countdown(server), (int)network_game_server_have_all_machines_have_precached(server),
+					server->game.map.name);
+				for (m = 0; m < MAXIMUM_NETWORK_MACHINE_COUNT; m++)
+				{
+					struct network_game_server_client_machine *machine = server->client_machines + m;
+
+					if (network_game_server_client_machine_is_joined_to_game(server, machine))
+						platform_log("co-op test: server: machine %ld (index %d): flags %08lx, players %d, needs map %d",
+							m, (int)machine->machine_index, (unsigned long)machine->flags,
+							(int)network_game_server_machine_has_players(server, machine->machine_index),
+							(int)map_share_machine_needs_map(machine->machine_index));
+				}
+			}
+		}
+#endif
+		/* (the scores' map choice holds the countdown till the host picks the next map, ui_widget.c: the piece's
+		switch picked it) */
+		if (network_game_server_cooperative_autostart && server->state == _network_game_server_state_pregame &&
+			server->countdown_state.paused)
+		{
+			network_game_server_pause_countdown(server, FALSE);
+		}
+		if (network_game_server_cooperative_autostart && server->state == _network_game_server_state_pregame &&
+			!server->countdown_state.active && server_ok_to_countdown(server))
+		{
+			extern void platform_log(char const *format, ...);
+			static char said[64];
+
+			if (strncmp(said, server->game.map.name, sizeof(said) - 1))
+			{
+				strncpy(said, server->game.map.name, sizeof(said) - 1);
+				platform_log("co-op: %s starts once every console has it", server->game.map.name);
+			}
+			network_game_server_update_countdown(server, _network_game_server_countdown_event_start_immediately);
+		}
 		if (network_game_server_start_wanted && server->state == _network_game_server_state_pregame &&
 			!server->countdown_state.active && server_ok_to_countdown(server))
 		{
@@ -6146,7 +6247,10 @@ static boolean network_game_server_idle_pregame_tasks(
 		}
 	}
 	else
+	{
 		network_game_server_start_wanted = FALSE;
+		network_game_server_cooperative_autostart = FALSE;
+	}
 #endif
 
 	/* port: a machine that finished downloading the map after the others

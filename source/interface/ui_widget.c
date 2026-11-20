@@ -2022,6 +2022,17 @@ void display_error_text_when_main_menu_loaded(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_NET_P2P)
+/* oxbox: a screen opened from widget as an event handler's "open widget" does (its history kept: B comes back), for
+HOST CO-OP GAME's screens (port/linux/game/hmp_online.c, ui_widget_event_handler_functions.c) */
+struct widget_instance *ui_widget_port_launch(
+	struct widget_instance *widget,
+	long tag_index)
+{
+	return tag_index == NONE ? NULL : ui_widget_launch_widget(widget, tag_index);
+}
+#endif
+
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: the perf sweep (port/oxbox/oxbox_perf.c): the error waiting for the main menu taken (NONE: none), so an
 unattended sweep never stops at its dialog (a map that can't load in the showcase's system link game ends it with

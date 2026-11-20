@@ -653,6 +653,31 @@ static void read_settings(const char *path)
 			continue;
 		}
 #endif
+#if defined(OXBOX_NET_P2P) && defined(OXBOX_COOP_TEST)
+		/* (the co-op test build: "debug.<name> = <value>" lines set the PC's config.toml debug settings, e.g.
+		port/linux/game/network_test.c's debug.network_test = host:levels\b30\b30:coop) */
+		if (!strncmp(name, "debug.", 6))
+		{
+			extern void oxbox_config_set(const char *name, const char *value);
+			static char names[6][48];
+			static int used;
+			char text[192];
+			int length = 0;
+
+			if (used < 6)
+			{
+				while (*p && *p != '\r' && *p != '\n' && length < (int)sizeof(text) - 3)
+					text[length++] = *p++;
+				while (length && (text[length - 1] == ' ' || text[length - 1] == '\t'))
+					length--;
+				text[length] = 0;
+				strncpy(names[used], name, sizeof(names[used]) - 1);
+				oxbox_config_set(names[used++], text);
+				platform_log("settings: %s = %s from %s", name, text, path);
+			}
+			continue;
+		}
+#endif
 #if defined(OXBOX_NET_P2P)
 		/* (internet play's lists: host:port, host:port ...; port/oxbox/net/p2p/oxbox_p2p_glue.c, port/linux/src/p2p.c) */
 		if (same_text(name, "online_brokers") || same_text(name, "online_stun"))

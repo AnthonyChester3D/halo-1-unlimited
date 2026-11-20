@@ -69,6 +69,9 @@ enum
 	dedicated server's server.host_scripts): network_scripts_host_only. The
 	byte's last bit, clear of the co-op bits OpenCE may add */
 	_network_game_host_scripts_bit = 7,
+	/* oxbox: a co-op lobby its host locked (HOST CO-OP GAME's Y): no console new to it joins, in the lobby or the game
+	(network_server_manager.c's network_game_server_port_lock); its clients' lobbies say so */
+	_network_game_locked_bit = 6,
 };
 
 struct network_game

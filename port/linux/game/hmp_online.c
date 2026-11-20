@@ -81,7 +81,9 @@ enum
 	/* our texts (hmp.h's HMP_ONLINE_STRING_BASE on) */
 	_string_online_item = HMP_ONLINE_STRING_BASE,
 	_string_online_description,
-	NUMBER_OF_ONLINE_STRINGS = 2,
+	_string_coop_item,
+	_string_coop_description,
+	NUMBER_OF_ONLINE_STRINGS = 4,
 	/* the Multiplayer list's items, as its extended description counts them, and their pictures (mp_options) */
 	MULTIPLAYER_SYSTEM_LINK_INDEX = 2,
 	MULTIPLAYER_ONLINE_INDEX = 3,
@@ -94,6 +96,9 @@ enum
 
 #define MULTIPLAYER_SCREEN "multiplayer_type_select_screen"
 #define SYSTEM_LINK_ITEM "multiplayer_type_conn_item"
+/* (HOST CO-OP GAME is a copy of SPLIT SCREEN's item: its definition's index is ours alone, as ONLINE PLAY's copy of
+SYSTEM LINK PLAY's has the other form of that one's; its own handlers never run: hmp_online_dispatch takes its A) */
+#define SPLIT_SCREEN_ITEM "multiplayer_type_split_item"
 /* (a widget's name is its definition's own: EDIT GAMETYPES' and the line's, not the names the screen gives them,
 "edit_gametypes" and "blue line") */
 #define GAMETYPES_ITEM "multiplayer_type_gametypes_item"
@@ -101,11 +106,14 @@ enum
 #define FOUND_GAMES_HEADER "ui\\shell\\main_menu\\multiplayer_type_select\\connected\\server_list\\header_found_games"
 #define SERVER_LIST_SCREEN "server_list_screen"
 #define XBOX_PICTURE "ui\\shell\\bitmaps\\console_grafix"
+#define COOP_PROFILES_SCREEN "ui\\shell\\main_menu\\player_profiles_select\\solo_game_player_profile_select_screen"
 
 static char const *const online_strings[NUMBER_OF_ONLINE_STRINGS] =
 {
 	"ONLINE PLAY",
 	"Play over the internet with \r\nother Xboxes running Halo 1 \r\nUnlimited: up to 16 players.",
+	"HOST CO-OP GAME",
+	"Play the campaign together, \r\neach on your own Xbox, over \r\nsystem link: up to 4 players.",
 };
 
 /* ---------- structures */
@@ -204,6 +212,14 @@ struct widget_instance *ui_widget_load_by_name_or_tag(char const *name, long tag
 struct widget_instance *ui_widget_get_active_widget(short local_player_index);
 int oxbox_xbe_online_header_read(void *buffer, unsigned long size);   /* (oxbox_entry.c: the XBE's ONLINE GAMES) */
 void p2p_set_hosting_allowed(int allowed);
+struct widget_instance *ui_widget_port_launch(struct widget_instance *widget, long tag_index);
+long tag_loaded(long group_tag, char const *name);
+void *tag_get(long group_tag, long tag_index);
+void *global_network_game_server_get(void);
+void *global_network_game_client_get(void);
+void dispose_global_network_game_server(void);
+void dispose_global_network_game_client(void);
+void network_game_accept_remote_connections(boolean accept);
 
 extern int oxbox_online;                                               /* (opence.ini online, oxbox_lwip_ws.c) */
 boolean network_game_client_advertised_index_on_xbox(long game_index);   /* (network_client_manager.c) */
@@ -235,12 +251,15 @@ static struct
 	boolean joining;
 	unsigned char identifier[6];
 	unsigned long time;
-	/* each local player's Multiplayer screen, patched, and its ONLINE PLAY item's datum */
+	/* each local player's Multiplayer screen, patched, and its ONLINE PLAY and HOST CO-OP GAME items' datums */
 	struct widget_instance *screen[4];
 	long screen_time[4];
 	long item[4];
-	/* the Multiplayer screen comes back (B from the games list): ONLINE PLAY gets the focus */
-	boolean focus[4];
+	long coop_item[4];
+	/* HOST CO-OP GAME chosen: the campaign's screens lead to a co-op lobby (hmp_coop_hosting) */
+	boolean coop_hosting;
+	/* the Multiplayer screen comes back (B from the games list): ONLINE PLAY (1) or HOST CO-OP GAME (2) gets the focus */
+	char focus[4];
 	wchar_t strings[NUMBER_OF_ONLINE_STRINGS][128];
 	struct bitmap_data header;
 	/* the games list: all its rows (the LAN's or the reached hosts', then those listed online; Xboxes' first), which
@@ -293,19 +312,74 @@ static void set_mode(boolean on)
 	p2p_set_hosting_public(on);
 }
 
-/* the Multiplayer screen (each local player's): ONLINE PLAY after SYSTEM LINK PLAY */
+/* an item made from model's definition (SYSTEM LINK PLAY's, by its index alone), put after after, a row lower, its text
+string; EDIT GAMETYPES and the line above it a row lower too */
+static struct widget_instance *item_insert(struct widget_instance *root, struct widget_instance *list,
+	struct widget_instance *model, struct widget_instance *after, struct widget_instance *gametypes, short local,
+	short string)
+{
+	struct widget_instance *item, *c;
+	short step;
+
+	item = ui_widget_load_by_name_or_tag(NULL, model->definition_tag_index & 0xffff, list, local, NONE, NONE, NONE);
+	if (!item)
+		return NULL;
+	/* (made as the list's child; moved to just after after) */
+	if (item->previous)
+		item->previous->next = item->next;
+	else if (list->child == item)
+		list->child = item->next;
+	if (item->next)
+		item->next->previous = item->previous;
+	item->previous = after;
+	item->next = after->next;
+	if (after->next)
+		after->next->previous = item;
+	after->next = item;
+	step = (short)(model->vertical_offset - model->previous->vertical_offset);
+	if (step <= 0 || step > 80)
+		step = 33;
+	/* (an instance's offsets are from its definition's own place: a copy of another item's, moved by the difference) */
+	{
+		short const *after_bounds = (short const *)((char const *)tag_get('DeLa', after->definition_tag_index) + 0x24);
+		short const *model_bounds = (short const *)((char const *)tag_get('DeLa', model->definition_tag_index) + 0x24);
+
+		item->horizontal_offset = (short)(after->horizontal_offset + after_bounds[1] - model_bounds[1]);
+		item->vertical_offset = (short)(after->vertical_offset + step + after_bounds[0] - model_bounds[0]);
+	}
+	item->parameters.text_box.string_list_index = string;
+	if (gametypes)
+		gametypes->vertical_offset += step;
+	/* (and the line between the items and EDIT GAMETYPES, the screen's own child) */
+	for (c = root->child; c; c = c->next)
+		if (name_is(c, DIVIDER))
+			c->vertical_offset += step;
+	return item;
+}
+
+/* the Multiplayer screen (each local player's): ONLINE PLAY after SYSTEM LINK PLAY, then HOST CO-OP GAME */
 static void multiplayer_patch(short local, struct widget_instance *root)
 {
-	struct widget_instance *list = NULL, *c, *link = NULL, *gametypes = NULL, *item;
-	short step;
+	struct widget_instance *list = NULL, *c, *link = NULL, *split = NULL, *gametypes = NULL, *item, *after;
 
 	online.screen[local] = root;
 	online.screen_time[local] = root->creation_time;
 	online.item[local] = 0;
+	online.coop_item[local] = 0;
 	/* (the games list opened from here starts at its top) */
 	online.top = 0;
-	if (!oxbox_online)
-		return;
+	/* (back from HOST CO-OP GAME's screens: its lobby, if it got that far, closed) */
+	if (online.coop_hosting)
+	{
+		online.coop_hosting = FALSE;
+		if (global_network_game_server_get() || global_network_game_client_get())
+		{
+			dispose_global_network_game_client();
+			dispose_global_network_game_server();
+			network_game_accept_remote_connections(FALSE);
+			platform_log("co-op: lobby closed");
+		}
+	}
 	for (c = root->child; c && !list; c = c->next)
 		if (c->type == 3)
 			list = c;
@@ -313,6 +387,8 @@ static void multiplayer_patch(short local, struct widget_instance *root)
 	{
 		if (name_is(c, SYSTEM_LINK_ITEM))
 			link = c;
+		else if (name_is(c, SPLIT_SCREEN_ITEM))
+			split = c;
 		else if (name_is(c, GAMETYPES_ITEM))
 			gametypes = c;
 	}
@@ -321,39 +397,22 @@ static void multiplayer_patch(short local, struct widget_instance *root)
 		platform_log("online: the Multiplayer screen has no SYSTEM LINK PLAY to put ONLINE PLAY under");
 		return;
 	}
-	item = ui_widget_load_by_name_or_tag(NULL, link->definition_tag_index & 0xffff, list, local, NONE, NONE, NONE);
-	if (!item)
-		return;
-	/* (made as the list's child; moved to just after SYSTEM LINK PLAY) */
-	if (item->previous)
-		item->previous->next = item->next;
-	else if (list->child == item)
-		list->child = item->next;
-	if (item->next)
-		item->next->previous = item->previous;
-	item->previous = link;
-	item->next = link->next;
-	if (link->next)
-		link->next->previous = item;
-	link->next = item;
-	step = (short)(link->vertical_offset - link->previous->vertical_offset);
-	if (step <= 0 || step > 80)
-		step = 33;
-	item->horizontal_offset = link->horizontal_offset;
-	item->vertical_offset = (short)(link->vertical_offset + step);
-	item->parameters.text_box.string_list_index = _string_online_item;
-	if (gametypes)
-		gametypes->vertical_offset += step;
-	/* (and the line between SYSTEM LINK PLAY and EDIT GAMETYPES, the screen's own child: under ONLINE PLAY now) */
-	for (c = root->child; c; c = c->next)
-		if (name_is(c, DIVIDER))
-			c->vertical_offset += step;
-	online.item[local] = item->definition_tag_index;
-	if (online.focus[local])
+	after = link;
+	if (oxbox_online && (item = item_insert(root, list, link, link, gametypes, local, _string_online_item)) != NULL)
 	{
-		online.focus[local] = FALSE;
-		list->focused_child = item;
+		online.item[local] = item->definition_tag_index;
+		after = item;
+		if (online.focus[local] == 1)
+			list->focused_child = item;
 	}
+	if (split && split->previous &&
+		(item = item_insert(root, list, split, after, gametypes, local, _string_coop_item)) != NULL)
+	{
+		online.coop_item[local] = item->definition_tag_index;
+		if (online.focus[local] == 2)
+			list->focused_child = item;
+	}
+	online.focus[local] = 0;
 }
 
 #if defined(OXBOX_OFFLINE_SYSTEM_LINK)
@@ -435,7 +494,7 @@ static boolean games_list_scroll(struct widget_instance *root, struct event_reco
 
 /* a local player's top menu is about to get an event (hmp_options_dispatch): A or Start on SYSTEM LINK PLAY or ONLINE
 PLAY sets the mode (the item's own handler runs after); up and down in the games list scroll it. TRUE: taken */
-boolean hmp_online_dispatch(struct widget_instance *root, struct event_record *event)
+long hmp_online_dispatch(struct widget_instance *root, struct event_record *event)
 {
 	struct widget_instance *list, *item;
 	short local;
@@ -463,46 +522,65 @@ boolean hmp_online_dispatch(struct widget_instance *root, struct event_record *e
 	item = list ? list->focused_child : NULL;
 	if (!item)
 		return FALSE;
+	if (online.coop_item[local] && item->definition_tag_index == online.coop_item[local])
+	{
+		/* (HOST CO-OP GAME: the campaign's profile screen, then its campaigns, levels and difficulty, whose last A
+		opens the co-op lobby in place of starting the level: ui_widget_event_handler_functions.c) */
+		long profiles = tag_loaded('DeLa', COOP_PROFILES_SCREEN);
+
+		set_mode(FALSE);
+		online.coop_hosting = TRUE;
+		online.focus[local] = 2;
+		platform_log("co-op: HOST CO-OP GAME");
+		if (ui_widget_port_launch(item, profiles))
+			return 2;
+		online.coop_hosting = FALSE;
+		return 0;
+	}
 	if (online.item[local] && item->definition_tag_index == online.item[local])
 	{
 		set_mode(TRUE);
-		online.focus[local] = TRUE;
+		online.focus[local] = 1;
 	}
 	else if (name_is(item, SYSTEM_LINK_ITEM))
 	{
 		set_mode(FALSE);
-		online.focus[local] = FALSE;
+		online.focus[local] = 0;
 	}
 	else
-		online.focus[local] = FALSE;
-	return FALSE;
+		online.focus[local] = 0;
+	return 0;
+}
+
+/* HOST CO-OP GAME chosen, and its lobby not closed (the campaign's screens open the co-op lobby, not the level) */
+boolean hmp_coop_hosting(void)
+{
+	return online.coop_hosting;
 }
 
 /* the Multiplayer list's extended description (multiplayer_type_menu_update_extended_description, after it set the
 picture and text to the focused item's count, index): ONLINE PLAY's, and the items' after it as without it */
 void hmp_online_multiplayer_description(struct widget_instance *list, short index, short *picture, short *text)
 {
-	struct widget_instance *c;
-	boolean ours = FALSE;
-	short local;
+	short local, online_at, coop_at;
 
 	/* (the screen's local player: the menus' widgets have none of their own) */
 	for (local = 0; local < 4 && (!list || online.screen[local] != list->parent); local++)
 		;
-	if (local > 3 || !online.item[local] || index < MULTIPLAYER_ONLINE_INDEX)
+	if (local > 3)
 		return;
-	for (c = list->child; c && !ours; c = c->next)
-		ours = c->definition_tag_index == online.item[local];
-	if (!ours)
-		return;
-	if (index == MULTIPLAYER_ONLINE_INDEX)
+	/* (ours come right after SYSTEM LINK PLAY, in order: the description counts the items) */
+	online_at = online.item[local] ? MULTIPLAYER_SYSTEM_LINK_INDEX + 1 : NONE;
+	coop_at = !online.coop_item[local] ? NONE : online.item[local] ? MULTIPLAYER_SYSTEM_LINK_INDEX + 2 :
+		MULTIPLAYER_SYSTEM_LINK_INDEX + 1;
+	if (index == online_at || index == coop_at)
 	{
 		/* (SYSTEM LINK PLAY's picture, our text) */
 		*picture = MULTIPLAYER_SYSTEM_LINK_INDEX;
-		*text = _string_online_description;
+		*text = index == online_at ? _string_online_description : _string_coop_description;
 	}
 	else
-		*picture = *text = (short)(index - 1);
+		*picture = *text = (short)(index - (online_at != NONE && index > online_at) - (coop_at != NONE && index > coop_at));
 }
 
 wchar_t *hmp_online_string(short index)

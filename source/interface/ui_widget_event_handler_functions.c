@@ -2181,11 +2181,66 @@ static boolean player_profile_end_editing(
 	return TRUE;
 }
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_NET_P2P)
+static boolean network_game_start_new_server(struct widget_instance *widget, struct event_record *event,
+	boolean *widget_deleted);
+
+/* oxbox: HOST CO-OP GAME (port/linux/game/hmp_online.c): the difficulty's A, the last of the campaign's screens, opens a
+co-op system link lobby on the level and difficulty chosen, in place of starting the level: the server made as the
+games list's Y does, the profile chosen the console's player in it (its controller's), and the lobby's screen opened
+as the gametype's A does. FALSE: not hosting co-op */
+static boolean coop_host_start(
+	struct widget_instance *widget,
+	struct event_record *event,
+	boolean *widget_deleted)
+{
+	boolean hmp_coop_hosting(void);
+	struct widget_instance *ui_widget_port_launch(struct widget_instance *widget, long tag_index);
+	boolean ui_widget_port_cooperative_level_choose(char const *map_name, short difficulty);
+	void platform_log(char const *format, ...);
+	char map_name[256];
+	short difficulty = main_get_difficulty();
+	short controller = event && event->controller_index >= 0 && event->controller_index < 4 ?
+		event->controller_index : widget->local_player_index;
+	short local;
+
+	if (!hmp_coop_hosting())
+		return FALSE;
+	csstrncpy(map_name, main_get_map_name(), sizeof(map_name) - 1);
+	map_name[sizeof(map_name) - 1] = 0;
+	if (controller < 0 || controller > 3)
+		controller = 0;
+	for (local = 0; local < 4; local++)
+		if (local != controller)
+			player_ui_clear_multiplayer_autojoin_for_local_player(local);
+	player_ui_local_player_joined_multiplayer_game(controller);
+	if (!network_game_start_new_server(widget, event, widget_deleted))
+		return TRUE;
+	if (!ui_widget_port_cooperative_level_choose(map_name, difficulty))
+	{
+		platform_log("co-op: %s isn't a campaign level here", map_name);
+		ui_play_audio_feedback_sound(4);
+		return TRUE;
+	}
+	platform_log("co-op: hosting %s, difficulty %d", map_name, (int)difficulty);
+	if (ui_widget_port_launch(widget,
+		tag_loaded('DeLa', "ui\\shell\\main_menu\\multiplayer_type_select\\connected\\pregame\\connected_pregame_screen")))
+	{
+		*widget_deleted = TRUE;
+	}
+	return TRUE;
+}
+#endif
+
 static boolean switch_from_main_menu_to_single_player(
 	struct widget_instance *widget,
 	struct event_record *event,
 	boolean *widget_deleted)
 {
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_NET_P2P)
+	if (coop_host_start(widget, event, widget_deleted))
+		return TRUE;
+#endif
 	game_connection_set(0);
 	main_menu_switch_to_single_player();
 	player_ui_remember_player1_profile(0);
@@ -6200,8 +6255,14 @@ boolean ui_widget_port_cooperative_level_choose(
 
 	/* (a campaign level, or a Custom Edition campaign map's:
 	port/linux/game/custom_edition_maps.c) */
+#if defined(HALO_XBOX_TARGET)
+	boolean hmp_stock_level_present(char const *level_name);
+	if (!server || !map_name || !(custom_edition_maps_level_campaign(map_name) || hmp_stock_level_present(map_name)))
+		return FALSE;
+#else
 	if (!server || !map_name || !custom_edition_maps_level_campaign(map_name))
 		return FALSE;
+#endif
 	csmemset(&variant, 0, sizeof(variant));
 	ustrncpy(variant.human_readable_game_description, L"Co-op",
 		NUMBEROF(variant.human_readable_game_description) - 1);

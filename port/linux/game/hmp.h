@@ -213,7 +213,7 @@ void hmp_game_tick(void);
 /* ---------- prototypes/HMP_ONLINE.C (the online test builds, OXBOX_NET_P2P) */
 
 void hmp_online_tick(short local_player_index);
-boolean hmp_online_dispatch(struct widget_instance *root, struct event_record *event);
+long hmp_online_dispatch(struct widget_instance *root, struct event_record *event);
 void hmp_online_event(struct widget_instance *root, struct event_record *event);
 void hmp_online_release(void);
 void hmp_online_multiplayer_description(struct widget_instance *list, short index, short *picture, short *text);
