@@ -1170,6 +1170,10 @@ static void server_list_menu_update(
 					score_limit_type_text->type == _ui_widget_type_text_box,
 				"expected 'score limit type' textbox");
 
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: (hidden for a co-op game, below) */
+			game_type_bitmap->visible = TRUE;
+#endif
 			if (widget->parameters.list.selected_list_item_index >= 0)
 			{
 				struct network_advertised_game *server = displayed_servers[
@@ -1336,6 +1340,24 @@ static void server_list_menu_update(
 
 				message_text->parameters.text_box.string_list_index = 2;
 				message_text->visible = FALSE;
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox: a co-op game's (no game engine): its level's name and picture, "Campaign", "Co-op", no game type
+				picture or score limit (port/linux/game/hmp_maps.c) */
+				if (server->engine_type == game_engine_none)
+				{
+					game_type_bitmap->visible = FALSE;
+					extern short hmp_maps_coop_level(char const *map_name);
+					short level = hmp_maps_coop_level(server->map_name);
+
+					if (level != NONE)
+						map_bitmap->animation.current_frame_index =
+							map_name_text->parameters.text_box.string_list_index = level;
+					ruleset_text->parameters.text_box.string_list_index = 0x7310 + 10;   /* (hmp.h's HMP_COOP_STRING_BASE) */
+					teams_text->parameters.text_box.string_list_index = 0x7310 + 11;
+					if (score_limit_text->parameters.text_box.text)
+						score_limit_text->parameters.text_box.text[0] = 0;
+				}
+#endif
 #if defined(HALO_XBOX_TARGET)
 				/* oxbox: the selected game's ping, a line under the rest (oxbox_games_ping_text_drawn) */
 				{
