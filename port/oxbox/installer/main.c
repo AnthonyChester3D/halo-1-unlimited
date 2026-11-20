@@ -35,6 +35,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #include <string.h>
 
 #include "download.h"
+#include "library.h"
 #include "package.h"
 #include "packs.h"
 #include "pictures.h"
@@ -51,7 +52,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 61
+#define INSTALLER_VERSION 62
 #endif
 __attribute__((used)) static struct
 {
@@ -85,6 +86,7 @@ static int auto_mode;
 static int developer;              /* (developer.ini beside the installer says developer = 1: the Developer screen) */
 static char developer_url[512];    /* (its update_url: a test update location, as update_url.txt's) */
 static int developer_unsigned;     /* (its allow_unsigned = 1) */
+static char developer_library[512]; /* (its library_url: a test map library's catalog; allow_unsigned counts for it too) */
 static int quiet;                  /* (a player's screen runs an operation: its details only in the log: say_in) */
 static char task_title[80];        /* (what that screen says it's doing: heading) */
 static int stepping;               /* (step: a line for the player, shown under the title) */
@@ -3945,6 +3947,157 @@ static void task_wait(void)
 		;
 }
 
+/* ---- the Map Library (library.c): maps to download, from the library's catalog (LIBRARY_DEFAULT_URL, or developer.ini's
+library_url), into the install's maps folder */
+
+static unsigned long library_started;
+
+static void library_progress(void *context, unsigned long done, unsigned long total)
+{
+	char const *what = context;
+	int bar = total ? (int)((unsigned long long)done * 40 / total) : 0, i;
+	char line[41];
+	for (i = 0; i < 40; i++)
+		line[i] = i < bar ? '#' : '.';
+	line[40] = 0;
+	screen_row(MENU_TOP + 2, COLOUR_BLACK);
+	screen_text(MENU_TOP + 2, 1, COLOUR_WHITE, "%-12s [%s] %lu.%lu of %lu.%lu MB", what, line, done >> 20,
+		(done % (1ul << 20)) * 10 >> 20, total >> 20, (total % (1ul << 20)) * 10 >> 20);
+	screen_show();
+}
+
+static void library_step(void *context, char const *text)
+{
+	(void)context;
+	log_file(text);
+}
+
+static void player_library(struct halo *h)
+{
+	static struct library library;
+	static char loaded_from[512];
+	struct menu_item *items;
+	char url[512], maps[200], error[256], address[32];
+	int k = 0, i;
+	if (!h)
+		return;
+	text_print(url, sizeof(url), "%s", developer_library[0] ? developer_library : LIBRARY_DEFAULT_URL);
+	text_print(maps, sizeof(maps), "%s\\maps", h->path);
+	check_wait();                      /* (one download at a time: the update check's is done) */
+	if (!library.items || strcmp(loaded_from, url))
+	{
+		library_free(&library);
+		player_heading("Map Library");
+		screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at the map library...");
+		screen_show();
+		library_started = GetTickCount();
+		if ((i = download_network(NULL, address, error) ? 1 :
+			library_fetch(url, developer_library[0] && developer_unsigned, &library, error)) != 0)
+		{
+			char text[400];
+			log_file(error);
+			text_print(text, sizeof(text), "Couldn't get the map library's list: %s.%s", error, i == 1 ?
+				" Is the Xbox connected to the internet?" : "");
+			page("Map Library", text);
+			library_free(&library);
+			return;
+		}
+		text_print(loaded_from, sizeof(loaded_from), "%s", url);
+		{
+			char line[200];
+			text_print(line, sizeof(line), "library: %d maps (serial %lu, %s) from %s in %lu ms", library.count,
+				library.serial, library.signer[0] ? library.signer : "not signed", url, GetTickCount() - library_started);
+			log_file(line);
+		}
+	}
+	if (!library.count)
+	{
+		page("Map Library", "The map library has no maps in it yet.");
+		return;
+	}
+	items = malloc(library.count * sizeof(*items));
+	if (!items)
+		return;
+	library_tidy(maps);
+	for (;;)
+	{
+		struct library_item *item;
+		static char const *const states[] = {"", "Installed", "Update", "Replaces yours", "Other version"};
+		library_states(&library, maps);
+		for (i = 0; i < library.count; i++)
+		{
+			item = &library.items[i];
+			text_print(items[i].text, sizeof(items[i].text), "%-26.26s %-9.9s %4lu MB  %s", item->name, item->group,
+				(item->size + 524288) >> 20, states[item->state]);
+			items[i].about = item->about[0] ? item->about : "A map from the library.";
+			items[i].disabled = 0;
+		}
+		if ((k = menu("Map Library", library.signer[0] ? "Maps made for Halo 1 Unlimited. A: get one." :
+			"Maps made for Halo 1 Unlimited (a TEST library, not signed). A: get one.", items, library.count, k)) < 0)
+			break;
+		item = &library.items[k];
+		{
+			struct menu_item choices[3];
+			char title[80], line[400];
+			int n = 0, get = -1, remove = -1, c;
+			memset(choices, 0, sizeof(choices));
+			if (item->state != LIBRARY_INSTALLED)
+			{
+				text_print(choices[n].text, sizeof(choices[n].text), item->state == LIBRARY_UPDATE ? "Update it" :
+					"Download it");
+				get = n++;
+			}
+			else
+			{
+				text_print(choices[n].text, sizeof(choices[n].text), "Remove it from this Xbox");
+				remove = n++;
+			}
+			text_print(choices[n++].text, sizeof(choices[0].text), "Back");
+			text_print(title, sizeof(title), "%s", item->name);
+			text_print(line, sizeof(line), "%s%s%s%s%lu MB to download, %lu MB on %c:. Goes in %s\\%s.%s", item->group,
+				item->version[0] ? ", version " : "", item->version, item->group[0] || item->version[0] ? ". " : "",
+				(item->size + 524288) >> 20, (item->unpacked + 524288) >> 20, maps[0], maps, item->item,
+				item->state == LIBRARY_OTHER ? " The map in that folder now is replaced." : item->state == LIBRARY_SWAP ?
+				" It replaces the other version you have." : "");
+			c = menu(title, line, choices, n, 0);
+			if (c == get)
+			{
+				struct download_report report = {library_step, library_progress, "Downloading"};
+				unsigned long started = GetTickCount();
+				char text[300];
+				player_heading(title);
+				screen_text(MENU_TOP, 1, COLOUR_GREY, "Getting it from the map library...");
+				screen_show();
+				if (library_get(&library, item, maps, &report, error))
+				{
+					text_print(text, sizeof(text), "library: %s: %s", item->item, error);
+					log_file(text);
+					text_print(text, sizeof(text), "Couldn't get %s: %s.", item->name, error);
+					page(title, text);
+				}
+				else
+				{
+					text_print(text, sizeof(text), "library: %s: in (%lu MB, %lu ms)", item->item, item->size >> 20,
+						GetTickCount() - started);
+					log_file(text);
+					screen_text(MENU_TOP + 4, 1, COLOUR_GREEN, "Done: it's in Halo 1 Unlimited's map list.");
+					screen_show();
+					Sleep(1500);
+				}
+			}
+			else if (c == remove)
+			{
+				struct menu_item sure[2] = {{"Remove it", NULL, 0}, {"Back", NULL, 0}};
+				text_print(line, sizeof(line), "%s comes off this Xbox (its folder %s\\%s is deleted). You can download "
+					"it again any time.", item->name, maps, item->item);
+				if (menu(title, line, sure, 2, 1) == 0 && library_remove(item, maps, error))
+					page(title, error);
+			}
+		}
+	}
+	free(items);
+}
+
 /* Halo 1 Unlimited as installed: the last install that worked (installer_last.txt), else the first found; NULL: none */
 static struct halo *player_install(void)
 {
@@ -5246,7 +5399,7 @@ static void player_main(void)
 		if (check_state == CHECK_NEWER && !update_asked)
 			update_prompt();               /* (the answer came after the start's wait) */
 		h = player_install();
-		enum { INSTALL, WHAT, PLAY, UPDATE, PACKS, MORE, DEVELOPER };
+		enum { INSTALL, WHAT, PLAY, UPDATE, PACKS, LIBRARY, MORE, DEVELOPER };
 		if (!h)
 		{
 			text_print(items[n].text, sizeof(items[n].text), "Install Halo 1 Unlimited");
@@ -5297,6 +5450,13 @@ static void player_main(void)
 			items[n].about = "Add the map packs on your Xbox to Halo 1 Unlimited's map list.";
 			items[n].disabled = 0;
 			actions[n++] = PACKS;
+			if (library_ready() || developer_library[0])
+			{
+				text_print(items[n].text, sizeof(items[n].text), "Map Library");
+				items[n].about = "Download maps made for Halo 1 Unlimited (Halo Map Porter's) straight into its map list.";
+				items[n].disabled = 0;
+				actions[n++] = LIBRARY;
+			}
 			text_print(items[n].text, sizeof(items[n].text), "More...");
 			items[n].about = "Rebuild your original Halo, and about this installer.";
 			items[n].disabled = 0;
@@ -5356,6 +5516,9 @@ static void player_main(void)
 		case PACKS:
 			player_map_packs();
 			break;
+		case LIBRARY:
+			player_library(h);
+			break;
 		case MORE:
 			player_more(h);
 			break;
@@ -5397,6 +5560,8 @@ static void developer_read(void)
 			text_print(developer_url, sizeof(developer_url), "%s", value);
 		else if (!_stricmp(key, "allow_unsigned"))
 			developer_unsigned = atoi(value) != 0;
+		else if (!_stricmp(key, "library_url"))
+			text_print(developer_library, sizeof(developer_library), "%s", value);
 	}
 	fclose(file);
 	log_file(developer ? "developer.ini: developer = 1" : "developer.ini: no developer = 1");

@@ -7,9 +7,11 @@ MONOCYPHER = $(CURDIR)/../../third_party/monocypher
 MBEDTLS = $(CURDIR)/../../third_party/mbedtls
 SRCS = $(CURDIR)/main.c $(CURDIR)/package.c $(CURDIR)/packs.c $(CURDIR)/packart.c $(CURDIR)/pictures.c $(CURDIR)/screen.c $(CURDIR)/sha256.c \
 	$(CURDIR)/stockmaps.c $(CURDIR)/mapstream.c $(CURDIR)/consolidate.c $(CURDIR)/scancache.c \
-	$(CURDIR)/download.c $(MONOCYPHER)/monocypher.c $(MONOCYPHER)/monocypher-ed25519.c
+	$(CURDIR)/download.c $(CURDIR)/library.c $(MONOCYPHER)/monocypher.c $(MONOCYPHER)/monocypher-ed25519.c
 NXDK_SDL = y
 KEYS ?= $(CURDIR)/keys.txt
+# (and the map library's catalog's: library_keys.txt, LIBRARY_KEYS=other.txt to test with a key of your own)
+LIBRARY_KEYS ?= $(CURDIR)/library_keys.txt
 # (nxdk's libraries, zlib among them, are built with these flags too when this build is the one that makes them: README.md)
 # (single precision in SSE, in the order written: the pictures come out as the PC tool makes them)
 CFLAGS += -O2 -mfpmath=sse -ffp-contract=off -Wall -I$(MONOCYPHER) -I$(MBEDTLS)/include -I$(CURDIR) \
@@ -27,6 +29,9 @@ $(CURDIR)/keys.h: FORCE
 # the notices it writes beside itself (THIRD_PARTY.txt), as C
 $(CURDIR)/notices.h: $(CURDIR)/THIRD_PARTY.txt $(CURDIR)/../tools/mkembed.py
 	python3 $(CURDIR)/../tools/mkembed.py $< $@ notices
+$(CURDIR)/library_keys.h: FORCE
+	python3 $(CURDIR)/../tools/mkkeys.py $(LIBRARY_KEYS) $@ library
+$(CURDIR)/library.obj: $(CURDIR)/library_keys.h
 $(CURDIR)/main.obj: $(CURDIR)/keys.h $(CURDIR)/notices.h
 $(CURDIR)/oxpatch.obj: $(CURDIR)/keys.h
 .PHONY: FORCE

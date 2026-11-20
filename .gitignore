@@ -53,3 +53,4 @@ dist/
 *.oxpk
 # signing keys' secret halves (port/oxbox/tools/oxsign.py): never in the repository
 *.oxkey
+/port/oxbox/installer/library_keys.h

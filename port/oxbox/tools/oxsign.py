@@ -9,6 +9,11 @@ passphrase, and never go in the repository. Plain Python 3, nothing to install.
     python3 oxsign.py verify FILE... [--keys keys.txt]   checks packages and their signatures
     python3 oxsign.py show FILE...             a package's manifest
 
+The map library's catalog (catalog.oxlb, made by library.py: docs/map_library.md) is signed the same way, with a key of
+its own ("python3 oxsign.py keygen library"; its public line goes in port/oxbox/installer/library_keys.txt):
+    python3 oxsign.py sign library.oxkey catalog.oxlb
+    python3 oxsign.py verify catalog.oxlb --keys port/oxbox/installer/library_keys.txt
+
 Signing in one go, on Windows (once: setup, with the key you sign with):
 
     py oxsign.py setup KEY.oxkey               double-clicking a .oxpk then shows it and its signatures and asks
@@ -246,7 +251,14 @@ SIGNED_PREFIX = b'Halo 1 Unlimited package, signed\n'
 HEADER = 128
 
 
-class Package:
+def Package(path):
+    """a package, or the map library's catalog (both signed the same way)"""
+    with open(path, 'rb') as f:
+        magic = f.read(4)
+    return Catalog(path) if magic == CATALOG_MAGIC else OxPackage(path)
+
+
+class OxPackage:
     def __init__(self, path):
         self.path = path
         data = open(path, 'rb').read()
@@ -289,6 +301,50 @@ class Package:
         os.replace(temp, self.path)
 
 
+# ---- the map library's catalog (port/oxbox/tools/library.py) ----
+
+CATALOG_MAGIC = b'OXLB'
+CATALOG_SIGNED_PREFIX = b'Halo 1 Unlimited map library, signed\n'
+
+
+class Catalog:
+    """"OXLB", u32 format, u32 the text's size, the text (ASCII), then the signatures as a package's"""
+    def __init__(self, path):
+        self.path = path
+        data = open(path, 'rb').read()
+        fmt, size = struct.unpack_from('<II', data, 4)
+        if fmt != 1 or len(data) < 12 + size:
+            sys.exit('oxsign: %s isn\'t a catalog this knows (format %d)' % (path, fmt))
+        self.header, self.text = data[:12], data[12:12 + size]
+        lines = self.text.split(b'\n\n', 1)[0]
+        self.manifest = lines + b'\nitems: %d' % self.text.count(b'\nitem: ')
+        rest = data[12 + size:]
+        self.signatures = []
+        if rest:
+            if rest[:4] != b'OXSG':
+                sys.exit('oxsign: %s has something after its text that isn\'t signatures' % path)
+            count, = struct.unpack_from('<I', rest, 4)
+            if len(rest) != 8 + count * 72:
+                sys.exit('oxsign: %s\'s signatures don\'t read' % path)
+            for k in range(count):
+                at = 8 + k * 72
+                self.signatures.append((rest[at:at + 8], rest[at + 8:at + 72]))
+
+    def signed_part(self):
+        return CATALOG_SIGNED_PREFIX + self.header + self.text
+
+    def save(self):
+        out = self.header + self.text
+        if self.signatures:
+            out += b'OXSG' + struct.pack('<I', len(self.signatures))
+            for kid, signature in self.signatures:
+                out += kid + signature
+        temp = self.path + '.new'
+        with open(temp, 'wb') as f:
+            f.write(out)
+        os.replace(temp, self.path)
+
+
 def sign(key_path, paths):
     name, seed, public = load_key(key_path)
     kid = key_id(public)
@@ -306,7 +362,8 @@ def verify(paths, keys_path):
     bad = False
     for path in paths:
         package = Package(path)
-        print('%s: contents match their SHA-256' % path)
+        if not isinstance(package, Catalog):
+            print('%s: contents match their SHA-256' % path)
         if not package.signatures:
             print('  not signed')
         for kid, signature in package.signatures:
