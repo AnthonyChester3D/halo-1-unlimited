@@ -1,3 +1,4 @@
 # The public keys the map library's catalog is signed with (library.c, docs/map_library.md): the installer lists the
 # library's maps only from a catalog signed by one of them (a developer.ini test location's allow_unsigned aside). One
 # "name id public" line each, as "python3 oxsign.py keygen library" prints it (library.pub). Not the package keys.
+library c611a9717069945a c4718d4f5bbb57202108d77d4715f5a54dfdccf3cd6b5a8320fbb73d6856151c
