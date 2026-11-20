@@ -2139,35 +2139,30 @@ static void campaign_name_line(char *s)
 /* whether there's a campaign to play: one of Halo's levels in the maps folder (the installer's "Campaign: Not
 included" leaves them out), or another campaign */
 long hmp_campaigns_count(void);
+/* oxbox: whether Halo's campaign level leaf ("b30"; NULL: any of them) has its map in the maps folder */
+static boolean stock_level_here(char const *leaf)
+{
+	static char const levels[] = "a10a30a50b30b40c10c20c40d20d40";
+	char path[32];
+	int k;
+	for (k = 0; k < 30; k += 3)
+	{
+		snprintf(path, sizeof(path), "d:\\maps\\%.3s.map", levels + k);
+		if ((!leaf || (strlen(leaf) == 3 && !_strnicmp(leaf, levels + k, 3))) && GetFileAttributesA(path) != (DWORD)-1)
+			return TRUE;
+	}
+	return FALSE;
+}
+
 /* oxbox: whether level_name is one of Halo's campaign levels ("levels\\b30\\b30") and its map is in the maps folder */
 boolean hmp_stock_level_present(char const *level_name)
 {
-	static char const *const levels[] = { "a10", "a30", "a50", "b30", "b40", "c10", "c20", "c40", "d20", "d40" };
-	char path[32];
-	char const *leaf;
-	int k;
-	if (!level_name || strncmp(level_name, "levels\\", 7)) return FALSE;
-	leaf = strrchr(level_name, '\\') + 1;
-	for (k = 0; k < 10; k++)
-		if (!ieq(leaf, levels[k]))
-		{
-			snprintf(path, sizeof(path), "d:\\maps\\%s.map", levels[k]);
-			return GetFileAttributesA(path) != (DWORD)-1;
-		}
-	return FALSE;
+	return level_name && !strncmp(level_name, "levels\\", 7) && stock_level_here(strrchr(level_name, '\\') + 1);
 }
 
 boolean hmp_campaign_playable(void)
 {
-	static char const *const levels[] = { "a10", "a30", "a50", "b30", "b40", "c10", "c20", "c40", "d20", "d40" };
-	char path[32];
-	int k;
-	for (k = 0; k < 10; k++)
-	{
-		snprintf(path, sizeof(path), "d:\\maps\\%s.map", levels[k]);
-		if (GetFileAttributesA(path) != (DWORD)-1) return TRUE;
-	}
-	return hmp_campaigns_count() > 0;
+	return stock_level_here(NULL) || hmp_campaigns_count() > 0;
 }
 
 /* how many campaigns there are besides Halo's (the table made again) */

@@ -2275,6 +2275,11 @@ boolean network_game_server_game_is_open(
 	match_assert(NETWORK_SERVER_MANAGER_FILE, 0x214, server);
 
 	game_is_open = TEST_FLAG(server->flags, _network_game_server_game_open_bit);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a locked co-op game takes no console new to it (network_game_server_port_lock) */
+	if (TEST_FLAG(server->game.cooperative_flags, _network_game_locked_bit))
+		game_is_open = FALSE;
+#endif
 	/* port: the game stays open in progress (a machine may join it), but
 	not while the machines load it, nor once it is over */
 	if ((server->state == _network_game_server_state_pregame && server->sent_start_game_message) ||
@@ -4906,14 +4911,41 @@ void network_game_server_port_set_cooperative(
 	if (!server || server->state != _network_game_server_state_pregame)
 		return;
 	server->game.difficulty = difficulty;
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: four (a campaign level's AI and the host's syncing of it leave no room for more on a console); open */
+	server->game.maximum_players = MIN(4, MAXIMUM_NETWORK_PLAYER_COUNT);
+	SET_FLAG(server->game.cooperative_flags, _network_game_locked_bit, FALSE);
+#else
 	/* (Server Setup's default for co-op, menu_functions.c's
 	COOPERATIVE_DEFAULT_PLAYERS, until it sets its own) */
 	server->game.maximum_players = MIN(16, MAXIMUM_NETWORK_PLAYER_COUNT);
+#endif
 	if (!network_game_server_send_game_data_pregame(server))
 		network_event("network_game_server_port_set_cooperative() failed to send updated game settings to clients");
 
 	return;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: HOST CO-OP GAME's lock (the lobby's Y, port/linux/game/bots.c): locked, no console new to the game joins it,
+in the lobby or in the game; the consoles in it stay, and the lobby says it's locked on all of them */
+void network_game_server_port_lock(
+	boolean locked)
+{
+	struct network_game_server *server = global_network_game_server_get();
+	extern void platform_log(char const *format, ...);
+
+	if (!server)
+		return;
+	SET_FLAG(server->game.cooperative_flags, _network_game_locked_bit, locked);
+	platform_log("co-op: %slocked", locked ? "" : "un");
+	if (server->state == _network_game_server_state_pregame &&
+		!network_game_server_send_game_data_pregame(server))
+	{
+		network_event("the lock's settings weren't sent");
+	}
+}
+#endif
 
 void network_game_server_port_set_cooperative_friendly_fire(
 	short friendly_fire)
@@ -5530,7 +5562,7 @@ static boolean network_game_server_idle_pregame_tasks(
 			if (strncmp(said, server->game.map.name, sizeof(said) - 1))
 			{
 				strncpy(said, server->game.map.name, sizeof(said) - 1);
-				platform_log("co-op: the lobby starts %s by itself once every console has it loaded", server->game.map.name);
+				platform_log("co-op: %s starts once every console has it", server->game.map.name);
 			}
 			network_game_server_update_countdown(server, _network_game_server_countdown_event_start_immediately);
 		}

@@ -199,10 +199,29 @@ static short bots_suggested_players(
 }
 
 /* how many bots the host wants, with this many people in the game */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the lobby is a co-op game's (HOST CO-OP GAME: a gametype with no game engine, not split screen): no bots, and
+its Y is the lock (network_game_server_port_lock) */
+static boolean bots_coop_lobby(
+	struct network_game **game_out)
+{
+	struct network_game_client *client = global_network_game_client_get();
+	struct network_game *game = client ? network_game_client_get_game(client) : NULL;
+
+	if (game_out)
+		*game_out = game;
+	return game && !game->variant.game_engine_index && !network_game_is_splitscreen_local();
+}
+#endif
+
 static short bots_wanted(
 	short people)
 {
 	short wanted = 0;
+#if defined(HALO_XBOX_TARGET)
+	if (bots_coop_lobby(NULL))
+		return 0;
+#endif
 
 	switch (bots_globals.mode)
 	{
@@ -7203,6 +7222,22 @@ boolean bots_lobby_button(
 {
 	if (!network_game_server_bots_in_lobby())
 		return FALSE;
+#if defined(HALO_XBOX_TARGET)
+	{
+		struct network_game *game;
+
+		if (bots_coop_lobby(&game))
+		{
+			void network_game_server_port_lock(boolean locked);
+
+			if (button != _gamepad_analog_button_y)
+				return FALSE;
+			network_game_server_port_lock(!TEST_FLAG(game->cooperative_flags, _network_game_locked_bit));
+			ui_play_audio_feedback_sound(1);
+			return TRUE;
+		}
+	}
+#endif
 	if (button == _gamepad_analog_button_y)
 	{
 #if defined(OXBOX_CROSSPLAY)
@@ -7292,6 +7327,20 @@ void bots_render(
 	}
 #endif
 	game = network_game_client_get_game(client);
+	if ((font = tag_loaded('font', "ui\\large_ui")) == NONE)
+		return;
+#if defined(HALO_XBOX_TARGET)
+	/* (a co-op lobby: its lock, not bots) */
+	if (bots_coop_lobby(NULL))
+	{
+		boolean locked = TEST_FLAG(game->cooperative_flags, _network_game_locked_bit);
+
+		if (!host && !locked)
+			return;
+		halo_linux_snprintf(text, sizeof(text), "%s", !host ? "Lobby Locked" : locked ? "Locked  Y: Unlock" : "Y: Lock Lobby");
+		goto draw;
+	}
+#endif
 	mode = host ? bots_globals.mode : (short)((NETWORK_GAME_BOT_MODE(game) & 0xFF) - 1);
 	difficulty = host ? bots_globals.difficulty : (short)((NETWORK_GAME_BOT_MODE(game) >> 8) & 0xFF);
 	if (difficulty < 0 || difficulty >= NUMBER_OF_BOTS_DIFFICULTIES)
@@ -7311,8 +7360,6 @@ void bots_render(
 			bots++;
 		}
 	}
-	if ((font = tag_loaded('font', "ui\\large_ui")) == NONE)
-		return;
 	if (mode == _bots_mode_off)
 		halo_linux_snprintf(text, sizeof(text), "Y: Bots Off");
 	else if (host && mode == _bots_mode_custom)
@@ -7321,6 +7368,9 @@ void bots_render(
 	else
 		halo_linux_snprintf(text, sizeof(text), host ? "Y: Bots %s (%d)  %s" : "Bots: %s (%d)  %s", bots_mode_names[mode],
 			(int)bots, bots_skills[difficulty].name);
+#if defined(HALO_XBOX_TARGET)
+draw:
+#endif
 	for (index = 0; text[index] && index < (long)NUMBEROF(wide) - 1; index++)
 		wide[index] = (wchar_t)(unsigned char)text[index];
 	wide[index] = 0;

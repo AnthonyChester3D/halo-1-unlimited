@@ -253,8 +253,7 @@ void hmp_carry_coop_update(void)
 	coop_switch_pending = FALSE;
 	if (!global_network_game_server_get() || !game_in_progress())
 		return;
-	platform_log("co-op: the host's script switches the game to %s: every console follows (the lobby, then the piece "
-		"starts by itself once every console has it)", coop_switch_target);
+	platform_log("co-op: the host's script switches every console to %s", coop_switch_target);
 	carry_record_network(coop_switch_target);
 	network_game_server_port_cooperative_switch(coop_switch_target);
 }
