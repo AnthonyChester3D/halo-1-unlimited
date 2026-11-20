@@ -1511,12 +1511,12 @@ static void player_spawn(
 							/* oxbox: the first spawn after a script's map switch: what the player carried, when the
 							profile it'd get is named "hmp_carry" (port/linux/game/hmp_carry.c) */
 							{
-								extern boolean hmp_carry_spawned(short local_player_index, long unit_index,
-									real_point3d const *position, real facing, char const *profile_name);
+								extern boolean hmp_carry_spawned(long player_index, short local_player_index,
+									long unit_index, real_point3d const *position, real facing, char const *profile_name);
 								short profile_index = starting_equipment_count > 1 &&
 									*(short *)((byte *)player2 + 0xAA) > 0 ? 1 : starting_equipment_count != 0 ? 0 : NONE;
 
-								if (hmp_carry_spawned(player2->local_player_index, player2->unit_index,
+								if (hmp_carry_spawned(player_index, player2->local_player_index, player2->unit_index,
 									&starting_location->position, starting_location->facing, profile_index == NONE ? NULL :
 									TAG_BLOCK_GET_ELEMENT(&scenario->starting_profiles, profile_index,
 										struct scenario_starting_profile)->name))

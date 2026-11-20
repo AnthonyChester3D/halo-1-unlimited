@@ -6200,8 +6200,14 @@ boolean ui_widget_port_cooperative_level_choose(
 
 	/* (a campaign level, or a Custom Edition campaign map's:
 	port/linux/game/custom_edition_maps.c) */
+#if defined(HALO_XBOX_TARGET)
+	boolean hmp_stock_level_present(char const *level_name);
+	if (!server || !map_name || !(custom_edition_maps_level_campaign(map_name) || hmp_stock_level_present(map_name)))
+		return FALSE;
+#else
 	if (!server || !map_name || !custom_edition_maps_level_campaign(map_name))
 		return FALSE;
+#endif
 	csmemset(&variant, 0, sizeof(variant));
 	ustrncpy(variant.human_readable_game_description, L"Co-op",
 		NUMBEROF(variant.human_readable_game_description) - 1);
