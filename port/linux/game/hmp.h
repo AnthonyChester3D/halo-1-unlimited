@@ -52,6 +52,8 @@ enum
 	HMP_MISSING_NAME_BASE = 0x7200, /* a map this console hasn't (a game in the browser): its folder's name */
 	HMP_MISSING_NAMES = 8,
 	HMP_CAMPAIGN_STRING_BASE = 0x7300, /* the campaign picker's three cards' names and texts (hmp_maps.c: 0x7300-0x7305) */
+	HMP_COOP_STRING_BASE = 0x7310,  /* the games list's co-op game: Halo's 10 levels' names on one line (and their
+	                                   pictures, sp_levels'), then "Campaign" and "Co-op" (hmp_maps_coop_level) */
 	HMP_UNKNOWN_PICTURE = 13,       /* the frame Halo itself shows for an unknown map */
 	HMP_STOCK_LEVELS = 13,
 };
@@ -218,6 +220,7 @@ void hmp_online_event(struct widget_instance *root, struct event_record *event);
 void hmp_online_release(void);
 void hmp_online_multiplayer_description(struct widget_instance *list, short index, short *picture, short *text);
 wchar_t *hmp_online_string(short string_index);
+short hmp_maps_coop_level(char const *map_name);
 struct bitmap_data *hmp_online_picture(long bitmap_tag_index, short *frame_index);
 boolean hmp_online_picture_read(long fake_index, void *buffer, long size);
 

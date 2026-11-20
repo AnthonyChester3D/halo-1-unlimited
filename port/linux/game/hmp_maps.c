@@ -2029,6 +2029,7 @@ wchar_t *custom_edition_maps_description(short display_index) { return hmp_strin
 /* the lobby's map name while a folder map is up: map sharing's status, else its name (or its folder's while this
 console hasn't the map) */
 static wchar_t *live_name(void);
+static wchar_t *coop_string(long k);
 
 wchar_t *hmp_string(long tag_index, short index)
 {
@@ -2054,6 +2055,7 @@ wchar_t *hmp_string(long tag_index, short index)
 		long k = index - HMP_CAMPAIGN_STRING_BASE;
 		return menu ? (k & 1 ? menu->card_text[k >> 1] : menu->card_name[k >> 1]) : NULL;
 	}
+	if (index >= HMP_COOP_STRING_BASE && index < HMP_COOP_STRING_BASE + 12) return coop_string(index - HMP_COOP_STRING_BASE);
 	if (index >= 0x7000) return NULL;
 	i = index - (index >= HMP_DESCRIPTION_BASE ? HMP_DESCRIPTION_BASE : index >= HMP_WRAPPED_NAME_BASE ? HMP_WRAPPED_NAME_BASE : HMP_NAME_BASE);
 	if (!(info = info_get(i))) return NULL;
@@ -2076,6 +2078,35 @@ static wchar_t *live_name(void)
 	return hmp_maps_globals.key_name;
 }
 
+static char const campaign_levels[] = "a10a30a50b30b40c10c20c40d20d40";   /* (Halo's campaign, in order) */
+
+/* the games list's panel for a co-op game (no game engine: ui_widget_game_data_input_functions.c): its level's name and
+picture index (a folder map's, or HMP_COOP_STRING_BASE + Halo's level), or NONE */
+short hmp_maps_coop_level(char const *map_name)
+{
+	char const *leaf = map_name ? tag_name_strip_path(map_name) : "";
+	long k;
+	if (map_name && map_name[0] == '+') return custom_edition_maps_display_index(map_name);
+	for (k = 0; strlen(leaf) == 3 && k < 30; k += 3)
+		if (!_strnicmp(leaf, campaign_levels + k, 3)) return (short)(HMP_COOP_STRING_BASE + k / 3);
+	return NONE;
+}
+
+/* its texts: Halo's level's name on one line (the level select's has two), "Campaign", "Co-op". (In the lobby's map
+name's buffer: the games list and the lobby aren't up together) */
+static wchar_t *coop_string(long k)
+{
+	wchar_t *name = hmp_maps_globals.key_name;
+	wchar_t const *s;
+	long tag = tag_loaded('ustr', "ui\\shell\\main_menu\\map_list"), n = 0;
+	if (k >= 10) return k == 10 ? (wchar_t *)L"Campaign" : (wchar_t *)L"Co-op";
+	for (s = tag != NONE ? unicode_string_list_get_string(tag, (short)k) : NULL; s && *s && n < 31; s++)
+		if (*s != '\r' && *s != '\n') name[n++] = *s;
+		else if (n && name[n - 1] != ' ') name[n++] = ' ';
+	name[n] = 0;
+	return name;
+}
+
 struct bitmap_data *custom_edition_maps_picture(long bitmap_tag_index, short *frame_index)
 {
 	long i = *frame_index - HMP_NAME_BASE;
@@ -2084,6 +2115,13 @@ struct bitmap_data *custom_edition_maps_picture(long bitmap_tag_index, short *fr
 	if (online_picture) return online_picture;
 #endif
 	boolean levels;
+	if (*frame_index >= HMP_COOP_STRING_BASE && *frame_index < HMP_COOP_STRING_BASE + 10)   /* (a co-op game's level) */
+	{
+		long pictures = tag_loaded('bitm', CAMPAIGN_PICTURES_TAG_NAME);
+		i = *frame_index - HMP_COOP_STRING_BASE;
+		*frame_index = HMP_UNKNOWN_PICTURE;
+		return pictures != NONE ? bitmap_group_get_bitmap_from_sequence(pictures, 0, (short)i) : NULL;
+	}
 	if (*frame_index < HMP_NAME_BASE || *frame_index >= HMP_WRAPPED_NAME_BASE || bitmap_tag_index == NONE) return NULL;
 	/* (the multiplayer list's pictures, or the campaign picker's and its levels': the level select's) */
 	levels = !csstrcasecmp(tag_get_name(bitmap_tag_index), CAMPAIGN_PICTURES_TAG_NAME);
@@ -2142,13 +2180,12 @@ long hmp_campaigns_count(void);
 /* oxbox: whether Halo's campaign level leaf ("b30"; NULL: any of them) has its map in the maps folder */
 static boolean stock_level_here(char const *leaf)
 {
-	static char const levels[] = "a10a30a50b30b40c10c20c40d20d40";
 	char path[32];
 	int k;
 	for (k = 0; k < 30; k += 3)
 	{
-		snprintf(path, sizeof(path), "d:\\maps\\%.3s.map", levels + k);
-		if ((!leaf || (strlen(leaf) == 3 && !_strnicmp(leaf, levels + k, 3))) && GetFileAttributesA(path) != (DWORD)-1)
+		snprintf(path, sizeof(path), "d:\\maps\\%.3s.map", campaign_levels + k);
+		if ((!leaf || (strlen(leaf) == 3 && !_strnicmp(leaf, campaign_levels + k, 3))) && GetFileAttributesA(path) != (DWORD)-1)
 			return TRUE;
 	}
 	return FALSE;

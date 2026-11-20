@@ -108,12 +108,13 @@ SYSTEM LINK PLAY's has the other form of that one's; its own handlers never run:
 #define XBOX_PICTURE "ui\\shell\\bitmaps\\console_grafix"
 #define COOP_PROFILES_SCREEN "ui\\shell\\main_menu\\player_profiles_select\\solo_game_player_profile_select_screen"
 
-static char const *const online_strings[NUMBER_OF_ONLINE_STRINGS] =
+/* (wide already: no copies kept) */
+static wchar_t const *const online_strings[NUMBER_OF_ONLINE_STRINGS] =
 {
-	"ONLINE PLAY",
-	"Play over the internet with \r\nother Xboxes running Halo 1 \r\nUnlimited: up to 16 players.",
-	"HOST CO-OP GAME",
-	"Play the campaign together, \r\neach on your own Xbox, over \r\nsystem link or online: 4 max.",
+	L"ONLINE PLAY",
+	L"Play over the internet with \r\nother Xboxes running Halo 1 \r\nUnlimited: up to 16 players.",
+	L"HOST CO-OP GAME",
+	L"Play the campaign together, \r\neach on your own Xbox, over \r\nsystem link or online: 4 max.",
 };
 
 /* ---------- structures */
@@ -260,7 +261,6 @@ static struct
 	boolean coop_hosting;
 	/* the Multiplayer screen comes back (B from the games list): ONLINE PLAY (1) or HOST CO-OP GAME (2) gets the focus */
 	char focus[4];
-	wchar_t strings[NUMBER_OF_ONLINE_STRINGS][128];
 	struct bitmap_data header;
 	/* the games list: all its rows (the LAN's or the reached hosts', then those listed online; Xboxes' first), which
 	an Xbox hosts, the first shown, and the list's own rows (Halo's displayed servers) and how many are shown */
@@ -599,16 +599,9 @@ void hmp_online_multiplayer_description(struct widget_instance *list, short inde
 
 wchar_t *hmp_online_string(short index)
 {
-	wchar_t *d;
-	char const *a;
-
 	if (index < HMP_ONLINE_STRING_BASE || index >= HMP_ONLINE_STRING_BASE + NUMBER_OF_ONLINE_STRINGS)
 		return NULL;
-	d = online.strings[index - HMP_ONLINE_STRING_BASE];
-	if (!d[0])
-		for (a = online_strings[index - HMP_ONLINE_STRING_BASE]; (*d++ = (unsigned char)*a++) != 0; )
-			;
-	return online.strings[index - HMP_ONLINE_STRING_BASE];
+	return (wchar_t *)online_strings[index - HMP_ONLINE_STRING_BASE];
 }
 
 /* ---------- public code: the games list's header */
