@@ -51,7 +51,28 @@ skips folders with `.hmp_` in their names, so a power cut never shows half a map
 back if the swap was cut between its renames, and deletes the rest. Needs the zip's and the files' room on the
 install's drive.
 
-## Making and publishing a library (on the owner's PC)
+## Managing it: library_manager.pyw (on the owner's PC)
+
+`port/oxbox/tools/library_manager.pyw`, double-clicked (Python from python.org; library.py and oxsign.py beside it): a
+window with the library's maps and their state (New, Changed, Published, To remove), and buttons:
+
+- **Add maps...**: a map's folder, or a folder of them (HMP's `Copy to Xbox maps\Crossplay`), and their group.
+- **Remove** / **Restore**: a map off the library at the next publish (or not).
+- **Check for changes**: every map made again from its source folder; one HMP made again shows Changed.
+- **Refresh from GitHub**: what's published now (the latest release's catalog).
+- **Publish**: the catalog signed with the library key (its passphrase asked; Windows can remember it for your login),
+  the new zips uploaded to the release (made the first time; the repository needs a commit first, a README), the
+  catalog swapped in, then zips nothing lists deleted. It reads the catalog back from the release's download address
+  to check.
+
+Settings (this PC's, `%LOCALAPPDATA%\Halo1Unlimited\library_manager.json`): the library's folder, the key file, the
+repository and release tag, and a GitHub token: a fine-grained personal access token of the library's account, for
+the library repository only, "Contents: Read and write", kept encrypted to your Windows login (DPAPI). The library's
+folder holds `library.json` (each map's catalog fields and its source, relative to the folder, so the same folder
+works from another PC's drive letter), `published.oxlb` and `zips\`. Lab test: `H1U_LIBRARY_TEST_API` points it at a
+stand-in for GitHub (~/h1u-lab/library/fake_github.py).
+
+## By hand (library.py)
 
     python3 port/oxbox/tools/library.py build OUT "...\output\Copy to Xbox maps\Crossplay" "...\Copy to Xbox maps\Xbox" --previous CURRENT\catalog.oxlb
     python3 port/oxbox/tools/oxsign.py sign library.oxkey OUT\catalog.oxlb

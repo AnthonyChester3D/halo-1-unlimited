@@ -100,7 +100,10 @@ def make_zip(folder):
 
 def read_catalog(path):
     """(serial, items: a dict of each item's fields, in order)"""
-    data = open(path, 'rb').read()
+    return parse_catalog(open(path, 'rb').read(), path)
+
+
+def parse_catalog(data, path='the catalog'):
     if data[:4] != MAGIC:
         sys.exit('library: %s isn\'t a catalog' % path)
     fmt, size = struct.unpack_from('<II', data, 4)
@@ -122,7 +125,7 @@ def read_catalog(path):
     return serial, items
 
 
-def write_catalog(path, serial, items):
+def catalog_bytes(serial, items):
     lines = ['library: Halo 1 Unlimited map library', 'format: %d' % FORMAT, 'serial: %d' % serial,
              'date: %s' % time.strftime('%Y-%m-%d', time.gmtime()), '']
     for item in items:
@@ -132,8 +135,51 @@ def write_catalog(path, serial, items):
                 lines.append('%s: %s' % (key, item[key]))
         lines.append('')
     text = '\n'.join(lines).encode('ascii')
+    return MAGIC + struct.pack('<II', FORMAT, len(text)) + text
+
+
+def write_catalog(path, serial, items):
     with open(path, 'wb') as f:
-        f.write(MAGIC + struct.pack('<II', FORMAT, len(text)) + text)
+        f.write(catalog_bytes(serial, items))
+
+
+def item_key(item):
+    """an item is its folder in its group: the same folder in two groups is two versions of a map, one or the other on
+    an Xbox"""
+    return item['item'].lower(), item.get('group', '').lower()
+
+
+def zip_name(folder_name, digest):
+    """(GitHub renames an uploaded file with other characters: letters, digits, '-', '.', '_' between them)"""
+    safe = ''.join(c if c.isalnum() or c in '-.' else '_' for c in folder_name)
+    while '__' in safe:
+        safe = safe.replace('__', '_')
+    return '%s-%s.zip' % (safe.strip('_.-') or 'map', digest[:8])
+
+
+def make_item(folder, group, base=''):
+    """a map's folder as an item: (its catalog fields, its zip's bytes), or (None, why not)"""
+    name = os.path.basename(os.path.normpath(folder))
+    problem = folder_problem(name)
+    if problem:
+        return None, problem
+    data, unpacked, count = make_zip(folder)
+    digest = hashlib.sha256(data).hexdigest()
+    title, about, version = ('', [], '')
+    info = os.path.join(folder, 'info.txt')
+    if os.path.isfile(info):
+        title, about, version = read_info(info)
+    about = ascii_text('  '.join(about))
+    if len(about) > MAXIMUM_ABOUT:
+        about = about[:MAXIMUM_ABOUT - 3].rsplit(' ', 1)[0] + '...'
+    item = {'item': name, 'name': ascii_text(title)[:48] or name, 'about': about, 'group': ascii_text(group or '')[:24],
+            'file': base + zip_name(name, digest), 'size': str(len(data)), 'unpacked': str(unpacked),
+            'files': str(count), 'version': ascii_text(version)[:12], 'sha256': digest}
+    return item, data
+
+
+def sort_items(items):
+    items.sort(key=lambda item: (item.get('group', '').lower(), item['name'].lower(), item['item'].lower()))
 
 
 def build(out, folders, group=None, previous=None, base=None):
@@ -144,46 +190,24 @@ def build(out, folders, group=None, previous=None, base=None):
     made, new = [], []
     for given in folders:
         for folder in map_folders(given):
+            in_group = group or (os.path.basename(os.path.normpath(given)) if folder != given else '')
             name = os.path.basename(os.path.normpath(folder))
-            problem = folder_problem(name)
-            if problem:
-                print('  skipped %s: %s' % (name, problem))
-                continue
-            if (name.lower(), (group or os.path.basename(os.path.normpath(given))).lower()) in seen:
+            if (name.lower(), in_group.lower()) in seen:
                 print('  skipped %s: a second folder of that name in the group' % name)
                 continue
-            seen.add((name.lower(), (group or os.path.basename(os.path.normpath(given))).lower()))
-            data, unpacked, count = make_zip(folder)
-            digest = hashlib.sha256(data).hexdigest()
-            # (GitHub renames an uploaded file with other characters: letters, digits, '-', '.', '_' between them)
-            safe = ''.join(c if c.isalnum() or c in '-.' else '_' for c in name)
-            while '__' in safe:
-                safe = safe.replace('__', '_')
-            safe = safe.strip('_.-') or 'map'
-            file_name = '%s-%s.zip' % (safe, digest[:8])
-            with open(os.path.join(out, file_name), 'wb') as f:
+            seen.add((name.lower(), in_group.lower()))
+            item, data = make_item(folder, in_group, base or '')
+            if item is None:
+                print('  skipped %s: %s' % (name, data))
+                continue
+            with open(os.path.join(out, item['file'][len(base or ''):]), 'wb') as f:
                 f.write(data)
-            title, about, version = ('', [], '')
-            info = os.path.join(folder, 'info.txt')
-            if os.path.isfile(info):
-                title, about, version = read_info(info)
-            about = ascii_text('  '.join(about))
-            if len(about) > MAXIMUM_ABOUT:
-                about = about[:MAXIMUM_ABOUT - 3].rsplit(' ', 1)[0] + '...'
-            item = {'item': name, 'name': ascii_text(title)[:48] or name, 'about': about,
-                    'group': ascii_text(group or (os.path.basename(os.path.normpath(given)) if folder != given
-                                                  else ''))[:24],
-                    'file': (base or '') + file_name, 'size': str(len(data)), 'unpacked': str(unpacked),
-                    'files': str(count), 'version': ascii_text(version)[:12], 'sha256': digest}
             made.append(item)
             if item['file'] not in published:
-                new.append(file_name)
-    # (an item is its folder in its group: the same folder in two groups is two versions of a map, one or the other on
-    # an Xbox)
-    key = lambda item: (item['item'].lower(), item.get('group', '').lower())
-    names = {key(item) for item in made}
-    items = [item for item in kept if key(item) not in names] + made
-    items.sort(key=lambda item: (item.get('group', '').lower(), item['name'].lower()))
+                new.append(item['file'])
+    names = {item_key(item) for item in made}
+    items = [item for item in kept if item_key(item) not in names] + made
+    sort_items(items)
     write_catalog(os.path.join(out, 'catalog.oxlb'), serial + 1, items)
     print('%s: %d items (%d made now), serial %d, not signed' % (os.path.join(out, 'catalog.oxlb'), len(items),
                                                                  len(made), serial + 1))
