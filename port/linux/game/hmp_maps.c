@@ -1807,7 +1807,7 @@ void hmp_menu_memory_release(void)
 #if defined(OXBOX_NET_P2P)
 	hmp_online_release();                       /* (and ONLINE PLAY's games list's listed games) */
 #endif
-	if (before) hmp_log("maps: the menus' memory freed for the game (%d KB of map list and text)", (before + 1023) / 1024);
+	if (before) hmp_log("maps: the menus' memory freed (%d KB of map list and text)", (before + 1023) / 1024);
 }
 
 /* the main menu's words OpenCE changes (hmp_game.c): GAME DEMOS shown as OPTIONS, SETTINGS as PROFILES (pictures
@@ -2673,7 +2673,7 @@ void hmp_maps_check_tick(void)
 		}
 		/* (at the game's priority, giving way after every piece it unpacks: at the lowest it got only what the
 		menus left, a minute or more a map, v1.44) */
-		hmp_log("map check (full): checking every map not yet known to load, one at a time (opence.ini map_check = 1)");
+		hmp_log("map check (full): every map not yet known to load, one at a time");
 	}
 	/* the full check: a result in, then the next map out */
 	if (check.job == 2)

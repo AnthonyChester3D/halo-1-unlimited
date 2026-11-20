@@ -45,6 +45,9 @@ bot every 20 seconds.
 #include "networking/network_client_manager.h"
 #include "input/input.h"
 #include "interface/ui_widget.h"
+#if defined(OXBOX_NET_P2P)
+boolean hmp_coop_online(short how, boolean locked);
+#endif
 #include "text/draw_string.h"
 #include "rasterizer/rasterizer.h"
 #include "tag_files/tag_groups.h"
@@ -201,7 +204,7 @@ static short bots_suggested_players(
 /* how many bots the host wants, with this many people in the game */
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: the lobby is a co-op game's (HOST CO-OP GAME: a gametype with no game engine, not split screen): no bots, and
-its Y is the lock (network_game_server_port_lock) */
+its Y is the lock (network_game_server_port_lock), its Black system link or online (hmp_online.c hmp_coop_online) */
 static boolean bots_coop_lobby(
 	struct network_game **game_out)
 {
@@ -7229,10 +7232,19 @@ boolean bots_lobby_button(
 		if (bots_coop_lobby(&game))
 		{
 			void network_game_server_port_lock(boolean locked);
+			boolean locked = TEST_FLAG(game->cooperative_flags, _network_game_locked_bit);
 
-			if (button != _gamepad_analog_button_y)
+			/* (Y the lock; Black system link or online: hmp_online.c) */
+			if (button == _gamepad_analog_button_y)
+				network_game_server_port_lock(locked = !locked);
+#if defined(OXBOX_NET_P2P)
+			else if (button != _gamepad_analog_button_black)
 				return FALSE;
-			network_game_server_port_lock(!TEST_FLAG(game->cooperative_flags, _network_game_locked_bit));
+			hmp_coop_online(button == _gamepad_analog_button_y ? 2 : 1, locked);
+#else
+			else
+				return FALSE;
+#endif
 			ui_play_audio_feedback_sound(1);
 			return TRUE;
 		}
@@ -7337,7 +7349,25 @@ void bots_render(
 
 		if (!host && !locked)
 			return;
+#if defined(OXBOX_NET_P2P)
+		/* (the host's: online or system link (hmp_online.c), the lock, and the buttons that change them) */
+		if (host)
+		{
+			boolean online = hmp_coop_online(0, locked);
+
+			/* (the bar has room for ~32 characters, Halo's own messages on its left: locked online, no room for
+			Black's) */
+			if (online && locked)
+				halo_linux_snprintf(text, sizeof(text), "Online, Locked  Y: Unlock");
+			else
+				halo_linux_snprintf(text, sizeof(text), "%sY: %s  Black: %s", online ? "Online  " : locked ? "Locked  " : "",
+					locked ? "Unlock" : "Lock", online ? "LAN" : "Go Online");
+		}
+		else
+			halo_linux_snprintf(text, sizeof(text), "Lobby Locked");
+#else
 		halo_linux_snprintf(text, sizeof(text), "%s", !host ? "Lobby Locked" : locked ? "Locked  Y: Unlock" : "Y: Lock Lobby");
+#endif
 		goto draw;
 	}
 #endif

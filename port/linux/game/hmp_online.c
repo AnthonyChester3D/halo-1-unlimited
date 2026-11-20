@@ -113,7 +113,7 @@ static char const *const online_strings[NUMBER_OF_ONLINE_STRINGS] =
 	"ONLINE PLAY",
 	"Play over the internet with \r\nother Xboxes running Halo 1 \r\nUnlimited: up to 16 players.",
 	"HOST CO-OP GAME",
-	"Play the campaign together, \r\neach on your own Xbox, over \r\nsystem link: up to 4 players.",
+	"Play the campaign together, \r\neach on your own Xbox, over \r\nsystem link or online: 4 max.",
 };
 
 /* ---------- structures */
@@ -304,8 +304,7 @@ static void row_name(wchar_t *name, int size, char const *prefix, char const *te
 static void set_mode(boolean on)
 {
 	if (online.mode != on)
-		platform_log("online: %s", on ? "ONLINE PLAY (internet games; a hosted game is listed online)" :
-			"SYSTEM LINK PLAY (the LAN alone)");
+		platform_log("online: %s", on ? "ONLINE PLAY (the internet)" : "SYSTEM LINK PLAY (the LAN)");
 	online.mode = on;
 	/* (a game hosted now: joinable and listed from the internet in ONLINE PLAY alone) */
 	p2p_set_hosting_allowed(on);
@@ -379,6 +378,8 @@ static void multiplayer_patch(short local, struct widget_instance *root)
 			network_game_accept_remote_connections(FALSE);
 			platform_log("co-op: lobby closed");
 		}
+		/* (an online co-op game's: the LAN again till ONLINE PLAY) */
+		set_mode(FALSE);
 	}
 	for (c = root->child; c && !list; c = c->next)
 		if (c->type == 3)
@@ -394,7 +395,7 @@ static void multiplayer_patch(short local, struct widget_instance *root)
 	}
 	if (!link || !link->previous)
 	{
-		platform_log("online: the Multiplayer screen has no SYSTEM LINK PLAY to put ONLINE PLAY under");
+		platform_log("online: no SYSTEM LINK PLAY item");
 		return;
 	}
 	after = link;
@@ -556,6 +557,19 @@ long hmp_online_dispatch(struct widget_instance *root, struct event_record *even
 boolean hmp_coop_hosting(void)
 {
 	return online.coop_hosting;
+}
+
+/* the co-op lobby (bots.c): whether its game is online (how 0); how 1 swaps system link (as it starts) and online
+(Black: the game then listed and joined as ONLINE PLAY's; not while online play is off), and 1 or 2 (the lock
+changed) set the listing to follow the lock: a locked game isn't listed online, and the invite made when it unlocks
+is a new one */
+boolean hmp_coop_online(short how, boolean locked)
+{
+	if (how == 1 && (online.mode || oxbox_online))
+		set_mode(!online.mode);
+	if (how)
+		p2p_set_hosting_public(online.mode && !locked);
+	return online.mode;
 }
 
 /* the Multiplayer list's extended description (multiplayer_type_menu_update_extended_description, after it set the
@@ -899,7 +913,7 @@ void oxbox_online_join_reached(struct widget_instance *list)
 	online.join_reached = FALSE;
 	if (!list || !list->focused_child || list->parameters.list.selected_index != online.join_row)
 	{
-		platform_log("online: the host is reached (its row not selected: not joined at once)");
+		platform_log("online: host reached, not joined");
 		return;
 	}
 	platform_log("online: the host is reached: joining its game");

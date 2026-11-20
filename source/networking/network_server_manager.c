@@ -1245,7 +1245,7 @@ boolean network_game_server_kick_machine_of_player(
 			!network_game_server_client_machine_is_joined_to_game(server, &server->client_machines[machine_index]) &&
 			network_game_server_machine_has_players(server, machine_index))
 		{
-			console_warning("ban: the player's machine has left the game, and has nothing to ban (kick takes the player out)");
+			console_warning("ban: the player's machine has left: nothing to ban");
 			return FALSE;
 		}
 		console_warning("%s: not a player of the host's own machine, nor one not joined", ban ? "ban" : "kick");
@@ -1730,8 +1730,7 @@ static void network_game_server_list(
 
 		if (kind != logged_kind)
 		{
-			network_event("lobby kind: %s", kind ? "crossplay (PCs see and join it)" :
-				"the Xboxes' alone (a folder map, bots, or crossplay off)");
+			network_event("lobby kind: %s", kind ? "crossplay" : "Xboxes only");
 			logged_kind = kind;
 		}
 	}
@@ -2082,7 +2081,7 @@ boolean network_game_server_start_network_game(
 					!network_game_server_machine_has_players(server, machine->machine_index))
 				{
 					network_game_server_map_pending[machine_index] = TRUE;
-					network_event("machine #%d has no player in the game yet: it joins once the game is going",
+					network_event("machine #%d has no player yet: it joins once the game is going",
 						machine->machine_index);
 					continue;
 				}
