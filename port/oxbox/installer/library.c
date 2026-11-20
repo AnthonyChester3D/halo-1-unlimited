@@ -186,7 +186,7 @@ static int parse(char *text, unsigned long size, struct library *library, char *
 
 int library_ready(void)
 {
-	return library_key_count > 0 && library_keys[0].name[0];
+	return library_key_count > 0;   /* (none: mkkeys.py writes one empty entry and a count of 0) */
 }
 
 int library_fetch(char const *url, int allow_unsigned, struct library *library, char *error)
