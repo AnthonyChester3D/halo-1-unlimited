@@ -155,7 +155,11 @@ def build(out, folders, group=None, previous=None, base=None):
             seen.add((name.lower(), (group or os.path.basename(os.path.normpath(given))).lower()))
             data, unpacked, count = make_zip(folder)
             digest = hashlib.sha256(data).hexdigest()
+            # (GitHub renames an uploaded file with other characters: letters, digits, '-', '.', '_' between them)
             safe = ''.join(c if c.isalnum() or c in '-.' else '_' for c in name)
+            while '__' in safe:
+                safe = safe.replace('__', '_')
+            safe = safe.strip('_.-') or 'map'
             file_name = '%s-%s.zip' % (safe, digest[:8])
             with open(os.path.join(out, file_name), 'wb') as f:
                 f.write(data)
