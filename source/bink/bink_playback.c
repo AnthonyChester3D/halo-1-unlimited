@@ -566,6 +566,13 @@ void bink_playback_start(
 	unsigned long flags)
 {
 	bink_get_memory_available("begin bink_playback_start");
+#if defined(HALO_XBOX_TARGET)
+	{
+		extern void oxbox_boot_movie_started(void);   /* (oxbox_sdk.c: the boot's later work waits for the intro) */
+
+		oxbox_boot_movie_started();
+	}
+#endif
 
 	if (!bink_globals.initialized)
 		return;

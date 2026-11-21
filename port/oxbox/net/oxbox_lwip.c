@@ -232,6 +232,30 @@ int oxbox_lwip_wait_up(unsigned long milliseconds)
 	return stack_state == 2;
 }
 
+/* oxbox (v1.156): while the boot holds (the intro movie: oxbox_boot_frame, oxbox_sdk.c), the game's own start-up
+(XNetStartup, WSAStartup, the address asked for) only notes that the stack is wanted; a socket asked for starts it at
+once (oxbox_lwip_start) */
+static int boot_held = 1, start_wanted;
+
+void oxbox_lwip_start_soon(void)
+{
+	void oxbox_lwip_start(void);
+
+	if (boot_held)
+		start_wanted = 1;
+	else
+		oxbox_lwip_start();
+}
+
+void oxbox_lwip_release(void)
+{
+	void oxbox_lwip_start(void);
+
+	boot_held = 0;
+	if (start_wanted)
+		oxbox_lwip_start();
+}
+
 void oxbox_lwip_start(void)
 {
 	if (stack_state)

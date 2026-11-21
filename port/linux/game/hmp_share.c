@@ -2522,7 +2522,19 @@ void map_share_update(void) {
     int priority;
     g_ticks++;
     crc_init();
+#if defined(HALO_XBOX_TARGET)
+    {
+        /* (oxbox_sdk.c: the boot's later work, after the intro; the transfer thread with it) */
+        void oxbox_boot_frame(int game_map);
+        int oxbox_boot_released(void);
+        oxbox_boot_frame(loaded && ieq(loaded, "ui") != 0);
+        if (!oxbox_boot_released()) goto boot_held;
+    }
+#endif
     if (!g_worker && !g_worker_failed) { maps_writable(); start_worker(); }
+#if defined(HALO_XBOX_TARGET)
+boot_held:
+#endif
     priority = game_in_progress() ? 0 : WORKER_PRIORITY;
     if (g_worker && priority != g_worker_priority) { SetThreadPriority(g_worker, priority); g_worker_priority = priority; }
     reap();
