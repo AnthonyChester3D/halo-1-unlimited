@@ -52,7 +52,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 62
+#define INSTALLER_VERSION 63
 #endif
 __attribute__((used)) static struct
 {
@@ -4018,7 +4018,7 @@ static void player_library(struct halo *h)
 	items = malloc(library.count * sizeof(*items));
 	if (!items)
 		return;
-	library_tidy(maps);
+	library_settle(&library, maps);
 	for (;;)
 	{
 		struct library_item *item;
@@ -4038,7 +4038,7 @@ static void player_library(struct halo *h)
 		item = &library.items[k];
 		{
 			struct menu_item choices[3];
-			char title[80], line[400];
+			char title[80], line[400], where[300];
 			int n = 0, get = -1, remove = -1, c;
 			memset(choices, 0, sizeof(choices));
 			if (item->state != LIBRARY_INSTALLED)
@@ -4054,10 +4054,12 @@ static void player_library(struct halo *h)
 			}
 			text_print(choices[n++].text, sizeof(choices[0].text), "Back");
 			text_print(title, sizeof(title), "%s", item->name);
-			text_print(line, sizeof(line), "%s%s%s%s%lu MB to download, %lu MB on %c:. Goes in %s\\%s.%s", item->group,
+			library_folder(item, maps, where, sizeof(where));
+			text_print(line, sizeof(line), "%s%s%s%s%lu MB to download, %lu MB on %c:. Goes in %s.%s%s%s", item->group,
 				item->version[0] ? ", version " : "", item->version, item->group[0] || item->version[0] ? ". " : "",
-				(item->size + 524288) >> 20, (item->unpacked + 524288) >> 20, maps[0], maps, item->item,
-				item->state == LIBRARY_OTHER ? " The map in that folder now is replaced." : item->state == LIBRARY_SWAP ?
+				(item->size + 524288) >> 20, (item->unpacked + 524288) >> 20, maps[0], where,
+				item->state == LIBRARY_OTHER ? " Your copy in maps\\" : "", item->state == LIBRARY_OTHER ? item->item : "",
+				item->state == LIBRARY_OTHER ? " is replaced." : item->state == LIBRARY_SWAP ?
 				" It replaces the other version you have." : "");
 			c = menu(title, line, choices, n, 0);
 			if (c == get)
@@ -4088,8 +4090,9 @@ static void player_library(struct halo *h)
 			else if (c == remove)
 			{
 				struct menu_item sure[2] = {{"Remove it", NULL, 0}, {"Back", NULL, 0}};
-				text_print(line, sizeof(line), "%s comes off this Xbox (its folder %s\\%s is deleted). You can download "
-					"it again any time.", item->name, maps, item->item);
+				library_folder(item, maps, where, sizeof(where));
+				text_print(line, sizeof(line), "%s comes off this Xbox (its folder %s is deleted). You can download it "
+					"again any time.", item->name, where);
 				if (menu(title, line, sure, 2, 1) == 0 && library_remove(item, maps, error))
 					page(title, error);
 			}

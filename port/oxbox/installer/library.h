@@ -1,6 +1,6 @@
 /* library.h: the map library (library.c, docs/map_library.md): maps to download, listed in a signed catalog
 (port/oxbox/tools/library.py makes it, oxsign.py signs it), each map a zip of its folder, put in the install's
-maps\<folder>\ as Halo Map Porter's maps are. */
+maps\Library\<folder>\ (Halo Map Porter's map folders, together in a pack of their own). */
 #ifndef OXBOX_LIBRARY_H
 #define OXBOX_LIBRARY_H
 
@@ -8,6 +8,12 @@ maps\<folder>\ as Halo Map Porter's maps are. */
 
 /* the library's catalog; its maps' zips are beside it, unless the catalog names another address */
 #define LIBRARY_DEFAULT_URL "https://github.com/h1u-librarian/map-library/releases/latest/download/catalog.oxlb"
+
+/* the library's maps go together in the install's maps\Library\ (a pack of their own in the game's list); a whole
+pack from it ("kind: pack") goes in maps\<its folder>\. (A map's folder name: at most 22 characters, the game's 30
+for a pack's and its map's together) */
+#define LIBRARY_PACK "Library"
+#define LIBRARY_MAP_NAME 22
 
 /* a map's folder on the Xbox holds this, from the library: what was installed ("sha256: <its zip's>", "group: ...") */
 #define LIBRARY_MARK "library.oxl"
@@ -17,7 +23,7 @@ enum
 	LIBRARY_NEW,       /* not on this Xbox */
 	LIBRARY_INSTALLED, /* this one, from the library */
 	LIBRARY_UPDATE,    /* an older one of it, from the library */
-	LIBRARY_OTHER,     /* its folder holds another map, put there by hand (or not from this library) */
+	LIBRARY_OTHER,     /* a copy of it put in maps\<item>\ by hand (or a pack's folder not from the library) */
 	LIBRARY_SWAP       /* its folder holds the library's other version of it (another group's) */
 };
 
@@ -28,6 +34,7 @@ struct library_item
 	char about[304];
 	char file[200];          /* its zip: a name beside the catalog, or an address */
 	unsigned long size, unpacked, files;
+	int pack;                /* ("kind: pack": a whole pack, in maps\<item>\; else a map, in maps\Library\<item>\) */
 	unsigned char sha256[32];
 	int state;               /* (library_states) */
 };
@@ -51,10 +58,18 @@ isn't a list this can use (not signed by the library's key, damaged, a newer kin
 int library_fetch(char const *url, int allow_unsigned, struct library *library, char *error);
 void library_free(struct library *library);
 
+/* where an item goes: maps\Library\<item> (a map), maps\<item> (a pack) */
+void library_folder(struct library_item const *item, char const *maps, char *folder, int size);
+
+/* the library's maps put where they go now: ones downloaded before (installer 62, in maps\<item>\ with the mark) moved
+into maps\Library\, and what an interrupted download left tidied (library_tidy) */
+void library_settle(struct library const *library, char const *maps);
+
 /* each item's state, from the folders in maps (the install's "F:\Games\H1U\maps") */
 void library_states(struct library *library, char const *maps);
 
-/* downloads an item and puts it in maps\<item>\ (in place of what's there), checked as it comes; 0 when it's in,
+/* downloads an item and puts it in its folder (library_folder: in place of what's there; a copy of a map put in
+maps\<item>\ by hand is deleted once it's in), checked as it comes; 0 when it's in,
 else why not in error (256 bytes). A power cut leaves only .hmp_ names, which the game skips (library_tidy) */
 int library_get(struct library const *library, struct library_item const *item, char const *maps,
 	struct download_report const *report, char *error);
@@ -62,7 +77,7 @@ int library_get(struct library const *library, struct library_item const *item, 
 /* an item's folder deleted (the map off this Xbox) */
 int library_remove(struct library_item const *item, char const *maps, char *error);
 
-/* what an interrupted download left in maps (<folder>.hmp_dl, .hmp_dl.zip, .hmp_old) */
+/* what an interrupted download left in a folder (<folder>.hmp_dl, .hmp_dl.zip, .hmp_old) */
 void library_tidy(char const *maps);
 
 #endif

@@ -1347,12 +1347,22 @@ void hmp_maps_table_set_count(long count) { hmp_maps_globals.table_count = count
 long hmp_maps_table_capacity(void) { return hmp_maps_globals.table_capacity; }
 long hmp_maps_visible_position(short card) { return card >= 0 && card < 3 ? hmp_maps_globals.visible_position[card] : NONE; }
 
+/* (the installer's map library puts its maps in maps\Library\, where a map copied by hand is in maps\: "+Library/X" and
+"+X" are the same map, so a game's map is found either way) */
+#define LIBRARY_KEY "+Library/"
+
 long hmp_maps_find(char const *name)
 {
-	long i;
+	long i, n = sizeof(LIBRARY_KEY) - 1;
+	char other[48];
 	if (!name || name[0] != '+') return NONE;
 	if (!hmp_maps_globals.scanned) hmp_maps_scan();
 	for (i = 0; i < hmp_maps_globals.map_count; i++) if (!ieq(MAP_KEY(i), name)) return i;
+	/* (not there: the other place's key, "+Library/X" for "+X" and the other way round) */
+	if (!_strnicmp(name, LIBRARY_KEY, n)) snprintf(other, sizeof(other), "+%s", name + n);
+	else if (!strchr(name, '/')) snprintf(other, sizeof(other), LIBRARY_KEY "%s", name + 1);
+	else return NONE;
+	for (i = 0; i < hmp_maps_globals.map_count; i++) if (!ieq(MAP_KEY(i), other)) return i;
 	return NONE;
 }
 
@@ -1557,7 +1567,7 @@ boolean hmp_maps_delete(char const *key)
 	short root;
 	boolean gone = TRUE;
 	size_t length = key ? strlen(key) : 0;
-	char shared_names[2][32];
+	char shared_names[2][32], own_key[MAXIMUM_FOLDER_NAME + 2];
 	/* (a map's own folder, never a maps folder itself or a pack: "+x" at least, no empty part, no "..") */
 	if (length < 2 || length > 200 || key[0] != '+' || key[1] == '/' || key[length - 1] == '/' || strstr(key, "//") ||
 		strstr(key, "..") || strchr(key, '\\') || hmp_maps_find(key) == NONE)
@@ -1565,6 +1575,9 @@ boolean hmp_maps_delete(char const *key)
 		hmp_log("maps: %s isn't a folder map this console has: not deleted", key ? key : "(none)");
 		return FALSE;
 	}
+	/* (the copy found: "+X" may be a library map's "+Library/X", hmp_maps_find) */
+	scpy(own_key, MAP_KEY(hmp_maps_find(key)));
+	key = own_key;
 	cache_files_forget_cached_map(key);              /* (first: a precache may hold the map open) */
 	/* (what its copies draw on, before they go) */
 	for (root = 0; root < 2; root++)
