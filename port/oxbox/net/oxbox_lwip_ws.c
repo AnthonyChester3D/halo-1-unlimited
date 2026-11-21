@@ -105,6 +105,7 @@ typedef struct
 #define WSANOTINITIALISED (WSABASEERR + 93)
 
 void oxbox_lwip_start(void);
+void oxbox_lwip_start_soon(void);
 int oxbox_lwip_address(unsigned long *address, int *dhcp);
 const unsigned char *oxbox_lwip_mac(void);
 int oxbox_lwip_card_up(void);
@@ -399,6 +400,26 @@ static void peer_incoming(int stream, struct sockaddr_in *address)
 /* once, as the game starts its networking (XNetStartup, WSAStartup): lwIP up, then internet play (opence.ini's online,
 on unless 0). A game hosted is the LAN's alone until ONLINE PLAY is chosen in the Multiplayer menu, which lists it for
 other Xboxes online (port/linux/game/hmp_online.c, port/linux/src/p2p_lobby.c) */
+static void internet_play_start(void);
+static int internet_play_wanted;
+
+/* (v1.156: while the boot holds, wanted; started when it ends: oxbox_internet_play_release) */
+static void internet_play_start_soon(void)
+{
+	int oxbox_boot_released(void);
+
+	if (oxbox_boot_released())
+		internet_play_start();
+	else
+		internet_play_wanted = 1;
+}
+
+void oxbox_internet_play_release(void)
+{
+	if (internet_play_wanted)
+		internet_play_start();
+}
+
 static void internet_play_start(void)
 {
 	static int started;
@@ -868,9 +889,9 @@ int WINAPI WSAStartup(unsigned short version, void *data)
 {
 	(void)version;
 	(void)data;
-	oxbox_lwip_start();
+	oxbox_lwip_start_soon();
 #if defined(OXBOX_NET_P2P)
-	internet_play_start();
+	internet_play_start_soon();
 #endif
 	return 0;
 }
@@ -885,9 +906,9 @@ int WINAPI WSACleanup(void)
 int WINAPI XNetStartup(const void *parameters)
 {
 	(void)parameters;
-	oxbox_lwip_start();
+	oxbox_lwip_start_soon();
 #if defined(OXBOX_NET_P2P)
-	internet_play_start();
+	internet_play_start_soon();
 #endif
 	return 0;
 }
@@ -906,7 +927,7 @@ unsigned long WINAPI XNetGetTitleXnAddr(void *xnaddr)
 	unsigned long ina = 0;
 	int dhcp = 0;
 
-	oxbox_lwip_start();
+	oxbox_lwip_start_soon();
 	oxbox_lwip_address(&ina, &dhcp);
 	memset(address, 0, sizeof(*address));
 	address->bSizeOfStruct = sizeof(*address);

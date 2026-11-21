@@ -991,11 +991,12 @@ int oxbox_entry(int argc, char **argv, char **envp)
 	if (!oxbox_setting_audio_effects)
 		platform_log("settings: no DirectSound effects image (audio_effects = 0)");
 	/* (the developers' perf log: its section loaded and started only with perf_log = 1, or perf_sweep = 1, oxbox_sdk.c) */
+	/* (v1.156: loaded when the intro has ended: oxbox_boot_frame, oxbox_sdk.c; its 168 KB left the intro too little) */
 	if (oxbox_setting_perf_log || oxbox_setting_perf_sweep)
 	{
-		void oxbox_perf_load(void);
+		extern int oxbox_boot_perf_wanted;
 
-		oxbox_perf_load();
+		oxbox_boot_perf_wanted = 1;
 	}
 	oxbox_stage = 2;
 	/* (a crash in the game's thread reported before the kernel stops: oxbox_crash_handler) */

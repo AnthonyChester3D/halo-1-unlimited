@@ -634,6 +634,70 @@ void oxbox_ftp_frame(int menus)
 	}
 }
 
+/* ---------- the boot's later work, after the intro movie (v1.156)
+
+At boot the intro movie's player needs the free memory, and a console has little to spare (v1.150 crashed in it, v1.154
+skipped it): the network stack, internet play, the network test, the developers' perf log and Halo Map Porter's
+transfer thread wait until the intro has played (or been skipped), a map starts loading, or 25 seconds have gone, then
+start (oxbox_boot_frame, every frame from map_share_update). The update check waits for it too, and for no movie
+playing. A socket asked for in the meantime starts the stack at once (oxbox_lwip.c). */
+
+int oxbox_boot_perf_wanted;
+static int oxbox_boot_done, oxbox_boot_movie_seen;
+static unsigned long oxbox_boot_first_frame;
+
+int oxbox_boot_released(void)
+{
+	return oxbox_boot_done;
+}
+
+/* a movie started, or was asked for and not played (bink_playback.c) */
+void oxbox_boot_movie_started(void)
+{
+	oxbox_boot_movie_seen = 1;
+}
+
+void oxbox_boot_frame(int game_map)
+{
+	extern boolean bink_playback_in_progress(void);
+	unsigned long now = GetTickCount();
+
+	if (oxbox_boot_done)
+		return;
+	if (!oxbox_boot_first_frame)
+		oxbox_boot_first_frame = now | 1;
+	if (!game_map && !(oxbox_boot_movie_seen && !bink_playback_in_progress()) && now - oxbox_boot_first_frame < 25000)
+		return;
+	oxbox_boot_done = 1;
+	platform_log("boot: %s: the network and the rest start now (%lu KB free)", game_map ? "a map is loading" :
+		oxbox_boot_movie_seen ? "the intro is over" : "no intro in 25 seconds", free_kb());
+	{
+		void oxbox_lwip_release(void);
+
+		oxbox_lwip_release();
+	}
+#if defined(OXBOX_NET_P2P)
+	{
+		void oxbox_internet_play_release(void);
+
+		oxbox_internet_play_release();
+	}
+#endif
+#if defined(OXBOX_NET_TEST)
+	{
+		void oxbox_net_test_release(void);
+
+		oxbox_net_test_release();
+	}
+#endif
+	if (oxbox_boot_perf_wanted)
+	{
+		void oxbox_perf_load(void);
+
+		oxbox_perf_load();
+	}
+}
+
 /* ---------- the look for a newer release, and the offer to update
 
 opence.ini update_check = 1 (the default; 0: never; 2: even on a test build, release 0, to try it): once a boot, in
@@ -866,6 +930,13 @@ void oxbox_update_frame(int menus)
 
 		if (!menus || (now < 8000 && !oxbox_update.forced))   /* (the boot's own work first) */
 			return;
+		{
+			/* (v1.156: not before the boot's later work has started, nor while a movie plays: OXUPD is ~190 KB) */
+			extern boolean bink_playback_in_progress(void);
+
+			if (!oxbox_boot_done || bink_playback_in_progress())
+				return;
+		}
 		oxbox_update_read_installed();
 		test_location = oxbox_update_read_url();
 		{

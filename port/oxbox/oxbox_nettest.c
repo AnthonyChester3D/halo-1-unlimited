@@ -606,13 +606,30 @@ void oxbox_net_test_no_network(unsigned long status)
 }
 
 /* transport_initialize's, once the network is up */
+static int net_test_wanted;
+
+/* (v1.156: the boot's test waits for the intro to end: oxbox_boot_frame) */
+void oxbox_net_test_release(void)
+{
+	void oxbox_net_test_start(void);
+
+	if (net_test_wanted)
+		oxbox_net_test_start();
+}
+
 void oxbox_net_test_start(void)
 {
 	static int started;
 	HANDLE thread;
+	int oxbox_boot_released(void);
 
 	if (started || !oxbox_net_test)
 		return;
+	if (!oxbox_boot_released())
+	{
+		net_test_wanted = 1;
+		return;
+	}
 	started = 1;
 #if defined(OXBOX_NET_LWIP)
 	{
