@@ -148,6 +148,8 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 				void oxbox_memprof_report(const char *label);
 				static unsigned long lowest = 0xFFFFFFFF, reports;
 				extern volatile int oxbox_memprof_request;
+				void oxbox_memprof_stack(const char *label);
+				oxbox_memprof_stack("t");
 				if (oxbox_memprof_request)
 				{
 					oxbox_memprof_request = 0;

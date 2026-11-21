@@ -13297,11 +13297,16 @@ static short hs_expression_refusal_walk(
 	char const **name,
 	long *stack);
 
+/* (v1.158: made once for a map's whole check, hs_scenario_functions_check, not once a script: CE Digsite's maps
+made and freed it 600 times a sweep) */
+static long *hs_expression_refusal_stack;
+
 static short hs_expression_refusal(
 	long root_expression_index,
 	char const **name)
 {
-	long *stack = (long *)malloc((MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO+1) * sizeof(long));
+	long *stack = hs_expression_refusal_stack ? hs_expression_refusal_stack :
+		(long *)malloc((MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO+1) * sizeof(long));
 	short refusal;
 
 	if (!stack)
@@ -13310,7 +13315,8 @@ static short hs_expression_refusal(
 		return _hs_node_refusal_damaged;
 	}
 	refusal = hs_expression_refusal_walk(root_expression_index, name, stack);
-	free(stack);
+	if (stack != hs_expression_refusal_stack)
+		free(stack);
 	return refusal;
 }
 
@@ -13441,6 +13447,9 @@ static void hs_scenario_functions_check(
 	if (!refused && !linked_twice)
 		return;
 
+#if defined(OXBOX_STRIP)
+	hs_expression_refusal_stack = (long *)malloc((MAXIMUM_HS_SYNTAX_NODES_PER_SCENARIO+1) * sizeof(long));
+#endif
 	for (script_index = 0; script_index<scenario->hs_scripts.count; script_index++)
 	{
 		struct hs_script const *script = TAG_BLOCK_GET_ELEMENT(
@@ -13493,6 +13502,12 @@ static void hs_scenario_functions_check(
 			disabled_global_count++;
 		}
 	}
+
+#if defined(OXBOX_STRIP)
+	if (hs_expression_refusal_stack)
+		free(hs_expression_refusal_stack);
+	hs_expression_refusal_stack = NULL;
+#endif
 
 	if (first_owner)
 	{

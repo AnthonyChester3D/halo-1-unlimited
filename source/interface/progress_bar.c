@@ -1621,6 +1621,29 @@ boolean progress_bar_oxbox_finished(
 	return !progress_bar_mode.active || !progress_bar_mode.texture0 ||
 		!progress_bar_rendering_enabled || last_t>=0.995f;
 }
+
+/* oxbox (v1.158): the loading picture's textures (300 KB and 8 KB) let go before a movie, when no load is showing
+them: they go only on the next frame drawn (progress_bar_eachframe), and the intro plays straight after the menus'
+map loads, before any, with the least free memory of the boot */
+void progress_bar_oxbox_release_textures(
+	void)
+{
+	if (progress_bar_mode.active)
+		return;
+	if (progress_bar_mode.texture0)
+	{
+		IDirect3DTexture8_Release(progress_bar_mode.texture0);
+		progress_bar_mode.texture0= NULL;
+	}
+	if (progress_bar_mode.texture1)
+	{
+		IDirect3DTexture8_Release(progress_bar_mode.texture1);
+		progress_bar_mode.texture1= NULL;
+	}
+
+	return;
+}
+
 #endif
 
 boolean progress_bar_is_active(

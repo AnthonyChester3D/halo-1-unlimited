@@ -225,14 +225,25 @@ void *system_realloc(
 			display_assert("pointer||size", "c:\\halo\\SOURCE\\cseries\\cseries_windows.c", 157, TRUE);
 			halt_and_catch_fire();
 		}
-		return GlobalAlloc(0, size);
+		return oxbox_system_note(GlobalAlloc(0, size), size, __builtin_return_address(0));
 	}
 
 	if (size != 0)
 	{
-		return GlobalReAlloc(pointer, size, GMEM_MOVEABLE);
+		/* (oxbox: the game heap's count follows a block that grows or shrinks, as the bots' network's do) */
+		unsigned long before = LocalSize(pointer);
+		void *result = GlobalReAlloc(pointer, size, GMEM_MOVEABLE);
+
+		if (result)
+		{
+			oxbox_system_live += LocalSize(result) - before;
+			if (oxbox_system_live > oxbox_system_peak)
+				oxbox_system_peak = oxbox_system_live;
+		}
+		return result;
 	}
 
+	oxbox_system_live -= LocalSize(pointer);
 	LocalFree(pointer);
 	return NULL;
 }
