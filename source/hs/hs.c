@@ -11776,6 +11776,11 @@ enum
 };
 
 short hs_script_progress(short script_index);   /* (hs_runtime.c) */
+static struct mcc_definition
+{
+	struct hs_function_definition definition;
+	short more_parameter_types[3];
+} const mcc_definitions[NUMBER_OF_MCC_FUNCTIONS];
 
 /* the nearest of a list's objects' centres to a point: -1 when none of them is there */
 static real mcc_distance(
@@ -11824,13 +11829,17 @@ static void hs_mcc_evaluate(
 	long thread_index,
 	boolean initialize)
 {
-	union hs_evaluation_argument const *a =
-		(union hs_evaluation_argument const *)hs_macro_function_evaluate(function_index, thread_index, initialize);
+	static union hs_evaluation_argument const no_arguments[2];
+	union hs_evaluation_argument const *a = no_arguments;
 	union hs_real_value result;
 	long value, bit;
 
-	if (!a)
+	/* (none to evaluate for those without: the runtime has no room to give them) */
+	if (mcc_definitions[function_index - MCC_FUNCTION_FIRST].definition.parameter_count &&
+		!(a = (union hs_evaluation_argument const *)hs_macro_function_evaluate(function_index, thread_index, initialize)))
+	{
 		return;
+	}
 	result.long_value = 0;
 	value = a[0].long_value;
 	bit = a[1].short_value;
@@ -11932,11 +11941,7 @@ static void hs_mcc_evaluate(
 #define MCC_FUNCTION(type, name, count, p0, p1, p2, p3) \
 	{{type, 0, name, hs_macro_function_parse, hs_mcc_evaluate, NULL, NULL, count, {p0}}, {p1, p2, p3}}
 
-static struct
-{
-	struct hs_function_definition definition;
-	short more_parameter_types[3];
-} const mcc_definitions[NUMBER_OF_MCC_FUNCTIONS]=
+static struct mcc_definition const mcc_definitions[NUMBER_OF_MCC_FUNCTIONS]=
 {
 	MCC_FUNCTION(_hs_type_boolean, "bit_test", 2, _hs_type_long_integer, _hs_type_short_integer, 0, 0),
 	MCC_FUNCTION(_hs_type_long_integer, "bit_toggle", 3, _hs_type_long_integer, _hs_type_short_integer,
