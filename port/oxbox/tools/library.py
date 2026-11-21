@@ -12,15 +12,16 @@ catalog.oxlb). --previous: the catalog now published, whose serial this one's go
 when they aren't made again (so a build can add one group at a time); the zips to upload are those it lists as new.
 --base: where the zips are, when not beside the catalog (a URL ending in /).
 
-A folder's name is where the Xbox puts the map (maps\\<folder>\\), and the map's name in map sharing ("+<folder>"), so
-it must be the name the map has everywhere: Halo Map Porter's. At most 30 characters (the game's), and only what
-FATX allows.
+A folder's name is where the Xbox puts the map (maps\\Library\\<folder>\\, the library's maps together), and the map's
+name in map sharing ("+Library/<folder>", which the game also finds as a copy put in maps\\<folder>\\ by hand), so it
+must be the name the map has everywhere: Halo Map Porter's. At most 22 characters (the game's 30 for a pack's and its
+map's together, "Library/" taking 8), and only what FATX allows.
 """
 import hashlib, io, os, struct, sys, time, unicodedata, zipfile
 
 MAGIC = b'OXLB'
 FORMAT = 1
-MAXIMUM_FOLDER = 30
+MAXIMUM_FOLDER = 22   # (the Xbox's maps\Library\<folder>: the game's 30 for "Library/<folder>")
 MAXIMUM_ABOUT = 300
 FATX_BAD = set('<>:"/\\|?*')
 STORED = ('.map', '.zip')   # (Xbox maps are zlib inside already: 98% of their size when packed again)
@@ -67,7 +68,8 @@ def map_folders(folder):
 
 def folder_problem(name):
     if len(name) > MAXIMUM_FOLDER:
-        return 'its name is longer than %d characters' % MAXIMUM_FOLDER
+        return 'its name is longer than %d characters (the Xbox\'s Library pack\'s limit): rename it in HMP\'s output' % \
+            MAXIMUM_FOLDER
     if any(c in FATX_BAD or not 32 <= ord(c) < 127 for c in name) or name != name.strip() or name.endswith('.'):
         return 'its name has characters an Xbox folder can\'t have'
     if '.hmp_' in name.lower():

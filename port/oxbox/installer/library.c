@@ -84,11 +84,11 @@ static int hex_digest(char const *text, int length, unsigned char *digest)
 }
 
 /* an item's folder name: what the game reads and FATX allows (and no ".hmp_", which the game skips) */
-static int folder_ok(char const *name)
+static int folder_ok(char const *name, int pack)
 {
 	char const *p;
 	size_t n = strlen(name);
-	if (!n || n > 30 || name[0] == ' ' || name[n - 1] == ' ' || name[n - 1] == '.' || !strcmp(name, ".."))
+	if (!n || n > (pack ? 30 : LIBRARY_MAP_NAME) || name[0] == ' ' || name[n - 1] == ' ' || name[n - 1] == '.' || !strcmp(name, ".."))
 		return 0;
 	for (p = name; *p; p++)
 		if (*p < 32 || *p > 126 || strchr("<>:\"/\\|?*", *p))
@@ -159,6 +159,8 @@ static int parse(char *text, unsigned long size, struct library *library, char *
 				item->size = strtoul(value, NULL, 10);
 			else if (key_length == 8 && !strncmp(line, "unpacked", 8))
 				item->unpacked = strtoul(value, NULL, 10);
+			else if (key_length == 4 && !strncmp(line, "kind", 4))
+				item->pack = length == 4 && !strncmp(value, "pack", 4);
 			else if (key_length == 5 && !strncmp(line, "files", 5))
 				item->files = strtoul(value, NULL, 10);
 			else if (key_length == 6 && !strncmp(line, "sha256", 6) && !hex_digest(value, length, item->sha256))
@@ -172,7 +174,7 @@ static int parse(char *text, unsigned long size, struct library *library, char *
 		for (i = 0; i < library->count; i++)
 		{
 			struct library_item *it = &library->items[i];
-			if (folder_ok(it->item) && it->file[0] && it->size && !strstr(it->file, "..") && it->unpacked < 0xF0000000ul)
+			if (folder_ok(it->item, it->pack) && it->file[0] && it->size && !strstr(it->file, "..") && it->unpacked < 0xF0000000ul)
 			{
 				if (!it->name[0])
 					text_print(it->name, sizeof(it->name), "%s", it->item);
@@ -310,6 +312,14 @@ static int mark_read(char const *folder, unsigned char *digest, char *group, int
 	return found;
 }
 
+void library_folder(struct library_item const *item, char const *maps, char *folder, int size)
+{
+	if (item->pack)
+		text_print(folder, size, "%s\\%s", maps, item->item);
+	else
+		text_print(folder, size, "%s\\" LIBRARY_PACK "\\%s", maps, item->item);
+}
+
 void library_states(struct library *library, char const *maps)
 {
 	int i;
@@ -318,9 +328,13 @@ void library_states(struct library *library, char const *maps)
 		struct library_item *item = &library->items[i];
 		char folder[300], group[32];
 		unsigned char digest[32];
-		text_print(folder, sizeof(folder), "%s\\%s", maps, item->item);
+		library_folder(item, maps, folder, sizeof(folder));
 		if (!folder_exists(folder))
-			item->state = LIBRARY_NEW;
+		{
+			/* (a copy put in maps\<item>\ by hand: the download takes its place) */
+			text_print(folder, sizeof(folder), "%s\\%s", maps, item->item);
+			item->state = !item->pack && folder_exists(folder) ? LIBRARY_OTHER : LIBRARY_NEW;
+		}
 		else if (!mark_read(folder, digest, group, sizeof(group)))
 			item->state = LIBRARY_OTHER;
 		else if (!memcmp(digest, item->sha256, 32))
@@ -391,6 +405,29 @@ void library_tidy(char const *maps)
 			}
 		} while (FindNextFileA(find, &found));
 		FindClose(find);
+	}
+}
+
+void library_settle(struct library const *library, char const *maps)
+{
+	char pack[300], top[300], folder[300], group[32];
+	unsigned char digest[32];
+	int i;
+	text_print(pack, sizeof(pack), "%s\\" LIBRARY_PACK, maps);
+	library_tidy(maps);
+	library_tidy(pack);
+	for (i = 0; i < library->count; i++)
+	{
+		struct library_item const *item = &library->items[i];
+		if (item->pack)
+			continue;
+		text_print(top, sizeof(top), "%s\\%s", maps, item->item);
+		library_folder(item, maps, folder, sizeof(folder));
+		if (folder_exists(top) && mark_read(top, digest, group, sizeof(group)) && !folder_exists(folder))
+		{
+			CreateDirectoryA(pack, NULL);
+			MoveFileA(top, folder);
+		}
 	}
 }
 
@@ -629,12 +666,16 @@ static int free_megabytes(char const *maps, unsigned long *megabytes)
 int library_get(struct library const *library, struct library_item const *item, char const *maps,
 	struct download_report const *report, char *error)
 {
-	char url[720], zip[300], fresh[300], final[300], old[300], mark[320];
+	char url[720], zip[300], fresh[300], final[300], old[300], mark[320], parent[300], top[300];
 	unsigned char digest[32];
 	unsigned long size = 0, megabytes, need = (item->size >> 20) + (item->unpacked >> 20) + 2;
 	struct writer w;
 	FILE *file;
-	library_tidy(maps);
+	library_folder(item, maps, final, sizeof(final));
+	text_print(parent, sizeof(parent), "%s", final);
+	*strrchr(parent, '\\') = 0;
+	CreateDirectoryA(parent, NULL);
+	library_tidy(parent);
 	if (free_megabytes(maps, &megabytes) && megabytes < need)
 	{
 		text_print(error, 256, "%c: needs %lu MB free for it (%lu MB now)", maps[0], need, megabytes);
@@ -644,10 +685,9 @@ int library_get(struct library const *library, struct library_item const *item, 
 		text_print(url, sizeof(url), "%s", item->file);
 	else
 		text_print(url, sizeof(url), "%s%s", library->base, item->file);
-	text_print(zip, sizeof(zip), "%s\\%s.hmp_dl.zip", maps, item->item);
-	text_print(fresh, sizeof(fresh), "%s\\%s.hmp_dl", maps, item->item);
-	text_print(final, sizeof(final), "%s\\%s", maps, item->item);
-	text_print(old, sizeof(old), "%s\\%s.hmp_old", maps, item->item);
+	text_print(zip, sizeof(zip), "%s.hmp_dl.zip", final);
+	text_print(fresh, sizeof(fresh), "%s.hmp_dl", final);
+	text_print(old, sizeof(old), "%s.hmp_old", final);
 	memset(&w, 0, sizeof(w));
 	sha256_start(&w.sha);
 	w.file = CreateFileA(zip, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -705,18 +745,28 @@ int library_get(struct library const *library, struct library_item const *item, 
 	}
 	if (folder_exists(old))
 		delete_tree(old, 2);
+	/* (a copy put in maps\<item>\ by hand: this one in its place now) */
+	text_print(top, sizeof(top), "%s\\%s", maps, item->item);
+	if (!item->pack && folder_exists(top))
+		delete_tree(top, 2);
 	return 0;
 }
 
 int library_remove(struct library_item const *item, char const *maps, char *error)
 {
 	char folder[300];
-	text_print(folder, sizeof(folder), "%s\\%s", maps, item->item);
+	library_folder(item, maps, folder, sizeof(folder));
 	delete_tree(folder, 2);
 	if (folder_exists(folder))
 	{
 		text_print(error, 256, "couldn't delete all of %s", folder);
 		return 1;
+	}
+	/* (and the Library folder, once nothing's in it) */
+	if (!item->pack)
+	{
+		*strrchr(folder, '\\') = 0;
+		RemoveDirectoryA(folder);
 	}
 	return 0;
 }

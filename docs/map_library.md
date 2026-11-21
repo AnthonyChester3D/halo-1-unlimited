@@ -9,8 +9,12 @@ this one: the maps hold Halo's content.
 Main menu > Map Library: the library's maps, each with its group (Halo Map Porter's "Crossplay" or "Xbox"), size and
 state: nothing (not on this Xbox), Installed, Update (a newer zip of the same map), Other version (the other group's
 copy of it is installed), Replaces yours (that folder holds a map that didn't come from the library). A downloads it
-into `<install>\maps\<folder>\`, as Halo Map Porter's "Copy to Xbox maps" folders are put by hand; an installed one
-can be removed. The game lists it with no other step.
+into `<install>\maps\Library\<folder>\`: the library's maps together, one pack ("Library") in the game's list. (A
+whole pack from the library, `kind: pack`, goes in `maps\<its folder>\` as packs do; none yet.) Maps downloaded by
+installer 62, which put them in `maps\<folder>\`, move into Library at the next visit; a copy put in `maps\<folder>\`
+by hand shows "Replaces yours" and is deleted once the library's is in. An installed one can be removed. The game
+lists it with no other step, and map sharing finds `+Library/X` and a hand-copied `+X` as the same map
+(hmp_maps_find), so a game on either needs no second copy.
 
 The item is on the main menu once the installer has the library's key (`port/oxbox/installer/library_keys.txt`);
 before that only with developer.ini's `library_url` (a test library).
@@ -22,7 +26,8 @@ before that only with developer.ini's `library_url` (a test library).
 the 12 bytes before the text + the text). The text is ASCII `key: value` lines: the library's (`library`, `format`,
 `serial`: one more each build, `date`), then each item's from its `item:` line:
 
-    item: Coldsnap            its folder: maps\Coldsnap\ (and its name in map sharing, "+Coldsnap"); at most 30 characters
+    item: Coldsnap            its folder: maps\Library\Coldsnap\ (map sharing's "+Library/Coldsnap"); at most 22 characters
+    kind: pack                (only for a whole pack: maps\<item>\, up to 30 characters; a map has no kind line)
     name: Coldsnap            info.txt's first line
     group: Crossplay          Halo Map Porter's output folder it came from
     about: By Tiamat, 2006.  Players: 4-16  ...   info.txt's lines up to its [sections], without Version:
