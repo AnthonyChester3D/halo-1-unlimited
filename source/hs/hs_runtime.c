@@ -281,6 +281,23 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "text/draw_string.h"
 #include "cseries/errors.h"
+
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_FAST_SCRIPTS)
+/* oxbox (v1.150, a test build's: OXBOX_FAST_SCRIPTS, gen_xbox.py): the interpreter's lookups (a thread, a syntax node, a
+global: several for each step of every script) by v1.137's inline fast path, datum_get itself only when one doesn't
+check out (it then says why, as before). CE Digsite's per-player scripts spent most of a game tick in the interpreter,
+datum_get its busiest function. Inlined at every lookup it costs ~13 KB (one shared copy gained nothing in xemu): a
+console sweep decides whether it's worth that */
+static __inline__ void *hs_datum_get(
+	struct data_array *data,
+	long index)
+{
+	void *header = datum_get_fast(data, index);
+
+	return header ? header : (datum_get)(data, index);
+}
+#define datum_get(data, index) hs_datum_get((data), (index))
+#endif
 #include "main/console.h"
 #include "game/game.h"
 

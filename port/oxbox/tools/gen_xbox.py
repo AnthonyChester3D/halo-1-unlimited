@@ -89,7 +89,12 @@ if '-DOXBOX_NO_FAST_LOOKUPS' in os.environ.get('OXBOX_EXTRA', '').split():
 # that build says so, in the menus' build number and in its perf logs' build line)
 HOT_EXTRA = tuple(os.environ.get('OXBOX_HOT_EXTRA', '').split())
 HOT += HOT_EXTRA
-VARIANT = ['-DOXBOX_BUILD_O2'] if HOT_EXTRA else []
+# (v1.150: OXBOX_EXTRA=-DOXBOX_FAST_SCRIPTS, a test build: the script interpreter's lookups inlined (hs_runtime.c) and
+# hs_runtime.c -O2, ~14 KB, to measure on a console against the normal build; its menus and perf logs say "O2" too)
+FAST_SCRIPTS = '-DOXBOX_FAST_SCRIPTS' in os.environ.get('OXBOX_EXTRA', '').split()
+if FAST_SCRIPTS:
+    HOT_FILES += (('hs', 'hs_runtime'),)
+VARIANT = ['-DOXBOX_BUILD_O2'] if HOT_EXTRA or FAST_SCRIPTS else []
 VARIANT_UNITS = ('ui_widget_game_data_input_functions', 'oxbox_perf')
 for s in srcs + port_game + [Path('port/third_party/stb_vorbis/stb_vorbis.c')]:
     add(s, 'game')
