@@ -189,6 +189,13 @@ tx = sh
 assert d[struct.unpack_from('<I', d, tx + 0x14)[0] - base:][:6] == b'.text\0'
 struct.pack_into('<I', d, tx, struct.unpack_from('<I', d, tx)[0] | 1)
 
+# the retail .rdata section writable too: OpenCE's .bss and data can overlay the retail game's read-only data in it
+# (port/oxbox/oxbox_overlay.h)
+for i in range(struct.unpack_from('<I', d, 0x11c)[0]):
+    hh = sh + i * 0x38
+    if d[struct.unpack_from('<I', d, hh + 0x14)[0] - base:][:7] == b'.rdata\0':
+        struct.pack_into('<I', d, hh, struct.unpack_from('<I', d, hh)[0] | 1)
+
 # the Bink player's sections (BINK*, BINKDATA) not loaded at boot: bink_playback.c loads them for a movie
 # (oxbox_sdk.c oxbox_bink_sections), so a game doesn't carry ~110 KB of movie player
 for i in range(nsec):

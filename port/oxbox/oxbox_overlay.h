@@ -2,6 +2,13 @@
 /* (0x210520-0x216590 is left alone: it holds the retail loading screen picture, 0x210988-0x217174, which
 source/interface/progress_bar.c reads) */
 static const struct { unsigned long start, end; } oxbox_overlay_regions[] = {
+	/* (v1.162: in retail .rdata, the retail game's read-only data 0x1dcc00-0x1efe00, 76 KB, which mkxbe.py makes
+	writable: no instruction of the retail libraries names an address in it (capstone; theirs end at 0x1dca30 and
+	start again at 0x1f0000), and the few aligned words pointing in come from the retail game's own tables (a
+	16-byte table at .data 0x1f91e4 and number tables in .rdata, none of them named by library code). In xemu,
+	filled with 0xA5 from the start, nothing changed it and nothing broke through the intro, the network, the
+	menus, Blood Gulch and Carousel with up to 15 bots and a10/b30) */
+	{ 0x1dcc00, 0x1efe00 },
 	{ 0x25000, 0x180c00 },
 	{ 0x1f3650, 0x1f8a70 },
 	{ 0x1f9350, 0x1ffef0 },
