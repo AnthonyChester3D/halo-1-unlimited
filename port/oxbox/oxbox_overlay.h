@@ -9,6 +9,12 @@ static const struct { unsigned long start, end; } oxbox_overlay_regions[] = {
 	{ 0x217280, 0x23ff70 },
 	{ 0x24db30, 0x25f580 },
 	{ 0x270a50, 0x292770 },
+	/* (v1.160: retail .data's zero-filled 0x292770-0x2c00d0, 182 KB, left out until now: no instruction of the
+	retail libraries (XAPI, D3D, DSOUND, XNET, XPP, BINK; capstone, every memory operand and immediate) names an
+	address in it, only unaligned look-alike values in .rdata/.data do, and in xemu, filled with 0xA5 from the start,
+	no byte of it changed through the intro, the menus, Blood Gulch and Carousel with up to 15 bots and a10/b30.
+	OpenCE's .bss there moves code out of .cap16: the image is 140 KB smaller) */
+	{ 0x292770, 0x2c00d0 },
 	{ 0x2c00d0, 0x2f9940 },
 	{ 0x2fa000, 0x2fdf00 },
 	{ 0x30bf10, 0x339e70 },
