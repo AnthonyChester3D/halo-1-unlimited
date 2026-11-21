@@ -105,9 +105,13 @@ void object_lists_dispose(
 	return;
 }
 
+/* port: whether this map has said its listed objects ran out (object_list_add) */
+static boolean object_lists_full_said;
+
 void object_lists_initialize_for_new_map(
 	void)
 {
+	object_lists_full_said = FALSE;
 	data_make_valid(object_list_header_data);
 	data_make_valid(object_list_data);
 
@@ -181,7 +185,27 @@ void object_list_add(
 	list = object_list_header_get(object_list_index);
 	/* port: a changed list no longer has hs_players' provenance. */
 	list->flags = 0;
-	reference_list_add(object_list_data, &list->first_reference_index, object_index);
+	/* port: reference_list_add's, but a full pool is said once a map, not for every object: a map whose scripts
+	read each player as (list_get (players) n) every tick wrote the warning millions of times (debug.txt, 400 MB) */
+	{
+		long reference_index = datum_new(object_list_data);
+
+		if (reference_index != NONE)
+		{
+			struct data_reference *reference = (struct data_reference *)datum_get(object_list_data, reference_index);
+
+			reference->datum_index = object_index;
+			reference->next_reference_index = list->first_reference_index;
+			list->first_reference_index = reference_index;
+		}
+		else if (!object_lists_full_said)
+		{
+			error(_error_silent, "WARNING: maximum %ss per map (%d) exceeded (said once a map).", object_list_data->name,
+				object_list_data->maximum_count);
+			object_lists_full_said = TRUE;
+		}
+	}
+	/* (counted even when it wasn't listed, as it always has been: list_count) */
 	list->count++;
 
 	return;
