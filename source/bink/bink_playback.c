@@ -555,8 +555,10 @@ skip_decode:
 }
 
 #if defined(HALO_XBOX_TARGET)
-/* oxbox: the free memory a movie's sound takes at most (Bink's DirectSound stream buffers), with room to spare */
-#define BINK_SOUND_MINIMUM_KB 256
+/* oxbox: the free memory a movie needs once the player's code is in (Bink's DirectSound buffers and the rest of what
+it allocates outside its pool), with room to spare: v1.148 played the intro with about 12 KB, and v1.152 crashed
+with 4 KB, silent or not */
+#define BINK_MINIMUM_FREE_KB 64
 #endif
 
 void bink_playback_start(
@@ -575,9 +577,22 @@ void bink_playback_start(
 	{
 		extern int oxbox_bink_sections(int load);
 
+		extern unsigned long oxbox_free_kb(void);
+		unsigned long free_kb;
+
 		if (!oxbox_bink_sections(TRUE))
 		{
 			error(_error_silent, "### ERROR couldn't load the bink player for '%s'", full_pathname);
+			return;
+		}
+		/* (too little left for the movie: not played, rather than the retail player reading through a NULL when an
+		allocation of its fails. A console boots with ~180 KB less free than xemu, and every folder map costs some) */
+		free_kb= oxbox_free_kb();
+		if (free_kb<BINK_MINIMUM_FREE_KB)
+		{
+			oxbox_bink_sections(FALSE);
+			error(_error_silent, "bink: %lu KB free with the player in, under the %d a movie needs: '%s' isn't played",
+				free_kb, BINK_MINIMUM_FREE_KB, full_pathname);
 			return;
 		}
 		RADSetMemory(bink_alloc, bink_free);
@@ -618,23 +633,6 @@ void bink_playback_start(
 			struct IDirectSound *dsound= dsound_get();
 			boolean sound_initialized= FALSE;
 
-#if defined(HALO_XBOX_TARGET)
-			/* oxbox: Bink's DirectSound buffers come from the free memory, and the retail player doesn't check
-			that it got them: with too little free, BinkOpen read through a NULL (v1.150's boot crashed in the
-			intro, the menus' start leaving it next to nothing). Without room the movie plays silent */
-			{
-				extern unsigned long oxbox_free_kb(void);
-				unsigned long free_kb= oxbox_free_kb();
-
-				if (dsound && free_kb<BINK_SOUND_MINIMUM_KB)
-				{
-					error(_error_silent, "bink: %lu KB free, under the %d its sound needs: '%s' plays silent",
-						free_kb, BINK_SOUND_MINIMUM_KB, full_pathname);
-					dsound= NULL;
-					sound_initialized= TRUE;     /* (not "no DirectSound": it was left out) */
-				}
-			}
-#endif
 			if (dsound)
 			{
 				bink_get_memory_available("begin BinkSoundUseDirectSound");
