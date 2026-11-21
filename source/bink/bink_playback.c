@@ -587,6 +587,11 @@ void bink_playback_start(
 		extern unsigned long oxbox_free_kb(void);
 		unsigned long free_kb;
 
+		{
+			extern void progress_bar_oxbox_release_textures(void);   /* (progress_bar.c: the loading picture, 308 KB) */
+
+			progress_bar_oxbox_release_textures();
+		}
 		if (!oxbox_bink_sections(TRUE))
 		{
 			error(_error_silent, "### ERROR couldn't load the bink player for '%s'", full_pathname);

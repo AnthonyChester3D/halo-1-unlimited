@@ -248,7 +248,9 @@ symbols in this file:
 enum
 {
 	RASTERIZER_MAXIMUM_PRIMITIVES_PER_DRAW_COMMAND = 10000,
-	RASTERIZER_MAXIMUM_DYNAMIC_DEBUG_VERTICES = 24576,
+	/* (24576, 384 KB of the GPU's memory; oxbox: debug drawing holds at most MAXIMUM_DEBUG_PRIMITIVES, 32, in each of
+	its 3 lists, 3 vertices each (rasterizer_debug.c): 288 vertices a view, 1152 in a 4-way split screen) */
+	RASTERIZER_MAXIMUM_DYNAMIC_DEBUG_VERTICES = 2048,
 };
 
 enum

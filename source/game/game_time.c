@@ -77,6 +77,7 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "scenario/scenario.h" /* port: game_time_menu_scene */
 #include "scenario/scenario_definitions.h"
+#include "networking/network_game_manager.h"
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 /* port/linux/game/network_distributed.c's */
 void network_distributed_tick(void);
@@ -192,6 +193,10 @@ long game_time_get(
 
 	return game_time_globals->local_time;
 }
+
+#if defined(HALO_XBOX_TARGET)
+enum { SOLO_HOST_MAXIMUM_TICKS = 2 };
+#endif
 
 short game_time_get_elapsed(
 	void)
@@ -424,8 +429,28 @@ void game_time_update(
 				connection = TICKS_PER_SECOND;
 				discard_leftover_time = FALSE;
 				goto calculate_elapsed_ticks;
-			case _game_connection_network_client:
 			case _game_connection_network_server:
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox (v1.158): a host no other machine has joined (a game
+				with bots alone, the showcase, the perf sweep) catches up as a
+				local game does, its leftover time dropped, at most
+				SOLO_HOST_MAXIMUM_TICKS a frame: with ticks dearer than a
+				frame's 33 ms (15 bots on a CE map) the 30 a frame a host
+				allows made each frame longer than the last until every
+				frame ran 30 (1.4 s a frame, 0.7 fps); now the game runs
+				slower, at about 10 frames a second. Once anyone has joined,
+				the host keeps real time as before. */
+				{
+					struct network_game const *game = network_game_get_game();
+
+					if (game && game->machine_count <= 1)
+					{
+						connection = SOLO_HOST_MAXIMUM_TICKS;
+						break;
+					}
+				}
+#endif
+			case _game_connection_network_client:
 				/* (the distributed netcode: every machine ticks on its own
 				clock, and the host waits for nobody) */
 				connection = TICKS_PER_SECOND;

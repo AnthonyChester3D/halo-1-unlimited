@@ -787,6 +787,9 @@ static struct rasterizer_xbox_d3d_globals rasterizer_xbox_d3d_globals = { 0 };
 #define global_d3d_surface_render_primary_copy rasterizer_xbox_d3d_globals.global_d3d_surface_render_primary_copy
 
 D3DDevice *global_d3d_device = NULL;
+#if defined(HALO_XBOX_TARGET)
+int oxbox_setting_push_buffer_kb;
+#endif
 
 /* the shared 256-entry palette; January's own
  * IDirect3DDevice8_CreatePalette(global_d3d_device, D3DPALETTE_256,
@@ -2941,6 +2944,19 @@ boolean _rasterizer_initialize(
 {
 	boolean success;
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.158): opence.ini push_buffer_kb (128 to 1024, whole 32 KB kick-offs), a test of what a smaller
+	Direct3D push buffer than Halo's 512 KB costs in frame rate: each KB less is a KB more free memory */
+	{
+		extern int oxbox_setting_push_buffer_kb;
+
+		if (oxbox_setting_push_buffer_kb >= 128 && oxbox_setting_push_buffer_kb <= 1024)
+		{
+			rasterizer_globals.push_buffer_size = (short)(oxbox_setting_push_buffer_kb & ~31);
+			error(_error_silent, "push buffer: %d KB (opence.ini push_buffer_kb)", rasterizer_globals.push_buffer_size);
+		}
+	}
+#endif
 	if (rasterizer_globals.push_buffer_size == 0)
 		rasterizer_globals.push_buffer_size = RASTERIZER_DEFAULT_PUSH_BUFFER_SIZE;
 	if (rasterizer_globals.kick_off_size == 0)

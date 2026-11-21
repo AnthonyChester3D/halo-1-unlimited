@@ -272,6 +272,40 @@ static struct
 	{ 17, (void *)hook_free_pool, (void **)&real_free_pool },
 };
 
+
+/* lab (v1.158 research): the main thread's stack painted below where it is at the start, so a report can say how
+deep it has ever been (the XBE's stack is 512 KB, all of it committed) */
+static unsigned long stack_base, stack_limit;
+static void stack_paint(void)
+{
+	unsigned long sp, *p;
+
+	__asm__ volatile ("movl %%fs:4, %0" : "=r"(stack_base));
+	__asm__ volatile ("movl %%fs:8, %0" : "=r"(stack_limit));
+	__asm__ volatile ("movl %%esp, %0" : "=r"(sp));
+	platform_log("memprof: main stack %08lx-%08lx (%lu KB), at %08lx", stack_limit, stack_base,
+		(stack_base - stack_limit) / 1024, sp);
+	if (stack_limit >= stack_base || sp <= stack_limit || sp > stack_base)
+	{
+		stack_base = 0;
+		return;
+	}
+	for (p = (unsigned long *)(sp - 4096); p >= (unsigned long *)stack_limit; p--)
+		*p = 0x5AC0FFEE;
+}
+void oxbox_memprof_stack(const char *label);
+void oxbox_memprof_stack(const char *label)
+{
+	unsigned long *p;
+
+	if (!stack_base)
+		return;
+	for (p = (unsigned long *)stack_limit; p < (unsigned long *)stack_base && *p == 0x5AC0FFEE; p++)
+		;
+	platform_log("memprof %s: main stack deepest %lu KB of %lu KB", label,
+		(stack_base - (unsigned long)p) / 1024, (stack_base - stack_limit) / 1024);
+}
+
 void oxbox_memprof_initialize(void)
 {
 	/* (the retail XBE's kernel thunk table, the start of .rdata: the header's copy of its address is not readable
@@ -280,6 +314,7 @@ void oxbox_memprof_initialize(void)
 	set_protect_proc set_protect = (set_protect_proc)oxbox_kernel_export(182);
 	unsigned long count, index, hook, hooked = 0;
 
+	stack_paint();
 	slots_rebuild();
 	query_size = (query_size_proc)oxbox_kernel_export(180);
 	for (count = 0; thunks[count]; count++)
@@ -321,6 +356,7 @@ void oxbox_memprof_report(const char *label)
 
 	memset(&mm, 0, sizeof(mm));
 	mm.length = sizeof(mm);
+	oxbox_memprof_stack(label);
 	if (statistics)
 		statistics(&mm);
 	for (index = 0; index < live_count; index++)
