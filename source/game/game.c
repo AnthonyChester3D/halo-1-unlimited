@@ -169,6 +169,7 @@ struct game_options;
 #include "physics/breakable_surfaces.h"
 #include "physics/collision_usage.h"
 #include "physics/point_physics.h"
+#include "physics/physics.h"
 #include "rasterizer/common/rasterizer_common.h"
 #include "rasterizer/rasterizer.h"
 #include "render/render.h"
@@ -802,6 +803,7 @@ void game_initialize_for_new_map(
 	game_sound_initialize_for_new_map();
 	weather_particle_systems_initialize_for_new_map();
 	point_physics_initialize_for_new_map();
+	physics_set_gravity_fraction(1.0f);  /* port: Halo's gravity again (a map's script may have changed it) */
 	game_engine_initialize_for_new_map();
 	game_statistics_start();
 	update_server_new();

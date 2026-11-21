@@ -74,6 +74,10 @@ void render_debug_physics(struct physics_instance *instance);
 /* ---------- globals */
 
 extern real global_gravity;
+
+/* port: gravity as a fraction of Halo's (MCC's physics_set_gravity: hs.c) */
+void physics_set_gravity_fraction(real fraction);
+real physics_get_gravity_fraction(void);
 extern real global_water_density;
 extern real global_air_density;
 extern real global_physics_collision_depth;

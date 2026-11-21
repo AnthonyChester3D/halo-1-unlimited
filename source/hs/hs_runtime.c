@@ -1559,6 +1559,25 @@ static long hs_find_thread_by_script(
 	return NONE;
 }
 
+/* port: a script's progress, for MCC's script_started and script_finished (hs.c): 0 not started (no thread, or a
+dormant script not woken), 1 started, 2 finished (a startup or dormant script that ran to its end) */
+short hs_script_progress(
+	short script_index)
+{
+	long thread_index = hs_find_thread_by_script(script_index);
+	struct hs_thread_datum *thread;
+
+	if (thread_index == NONE)
+		return 0;
+	thread = hs_thread_get(thread_index);
+	if (thread->sleep_until == NONE)
+		return 2;
+	if (thread->sleep_until == NONE-1 && thread->stack == (struct hs_stack_frame *)thread->stack_data)
+		return 0;
+
+	return 1;
+}
+
 static void hs_inspect_boolean(
 	short type,
 	long value,
