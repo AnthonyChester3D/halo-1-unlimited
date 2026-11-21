@@ -554,6 +554,11 @@ skip_decode:
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the free memory a movie's sound takes at most (Bink's DirectSound stream buffers), with room to spare */
+#define BINK_SOUND_MINIMUM_KB 256
+#endif
+
 void bink_playback_start(
 	const char *full_pathname,
 	unsigned long flags)
@@ -613,6 +618,23 @@ void bink_playback_start(
 			struct IDirectSound *dsound= dsound_get();
 			boolean sound_initialized= FALSE;
 
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: Bink's DirectSound buffers come from the free memory, and the retail player doesn't check
+			that it got them: with too little free, BinkOpen read through a NULL (v1.150's boot crashed in the
+			intro, the menus' start leaving it next to nothing). Without room the movie plays silent */
+			{
+				extern unsigned long oxbox_free_kb(void);
+				unsigned long free_kb= oxbox_free_kb();
+
+				if (dsound && free_kb<BINK_SOUND_MINIMUM_KB)
+				{
+					error(_error_silent, "bink: %lu KB free, under the %d its sound needs: '%s' plays silent",
+						free_kb, BINK_SOUND_MINIMUM_KB, full_pathname);
+					dsound= NULL;
+					sound_initialized= TRUE;     /* (not "no DirectSound": it was left out) */
+				}
+			}
+#endif
 			if (dsound)
 			{
 				bink_get_memory_available("begin BinkSoundUseDirectSound");

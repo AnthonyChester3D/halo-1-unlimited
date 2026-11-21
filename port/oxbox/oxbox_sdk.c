@@ -402,8 +402,14 @@ int oxbox_bink_sections(int load)
 		return 0;
 	}
 	oxbox_bink_loaded = load;
-	platform_log("bink: player %s", load ? "loaded" : "unloaded");
+	platform_log("bink: player %s (%lu KB free)", load ? "loaded" : "unloaded", free_kb());
 	return 1;
+}
+
+/* the free memory, in KB (bink_playback.c: whether a movie's sound has room) */
+unsigned long oxbox_free_kb(void)
+{
+	return free_kb();
 }
 
 /* ---------- the developers' perf log, in a section of its own
