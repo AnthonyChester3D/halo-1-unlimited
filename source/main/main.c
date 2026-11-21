@@ -1959,6 +1959,13 @@ void main_load_ui_scenario(
 	game_precache_new_map("levels\\ui\\ui", TRUE);
 	match_assert("c:\\halo\\SOURCE\\main\\main.c", 1092,
 		!main_globals.main_menu_scenario_loaded);
+#if defined(HALO_XBOX_TARGET)
+	{
+		extern char const *volatile oxbox_boot_step;   /* (the boot's watch: port/oxbox/oxbox_sdk.c) */
+
+		oxbox_boot_step = "loading the menus' map";
+	}
+#endif
 	game_options_new(&options);
 	csstrncpy(options.map_name, "levels\\ui\\ui", NUMBEROF(options.map_name) - 1);
 	options.map_name[NUMBEROF(options.map_name) - 1] = 0;
