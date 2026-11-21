@@ -13154,6 +13154,13 @@ from the node as it is), or names an external global a map may not set
 Only a node with a value's type that is neither a constant nor a script's
 call is a function's call (hs_evaluate, hs_thread_main); its function's and
 its globals' indices are the ones hs_compile_postprocess found by name */
+/* port (v1.165): whether the map whose scripts hs_scenario_functions_check is checking is a campaign level: its
+scripts may call map_name, which names the next map (a Halo Map Porter split level's next piece "+./folder", a
+custom campaign's next level, Boxfight's next room), though no other map's may (hs_function_allowed_in_maps), as
+upstream OpenCE's ac152e44 lets them. A network co-op host's map_name switches every console
+(port/linux/game/hmp_carry.c) */
+static boolean hs_scenario_check_campaign = FALSE;
+
 static short hs_syntax_node_refusal(
 	struct hs_syntax_node const *expression,
 	char const **name)
@@ -13185,8 +13192,11 @@ static short hs_syntax_node_refusal(
 		return _hs_node_refusal_damaged;
 	function = hs_function_get(function_index);
 	*name = function->name;
-	if (!hs_function_allowed_in_maps[function_index])
+	if (!hs_function_allowed_in_maps[function_index] &&
+		!(hs_scenario_check_campaign && !csstrcmp(function->name, "map_name")))
+	{
 		return _hs_node_refusal_function;
+	}
 
 	if (function->parse == hs_macro_function_parse)
 	{
@@ -13403,6 +13413,7 @@ static void hs_scenario_functions_check(
 	short disabled_global_count = 0;
 	char reason[128];
 
+	hs_scenario_check_campaign = scenario->type == _scenario_type_solo;
 	csmemset(hs_syntax_nodes_marked, 0, sizeof(hs_syntax_nodes_marked));
 	for (script_index = 0; script_index<scenario->hs_scripts.count; script_index++)
 	{
