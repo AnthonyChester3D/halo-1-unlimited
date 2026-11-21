@@ -403,6 +403,11 @@ int oxbox_bink_sections(int load)
 	}
 	oxbox_bink_loaded = load;
 	platform_log("bink: player %s (%lu KB free)", load ? "loaded" : "unloaded", free_kb());
+	{
+		extern char const *volatile oxbox_boot_step;   /* (the boot's watch, below) */
+
+		oxbox_boot_step = load ? "a movie (the player loaded)" : "the movie is over (the player unloaded)";
+	}
 	return 1;
 }
 
@@ -657,11 +662,62 @@ void oxbox_boot_movie_started(void)
 	oxbox_boot_movie_seen = 1;
 }
 
+/* ---------- the boot's watch (v1.159): v1.157 froze once half a second into the intro on a console, buttons dead,
+with nothing in the log after it. For the boot's first 150 seconds a thread above everything else's priority looks every
+second whether the game's loop (oxbox_boot_frame, every frame; it reads the controllers too) and the log's writer
+(oxbox_entry.c, a thread at the game's priority) are still running: the loop alone stopped is the game stuck, both
+stopped is something above the game's priority holding the processor. One that has stood still for 4 seconds is
+logged, with the last step the boot reached, and the log written to the disk at once */
+volatile unsigned long oxbox_boot_heartbeat, oxbox_writer_heartbeat;
+#if !defined(THREAD_PRIORITY_TIME_CRITICAL)
+#define THREAD_PRIORITY_TIME_CRITICAL 15
+#endif
+char const *volatile oxbox_boot_step = "starting";
+
+static DWORD WINAPI boot_watch_thread(void *unused)
+{
+	extern boolean bink_playback_in_progress(void);
+	extern boolean progress_bar_is_active(void);
+	void oxbox_log_flush(void);
+	unsigned long seconds, last_main = 0, last_writer = 0, main_still = 0, writer_still = 0;
+
+	(void)unused;
+	for (seconds = 1; seconds <= 150; seconds++)
+	{
+		Sleep(1000);
+		main_still = oxbox_boot_heartbeat && oxbox_boot_heartbeat == last_main ? main_still + 1 : 0;
+		writer_still = oxbox_writer_heartbeat && oxbox_writer_heartbeat == last_writer ? writer_still + 1 : 0;
+		last_main = oxbox_boot_heartbeat;
+		last_writer = oxbox_writer_heartbeat;
+		if (main_still == 4 || main_still == 15 || writer_still == 4 || writer_still == 15)
+		{
+			platform_log("boot watch: %lu s in, the game's loop has stood still %lu s, the log's writer %lu s; last step: %s;"
+				" a movie %s, a loading screen %s; %lu KB free", seconds, main_still, writer_still, oxbox_boot_step,
+				bink_playback_in_progress() ? "plays" : "doesn't play", progress_bar_is_active() ? "up" : "not up",
+				free_kb());
+			oxbox_log_flush();
+		}
+	}
+	return 0;
+}
+
+void oxbox_boot_watch_start(void)
+{
+	HANDLE thread = CreateThread(NULL, 0x2000, boot_watch_thread, NULL, 0, NULL);
+
+	if (thread)
+	{
+		SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL);
+		CloseHandle(thread);
+	}
+}
+
 void oxbox_boot_frame(int game_map)
 {
 	extern boolean bink_playback_in_progress(void);
 	unsigned long now = GetTickCount();
 
+	oxbox_boot_heartbeat++;
 	if (oxbox_boot_done)
 		return;
 	if (!oxbox_boot_first_frame)
@@ -671,6 +727,7 @@ void oxbox_boot_frame(int game_map)
 	oxbox_boot_done = 1;
 	platform_log("boot: %s: the network and the rest start now (%lu KB free)", game_map ? "a map is loading" :
 		oxbox_boot_movie_seen ? "the intro is over" : "no intro in 25 seconds", free_kb());
+	oxbox_boot_step = "the network starts";
 	{
 		void oxbox_lwip_release(void);
 
@@ -694,8 +751,19 @@ void oxbox_boot_frame(int game_map)
 	{
 		void oxbox_perf_load(void);
 
+		oxbox_boot_step = "the perf code loads";
 		oxbox_perf_load();
 	}
+	oxbox_boot_step = "the menus (the boot's work started)";
+#if defined(OXBOX_TEST_BOOT_SPIN)
+	/* (lab only: the boot's watch tried, the game's loop held up 6 seconds) */
+	{
+		unsigned long start = GetTickCount();
+
+		while (GetTickCount() - start < 6000)
+			;
+	}
+#endif
 }
 
 /* ---------- the look for a newer release, and the offer to update
