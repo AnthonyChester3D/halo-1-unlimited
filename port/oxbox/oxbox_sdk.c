@@ -673,6 +673,8 @@ volatile unsigned long oxbox_boot_heartbeat, oxbox_writer_heartbeat;
 #define THREAD_PRIORITY_TIME_CRITICAL 15
 #endif
 char const *volatile oxbox_boot_step = "starting";
+/* (v1.164: what the step is working on, when it says: the folder map being scanned) */
+char const *volatile oxbox_boot_detail;
 
 static DWORD WINAPI boot_watch_thread(void *unused)
 {
@@ -689,6 +691,16 @@ static DWORD WINAPI boot_watch_thread(void *unused)
 		writer_still = oxbox_writer_heartbeat && oxbox_writer_heartbeat == last_writer ? writer_still + 1 : 0;
 		last_main = oxbox_boot_heartbeat;
 		last_writer = oxbox_writer_heartbeat;
+		/* (v1.164: v1.163 once stopped before its first frame, in the menus' setup, where the loop hadn't started:
+		no frame yet at 20, 45 and 90 seconds is logged too) */
+		if (!oxbox_boot_heartbeat && (seconds == 20 || seconds == 45 || seconds == 90))
+		{
+			char const *detail = oxbox_boot_detail;
+
+			platform_log("boot watch: %lu s in, no frame drawn yet (the log's writer stood still %lu s); last step: %s%s%.64s",
+				seconds, writer_still, oxbox_boot_step, detail ? ": " : "", detail ? detail : "");
+			oxbox_log_flush();
+		}
 		if (main_still == 4 || main_still == 15 || writer_still == 4 || writer_still == 15)
 		{
 			platform_log("boot watch: %lu s in, the game's loop has stood still %lu s, the log's writer %lu s; last step: %s;"

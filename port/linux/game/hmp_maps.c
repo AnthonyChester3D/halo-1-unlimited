@@ -656,6 +656,20 @@ static void scan_root(short root, long maximum)
 	do
 	{
 		char const *name = find->cFileName;
+#if defined(HALO_XBOX_TARGET)
+		{
+			extern char const *volatile oxbox_boot_detail;   /* (the boot's watch: oxbox_sdk.c) */
+			oxbox_boot_detail = name;
+		}
+#if defined(OXBOX_TEST_SCAN_SPIN)
+		/* (lab only: the boot's watch tried before the first frame, the scan held up 25 seconds) */
+		{
+			static int once;
+			unsigned long t0 = GetTickCount();
+			if (!once++) while (GetTickCount() - t0 < 25000) ;
+		}
+#endif
+#endif
 		if (!is_folder(find) || strlen(name) > MAXIMUM_FOLDER_NAME || hmp_maps_globals.map_count >= maximum) continue;
 		if (add_folder(root, name, NULL)) continue;
 		first = hmp_maps_globals.map_count;          /* no .map: a pack */
@@ -1234,6 +1248,12 @@ void hmp_maps_scan(void)
 	struct hmp_map *old_maps = hmp_maps_globals.maps;
 	char *old_names = hmp_maps_globals.names;
 	unsigned long start = GetTickCount();
+#if defined(HALO_XBOX_TARGET)
+	extern char const *volatile oxbox_boot_step, *volatile oxbox_boot_detail;   /* (the boot's watch: oxbox_sdk.c) */
+	char const *step_before = oxbox_boot_step;
+
+	oxbox_boot_step = "scanning the folder maps";
+#endif
 
 	if (!hmp_maps_globals.scanned)
 	{
@@ -1327,6 +1347,10 @@ void hmp_maps_scan(void)
 	hmp_log("maps: %d folder maps (%d in T:\\maps, %d in both), %d KB of names, in %d ms", hmp_maps_globals.map_count,
 		hmp_maps_globals.scan_t, hmp_maps_globals.scan_both, (hmp_maps_globals.names_capacity + 1023) / 1024,
 		GetTickCount() - start);
+#if defined(HALO_XBOX_TARGET)
+	oxbox_boot_step = step_before;
+	oxbox_boot_detail = NULL;
+#endif
 }
 
 static void scan_if_needed(void)
