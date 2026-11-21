@@ -788,6 +788,26 @@ void hs_runtime_initialize(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.163): a map's own global's value, read and set by its index in the scenario (port/linux/game/hmp_carry.c) */
+long hs_runtime_map_global_get(
+	short global_index)
+{
+	struct hs_global_datum *global = datum_get(hs_global_data, global_index+hs_external_global_count);
+
+	return global->value;
+}
+
+void hs_runtime_map_global_set(
+	short global_index,
+	long value)
+{
+	struct hs_global_datum *global = datum_get(hs_global_data, global_index+hs_external_global_count);
+
+	global->value = value;
+}
+#endif
+
 void hs_runtime_initialize_for_new_map(
 	void)
 {
@@ -860,6 +880,15 @@ void hs_runtime_initialize_for_new_map(
 		}
 
 		hs_thread_delete(internal_thread_index);
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox (v1.163): carry_... globals carried from the last map over their starting values, before any
+		script runs (port/linux/game/hmp_carry.c) */
+		{
+			void hmp_carry_globals_apply(void);
+
+			hmp_carry_globals_apply();
+		}
+#endif
 
 		for (script_index = 0;
 			script_index<scenario->hs_scripts.count;
