@@ -151,6 +151,11 @@ static unsigned long __stdcall log_writer_thread(void *unused)
 		unsigned long now;
 
 		Sleep(100);
+		{
+			extern volatile unsigned long oxbox_writer_heartbeat;   /* (oxbox_sdk.c: the boot's watch) */
+
+			oxbox_writer_heartbeat++;
+		}
 		now = GetTickCount();
 		log_write_out(now - last_flush >= 2000);
 		if (now - last_flush >= 2000)
@@ -977,6 +982,11 @@ int oxbox_entry(int argc, char **argv, char **envp)
 		physical_memory_reserve_fixed();
 	}
 	log_start_writer();
+	{
+		void oxbox_boot_watch_start(void);   /* (oxbox_sdk.c: a boot that stops is logged) */
+
+		oxbox_boot_watch_start();
+	}
 #if defined(OXBOX_MEMPROF)
 	{
 		void oxbox_memprof_initialize(void);

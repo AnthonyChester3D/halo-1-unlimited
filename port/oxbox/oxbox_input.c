@@ -119,6 +119,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	DWORD result;
 	unsigned long now;
 	int i, active = 0;
+
 	{   /* (memory measurement: every 10 s) */
 		extern unsigned long oxbox_heap_live, oxbox_heap_peak, oxbox_heap_blocks, oxbox_system_live, oxbox_system_peak;
 		extern unsigned long oxbox_text_cache_misses;
