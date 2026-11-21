@@ -91,8 +91,22 @@ static struct
 	long made_for_old[CARRY_PLAYERS], made[CARRY_PLAYERS];   /* (the vehicles made, by their old index) */
 } *carry;
 
+static void carry_globals_clear(void);
+static void carry_globals_record(char const *target);
+
+/* the players' record only (a new one replacing it) */
+static void carry_players_clear(void)
+{
+	if (carry)
+	{
+		free(carry);
+		carry = NULL;
+	}
+}
+
 void hmp_carry_clear(void)
 {
+	carry_globals_clear();
 	if (carry)
 	{
 		free(carry);
@@ -164,7 +178,7 @@ allocator, as free is; calloc isn't) */
 static boolean carry_new(char const *target, boolean network)
 {
 	short k;
-	hmp_carry_clear();
+	carry_players_clear();
 	if (!(carry = malloc(sizeof(*carry))))
 		return FALSE;
 	csmemset(carry, 0, sizeof(*carry));
@@ -184,6 +198,7 @@ static boolean carry_unit_alive(long unit_index)
 void hmp_carry_record(char const *target)
 {
 	short local_player_index, recorded = 0;
+	carry_globals_record(target);
 	if (game_engine_running() || !carry_new(target, FALSE))
 		return;
 	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
@@ -195,7 +210,7 @@ void hmp_carry_record(char const *target)
 			local_player_index);
 	}
 	if (!recorded)
-		hmp_carry_clear();
+		carry_players_clear();
 }
 
 /* a network co-op host's: every player, by console and controller */
@@ -215,13 +230,14 @@ static void carry_record_network(char const *target)
 			(short)player->network_player_data.machine_index, (short)player->network_player_data.controller_index);
 	}
 	if (!recorded)
-		hmp_carry_clear();
+		carry_players_clear();
 }
 
 /* back at the main menu: nothing carried past it, but a network co-op host's record goes through the lobby (its
 round ends there, and the next piece starts from it) */
 void hmp_carry_menu(void)
 {
+	carry_globals_clear();
 	if (carry && carry->network && global_network_game_server_get())
 		return;
 	hmp_carry_clear();
@@ -246,6 +262,12 @@ void hmp_carry_coop_update(void)
 	{
 		void hmp_carry_coop_test(void);
 		hmp_carry_coop_test();
+	}
+#endif
+#if defined(OXBOX_CARRY_TEST)
+	{
+		void hmp_carry_globals_test(void);
+		hmp_carry_globals_test();
 	}
 #endif
 	if (!coop_switch_pending)
@@ -496,4 +518,179 @@ void hmp_carry_coop_test(void)
 			}
 	}
 }
+
+#endif
+
+#if defined(HALO_XBOX_TARGET)
+/* ---- v1.163 (Halo Map Porter's Boxfight, a test: rooms each a folder map, linked by map_name): a map's script
+globals named carry_... carried to the next map a local game's script switches to. Recorded with the players
+(hmp_carry_record), whether or not anyone is alive; given right after the new map's globals take their starting
+values and before any of its scripts runs (hs_runtime.c's hs_runtime_initialize_for_new_map), matched by name and
+type: booleans, reals, shorts and longs only (a string or an object points into the old map). In memory only while
+a switch is under way; cleared with the players' record (Restart mission, a game from the main menu, the main
+menu). A checkpoint in the new map saves the given values as it does any global's ---- */
+
+#include "hs/hs.h"
+#include "hs/hs_scenario_definitions.h"
+
+#define CARRY_GLOBAL_PREFIX "carry_"
+#define CARRY_GLOBALS 32
+
+long hs_runtime_map_global_get(short global_index);
+void hs_runtime_map_global_set(short global_index, long value);
+
+static struct
+{
+	char target[256];
+	short count;
+	struct
+	{
+		char name[32];
+		short type;
+		long value;
+	} globals[CARRY_GLOBALS];
+} *carry_globals;
+
+static void carry_globals_clear(void)
+{
+	if (carry_globals)
+	{
+		free(carry_globals);
+		carry_globals = NULL;
+	}
+}
+
+static boolean carry_global_carried(struct hs_global const *global)
+{
+	return !_strnicmp(global->name, CARRY_GLOBAL_PREFIX, sizeof(CARRY_GLOBAL_PREFIX) - 1) &&
+		(global->type == _hs_type_boolean || global->type == _hs_type_real ||
+			global->type == _hs_type_short_integer || global->type == _hs_type_long_integer);
+}
+
+static void carry_globals_record(char const *target)
+{
+	struct scenario *scenario;
+	short index;
+
+	carry_globals_clear();
+	if (global_scenario_index == NONE)
+		return;
+	scenario = global_scenario_get();
+	for (index = 0; index < scenario->hs_globals.count; index++)
+	{
+		struct hs_global const *global = TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, index, struct hs_global);
+
+		if (!carry_global_carried(global))
+			continue;
+		if (!carry_globals)
+		{
+			if (!(carry_globals = malloc(sizeof(*carry_globals))))
+				return;
+			csmemset(carry_globals, 0, sizeof(*carry_globals));
+			csstrncpy(carry_globals->target, target ? target : "", sizeof(carry_globals->target) - 1);
+		}
+		if (carry_globals->count >= CARRY_GLOBALS)
+		{
+			platform_log("hmp carry: more than %d carry_ globals: %.32s and later ones not carried", CARRY_GLOBALS,
+				global->name);
+			break;
+		}
+		csstrncpy(carry_globals->globals[carry_globals->count].name, global->name, 31);
+		carry_globals->globals[carry_globals->count].type = global->type;
+		carry_globals->globals[carry_globals->count].value = hs_runtime_map_global_get(index);
+		carry_globals->count++;
+	}
+}
+
+void hmp_carry_globals_apply(void)
+{
+	struct scenario *scenario;
+	short index, k, given = 0;
+
+	if (!carry_globals)
+		return;
+	if (global_scenario_index == NONE || _stricmp(main_get_map_name(), carry_globals->target))
+	{
+		platform_log("hmp carry: the carry_ globals are for %s, not %s: dropped", carry_globals->target,
+			main_get_map_name());
+		carry_globals_clear();
+		return;
+	}
+	scenario = global_scenario_get();
+	for (index = 0; index < scenario->hs_globals.count; index++)
+	{
+		struct hs_global const *global = TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, index, struct hs_global);
+
+		if (!carry_global_carried(global))
+			continue;
+		for (k = 0; k < carry_globals->count; k++)
+		{
+			if (carry_globals->globals[k].type == global->type &&
+				!_strnicmp(carry_globals->globals[k].name, global->name, 31))
+			{
+				hs_runtime_map_global_set(index, carry_globals->globals[k].value);
+				given++;
+				break;
+			}
+		}
+	}
+	platform_log("hmp carry: %d of %d carry_ globals given to %s", (int)given, (int)carry_globals->count,
+		carry_globals->target);
+	carry_globals_clear();
+}
+
+#if defined(OXBOX_CARRY_TEST)
+/* (lab only: on a local game's folder map +carrytest/..., 20 s in, the carry_ globals set to test values and the
+map switched to itself by name, as a script's map_name does; 10 s into the next load, their values logged) */
+void hmp_carry_globals_test(void)
+{
+	static int stage;
+	static unsigned long since;
+	struct scenario *scenario;
+	short index;
+	unsigned long now = GetTickCount();
+
+	if (!game_in_progress() || game_connection() != _game_connection_local || _strnicmp(main_get_map_name(), "+carrytest/", 11))
+	{
+		since = 0;
+		return;
+	}
+	if (!since)
+		since = now;
+	if (now - since < (stage == 0 ? 20000UL : 10000UL) || stage >= 2)
+		return;
+	scenario = global_scenario_get();
+	for (index = 0; index < scenario->hs_globals.count; index++)
+	{
+		struct hs_global const *global = TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, index, struct hs_global);
+
+		if (!carry_global_carried(global))
+			continue;
+		if (stage == 0)
+		{
+			long value = global->type == _hs_type_boolean ? (long)!(boolean)hs_runtime_map_global_get(index) :
+				global->type == _hs_type_short_integer ? 1234 : 987654;
+			platform_log("carry test: %.32s (type %d) was %ld, set to %ld", global->name, (int)global->type,
+				hs_runtime_map_global_get(index), value);
+			hs_runtime_map_global_set(index, value);
+		}
+		else
+		{
+			platform_log("carry test: after the switch, %.32s = %ld", global->name, hs_runtime_map_global_get(index));
+		}
+	}
+	if (stage == 0)
+	{
+		void main_set_map_name(char const *map_name);
+		static char name[256];
+
+		csstrncpy(name, main_get_map_name(), sizeof(name) - 1);
+		platform_log("carry test: switching to %s", name);
+		main_set_map_name(name);
+	}
+	stage++;
+	since = 0;
+}
+#endif
+
 #endif

@@ -895,6 +895,24 @@ void main_defer_map_map_change(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.163, for Halo Map Porter's Boxfight test): a folder map's local game (a map from the main menu, a script's
+map_name, Restart mission) starts its random numbers from the clock, not from Halo's fixed 0xDEADBEEF, so rolls made
+at the same moment of each room differ from load to load. The stock maps keep the fixed seed (the campaign plays as
+on retail); a network game's seed is its host's, as before. A checkpoint saves and restores the random state */
+static void oxbox_folder_map_seed(
+	struct game_options *options)
+{
+	unsigned long low, high;
+
+	if (options->map_name[0] != '+')
+		return;
+	__asm__ volatile ("rdtsc" : "=a"(low), "=d"(high));
+	options->random_seed = (low ^ (high << 16) ^ (GetTickCount() * 2654435761UL)) | 1;
+	error(_error_silent, "random seed %08lx for %s (a folder map's local game)", options->random_seed, options->map_name);
+}
+#endif
+
 char *main_get_map_name(
 	void)
 {
@@ -1575,6 +1593,9 @@ static void main_change_map_name(
 				NUMBEROF(options.map_name) - 1);
 			options.map_name[NUMBEROF(options.map_name) - 1] = 0;
 			options.difficulty = global_difficulty_level;
+#if defined(HALO_XBOX_TARGET)
+			oxbox_folder_map_seed(&options);
+#endif
 #if defined(HALO_XBOX_TARGET)
 			/* oxbox: a game's script switching maps (a Halo Map Porter split level's next piece) carries the players'
 			weapons, grenades, vitality and vehicle to it; a game started from the main menu carries nothing
@@ -2947,6 +2968,9 @@ static void main_setup_connection(
 			NUMBEROF(options.map_name) - 1);
 		options.map_name[NUMBEROF(options.map_name) - 1] = 0;
 		options.difficulty = global_difficulty_level;
+#if defined(HALO_XBOX_TARGET)
+		oxbox_folder_map_seed(&options);
+#endif
 		game_precache_new_map(options.map_name, TRUE);
 		game_dispose_from_old_map();
 		main_new_map(&options);
