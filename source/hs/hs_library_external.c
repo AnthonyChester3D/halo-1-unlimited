@@ -187,8 +187,42 @@ void hs_print(
 long hs_players(
 	void)
 {
+	/* port: the list made last, while it's still there, unchanged, of the same units in the same order: given again.
+	A map's scripts that read each player as (list_get (players) n) made a list of every player for each one,
+	16 x 16 entries a tick with 16 players, far past the 128 the Xbox has (lists are never changed once made,
+	and an unused one is collected after the tick's threads: object_list_gc) */
+	static long last_list = NONE;
+	long units[16];
+	short count = 0;
 	long object_list_index;
 	long player_index;
+
+	for (player_index = data_next_index(player_data, NONE);
+		player_index != NONE;
+		player_index = data_next_index(player_data, player_index))
+	{
+		struct player_datum *player = player_get(player_index);
+
+		if (player->unit_index != NONE && count < (short)NUMBEROF(units))
+			units[count++] = player->unit_index;
+	}
+	/* (its contents checked, not remembered: a checkpoint brought back may hold another list there) */
+	if (last_list != NONE && datum_try_and_get(object_list_header_data, last_list) &&
+		object_list_is_players(last_list) && object_list_count(last_list) == count && count <= (short)NUMBEROF(units))
+	{
+		long reference_index;
+		long object_index = object_list_get_first(last_list, &reference_index);
+		short n = count;
+
+		/* (a list holds its objects last added first) */
+		while (object_index != NONE && n > 0 && object_index == units[n - 1])
+		{
+			n--;
+			object_index = object_list_get_next(last_list, &reference_index);
+		}
+		if (n == 0 && object_index == NONE)
+			return last_list;
+	}
 
 	object_list_index = object_list_new();
 	for (player_index = data_next_index(player_data, NONE);
@@ -203,6 +237,7 @@ long hs_players(
 	}
 	/* port: even an empty (players) list must not open a co-op gate. */
 	object_list_mark_players(object_list_index);
+	last_list = object_list_index;
 
 	return object_list_index;
 }
