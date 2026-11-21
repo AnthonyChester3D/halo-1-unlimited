@@ -426,10 +426,13 @@ void game_time_update(
 				frame ran 30 (1.4 s a frame, 0.7 fps); now the game runs
 				slower, at about 10 frames a second. Once anyone has joined,
 				the host keeps real time as before. */
+				/* (v1.166: not in the perf sweep, whose bots stand in for a lobby's players: its host keeps real time
+				as a lobby's must, so a map too heavy for a full lobby measures as it would play in one) */
 				{
+					extern int oxbox_setting_perf_sweep;   /* (port/oxbox/oxbox_entry.c) */
 					struct network_game const *game = network_game_get_game();
 
-					if (game && game->machine_count <= 1)
+					if (game && game->machine_count <= 1 && !oxbox_setting_perf_sweep)
 					{
 						connection = SOLO_HOST_MAXIMUM_TICKS;
 						break;
