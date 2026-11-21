@@ -2810,6 +2810,7 @@ symbols in this file:
 #include "objects/object_lights.h"
 #include "objects/scenery.h"
 #include "physics/breakable_surfaces.h"
+#include "physics/physics.h"
 #include "rasterizer/rasterizer.h"
 #include "render/render.h"
 #include "saved games/game_state.h"
@@ -3382,7 +3383,7 @@ typedef void (*hs_token_enumerator)(
 
 struct hs_function_table_storage
 {
-	struct hs_function_definition const *functions[418 + 4];
+	struct hs_function_definition const *functions[418 + 4 + 20]; /* port: (+ 20: MCC's, mcc_definitions) */
 	struct profile_section profile;
 	hs_token_enumerator token_enumerators[18];
 };
@@ -11744,7 +11745,228 @@ static struct hs_function_definition_with_1_parameter const loose_sounds_definit
 	},
 };
 
-long const hs_function_table_count= 418 + 4;
+/* port: MCC's script functions (Halo: The Master Chief Collection's), by MCC's names and arguments, for the maps Halo
+Map Porter converts from MCC mods: bits, distances, players, gravity and the scripts' progress. One evaluator for them
+all, by their place in the table (MCC_FUNCTION_FIRST on: the dedicated server's table has them at the same places, so
+a map's scripts call the same ones on both) */
+enum
+{
+	MCC_FUNCTION_FIRST = 418 + 4,
+	_mcc_bit_test = 0,
+	_mcc_bit_toggle,
+	_mcc_bitwise_flags_toggle,
+	_mcc_bitwise_and,
+	_mcc_bitwise_or,
+	_mcc_bitwise_xor,
+	_mcc_bitwise_left_shift,
+	_mcc_bitwise_right_shift,
+	_mcc_objects_distance_to_object,
+	_mcc_objects_distance_to_flag,
+	_mcc_objects_distance_to_position,
+	_mcc_list_count_not_dead,
+	_mcc_local_players,
+	_mcc_players_on_multiplayer_team,
+	_mcc_game_is_authoritative,
+	_mcc_physics_set_gravity,
+	_mcc_physics_get_gravity,
+	_mcc_physics_constants_reset,
+	_mcc_script_started,
+	_mcc_script_finished,
+	NUMBER_OF_MCC_FUNCTIONS
+};
+
+short hs_script_progress(short script_index);   /* (hs_runtime.c) */
+
+/* the nearest of a list's objects' centres to a point: -1 when none of them is there */
+static real mcc_distance(
+	long object_list_index,
+	real_point3d const *point)
+{
+	long reference_index, object_index;
+	real best = -1.0f;
+
+	for (object_index = object_list_get_first(object_list_index, &reference_index); object_index != NONE;
+		object_index = object_list_get_next(object_list_index, &reference_index))
+	{
+		real distance = distance3d(&object_get(object_index)->object.bounding_sphere_center, point);
+
+		if (best < 0.0f || distance < best)
+			best = distance;
+	}
+
+	return best;
+}
+
+/* the players' units: those this console plays (local), or a team's */
+static long mcc_players(
+	boolean local,
+	long team_index)
+{
+	long object_list_index = object_list_new(), player_index;
+
+	for (player_index = data_next_index(player_data, NONE); player_index != NONE;
+		player_index = data_next_index(player_data, player_index))
+	{
+		struct player_datum *player = player_get(player_index);
+
+		if (player->unit_index != NONE &&
+			(local ? player->local_player_index != NONE : player->team_index == team_index))
+		{
+			object_list_add(object_list_index, player->unit_index);
+		}
+	}
+
+	return object_list_index;
+}
+
+static void hs_mcc_evaluate(
+	short function_index,
+	long thread_index,
+	boolean initialize)
+{
+	union hs_evaluation_argument const *a =
+		(union hs_evaluation_argument const *)hs_macro_function_evaluate(function_index, thread_index, initialize);
+	union hs_real_value result;
+	long value, bit;
+
+	if (!a)
+		return;
+	result.long_value = 0;
+	value = a[0].long_value;
+	bit = a[1].short_value;
+	switch (function_index - MCC_FUNCTION_FIRST)
+	{
+	case _mcc_bit_test:
+		result.long_value = bit >= 0 && bit < 32 && ((unsigned long)value >> bit & 1);
+		break;
+	case _mcc_bit_toggle:
+		result.long_value = bit < 0 || bit >= 32 ? value :
+			a[2].boolean_value ? (long)((unsigned long)value | 1ul << bit) : (long)((unsigned long)value & ~(1ul << bit));
+		break;
+	case _mcc_bitwise_flags_toggle:
+		result.long_value = a[2].boolean_value ? value | a[1].long_value : value & ~a[1].long_value;
+		break;
+	case _mcc_bitwise_and:
+		result.long_value = value & a[1].long_value;
+		break;
+	case _mcc_bitwise_or:
+		result.long_value = value | a[1].long_value;
+		break;
+	case _mcc_bitwise_xor:
+		result.long_value = value ^ a[1].long_value;
+		break;
+	case _mcc_bitwise_left_shift:
+		result.long_value = bit < 0 || bit >= 32 ? 0 : (long)((unsigned long)value << bit);
+		break;
+	case _mcc_bitwise_right_shift:
+		/* (arithmetic: a negative value stays negative) */
+		result.long_value = bit < 0 ? value : bit >= 32 ? (value < 0 ? -1 : 0) :
+			value < 0 ? (long)~(~(unsigned long)value >> bit) : (long)((unsigned long)value >> bit);
+		break;
+	case _mcc_objects_distance_to_object:
+		result.real_value = -1.0f;
+		if (a[1].long_value != NONE && object_try_and_get(a[1].long_value))
+			result.real_value = mcc_distance(value, &object_get(a[1].long_value)->object.bounding_sphere_center);
+		break;
+	case _mcc_objects_distance_to_flag:
+		result.real_value = -1.0f;
+		if (a[1].short_value >= 0 && a[1].short_value < global_scenario_get()->cutscene_flags.count)
+		{
+			result.real_value = mcc_distance(value, &TAG_BLOCK_GET_ELEMENT(&global_scenario_get()->cutscene_flags,
+				a[1].short_value, struct scenario_cutscene_flag)->position);
+		}
+		break;
+	case _mcc_objects_distance_to_position:
+	{
+		real_point3d point;
+
+		point.x = a[1].real_value;
+		point.y = a[2].real_value;
+		point.z = a[3].real_value;
+		result.real_value = mcc_distance(value, &point);
+		break;
+	}
+	case _mcc_list_count_not_dead:
+	{
+		long reference_index, object_index;
+		union hs_short_result count;
+
+		count.value = 0;
+		for (object_index = object_list_get_first(value, &reference_index); object_index != NONE;
+			object_index = object_list_get_next(value, &reference_index))
+		{
+			count.short_value += !TEST_FLAG(object_get(object_index)->object.damage_flags, _object_dead_bit);
+		}
+		result.long_value = count.value;
+		break;
+	}
+	case _mcc_local_players:
+	case _mcc_players_on_multiplayer_team:
+		result.long_value = mcc_players(function_index - MCC_FUNCTION_FIRST == _mcc_local_players, a[0].short_value);
+		break;
+	case _mcc_game_is_authoritative:
+		result.long_value = game_connection() != _game_connection_network_client;
+		break;
+	case _mcc_physics_set_gravity:
+		physics_set_gravity_fraction(a[0].real_value);
+		break;
+	case _mcc_physics_get_gravity:
+		result.real_value = physics_get_gravity_fraction();
+		break;
+	case _mcc_physics_constants_reset:
+		physics_set_gravity_fraction(1.0f);
+		break;
+	case _mcc_script_started:
+		result.long_value = hs_script_progress(a[0].short_value) != 0;
+		break;
+	case _mcc_script_finished:
+		result.long_value = hs_script_progress(a[0].short_value) == 2;
+		break;
+	}
+	hs_return(thread_index, result.long_value);
+
+	return;
+}
+
+/* (a definition and its parameter types after it, as hs_function_definition_with_4_parameters has them) */
+#define MCC_FUNCTION(type, name, count, p0, p1, p2, p3) \
+	{{type, 0, name, hs_macro_function_parse, hs_mcc_evaluate, NULL, NULL, count, {p0}}, {p1, p2, p3}}
+
+static struct
+{
+	struct hs_function_definition definition;
+	short more_parameter_types[3];
+} const mcc_definitions[NUMBER_OF_MCC_FUNCTIONS]=
+{
+	MCC_FUNCTION(_hs_type_boolean, "bit_test", 2, _hs_type_long_integer, _hs_type_short_integer, 0, 0),
+	MCC_FUNCTION(_hs_type_long_integer, "bit_toggle", 3, _hs_type_long_integer, _hs_type_short_integer,
+		_hs_type_boolean, 0),
+	MCC_FUNCTION(_hs_type_long_integer, "bitwise_flags_toggle", 3, _hs_type_long_integer, _hs_type_long_integer,
+		_hs_type_boolean, 0),
+	MCC_FUNCTION(_hs_type_long_integer, "bitwise_and", 2, _hs_type_long_integer, _hs_type_long_integer, 0, 0),
+	MCC_FUNCTION(_hs_type_long_integer, "bitwise_or", 2, _hs_type_long_integer, _hs_type_long_integer, 0, 0),
+	MCC_FUNCTION(_hs_type_long_integer, "bitwise_xor", 2, _hs_type_long_integer, _hs_type_long_integer, 0, 0),
+	MCC_FUNCTION(_hs_type_long_integer, "bitwise_left_shift", 2, _hs_type_long_integer, _hs_type_short_integer, 0, 0),
+	MCC_FUNCTION(_hs_type_long_integer, "bitwise_right_shift", 2, _hs_type_long_integer, _hs_type_short_integer, 0, 0),
+	MCC_FUNCTION(_hs_type_real, "objects_distance_to_object", 2, _hs_type_object_list, _hs_type_object, 0, 0),
+	MCC_FUNCTION(_hs_type_real, "objects_distance_to_flag", 2, _hs_type_object_list, _hs_type_cutscene_flag, 0, 0),
+	MCC_FUNCTION(_hs_type_real, "objects_distance_to_position", 4, _hs_type_object_list, _hs_type_real, _hs_type_real,
+		_hs_type_real),
+	MCC_FUNCTION(_hs_type_short_integer, "list_count_not_dead", 1, _hs_type_object_list, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_object_list, "local_players", 0, 0, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_object_list, "players_on_multiplayer_team", 1, _hs_type_short_integer, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_boolean, "game_is_authoritative", 0, 0, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_void, "physics_set_gravity", 1, _hs_type_real, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_real, "physics_get_gravity", 0, 0, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_void, "physics_constants_reset", 0, 0, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_boolean, "script_started", 1, _hs_type_script, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_boolean, "script_finished", 1, _hs_type_script, 0, 0, 0),
+};
+typedef char mcc_function_count_assert[NUMBER_OF_MCC_FUNCTIONS == 20 ? 1 : -1];
+typedef char mcc_definitions_parameters_assert[
+	offsetof(struct hs_function_definition_with_4_parameters, parameter_types) == sizeof(struct hs_function_definition) ? 1 : -1];
+
+long const hs_function_table_count= 418 + 4 + NUMBER_OF_MCC_FUNCTIONS;
 
 struct hs_enum_definition const hs_enum_table[]=
 {
@@ -12180,6 +12402,27 @@ struct hs_function_table_storage hs_function_table=
 		&sv_end_game_definition,
 		&loose_sounds_reload_definition,
 		&loose_sounds_definition.definition,
+		/* (MCC's: MCC_FUNCTION_FIRST on) */
+		&mcc_definitions[_mcc_bit_test].definition,
+		&mcc_definitions[_mcc_bit_toggle].definition,
+		&mcc_definitions[_mcc_bitwise_flags_toggle].definition,
+		&mcc_definitions[_mcc_bitwise_and].definition,
+		&mcc_definitions[_mcc_bitwise_or].definition,
+		&mcc_definitions[_mcc_bitwise_xor].definition,
+		&mcc_definitions[_mcc_bitwise_left_shift].definition,
+		&mcc_definitions[_mcc_bitwise_right_shift].definition,
+		&mcc_definitions[_mcc_objects_distance_to_object].definition,
+		&mcc_definitions[_mcc_objects_distance_to_flag].definition,
+		&mcc_definitions[_mcc_objects_distance_to_position].definition,
+		&mcc_definitions[_mcc_list_count_not_dead].definition,
+		&mcc_definitions[_mcc_local_players].definition,
+		&mcc_definitions[_mcc_players_on_multiplayer_team].definition,
+		&mcc_definitions[_mcc_game_is_authoritative].definition,
+		&mcc_definitions[_mcc_physics_set_gravity].definition,
+		&mcc_definitions[_mcc_physics_get_gravity].definition,
+		&mcc_definitions[_mcc_physics_constants_reset].definition,
+		&mcc_definitions[_mcc_script_started].definition,
+		&mcc_definitions[_mcc_script_finished].definition,
 	},
 	{
 		"hs_update",
@@ -12685,6 +12928,14 @@ static boolean const hs_function_allowed_in_maps[]=
 	/* the port's, for those making sounds */
 	FALSE, /* loose_sounds_reload */
 	FALSE, /* loose_sounds */
+
+	/* MCC's, for maps converted from MCC mods: arithmetic, read-only lookups, gravity (reset each map) */
+	TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, /* bit_test ... bitwise_right_shift */
+	TRUE, TRUE, TRUE, /* objects_distance_to_object, _flag, _position */
+	TRUE, TRUE, TRUE, /* list_count_not_dead, local_players, players_on_multiplayer_team */
+	TRUE, /* game_is_authoritative */
+	TRUE, TRUE, TRUE, /* physics_set_gravity, physics_get_gravity, physics_constants_reset */
+	TRUE, TRUE, /* script_started, script_finished */
 };
 typedef char verify_hs_function_allowed_in_maps_size[
 	NUMBEROF(hs_function_allowed_in_maps) == NUMBEROF(hs_function_table.functions) ? 1 : -1];

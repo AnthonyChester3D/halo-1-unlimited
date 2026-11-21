@@ -284,7 +284,8 @@ static void rotate_vectors3d_by_angular_velocity(
 
 /* ---------- globals */
 
-real global_gravity = 0.0035651792f;
+#define GLOBAL_GRAVITY 0.0035651792f
+real global_gravity = GLOBAL_GRAVITY;
 real global_water_density = 1.0f;
 real global_air_density = 0.0011f;
 real global_physics_collision_depth = 0.2f;
@@ -2331,3 +2332,19 @@ void physics_update(
 }
 
 /* ---------- private code */
+
+/* port: MCC's physics_set_gravity / physics_get_gravity (hs.c): gravity as a fraction of Halo's, 0 to 10; each map
+starts with Halo's (game_initialize_for_new_map) */
+void physics_set_gravity_fraction(
+	real fraction)
+{
+	global_gravity = GLOBAL_GRAVITY*PIN(fraction == fraction ? fraction : 1.0f, 0.0f, 10.0f);
+
+	return;
+}
+
+real physics_get_gravity_fraction(
+	void)
+{
+	return global_gravity/GLOBAL_GRAVITY;
+}
