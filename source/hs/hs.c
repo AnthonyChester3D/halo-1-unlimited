@@ -13265,6 +13265,13 @@ from the node as it is), or names an external global a map may not set
 Only a node with a value's type that is neither a constant nor a script's
 call is a function's call (hs_evaluate, hs_thread_main); its function's and
 its globals' indices are the ones hs_compile_postprocess found by name */
+/* port (v1.165): whether the map whose scripts hs_scenario_functions_check is checking is a campaign level: its
+scripts may call map_name, which names the next map (a Halo Map Porter split level's next piece "+./folder", a
+custom campaign's next level, Boxfight's next room), though no other map's may (hs_function_allowed_in_maps), as
+upstream OpenCE's ac152e44 lets them. A network co-op host's map_name switches every console
+(port/linux/game/hmp_carry.c) */
+static boolean hs_scenario_check_campaign = FALSE;
+
 static short hs_syntax_node_refusal(
 	struct hs_syntax_node const *expression,
 	char const **name)
@@ -13296,8 +13303,11 @@ static short hs_syntax_node_refusal(
 		return _hs_node_refusal_damaged;
 	function = hs_function_get(function_index);
 	*name = function->name;
-	if (!hs_function_allowed_in_maps[function_index])
+	if (!hs_function_allowed_in_maps[function_index] &&
+		!(hs_scenario_check_campaign && !csstrcmp(function->name, "map_name")))
+	{
 		return _hs_node_refusal_function;
+	}
 	/* port: a downloaded map's (hs_functions_denied_to_downloaded_maps) */
 	if (hs_scenario_downloaded && hs_name_listed(function->name, hs_functions_denied_to_downloaded_maps))
 		return _hs_node_refusal_downloaded_function;
@@ -13529,6 +13539,7 @@ static void hs_scenario_functions_check(
 	hs_scenario_downloaded = map_share_map_downloaded(cache_file_loaded_map_name());
 	if (hs_scenario_downloaded)
 		error(_error_silent, "%s is a downloaded map: its scripts may call and set less", cache_file_loaded_map_name());
+	hs_scenario_check_campaign = scenario->type == _scenario_type_solo;
 	csmemset(hs_syntax_nodes_marked, 0, sizeof(hs_syntax_nodes_marked));
 	for (script_index = 0; script_index<scenario->hs_scripts.count; script_index++)
 	{
