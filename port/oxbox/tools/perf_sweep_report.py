@@ -7,6 +7,14 @@
 #   python3 perf_sweep_report.py sweep.csv --write-list sweep_list.txt
 #   python3 perf_sweep_report.py sweep.csv --compare sweep_r70.csv [--compare-csv fill.csv]
 #   python3 perf_sweep_report.py sweep.csv --compare sweep_p1.csv      (another build: opence.ini perf_sweep_pass = 1)
+#   python3 perf_sweep_report.py --library-list sweep_list.txt --library library.json   (a pass of the map library's maps)
+#   python3 perf_sweep_report.py sweep_p4.csv --library library.json [--library-out verdicts.txt]
+#
+# The map library (docs/map_library.md): --library-list writes perf\sweep_list.txt with every map in the library's
+# library.json (its keys: +Library/<item>), for a pass of them alone (opence.ini perf_sweep_pass = 4, say), and
+# --library sorts that pass's results into what to take out of the library (crashed, hung or didn't load, or under
+# --remove-fps frames a second with no bots), what to look at (under --check-fps with 4 bots), what's fine, and what
+# wasn't tested (not downloaded on that Xbox, or the pass hasn't reached it).
 #
 # The resolution scaling test: a pass with opence.ini res_scale = 70 (say) writes perf\sweep_r70.csv, and plays only
 # perf\sweep_list.txt's maps when there's one (--write-list: the maps under the "perfect" line whose slowest run kept
@@ -21,6 +29,7 @@ import argparse
 import csv
 import html
 import io
+import json
 import os
 import re
 import sys
@@ -390,9 +399,90 @@ def compare(base_maps, scaled_paths, args):
     return 0
 
 
+def library_items(path):
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    items = data.get('items', []) if isinstance(data, dict) else data
+    return [item for item in items if item.get('item') and item.get('state', '') != 'remove']
+
+
+def write_library_list(library, path):
+    items = library_items(library)
+    with open(path, 'w', encoding='ascii', errors='replace', newline='') as f:
+        for item in items:
+            f.write('+Library/%s\r\n' % item['item'])
+    print('wrote %s: %d library maps (copy it to the Xbox as perf\\sweep_list.txt)' % (path, len(items)))
+
+
+def library_verdicts(maps, args):
+    rows = []
+    # (the same folder in two groups is two versions of one map, and an Xbox has one of them: one line for both)
+    groups = {}
+    for item in library_items(args.library):
+        groups.setdefault(item['item'].lower(), []).append(item.get('group', ''))
+    seen = set()
+    for item in library_items(args.library):
+        name = item['item']
+        if name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        item = dict(item, group='/'.join(g for g in groups[name.lower()] if g))
+        runs = maps.get(('+library/' + name).lower()) or maps.get(('+' + name).lower())
+        fps = {}
+        verdict, why = 'not tested', 'no results (not downloaded on this Xbox, or the pass hasn\'t reached it)'
+        if runs:
+            for run, row in runs.items():
+                if row['status'] in ('ok', 'fail_fps') and number(row, 'avg_fps') is not None:
+                    fps[run] = number(row, 'avg_fps')
+            broken = [(run, row['status']) for run, row in sorted(runs.items())
+                      if row['status'] in ('crashed', 'hung', 'bad_map', 'no_start')]
+            first = fps.get(0, fps.get(3))
+            if broken:
+                verdict, why = 'REMOVE', '%s (%s)' % (broken[0][1].replace('_', ' '), RUN_NAMES.get(broken[0][0], 'run %d' % broken[0][0]))
+            elif first is not None and first < args.remove_fps:
+                verdict, why = 'REMOVE', '%.1f fps with no bots' % first
+            elif fps.get(1) is not None and fps[1] < args.check_fps:
+                verdict, why = 'CHECK', '%.1f fps with 4 bots' % fps[1]
+            elif first is None or (0 in fps and 3 not in runs and 1 not in runs):
+                verdict, why = 'not tested', 'only partly measured so far'
+            else:
+                verdict, why = 'KEEP', ''
+                if fps.get(2) is not None and fps[2] < args.check_fps:
+                    why = 'slow with a full game of bots (%.1f fps)' % fps[2]
+        rows.append((verdict, name, item.get('group', ''), why,
+                     ' / '.join('%s %.1f' % (RUN_NAMES.get(r, 'run %d' % r), fps[r]) for r in sorted(fps) if r <= 3)))
+    order = {'REMOVE': 0, 'CHECK': 1, 'KEEP': 2, 'not tested': 3}
+    rows.sort(key=lambda r: (order[r[0]], r[1].lower()))
+    out = []
+    counts = {}
+    for verdict, name, group, why, line in rows:
+        counts[verdict] = counts.get(verdict, 0) + 1
+    out.append('Map library: %d maps. Take out %d, look at %d, fine %d, not tested %d (remove under %.0f fps with no '
+               'bots, look at under %.0f fps with 4 bots)' % (len(rows), counts.get('REMOVE', 0), counts.get('CHECK', 0),
+               counts.get('KEEP', 0), counts.get('not tested', 0), args.remove_fps, args.check_fps))
+    current = None
+    for verdict, name, group, why, line in rows:
+        if verdict != current:
+            out.append('')
+            out.append({'REMOVE': '== Take out of the library', 'CHECK': '== Look at', 'KEEP': '== Fine',
+                        'not tested': '== Not tested'}[verdict])
+            current = verdict
+        out.append('  %-24s %-14s %s%s' % (name, group, why, ('   [' + line + ']') if line else ''))
+    text = '\n'.join(out)
+    print(text)
+    if args.library_out:
+        with open(args.library_out, 'w', encoding='utf-8', newline='\r\n') as f:
+            f.write(text + '\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('files', nargs='+', help="perf\\sweep.csv files from the Xbox")
+    parser.add_argument('files', nargs='*', help="perf\\sweep.csv files from the Xbox")
+    parser.add_argument('--library', help="the map library's library.json: sort its maps by the files' results")
+    parser.add_argument('--library-list', help="write a sweep_list.txt of the library's maps (with --library)")
+    parser.add_argument('--library-out', help="write the library's verdicts to this text file too")
+    parser.add_argument('--remove-fps', type=float, default=20.0, help="library: take out under this with no bots")
+    parser.add_argument('--check-fps', type=float, default=22.0, help="library: look at under this with 4 bots")
     parser.add_argument('--summary', help='write a CSV with one row a map')
     parser.add_argument('--html', help='write an HTML page of the report')
     parser.add_argument('--perfect', type=float, default=29.0)
@@ -404,7 +494,18 @@ def main():
     parser.add_argument('--compare-csv', help="write the comparison as a CSV")
     parser.add_argument('--scale', type=int, help="the compared pass's res_scale, when its file doesn't say")
     args = parser.parse_args()
+    if args.library_list:
+        if not args.library:
+            parser.error('--library-list needs --library library.json')
+        write_library_list(args.library, args.library_list)
+        if not args.files:
+            return 0
+    if not args.files:
+        parser.error('give the perf\\sweep CSV files to read')
     maps = maps_from(read_rows(args.files))
+    if args.library:
+        library_verdicts(maps, args)
+        return 0
     lines = summary_rows(maps, args.perfect, args.little, args.lot)
     text_report(lines, args)
     if args.write_list:
