@@ -246,7 +246,9 @@ How the pieces fit:
   (made by `tools/gen_retail_ld.py` from `retail_syms.txt`) names the retail libraries' functions and data.
 - `tools/gen_overlay.py` places OpenCE's larger globals over retail game code that nothing runs.
 - `tools/mkxbe.py` writes the XBE: it adds the image (and the empty `.cap16` section, on a retail XBE), redirects
-  `main`, appends the effects program and the pictures, and fixes up the section digests.
+  `main`, appends the effects program and the pictures, and fixes up the section digests. The retail movie player
+  (BINK sections) isn't loaded at boot, and neither is retail XNet (the XNET section, 30 KB) when nothing in the
+  image calls it or names one of its functions, as in the lwIP builds; it says which in the build's output.
 - `installer/` is the installer XBE, and `tools/mkpackage.py` makes its packages. The installer downloads the
   latest signed release's package from GitHub (Y) and updates itself from a signed package that carries a newer
   installer (`installer/README.md`).

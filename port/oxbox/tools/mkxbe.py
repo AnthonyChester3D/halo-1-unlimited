@@ -197,6 +197,53 @@ for i in range(nsec):
     if d[nm:nm + 4] == b'BINK':
         struct.pack_into('<I', d, hh, struct.unpack_from('<I', d, hh)[0] & ~2)
 
+# retail XNet's code (the XNET section) not loaded at boot when nothing in OpenCE's image calls it or holds its address:
+# the lwIP builds (OXBOX_NET_LWIP) never start XNet, and no retail library refers to it (v1.161; port/oxbox/README.md).
+# A call or jump into it, or an instruction operand or an aligned word of OpenCE's loaded data naming one of its
+# functions, keeps it loaded, and so does a check that can't run
+def xnet_named(lo, hi):
+    # (its entry points: the retail functions retail_syms.txt names in it; packed constants such as 0x1b0002 in data
+    # aren't addresses)
+    entries = set()
+    for line in open(os.path.join(HERE, '..', 'retail_syms.txt')):
+        p = line.split()
+        if len(p) >= 2 and p[1].startswith('0x') and lo <= int(p[1], 16) < hi:
+            entries.add(int(p[1], 16))
+    try:
+        dis = subprocess.run(['llvm-objdump', '-d', '--no-show-raw-insn', elf], capture_output=True, text=True, check=True).stdout
+    except Exception:
+        return True
+    for line in dis.splitlines():
+        m = re.search(r'\t(call|jmp|j[a-z]+)l?\s+0x([0-9a-f]+)', line)
+        if m and lo <= int(m.group(2), 16) < hi:
+            return True
+        if any(int(v, 16) in entries for v in re.findall(r'\b0x([0-9a-f]{5,8})\b', line)):
+            return True
+    heads = subprocess.run(['llvm-readelf', '-S', '-W', elf], capture_output=True, text=True).stdout.splitlines()
+    for line in heads:
+        m = re.match(r'\s*\[\s*\d+\]\s+(\S+)\s+(PROGBITS|INIT_ARRAY)\s+([0-9a-f]+)\s+\S+\s+\S+\s+\S+\s+(\S+)', line)
+        if not m or 'A' not in m.group(4) or 'X' in m.group(4):
+            continue
+        out = os.path.join(os.path.dirname(elf), 'oxbox_scan.bin')
+        if subprocess.run(['llvm-objcopy', '-O', 'binary', '--only-section=' + m.group(1), elf, out]).returncode:
+            return True
+        blob = open(out, 'rb').read(); os.remove(out)
+        va = int(m.group(3), 16)
+        for k in range((-va) % 4, len(blob) - 3, 4):
+            if struct.unpack_from('<I', blob, k)[0] in entries:
+                return True
+    return False
+for i in range(nsec):
+    hh = sh + i * 0x38
+    nm = struct.unpack_from('<I', d, hh + 0x14)[0] - base
+    if d[nm:nm + 5] == b'XNET\0':
+        lo = struct.unpack_from('<I', d, hh + 4)[0]; hi = lo + struct.unpack_from('<I', d, hh + 8)[0]
+        if xnet_named(lo, hi):
+            print('XNET (retail XNet) stays loaded: the image names it')
+        else:
+            struct.pack_into('<I', d, hh, struct.unpack_from('<I', d, hh)[0] & ~2)
+            print(f'XNET (retail XNet, {(hi - lo) // 1024} KB) not loaded at boot: nothing in the image names it')
+
 # init flags: drop XINIT_LIMIT_DEVKIT_MEMORY (4), so a console with 128 MB (xemu's option) gives the title all of it
 struct.pack_into('<I', d, 0x124, struct.unpack_from('<I', d, 0x124)[0] & ~4)
 # DirectSound's effects image (15 KB) after the sections, where the loader does not load it: sound_dsound_xbox.c
