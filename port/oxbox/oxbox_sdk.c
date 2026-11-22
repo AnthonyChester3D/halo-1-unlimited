@@ -712,6 +712,9 @@ static DWORD WINAPI boot_watch_thread(void *unused)
 	for (seconds = 1; seconds <= 150; seconds++)
 	{
 		Sleep(1000);
+		/* (v1.171: the log on the disk every second meanwhile: v1.168 and v1.170 froze dead just after a skipped
+		intro, the watch itself silent, and the last lines before were never written) */
+		oxbox_log_flush();
 		main_still = oxbox_boot_heartbeat && oxbox_boot_heartbeat == last_main ? main_still + 1 : 0;
 		writer_still = oxbox_writer_heartbeat && oxbox_writer_heartbeat == last_writer ? writer_still + 1 : 0;
 		last_main = oxbox_boot_heartbeat;
@@ -1191,6 +1194,11 @@ static void oxbox_launch_updater(void)
 	if (halo_linux_snprintf((char *)page + 8, 520, "%s\\updater;default.xbe", folder) >= 520)
 		return;
 	platform_log("update: starting %s", (char *)page + 8);
+	{
+		void oxbox_quiesce_devices(void);   /* (oxbox_entry.c: the network card and USB stopped writing, v1.171) */
+
+		oxbox_quiesce_devices();
+	}
 	reboot(2);                                                                   /* (the quick reboot) */
 }
 

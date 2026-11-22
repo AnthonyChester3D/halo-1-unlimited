@@ -48,11 +48,15 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 
 #include "keys.h"
 #include "notices.h"
+/* (v1.171, installer 64: the network card and USB stopped before it starts anything: a quick reboot left them writing
+into the next program's memory) */
+#define OXBOX_QUIESCE_DEFINE
+#include "../net/oxbox_quiesce.h"
 
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 63
+#define INSTALLER_VERSION 64
 #endif
 __attribute__((used)) static struct
 {
@@ -2358,6 +2362,7 @@ static void launch(char const *device)
 {
 	screen_spinner(0);
 	screen_hand_over();
+	oxbox_quiesce_devices();
 	XLaunchXBE(device);
 	/* (only if the path didn't convert) */
 	screen_init();

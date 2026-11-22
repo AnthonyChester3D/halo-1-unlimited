@@ -3711,6 +3711,11 @@ static void sweep_restart(
 		return;
 	platform_log("perf sweep: restarting %s", (char *)page + 8);
 	oxbox_log_flush();
+	{
+		void oxbox_quiesce_devices(void);   /* (oxbox_entry.c: the network card and USB stopped writing, v1.171) */
+
+		oxbox_quiesce_devices();
+	}
 	reboot(2);
 }
 
