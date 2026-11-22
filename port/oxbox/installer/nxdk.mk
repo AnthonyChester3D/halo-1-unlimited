@@ -23,6 +23,12 @@ endif
 
 include $(NXDK_DIR)/Makefile
 
+# (the pictures' code, hashed: what an install kept of them (updater\pictures.bin) is used again only by the same code)
+PICTURES_CODE := $(shell cat $(CURDIR)/pictures.c $(CURDIR)/pictures.h | sha256sum | cut -c1-8)
+ifneq ($(PICTURES_CODE),)
+$(CURDIR)/pictures.obj: CFLAGS += -DPICTURES_CODE=0x$(PICTURES_CODE)ul
+endif
+
 # the keys it trusts, as C (rewritten only when they change)
 $(CURDIR)/keys.h: FORCE
 	python3 $(CURDIR)/../tools/mkkeys.py $(KEYS) $@
