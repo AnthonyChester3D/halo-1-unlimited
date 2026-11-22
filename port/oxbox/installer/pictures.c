@@ -17,6 +17,11 @@ mkicons.py and mkheader.py (Python, with numpy and Pillow); the blur and the res
 
 pictures_progress_t pictures_progress;
 
+#if !defined(PICTURES_CODE)
+#define PICTURES_CODE 0
+#endif
+unsigned long const pictures_code = PICTURES_CODE;
+
 static void progress(char const *step)
 {
 	if (pictures_progress)

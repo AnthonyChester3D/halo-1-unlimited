@@ -37,6 +37,10 @@ struct map_range
 *file_size. 0 when done, else an error's text (error[256]). (packs.c reads a map pack's ui.map with it too) */
 int map_read(char const *path, struct map_range *ranges, int count, unsigned long *file_size, char *error);
 
+/* what made them: a hash of pictures.c and pictures.h (nxdk.mk gives it; 0 when built without it, as mkpictures is).
+The installer keeps what it made beside an install (updater\pictures.bin) and uses it again only when it's the same */
+extern unsigned long const pictures_code;
+
 /* (for the tool and the installer's progress) */
 typedef void (*pictures_progress_t)(char const *step);
 extern pictures_progress_t pictures_progress;

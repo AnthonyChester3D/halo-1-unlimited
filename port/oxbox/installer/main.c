@@ -56,7 +56,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 64
+#define INSTALLER_VERSION 65
 #endif
 __attribute__((used)) static struct
 {
@@ -840,6 +840,38 @@ static int write_part(void *context, unsigned char const *data, unsigned long si
 {
 	DWORD put;
 	return !WriteFile(((struct writer *)context)->file, data, size, &put, NULL) || put != size;
+}
+
+/* (package_make's parts, about 25,000 of them, most a few bytes to a few KB: gathered and written a megabyte at a time.
+Each WriteFile is a trip through the kernel and FATX: one a part took ~14 s of an install in xemu. Installer 65) */
+#define GATHER_SIZE (1024 * 1024)
+
+struct gatherer
+{
+	struct writer w;
+	unsigned char *buffer;
+	unsigned long held;
+};
+
+static int gather_flush(struct gatherer *g)
+{
+	unsigned long held = g->held;
+	g->held = 0;
+	return held && write_part(&g->w, g->buffer, held);
+}
+
+static int gather_part(void *context, unsigned char const *data, unsigned long size)
+{
+	struct gatherer *g = context;
+	while (size)
+	{
+		unsigned long n = GATHER_SIZE - g->held < size ? GATHER_SIZE - g->held : size;
+		memcpy(g->buffer + g->held, data, n);
+		g->held += n, data += n, size -= n;
+		if (g->held == GATHER_SIZE && gather_flush(g))
+			return 1;
+	}
+	return 0;
 }
 
 static HANDLE create(char const *path)
@@ -1988,14 +2020,102 @@ static void downloads_default(struct halo const *h)
 	flush_drive("E:\\");
 }
 
+/* ---- the pictures kept (installer 65): what pictures_make made from an install's ui.map, kept in its updater folder
+(updater\pictures.bin), so an update doesn't read ui.map and make them again. Used only when made by the same picture
+code (pictures_code) from the same ui.map (its size, write time and first 2048 bytes), and its own SHA-256 reads
+right; else they're made again, and kept. (The player's own art, as the XBE beside it is: it never leaves the Xbox) ---- */
+
+#define KEPT_PICTURES_MAGIC 0x4350584Ful   /* "OXPC" */
+#define KEPT_PICTURES_SIZE (PICTURES_SIZE + HEADER_COUNT * HEADER_SIZE)
+
+struct kept_pictures
+{
+	unsigned long magic, code, pictures_size, header_size, ui_size, ui_time_low, ui_time_high;
+	unsigned char ui_head[32];
+	unsigned char sha[32];            /* (of what follows: the pictures, then the headers) */
+};
+
+/* what the kept pictures must have been made from; 0 when it reads (1: none can be used) */
+static int kept_pictures_key(char const *ui_map, struct kept_pictures *key)
+{
+	WIN32_FILE_ATTRIBUTE_DATA data;
+	unsigned char head[2048];
+	FILE *file;
+	int got;
+	memset(key, 0, sizeof(*key));
+	if (!pictures_code || !GetFileAttributesExA(ui_map, GetFileExInfoStandard, &data) || data.nFileSizeHigh ||
+		!(file = fopen(ui_map, "rb")))
+		return 1;
+	got = fread(head, 1, sizeof(head), file) == sizeof(head);
+	fclose(file);
+	if (!got)
+		return 1;
+	key->magic = KEPT_PICTURES_MAGIC;
+	key->code = pictures_code;
+	key->pictures_size = PICTURES_SIZE;
+	key->header_size = HEADER_COUNT * HEADER_SIZE;
+	key->ui_size = data.nFileSizeLow;
+	key->ui_time_low = data.ftLastWriteTime.dwLowDateTime;
+	key->ui_time_high = data.ftLastWriteTime.dwHighDateTime;
+	sha256(head, sizeof(head), key->ui_head);
+	return 0;
+}
+
+/* the kept pictures into pictures[] and header[]; 0 when they were there and right */
+static int kept_pictures_read(struct halo *h, struct kept_pictures const *key)
+{
+	char path[220];
+	unsigned char *data, sha[32];
+	unsigned long size;
+	int right;
+	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER "\\pictures.bin", h->path);
+	if (!(data = read_whole(path, &size)))
+		return 1;
+	right = size == sizeof(*key) + KEPT_PICTURES_SIZE && !memcmp(data, key, offsetof(struct kept_pictures, sha));
+	if (right)
+	{
+		sha256(data + sizeof(*key), KEPT_PICTURES_SIZE, sha);
+		right = !memcmp(sha, ((struct kept_pictures const *)data)->sha, 32);
+	}
+	if (right)
+	{
+		memcpy(pictures, data + sizeof(*key), PICTURES_SIZE);
+		memcpy(header, data + sizeof(*key) + PICTURES_SIZE, HEADER_COUNT * HEADER_SIZE);
+	}
+	free(data);
+	return !right;
+}
+
+/* pictures[] and header[] kept for the next time (nothing said if it can't: they're made again then) */
+static void kept_pictures_write(struct halo *h, struct kept_pictures const *key)
+{
+	char path[220];
+	unsigned char *data = malloc(sizeof(*key) + KEPT_PICTURES_SIZE);
+	struct kept_pictures *kept = (struct kept_pictures *)data;
+	if (!data)
+		return;
+	*kept = *key;
+	memcpy(data + sizeof(*key), pictures, PICTURES_SIZE);
+	memcpy(data + sizeof(*key) + PICTURES_SIZE, header, HEADER_COUNT * HEADER_SIZE);
+	sha256(data + sizeof(*key), KEPT_PICTURES_SIZE, kept->sha);
+	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER, h->path);
+	CreateDirectoryA(path, NULL);
+	text_print(path, sizeof(path), "%s\\" UPDATER_FOLDER "\\pictures.bin", h->path);
+	log_file(write_checked(path, data, sizeof(*key) + KEPT_PICTURES_SIZE) ? "pictures: couldn't keep them in updater\\pictures.bin" :
+		"pictures: kept in updater\\pictures.bin");
+	free(data);
+}
+
 static int install(struct halo *h)
 {
 	char main[200], backup[200], temp[220], ui_map[200], error[256], line[SCREEN_COLUMNS + 8];
 	unsigned long zero_at[GENERATED_REGIONS], zero_size[GENERATED_REGIONS], made_size;
 	unsigned char digest[32];
-	int zeros, have_pictures;
+	int zeros, have_pictures, kept, failed;
 	struct retail r;
-	struct writer w;
+	struct gatherer g;
+	struct kept_pictures key;
+	unsigned long started = GetTickCount(), retail_ms, pictures_ms, written_ms, checked_ms;
 
 	text_print(main, sizeof(main), "%s\\default.xbe", h->path);
 	text_print(backup, sizeof(backup), "%s\\default_retail.xbe", h->path);
@@ -2027,37 +2147,61 @@ static int install(struct halo *h)
 		retail_free(&r);
 		return 1;
 	}
-	/* the pictures, from the game's own ui.map */
-	say("Making the pictures from maps\\ui.map:");
-	pictures_progress = pictures_step;
-	have_pictures = !pictures_make(ui_map, pictures, header, error);
-	if (!have_pictures)
-		say_in(COLOUR_YELLOW, "  no pictures (%s): they'll be blank", error);
+	retail_ms = GetTickCount() - started;
+	/* the pictures, from the game's own ui.map: the ones made last time when they're right (installer 65) */
+	kept = !kept_pictures_key(ui_map, &key) && !kept_pictures_read(h, &key);
+	if (kept)
+	{
+		say("Menu pictures: the ones made last time (updater\\pictures.bin)");
+		have_pictures = 1;
+	}
+	else
+	{
+		say("Making the pictures from maps\\ui.map:");
+		pictures_progress = pictures_step;
+		have_pictures = !pictures_make(ui_map, pictures, header, error);
+		if (!have_pictures)
+			say_in(COLOUR_YELLOW, "  no pictures (%s): they'll be blank", error);
+		else if (key.magic)
+			kept_pictures_write(h, &key);
+	}
+	pictures_ms = GetTickCount() - started;
 	/* the build, beside the old XBE (from the disc's bytes) */
 	say("Making OpenCE from %s%s...", h->retail->name, r.patch.patched ? " (region/media patched)" : "");
-	w.file = create(temp);
-	if (w.file == INVALID_HANDLE_VALUE)
+	g.held = 0;
+	g.buffer = malloc(GATHER_SIZE);
+	g.w.file = g.buffer ? create(temp) : INVALID_HANDLE_VALUE;
+	if (g.w.file == INVALID_HANDLE_VALUE)
 	{
+		free(g.buffer);
 		say_in(COLOUR_RED, "Couldn't create default.xbe.new.");
 		retail_free(&r);
 		return 1;
 	}
-	if (package_make(&package, h->retail, r.data, have_pictures ? pictures : NULL, have_pictures ? header : NULL,
-		write_part, &w, error))
+	failed = package_make(&package, h->retail, r.data, have_pictures ? pictures : NULL, have_pictures ? header : NULL,
+		gather_part, &g, error);
+	if (!failed && gather_flush(&g))
 	{
-		CloseHandle(w.file);
+		failed = 1;
+		text_print(error, sizeof(error), "couldn't write the new XBE");
+	}
+	free(g.buffer);
+	if (failed)
+	{
+		CloseHandle(g.w.file);
 		DeleteFileA(temp);
 		say_in(COLOUR_RED, "%s", error);
 		retail_free(&r);
 		return 1;
 	}
-	if (!finish(w.file))
+	if (!finish(g.w.file))
 	{
 		DeleteFileA(temp);
 		say_in(COLOUR_RED, "Couldn't finish writing default.xbe.new.");
 		retail_free(&r);
 		return 1;
 	}
+	written_ms = GetTickCount() - started;
 	zeros = package_pictures(&package, h->retail, zero_at, zero_size, GENERATED_REGIONS);
 	if (file_sha256(temp, zero_at, zero_size, zeros, digest, &made_size) || made_size != h->retail->build_size ||
 		memcmp(digest, h->retail->build_sha256, 32))
@@ -2068,6 +2212,7 @@ static int install(struct halo *h)
 		return 1;
 	}
 	say("  written and checked (%lu KB)", made_size / 1024);
+	checked_ms = GetTickCount() - started;
 	/* the retail XBE kept, as it was */
 	if (h->state == RETAIL && !exists(backup))
 	{
@@ -2093,6 +2238,14 @@ static int install(struct halo *h)
 	install_updater(h);
 	own_title_folders();
 	downloads_default(h);
+	{
+		char times[160];
+		unsigned long all_ms = GetTickCount() - started;
+		text_print(times, sizeof(times), "time: installed in %lu ms: retail XBE read %lu, pictures %lu (%s), XBE written %lu, "
+			"checked %lu, the rest %lu", all_ms, retail_ms, pictures_ms - retail_ms, kept ? "kept" : "made",
+			written_ms - pictures_ms, checked_ms - written_ms, all_ms - checked_ms);
+		log_file(times);
+	}
 	say_in(COLOUR_GREEN, "Done: OpenCE is this folder's default.xbe.");
 	return 0;
 }
