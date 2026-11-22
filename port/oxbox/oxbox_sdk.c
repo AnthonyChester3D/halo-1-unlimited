@@ -574,7 +574,7 @@ void oxbox_perf_load(void)
 			continue;
 		if (!load_section)
 		{
-			platform_log("perf: the kernel's XeLoadSection wasn't found");
+			platform_log("perf: no XeLoadSection");
 			return;
 		}
 		status = load_section(section);
@@ -668,8 +668,8 @@ void oxbox_ftp_frame(int menus)
 
 At boot the intro movie's player needs the free memory, and a console has little to spare (v1.150 crashed in it, v1.154
 skipped it): the network stack, internet play, the network test, the developers' perf log and Halo Map Porter's
-transfer thread wait until the intro has played (or been skipped), a map starts loading, or 25 seconds have gone, then
-start (oxbox_boot_frame, every frame from map_share_update). The update check waits for it too, and for no movie
+transfer thread wait until the intro has played (or been skipped) and its player's code is out, a map starts loading,
+or 60 seconds have gone with no intro (2 minutes with one still playing, v1.170), then start (oxbox_boot_frame, every frame from map_share_update). The update check waits for it too, and for no movie
 playing. A socket asked for in the meantime starts the stack at once (oxbox_lwip.c). */
 
 int oxbox_boot_perf_wanted;
@@ -760,13 +760,16 @@ void oxbox_boot_frame(int game_map)
 		return;
 	if (!oxbox_boot_first_frame)
 		oxbox_boot_first_frame = now | 1;
-	/* (after the intro once its player's code is out too, v1.169: the rest want that memory) */
+	/* (after the intro once its player's code is out too, v1.169: the rest want that memory; with no intro yet, 60
+	seconds, with one still playing 2 minutes at most. v1.170: the time since the first frame is signed: the first
+	frame's time is now | 1, a millisecond ahead when now was even, and unsigned that read as 49 days gone: since
+	v1.156 about half the boots started the network, the perf log and the transfer thread just as the intro began) */
 	if (!game_map && !(oxbox_boot_movie_seen && !bink_playback_in_progress() && !oxbox_bink_loaded) &&
-		now - oxbox_boot_first_frame < 25000)
+		(long)(now - oxbox_boot_first_frame) < (oxbox_boot_movie_seen ? 120000L : 60000L))
 		return;
 	oxbox_boot_done = 1;
 	platform_log("boot: %s: the network and the rest start now (%lu KB free)", game_map ? "a map is loading" :
-		oxbox_boot_movie_seen ? "the intro is over" : "no intro in 25 seconds", free_kb());
+		oxbox_boot_movie_seen ? "the intro is over" : "no intro in 60 seconds", free_kb());
 	oxbox_boot_step = "the network starts";
 	{
 		void oxbox_lwip_release(void);
