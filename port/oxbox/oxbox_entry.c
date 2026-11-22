@@ -14,6 +14,8 @@ calls oxbox_entry where it called the retail main; oxbox_entry runs OpenCE's mai
 #include <stdlib.h>
 
 #include "oxbox_overlay.h"
+#define OXBOX_QUIESCE_DEFINE
+#include "net/oxbox_quiesce.h"
 #include "oxbox_perf.h"
 
 int main(void);
@@ -965,6 +967,9 @@ int oxbox_entry(int argc, char **argv, char **envp)
 	MEMORYSTATUS memory;
 	unsigned i;
 
+	/* (v1.171: the network card and USB stopped first: a program that quick-rebooted into this one may have left them
+	writing into this one's memory, net/oxbox_quiesce.h) */
+	oxbox_quiesce_devices();
 	/* OpenCE's larger globals live over the retail game's code and globals, which nothing runs or reads: zero
 	them before anything uses them (they are .bss) */
 	/* (only the .bss parts: the rest of the regions holds OpenCE code and data the XBE loaded there,

@@ -798,6 +798,11 @@ size_t strftime(char *buffer, size_t size, const char *format, const struct tm *
 void exit(int status)
 {
 	platform_log("exit(%d)", status);
+	{
+		void oxbox_quiesce_devices(void);   /* (oxbox_entry.c: the network card and USB stopped writing, v1.171) */
+
+		oxbox_quiesce_devices();
+	}
 	XLaunchNewImageA(NULL, NULL);
 	for (;;)
 		Sleep(1000);
