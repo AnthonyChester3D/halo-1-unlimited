@@ -499,11 +499,12 @@ void bink_playback_stop(
 #endif
 	bink_free_texture_cache();
 #if defined(HALO_XBOX_TARGET)
-	/* oxbox: the player's code out of memory again until the next movie */
+	/* oxbox: the player's code out of memory again until the next movie, a few seconds on (v1.169: its sound may
+	still be finishing; oxbox_sdk.c) */
 	{
-		extern int oxbox_bink_sections(int load);
+		extern void oxbox_bink_unload_later(void);
 
-		oxbox_bink_sections(FALSE);
+		oxbox_bink_unload_later();
 	}
 #endif
 

@@ -342,6 +342,14 @@ static void *oxbox_kernel_export(unsigned long ordinal)
 
 static int oxbox_bink_loaded;
 
+/* v1.169: when a movie stops, the player's code goes BINK_UNLOAD_DELAY_MS later (oxbox_bink_unload_later, then
+oxbox_boot_frame each frame), not at once. Bink plays its sound through DirectSound, which goes on with the movie's
+last sound for a moment after BinkClose, partly where nothing can catch a fault: a console froze dead, nothing in the
+log after "player unloaded", just after its intro was skipped with Start. Retail Halo kept Bink's code in memory for
+good; this keeps it a few seconds more. A movie started meanwhile keeps it */
+#define BINK_UNLOAD_DELAY_MS 3000
+static unsigned long oxbox_bink_unload_at;     /* (GetTickCount then; 0: none due) */
+
 /* load (TRUE) or unload (FALSE) the BINK* sections; FALSE if they couldn't be loaded */
 int oxbox_bink_sections(int load)
 {
@@ -352,6 +360,7 @@ int oxbox_bink_sections(int load)
 	unsigned long index;
 	int ok = 1;
 
+	oxbox_bink_unload_at = 0;
 	if (load == oxbox_bink_loaded)
 		return 1;
 	if (!load_section)
@@ -360,7 +369,7 @@ int oxbox_bink_sections(int load)
 		unload_section = (oxbox_section_proc)oxbox_kernel_export(328);
 		if (!load_section || !unload_section)
 		{
-			platform_log("bink: the kernel's XeLoadSection/XeUnloadSection weren't found");
+			platform_log("bink: no XeLoadSection");
 			load_section = unload_section = NULL;
 			return 0;
 		}
@@ -411,6 +420,22 @@ int oxbox_bink_sections(int load)
 	return 1;
 }
 
+/* a movie stopped (bink_playback.c): the player's code goes in BINK_UNLOAD_DELAY_MS */
+void oxbox_bink_unload_later(void)
+{
+	if (!oxbox_bink_loaded)
+		return;
+	oxbox_bink_unload_at = (GetTickCount() + BINK_UNLOAD_DELAY_MS) | 1;
+	platform_log("bink: movie stopped");
+}
+
+/* each frame (oxbox_boot_frame): the player's code unloaded once it's due */
+static void oxbox_bink_unload_due(unsigned long now)
+{
+	if (oxbox_bink_unload_at && (long)(now - oxbox_bink_unload_at) >= 0)
+		oxbox_bink_sections(0);
+}
+
 /* the free memory, in KB (bink_playback.c: whether a movie's sound has room) */
 unsigned long oxbox_free_kb(void)
 {
@@ -459,7 +484,7 @@ void menu_tags_loaded(char const *map_name)
 	section = oxbox_section_named("OXMENU");
 	if (!section || !load_section || !unload_section || load_section(section) < 0)
 	{
-		platform_log("menus: the OXMENU section couldn't be loaded: Halo 1 Unlimited's screens aren't added");
+		platform_log("menus: OXMENU didn't load: no H1U screens");
 		return;
 	}
 	oxbox_menus_section = section;
@@ -730,11 +755,14 @@ void oxbox_boot_frame(int game_map)
 	unsigned long now = GetTickCount();
 
 	oxbox_boot_heartbeat++;
+	oxbox_bink_unload_due(now);
 	if (oxbox_boot_done)
 		return;
 	if (!oxbox_boot_first_frame)
 		oxbox_boot_first_frame = now | 1;
-	if (!game_map && !(oxbox_boot_movie_seen && !bink_playback_in_progress()) && now - oxbox_boot_first_frame < 25000)
+	/* (after the intro once its player's code is out too, v1.169: the rest want that memory) */
+	if (!game_map && !(oxbox_boot_movie_seen && !bink_playback_in_progress() && !oxbox_bink_loaded) &&
+		now - oxbox_boot_first_frame < 25000)
 		return;
 	oxbox_boot_done = 1;
 	platform_log("boot: %s: the network and the rest start now (%lu KB free)", game_map ? "a map is loading" :
