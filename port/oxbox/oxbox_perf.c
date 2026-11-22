@@ -91,6 +91,8 @@ thread still never touches the disk. The format (tour_parse):
 #include "interface/hud_messaging.h"
 #include "interface/event_manager.h"
 #include "units/units.h"
+#include "cutscene/cinematics.h"
+#include "main/main.h"
 #include "oxbox_perf.h"
 
 #include <math.h>
@@ -2382,6 +2384,15 @@ perf_sweep_report.py --compare sets the passes side by side. v1.137: perf_sweep_
 same way (sweep_p<pass>.csv, sweep_now_p<pass>.txt, the list), at full size and without scaling runs: the same maps
 measured again on another build, for --compare.
 
+v1.168, spots: in a pass of its own (perf_sweep_pass), a list line may put a campaign level's player somewhere,
+	<key> bsp <index> at <x> <y> <z> yaw <radians>
+(the scenario's BSP index; the facing in radians, as Halo's own). Each such line is a run of its own, its rows' key
+"<key> spot <n>" (n counting that level's spot lines from 1) and its name saying where; a level with spot lines plays
+only those. The level's cutscenes are skipped (as a press would; one before the run measures puts the player back
+after it), then, 3 seconds in at the soonest, its BSP is switched to and the player put on the spot facing that way, and kept there (the camera tour's pin: put back when it's moved; the BSP switched back when a
+script changes it, 3 times at most); the run's warmup counts from then. Each pass may have its own list,
+perf\sweep_list_p<pass>.txt, read instead of sweep_list.txt when it's there.
+
 v1.138: a crash (oxbox_entry.c's handler) or a halt (main.c) stops the console where the watchdog's thread can't run:
 both call sweep_fatal after their report, which keeps the log (sweep_hangs.txt, ", crashed") and restarts H1U; the
 run's marker stays, so the next boot writes it "crashed" and the sweep goes on.
@@ -2481,6 +2492,7 @@ enum
 	SWEEP_COLUMN_NAME = 40
 };
 #define SWEEP_WARMUP_SECONDS 4.5f               /* (the showcase's 1.5 s settle, then 3 s of textures streaming) */
+#define SWEEP_SPOT_SETTLE_SECONDS 3.0f          /* (a spot run: the level's startup scripts this long before the spot, v1.168) */
 #if !defined(SWEEP_FAIL_FPS)
 #define SWEEP_FAIL_FPS 10.0   /* (a lab build may set it lower: xemu draws a campaign level slower) */
 #endif
@@ -2527,8 +2539,15 @@ static struct
 	/* the map at the cursor */
 	long cursor, map_count;
 	boolean map_ready;
-	char key[SWEEP_KEY_LENGTH];
+	char key[SWEEP_KEY_LENGTH];                 /* (the rows': the map's, or "<map key> spot <n>", v1.168) */
+	char map_key[SWEEP_KEY_LENGTH];             /* (the map's own, which loads it) */
 	boolean solo;
+	long spot, spot_count;                      /* (a campaign level's spot run, from 1, and how many it has; 0 none) */
+	short spot_bsp, spot_switches;
+	real_point3d spot_position;
+	real spot_yaw;
+	float spot_ready, spot_skip;                /* (the run's seconds when the player was put there, 0 not yet; a skip asked) */
+	char list[24];                              /* (perf\sweep_list_p<pass>.txt when there's one, else sweep_list.txt) */
 	unsigned long identity;
 	unsigned char needed, have;                 /* (its runs: wanted, and with a row) */
 	short full_bots;
@@ -2567,6 +2586,8 @@ static struct
 /* the watchdog (sweep_watch, on the writer thread): on while a run is under way or coming back from one */
 static volatile long sweep_watching;
 static volatile __int64 sweep_watch_deadline;
+
+static void sweep_spot_end(void);
 
 static void sweep_watch_on(
 	long seconds)
@@ -2986,18 +3007,18 @@ static boolean sweep_map_key(
 static void sweep_map_info(
 	void)
 {
-	char const *leaf = strrchr(sweep.key, '\\');
+	char const *leaf = strrchr(sweep.map_key, '\\');
 	unsigned char header[0x800];
 	unsigned long got = 0;
 	HANDLE file;
 
-	leaf = leaf ? leaf + 1 : sweep.key;
+	leaf = leaf ? leaf + 1 : sweep.map_key;
 	sweep.name[0] = sweep.path[0] = 0;
 	sweep.file_kb = sweep.map_kb = 0;
-	if (sweep.key[0] == '+')
+	if (sweep.map_key[0] == '+')
 	{
-		wchar_t const *title = hmp_maps_title(sweep.key);
-		long index = hmp_maps_find(sweep.key), k;
+		wchar_t const *title = hmp_maps_title(sweep.map_key);
+		long index = hmp_maps_find(sweep.map_key), k;
 
 		for (k = 0; title && title[k] && k < (long)sizeof(sweep.name) - 1; k++)
 			sweep.name[k] = (char)(title[k] >= 32 && title[k] < 127 ? title[k] : '?');
@@ -3007,7 +3028,7 @@ static void sweep_map_info(
 	}
 	else
 	{
-		char const *title = hmp_browse_stock_title(sweep.key);
+		char const *title = hmp_browse_stock_title(sweep.map_key);
 
 		csstrcpy(sweep.name, title ? title : leaf);
 		_snprintf(sweep.path, sizeof(sweep.path), "d:\\maps\\%s.map", leaf);
@@ -3015,7 +3036,16 @@ static void sweep_map_info(
 	}
 	if (!sweep.name[0])
 		csstrcpy(sweep.name, leaf[0] == '+' ? leaf + 1 : leaf);
-	strcpy(sweep.origin, sweep.key[0] == '+' ? "unknown" : "xbox");
+	/* (a spot: where, v1.168) */
+	if (sweep.spot && sweep.spot_count)
+	{
+		long length = (long)strlen(sweep.name);
+
+		_snprintf(sweep.name + length, sizeof(sweep.name) - length, " at BSP %d (%.1f %.1f %.1f yaw %.2f)",
+			(int)sweep.spot_bsp, sweep.spot_position.x, sweep.spot_position.y, sweep.spot_position.z, sweep.spot_yaw);
+		sweep.name[sizeof(sweep.name) - 1] = 0;
+	}
+	strcpy(sweep.origin, sweep.map_key[0] == '+' ? "unknown" : "xbox");
 	if (!sweep.path[0])
 		return;
 	file = CreateFileA(sweep.path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -3026,7 +3056,7 @@ static void sweep_map_info(
 			sweep.map_kb = (*(unsigned long const *)(header + 8) + 1023) / 1024;
 		CloseHandle(file);
 	}
-	if (sweep.key[0] == '+')
+	if (sweep.map_key[0] == '+')
 	{
 		char folder[200];
 		char *end;
@@ -3287,6 +3317,7 @@ static void sweep_finish(
 	long run;
 
 	sweep_row(status);
+	sweep_spot_end();
 	if (sweep.frames)
 		platform_log("perf sweep: %s run %ld (%d bots): %s, %.1f fps over %.1f s", sweep.key, sweep.run, (int)sweep.bots,
 			status, ticks_to_ms(sweep.time) > 0.0 ? sweep.frames * 1000.0 / ticks_to_ms(sweep.time) : 0.0,
@@ -3338,31 +3369,105 @@ static unsigned long sweep_identity(
 }
 
 /* the map at the cursor: its runs, and which have rows */
-/* a scaled pass's maps: perf\sweep_list.txt's keys, a line each (perf_sweep_report.py --write-list makes it); every
-map without one. Read for each map (no memory kept: the sweep's console was short of it) */
-static boolean sweep_listed(
-	char const *key)
+/* v1.168: a list line's spot, "<key> bsp <index> at <x> <y> <z> yaw <radians>": the line cut where it starts (the
+key left); FALSE when it isn't one */
+static boolean sweep_spot_parse(
+	char *line,
+	short *bsp,
+	real_point3d *position,
+	real *yaw)
 {
-	char path[64], buffer[1024], line[SWEEP_KEY_LENGTH + 2];
-	long length = 0;
+	char *at = line, *found = NULL, *p, *end;
+	double values[5];
+	long k;
+
+	/* (the last " bsp ": a folder's name may have one) */
+	while ((at = strstr(at, " bsp ")) != NULL)
+		found = at++;
+	if (!found)
+		return FALSE;
+	p = found + 5;
+	for (k = 0; k < 5; k++)
+	{
+		values[k] = strtod(p, &end);
+		if (end == p)
+			return FALSE;
+		p = end;
+		while (*p == ' ')
+			p++;
+		if (k == 0 && strncmp(p, "at ", 3) == 0)
+			p += 3;
+		else if (k == 3 && strncmp(p, "yaw ", 4) == 0)
+			p += 4;
+		else if (k == 0 || k == 3)
+			return FALSE;
+	}
+	while (found > line && found[-1] == ' ')
+		found--;
+	*found = 0;
+	if (bsp)
+	{
+		*bsp = (short)values[0];
+		position->x = (real)values[1];
+		position->y = (real)values[2];
+		position->z = (real)values[3];
+		*yaw = (real)values[4];
+	}
+	return TRUE;
+}
+
+/* a pass's maps: its list's keys, a line each (perf_sweep_report.py --write-list makes it), or a key and a spot (v1.168);
+every map without a list. -1: the key isn't listed; else how many spot lines it has (0 none), and the want'th one's
+spot (from 1) in bsp, position and yaw. Read for each map (no memory kept: the sweep's console was short of it) */
+static long sweep_list_find(
+	char const *key,
+	long want,
+	short *bsp,
+	real_point3d *position,
+	real *yaw)
+{
+	char path[64], buffer[1024], line[SWEEP_KEY_LENGTH + 96];
+	long length = 0, spots = 0;
 	unsigned long got, k;
-	boolean found = FALSE;
+	boolean listed = FALSE, more = TRUE;
 	HANDLE file;
 
-	sweep_path(path, sizeof(path), "sweep_list.txt");
+	sweep_path(path, sizeof(path), sweep.list);
 	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (file == INVALID_HANDLE_VALUE)
-		return TRUE;
-	while (!found && ReadFile(file, buffer, sizeof(buffer), &got, NULL) && got)
+		return 0;
+	while (more)
 	{
-		for (k = 0; k < got && !found; k++)
+		more = ReadFile(file, buffer, sizeof(buffer), &got, NULL) && got;
+		if (!more)
+		{
+			/* (the last line, when the file doesn't end with one) */
+			buffer[0] = '\n';
+			got = 1;
+		}
+		for (k = 0; k < got; k++)
 		{
 			if (buffer[k] == '\n' || buffer[k] == '\r')
 			{
+				short line_bsp = 0;
+				real_point3d line_position = { 0.0f, 0.0f, 0.0f };
+				real line_yaw = 0.0f;
+				boolean spot;
+
 				while (length && line[length - 1] == ' ')
 					length--;
 				line[length] = 0;
-				found = length && !csstrcasecmp(line, key);
+				spot = length && sweep_spot_parse(line, &line_bsp, &line_position, &line_yaw);
+				if (length && !csstrcasecmp(line, key))
+				{
+					listed = TRUE;
+					if (spot && ++spots == want && bsp)
+					{
+						*bsp = line_bsp;
+						*position = line_position;
+						*yaw = line_yaw;
+					}
+				}
 				length = 0;
 			}
 			else if (length < (long)sizeof(line) - 1 && (length || buffer[k] != ' '))
@@ -3371,13 +3476,27 @@ static boolean sweep_listed(
 			}
 		}
 	}
-	if (!found && length)
-	{
-		line[length] = 0;
-		found = !csstrcasecmp(line, key);
-	}
 	CloseHandle(file);
-	return found;
+	return listed ? spots : -1;
+}
+
+/* the rows' key: the map's, or "<map key> spot <n>" with that spot's place from the list */
+static void sweep_spot_key(
+	void)
+{
+	strcpy(sweep.key, sweep.map_key);
+	if (!sweep.spot)
+		return;
+	if ((long)strlen(sweep.map_key) + 12 >= SWEEP_KEY_LENGTH ||
+		sweep_list_find(sweep.map_key, sweep.spot, &sweep.spot_bsp, &sweep.spot_position, &sweep.spot_yaw) < sweep.spot)
+	{
+		platform_log("perf sweep: %s's spots left out (its key is too long, or the list changed): its normal run instead",
+			sweep.map_key);
+		sweep.spot = sweep.spot_count = 0;
+		return;
+	}
+	_snprintf(sweep.key, SWEEP_KEY_LENGTH, "%s spot %ld", sweep.map_key, sweep.spot);
+	sweep.key[SWEEP_KEY_LENGTH - 1] = 0;
 }
 
 static boolean sweep_map_ready(
@@ -3386,11 +3505,24 @@ static boolean sweep_map_ready(
 	struct sweep_done *done;
 	short players;
 
-	if (!sweep_map_key(sweep.cursor, sweep.key, &sweep.solo))
+	if (!sweep_map_key(sweep.cursor, sweep.map_key, &sweep.solo))
 		return FALSE;
-	if ((sweep.scale || sweep.pass) && !sweep_listed(sweep.key))
-		return FALSE;
-	sweep.identity = sweep.key[0] == '+' ? sweep_identity(sweep.key) : 1;
+	sweep.spot = sweep.spot_count = 0;
+	if (sweep.scale || sweep.pass)
+	{
+		long spots = sweep_list_find(sweep.map_key, 0, NULL, NULL, NULL);
+
+		if (spots < 0)
+			return FALSE;
+		/* (spots are a campaign level's: a multiplayer map's views are the showcase's) */
+		if (sweep.solo && spots > 0)
+		{
+			sweep.spot_count = spots;
+			sweep.spot = 1;
+		}
+	}
+	sweep_spot_key();
+	sweep.identity = sweep.map_key[0] == '+' ? sweep_identity(sweep.map_key) : 1;
 	if (sweep.solo)
 	{
 		sweep.needed = sweep.needed_base = 1 << 3;
@@ -3398,7 +3530,7 @@ static boolean sweep_map_ready(
 	}
 	else
 	{
-		players = hmp_browse_suggested_players(sweep.key);
+		players = hmp_browse_suggested_players(sweep.map_key);
 		if (players <= 0)
 			players = 8;
 		sweep.full_bots = players > 15 ? 15 : players;
@@ -3451,6 +3583,18 @@ static void sweep_initialize(
 			strcpy(sweep.marker, "sweep_now.txt");
 		}
 	}
+	/* (v1.168: a pass's own list, perf\sweep_list_p<pass>.txt, when there's one) */
+	strcpy(sweep.list, "sweep_list.txt");
+	if (sweep.pass)
+	{
+		char name[24];
+
+		_snprintf(name, sizeof(name), "sweep_list_p%ld.txt", sweep.pass);
+		name[sizeof(name) - 1] = 0;
+		sweep_path(path, sizeof(path), name);
+		if (GetFileAttributesA(path) != (DWORD)-1)
+			strcpy(sweep.list, name);
+	}
 	/* (the column names: the P rows' own) */
 	{
 		char const *names = strstr(frame_fields, "tick_units_ms");
@@ -3468,9 +3612,10 @@ static void sweep_initialize(
 	}
 	sweep_read_results();
 	sweep.map_count = hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO;
-	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\%s; %ld maps here%s", sweep.done_count,
+	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\%s; %ld maps here%s%s%s", sweep.done_count,
 		sweep.drive, sweep.results, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER,
-		sweep.scale || sweep.pass ? " (a pass of its own: only perf\\sweep_list.txt's maps, when it's there)" : "");
+		sweep.scale || sweep.pass ? " (a pass of its own: only perf\\" : "", sweep.scale || sweep.pass ? sweep.list : "",
+		sweep.scale || sweep.pass ? "'s maps, when it's there)" : "");
 	/* (a run the last boot started and never wrote: the Xbox crashed or hung in it) */
 	sweep_path(path, sizeof(path), sweep.marker);
 	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -3491,12 +3636,23 @@ static void sweep_initialize(
 
 			*tab = 0;
 			strcpy(sweep.key, text);
+			strcpy(sweep.map_key, text);
+			sweep.spot = sweep.spot_count = 0;
+			/* (a spot's run: "<map key> spot <n>") */
+			{
+				char *spot = NULL, *at = sweep.map_key;
+
+				while ((at = strstr(at, " spot ")) != NULL)
+					spot = at++;
+				if (spot && spot[6] >= '1' && spot[6] <= '9' && strspn(spot + 6, "0123456789") == strlen(spot + 6))
+					*spot = 0;
+			}
 			sweep.run = strtol(tab + 1, NULL, 10);
 			sweep.identity = strtoul(tab2 + 1, &end, 16);
 			hung = end && !strncmp(end, "\thung", 5);
 			if (sweep.run >= 0 && sweep.run < SWEEP_RUNS)
 			{
-				short players = sweep.key[0] == '+' || hmp_browse_stock_title(sweep.key) ? hmp_browse_suggested_players(sweep.key) : 0;
+				short players = sweep.map_key[0] == '+' || hmp_browse_stock_title(sweep.map_key) ? hmp_browse_suggested_players(sweep.map_key) : 0;
 
 				struct sweep_done const *done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
 
@@ -3657,24 +3813,32 @@ static long sweep_next(
 				continue;
 			sweep.map_ready = TRUE;
 		}
+		for (;;)
 		{
 			struct sweep_done const *done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
 
 			sweep.needed = (unsigned char)(sweep.needed_base | sweep_extra(done));
 			sweep.slow_run = done && done->slow_run != 0xff ? done->slow_run : 0;
+			for (run = 0; run < SWEEP_RUNS && (!(sweep.needed & (1 << run)) || (sweep.have & (1 << run))); run++)
+				;
+			if (run < SWEEP_RUNS || !sweep.spot || sweep.spot >= sweep.spot_count)
+				break;
+			/* (that spot's done: the level's next, v1.168) */
+			sweep.spot++;
+			sweep_spot_key();
+			done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
+			sweep.have = done ? done->runs & SWEEP_RUNS_MASK : 0;
 		}
-		for (run = 0; run < SWEEP_RUNS && (!(sweep.needed & (1 << run)) || (sweep.have & (1 << run))); run++)
-			;
 		if (run == SWEEP_RUNS)
 			continue;
-		if ((long)strlen(sweep.key) >= size)
+		if ((long)strlen(sweep.map_key) >= size)
 			continue;
 		sweep.run = run;
 		sweep.bots = sweep_run_bots(run);
 		sweep_map_info();
 		sweep_clear_measures();
 		/* (a folder map the map browser won't choose isn't loaded: its rows say why) */
-		if (sweep.key[0] == '+' && !sweep.solo && sweep.cursor < hmp_maps_count() &&
+		if (sweep.map_key[0] == '+' && !sweep.solo && sweep.cursor < hmp_maps_count() &&
 			(sweep.problem = hmp_maps_problem(sweep.cursor)) != NULL)
 		{
 			platform_log("perf sweep: %s isn't loaded: %s", sweep.key, sweep.problem);
@@ -3692,7 +3856,9 @@ static long sweep_next(
 		sweep_set_scale(run);
 		sweep_watch_on(sweep.seconds + SWEEP_WATCH_SECONDS);
 		sweep.active = TRUE;
-		strcpy(key, sweep.key);
+		sweep.spot_ready = sweep.spot_skip = 0.0f;
+		sweep.spot_switches = 0;
+		strcpy(key, sweep.map_key);
 		*bots = sweep.bots;
 		platform_log("perf sweep: map %ld of %ld, %s (%s, %s), run %ld: %d bots%s", sweep.cursor + 1, sweep.map_count,
 			sweep.key, sweep.name, sweep.solo ? "campaign" : "multiplayer", run, (int)sweep.bots,
@@ -3739,12 +3905,93 @@ static long sweep_spawn_shots(
 	return shots;
 }
 
+/* v1.168: a spot run's frame: the opening cutscene skipped (as a press would), then the BSP switched to and the player
+put on the spot and kept there (the camera tour's pin). TRUE once it's there: the warmup counts from then */
+static boolean sweep_spot_frame(
+	float seconds)
+{
+	struct scenario *scenario = global_scenario_try_and_get();
+	LARGE_INTEGER now;
+	long player_index;
+
+	if (!scenario || !game_in_progress())
+		return FALSE;
+	QueryPerformanceCounter(&now);
+	/* (a cutscene, whenever one plays: skipped as a press would, asked again every 5 seconds. One that starts before
+	the run measures puts the player back on the spot after it, the warmup again) */
+	if (cinematic_in_progress())
+	{
+		if (cinematic_can_be_skipped() && (!sweep.spot_skip || seconds - sweep.spot_skip >= 5.0f))
+		{
+			platform_log("perf sweep: %s: a cutscene skipped, %.1f s in", sweep.key, seconds);
+			sweep.spot_skip = seconds > 0.01f ? seconds : 0.01f;
+			main_skip_cinematic();
+		}
+		if (sweep.spot_ready && !sweep.measuring)
+		{
+			tour_pin_release();
+			sweep.spot_ready = 0.0f;
+		}
+	}
+	if (!sweep.spot_ready)
+	{
+		/* (the level's startup scripts first, which start its opening cutscene; one that can't be skipped is waited
+		for, 2 minutes at most) */
+		if (seconds < SWEEP_SPOT_SETTLE_SECONDS || (cinematic_in_progress() && seconds < 120.0f))
+			return FALSE;
+		tour.local_player_index = 0;
+		if (tour_player_unit(&player_index) == NONE)
+			return FALSE;
+		if (sweep.spot_bsp < 0 || sweep.spot_bsp >= scenario->structure_bsp_references.count)
+		{
+			platform_log("perf sweep: %s: it has no BSP %d (%ld): the player put there in BSP %d", sweep.key,
+				(int)sweep.spot_bsp, scenario->structure_bsp_references.count, (int)global_structure_bsp_index_get());
+			sweep.spot_bsp = global_structure_bsp_index_get();
+		}
+		if (global_structure_bsp_index_get() != sweep.spot_bsp)
+			scenario_switch_structure_bsp(sweep.spot_bsp);
+		tour.pin = TRUE;
+		tour.pin_unit = NONE;
+		tour.pin_settled = FALSE;
+		tour.pin_set_invulnerable = FALSE;
+		tour.pins = 0;
+		tour.pin_position = sweep.spot_position;
+		tour.pin_yaw = sweep.spot_yaw;
+		sweep.spot_ready = seconds > 0.01f ? seconds : 0.01f;
+		platform_log("perf sweep: %s: BSP %d, the player at (%.2f %.2f %.2f) facing %.2f, %.1f s in", sweep.key,
+			(int)global_structure_bsp_index_get(), sweep.spot_position.x, sweep.spot_position.y, sweep.spot_position.z,
+			sweep.spot_yaw, seconds);
+	}
+	else if (global_structure_bsp_index_get() != sweep.spot_bsp && sweep.spot_switches < 3)
+	{
+		sweep.spot_switches++;
+		platform_log("perf sweep: %s: the level switched to BSP %d: back to %d", sweep.key,
+			(int)global_structure_bsp_index_get(), (int)sweep.spot_bsp);
+		scenario_switch_structure_bsp(sweep.spot_bsp);
+		tour.pin_unit = NONE;
+		tour.pin_settled = FALSE;
+	}
+	tour_pin_update(now.QuadPart);
+	return TRUE;
+}
+
+/* the spot run's end: the player's pin let go */
+static void sweep_spot_end(
+	void)
+{
+	if (sweep.spot_ready)
+		tour_pin_release();
+	sweep.spot_ready = 0.0f;
+}
+
 static boolean sweep_frame(
 	float seconds)
 {
 	if (!sweep.active || sweep.over)
 		return TRUE;
-	if (!sweep.measuring && seconds >= SWEEP_WARMUP_SECONDS)
+	if (sweep.spot && !sweep_spot_frame(seconds))
+		return FALSE;
+	if (!sweep.measuring && seconds >= sweep.spot_ready + SWEEP_WARMUP_SECONDS)
 	{
 		struct scenario *scenario = global_scenario_try_and_get();
 
@@ -3777,6 +4024,7 @@ static void sweep_ended(
 		platform_log("perf sweep: a press interrupted %s run %ld (not counted): the sweep goes on after 2 minutes without a "
 			"press (hold Back 3 seconds at the main menu to stop it until the next boot)", sweep.key, sweep.run);
 		sweep_marker(0);
+		sweep_spot_end();
 		sweep.active = sweep.measuring = FALSE;
 		sweep_set_scale(0);
 		return;
@@ -3786,6 +4034,7 @@ static void sweep_ended(
 		platform_log("perf sweep: stopped by a press (%s run %ld isn't counted); it carries on at the next boot", sweep.key,
 			sweep.run);
 		sweep_marker(0);
+		sweep_spot_end();
 		sweep.active = sweep.measuring = FALSE;
 		sweep_set_scale(0);
 		return;
