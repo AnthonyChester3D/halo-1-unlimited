@@ -2791,6 +2791,14 @@ void unit_died(
 		object_set_garbage(unit_index, TRUE);
 		if (unit->unit.player_index != NONE)
 		{
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox (v1.167): a campaign player's deaths, for scripts (port/linux/game/hmp_carry.c) */
+			{
+				void hmp_carry_died(long player_index);
+
+				hmp_carry_died(unit->unit.player_index);
+			}
+#endif
 			player_died(unit->unit.player_index);
 			unit->unit.player_index = NONE;
 		}

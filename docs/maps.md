@@ -53,3 +53,25 @@ Gravity is the host's: in a network game, clients predict their own movement at 
 shows as jumps corrected by the host. Not saved in checkpoints. Converted maps don't need these for MCC's other
 functions that Halo has under another name (Halo Map Porter rewrites those: `pin` as `min`/`max`, `sleep_forever` as
 `sleep -1`, `breadcrumbs_*_flag/_object` as the team nav point functions...).
+
+## H1U's script functions and kept globals (v1.167)
+
+After MCC's, at the same places on the Xbox and the dedicated server (the server's own functions come after these),
+for Halo Map Porter's Boxfight (an end-of-run stats screen); maps may call them:
+
+| index | function | returns |
+|---|---|---|
+| 442 | `cinematic_set_title_number <cutscene_title> <short>` | shows the title as `cinematic_set_title` does, its text's first `%d` showing the number (0 for a negative one) |
+| 443 | `player_kills <short player>` | short: enemy bipeds the player's damage killed in this campaign game |
+| 444 | `player_deaths <short player>` | short: times the player's body died |
+| 445 | `player_headshots <short player>` | short: of those kills, the ones a shot to the head killed outright |
+
+The player is the game's player index (0 the first player, as in `(players)`). The counts are the Xbox's only (0 on
+the server and in multiplayer), kept outside the saved game (port/linux/game/hmp_carry.c): they last through map
+switches (`map_name`) and are cleared when a game starts from the menus. A checkpoint revert takes kills and headshots
+back to the checkpoint's, and a restart to the map's start (the enemies come back); deaths are never taken back. A
+title's number isn't sent to network co-op clients (they show 0).
+
+Script globals named `carry_...` (v1.163) are given to the next map a local game's `map_name` switches to; globals
+named `keep_...` are too, and also keep their values through a checkpoint revert and a restart (a death's count, for
+one). Both: booleans, reals, shorts and longs only, matched by name and type, local games only.

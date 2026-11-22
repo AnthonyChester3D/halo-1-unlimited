@@ -78,6 +78,9 @@ void draw_quad(
 	pixel32 color);
 void cinematic_set_title(
 	unsigned short title_index);
+void cinematic_set_title_number(
+	short title_index,
+	long number);
 
 /* ---------- globals */
 

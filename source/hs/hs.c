@@ -3383,7 +3383,7 @@ typedef void (*hs_token_enumerator)(
 
 struct hs_function_table_storage
 {
-	struct hs_function_definition const *functions[418 + 4 + 20]; /* port: (+ 20: MCC's, mcc_definitions) */
+	struct hs_function_definition const *functions[418 + 4 + 24]; /* port: (+ 24: MCC's and H1U's, mcc_definitions) */
 	struct profile_section profile;
 	hs_token_enumerator token_enumerators[18];
 };
@@ -11772,10 +11772,20 @@ enum
 	_mcc_physics_constants_reset,
 	_mcc_script_started,
 	_mcc_script_finished,
+	/* H1U's own (v1.167, Halo Map Porter's Boxfight: an end-of-run stats screen), 442 on: a title with a number for
+	its %d, and each player's kills, deaths and headshots in a campaign game (port/linux/game/hmp_carry.c). The
+	dedicated server's table has them at the same places, its own functions after them */
+	_h1u_cinematic_set_title_number,
+	_h1u_player_kills,
+	_h1u_player_deaths,
+	_h1u_player_headshots,
 	NUMBER_OF_MCC_FUNCTIONS
 };
 
 short hs_script_progress(short script_index);   /* (hs_runtime.c) */
+#if defined(HALO_XBOX_TARGET)
+short hmp_carry_count(short which, short player);  /* (port/linux/game/hmp_carry.c: 0 kills, 1 deaths, 2 headshots) */
+#endif
 static struct mcc_definition
 {
 	struct hs_function_definition definition;
@@ -11931,6 +11941,23 @@ static void hs_mcc_evaluate(
 	case _mcc_script_finished:
 		result.long_value = hs_script_progress(a[0].short_value) == 2;
 		break;
+	case _h1u_cinematic_set_title_number:
+		cinematic_set_title_number(a[0].short_value, a[1].short_value);
+		break;
+	case _h1u_player_kills:
+	case _h1u_player_deaths:
+	case _h1u_player_headshots:
+	{
+		union hs_short_result count;
+
+		count.value = 0;
+#if defined(HALO_XBOX_TARGET)
+		count.short_value = hmp_carry_count((short)(function_index - MCC_FUNCTION_FIRST - _h1u_player_kills),
+			a[0].short_value);
+#endif
+		result.long_value = count.value;
+		break;
+	}
 	}
 	hs_return(thread_index, result.long_value);
 
@@ -11966,8 +11993,13 @@ static struct mcc_definition const mcc_definitions[NUMBER_OF_MCC_FUNCTIONS]=
 	MCC_FUNCTION(_hs_type_void, "physics_constants_reset", 0, 0, 0, 0, 0),
 	MCC_FUNCTION(_hs_type_boolean, "script_started", 1, _hs_type_script, 0, 0, 0),
 	MCC_FUNCTION(_hs_type_boolean, "script_finished", 1, _hs_type_script, 0, 0, 0),
+	/* (a short: Halo's scripts cast a long or a real to a short, but not a short to a long) */
+	MCC_FUNCTION(_hs_type_void, "cinematic_set_title_number", 2, _hs_type_cutscene_title, _hs_type_short_integer, 0, 0),
+	MCC_FUNCTION(_hs_type_short_integer, "player_kills", 1, _hs_type_short_integer, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_short_integer, "player_deaths", 1, _hs_type_short_integer, 0, 0, 0),
+	MCC_FUNCTION(_hs_type_short_integer, "player_headshots", 1, _hs_type_short_integer, 0, 0, 0),
 };
-typedef char mcc_function_count_assert[NUMBER_OF_MCC_FUNCTIONS == 20 ? 1 : -1];
+typedef char mcc_function_count_assert[NUMBER_OF_MCC_FUNCTIONS == 24 ? 1 : -1];
 typedef char mcc_definitions_parameters_assert[
 	offsetof(struct hs_function_definition_with_4_parameters, parameter_types) == sizeof(struct hs_function_definition) ? 1 : -1];
 
@@ -12428,6 +12460,11 @@ struct hs_function_table_storage hs_function_table=
 		&mcc_definitions[_mcc_physics_constants_reset].definition,
 		&mcc_definitions[_mcc_script_started].definition,
 		&mcc_definitions[_mcc_script_finished].definition,
+		/* (H1U's: 442 on) */
+		&mcc_definitions[_h1u_cinematic_set_title_number].definition,
+		&mcc_definitions[_h1u_player_kills].definition,
+		&mcc_definitions[_h1u_player_deaths].definition,
+		&mcc_definitions[_h1u_player_headshots].definition,
 	},
 	{
 		"hs_update",
@@ -12941,6 +12978,9 @@ static boolean const hs_function_allowed_in_maps[]=
 	TRUE, /* game_is_authoritative */
 	TRUE, TRUE, TRUE, /* physics_set_gravity, physics_get_gravity, physics_constants_reset */
 	TRUE, TRUE, /* script_started, script_finished */
+
+	/* H1U's: a numbered title, the players' counts */
+	TRUE, TRUE, TRUE, TRUE, /* cinematic_set_title_number, player_kills, player_deaths, player_headshots */
 };
 typedef char verify_hs_function_allowed_in_maps_size[
 	NUMBEROF(hs_function_allowed_in_maps) == NUMBEROF(hs_function_table.functions) ? 1 : -1];

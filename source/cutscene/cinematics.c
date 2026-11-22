@@ -260,6 +260,14 @@ void cinematic_stop(
 	return;
 }
 
+/* port (v1.167, Halo Map Porter's Boxfight): a number per title slot, for the first %d in its text
+(cinematic_set_title_number); kept beside the game state, not in it, so saved games keep their layout. A title
+queued without one (NONE) shows its text as it is. Only cinematic_set_title_delayed queues titles in a game
+(cinematic_force_title is the editor's) */
+static long cinematic_title_numbers[MAXIMUM_QUEUED_CINEMATIC_TITLES];
+static char cinematic_title_queued_slot;    /* (the slot cinematic_set_title_delayed just used, NONE when none) */
+static wchar_t const *cinematic_title_text(wchar_t const *text, short title_slot_index, wchar_t *out, short out_count);
+
 void cinematic_set_title_delayed(
 	short title_index,
 	real delay)
@@ -274,6 +282,8 @@ void cinematic_set_title_delayed(
 
 	if (title_slot_index < MAXIMUM_QUEUED_CINEMATIC_TITLES)
 	{
+		cinematic_title_numbers[title_slot_index] = NONE;
+		cinematic_title_queued_slot = (char)title_slot_index;
 		cinematic_globals->queued_titles[title_slot_index].title_index = title_index;
 		cinematic_globals->queued_titles[title_slot_index].time =
 			(short)-fast_ftol(delay * TICKS_PER_SECOND);
@@ -432,6 +442,7 @@ void cinematic_render(
 			{
 				real_argb_color text_color;
 				long shadow_alpha;
+				wchar_t numbered_text[256];
 
 				pixel32_to_real_argb_color(
 					title->foreground_color,
@@ -482,9 +493,13 @@ void cinematic_render(
 					NULL,
 					NULL,
 					0,
-					unicode_string_list_get_string(
-						help_text_tag_index,
-						title->text_index));
+					cinematic_title_text(
+						unicode_string_list_get_string(
+							help_text_tag_index,
+							title->text_index),
+						title_slot_index,
+						numbered_text,
+						NUMBEROF(numbered_text)));
 
 				rasterizer_text_set_shadow_color(0);
 			}
@@ -512,6 +527,83 @@ void cinematic_set_title(
 	cinematic_set_title_delayed(title_index, 0.0f);
 
 	return;
+}
+
+/* port (v1.167): a title with a number for the first %d in its text (a script's counts: "Enemies killed: %d") */
+void cinematic_set_title_number(
+	short title_index,
+	long number)
+{
+	cinematic_title_queued_slot = NONE;
+	cinematic_set_title_delayed(title_index, 0.0f);
+	if (cinematic_title_queued_slot != NONE)
+		cinematic_title_numbers[cinematic_title_queued_slot] = MAX(number, 0);
+
+	return;
+}
+
+#if defined(OXBOX_CARRY_TEST)
+/* (lab only: the first title's text made to start with %d, its name given for a script; FALSE when there's none) */
+boolean cinematic_title_lab_mark(
+	char *name)
+{
+	struct scenario *scenario = global_scenario_get();
+	struct scenario_cutscene_title *title;
+	wchar_t *text;
+
+	if (!scenario->cutscene_chapter_titles.count || scenario->ingame_help_text.index == NONE)
+		return FALSE;
+	title = TAG_BLOCK_GET_ELEMENT(&scenario->cutscene_chapter_titles, 0, struct scenario_cutscene_title);
+	text = unicode_string_list_get_string(scenario->ingame_help_text.index, title->text_index);
+	if (!text || !text[0] || !text[1])
+		return FALSE;
+	text[0] = '%';
+	text[1] = 'd';
+	csstrncpy(name, title->name, TAG_STRING_LENGTH);
+	name[TAG_STRING_LENGTH] = 0;
+
+	return TRUE;
+}
+#endif
+
+/* a title's text with its number in place of the first %d (as it is when it has none; 0 for a negative number) */
+static wchar_t const *cinematic_title_text(
+	wchar_t const *text,
+	short title_slot_index,
+	wchar_t *out,
+	short out_count)
+{
+	short length = 0;
+	boolean done = FALSE;
+
+	if (!text || cinematic_title_numbers[title_slot_index] < 0)
+		return text;
+	while (*text && length < out_count - 12)
+	{
+		if (!done && text[0] == '%' && text[1] == 'd')
+		{
+			char digits[12];
+			long value = cinematic_title_numbers[title_slot_index];
+			short count = 0;
+
+			do
+			{
+				digits[count++] = (char)('0' + value % 10);
+				value /= 10;
+			} while (value);
+			while (count)
+				out[length++] = digits[--count];
+			text += 2;
+			done = TRUE;
+		}
+		else
+		{
+			out[length++] = *text++;
+		}
+	}
+	out[length] = 0;
+
+	return out;
 }
 
 /* ---------- private code */

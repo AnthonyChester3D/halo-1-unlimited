@@ -2948,11 +2948,11 @@ static void main_reset_map_private(
 	void)
 {
 #if defined(HALO_XBOX_TARGET)
-	/* oxbox: Restart mission starts the piece with its profile (port/linux/game/hmp_carry.c) */
+	/* oxbox: Restart mission starts the piece with its profile, keep_ globals kept (port/linux/game/hmp_carry.c) */
 	{
-		void hmp_carry_clear(void);
+		void hmp_carry_reset(void);
 
-		hmp_carry_clear();
+		hmp_carry_reset();
 	}
 #endif
 	if (!game_time_get_paused())
