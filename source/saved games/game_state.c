@@ -400,6 +400,15 @@ void game_state_save(
 		network_coop_checkpoint_saved();
 	main_start_time();
 	game_state_note_event("checkpoint saved");
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.167): the players' counts a revert goes back to (port/linux/game/hmp_carry.c) */
+	if (game_state_globals.saved_game_valid)
+	{
+		void hmp_carry_checkpoint_saved(void);
+
+		hmp_carry_checkpoint_saved();
+	}
+#endif
 
 	return;
 }
@@ -432,6 +441,14 @@ void game_state_revert(
 	}
 
 	game_state_note_event("checkpoint revert");
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.167): keep_ globals kept through the revert (port/linux/game/hmp_carry.c) */
+	{
+		void hmp_carry_revert(boolean read);
+
+		hmp_carry_revert(FALSE);
+	}
+#endif
 	game_state_call_before_load_procs();
 	/* port: a file that is not a saved game of this build is not taken, and
 	the map starts over */
@@ -442,7 +459,16 @@ void game_state_revert(
 		main_reset_map();
 	}
 	else
+	{
 		platform_log("checkpoint: back to the one saved (now %ld s into the map)", (long)(game_time_get() / 30));
+#if defined(HALO_XBOX_TARGET)
+		{
+			void hmp_carry_revert(boolean read);
+
+			hmp_carry_revert(TRUE);
+		}
+#endif
+	}
 	game_state_call_after_load_procs();
 
 	return;

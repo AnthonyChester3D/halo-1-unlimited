@@ -156,6 +156,10 @@ boolean network_damage_static_target(long object_index);
 /* set while a distributed client carries out a kill it does not decide (an
 act of god: the host's word, network_distributed.c, or the world's) */
 static boolean distributed_damage_authorized;
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.167): this damage's shot to the head killed outright (a campaign player's headshots: hmp_carry.c) */
+static boolean damage_headshot;
+#endif
 
 /* whether this machine runs the object's shields (their stun, recharge and
 overcharge): not a client of the distributed netcode, which has the host's
@@ -1111,6 +1115,16 @@ static void object_damage_aftermath(
 		}
 	}
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.167): a campaign player's kills and headshots, for scripts (port/linux/game/hmp_carry.c) */
+	if (TEST_FLAG(being_damaged_flags, _object_being_damaged_body_depleted_bit))
+	{
+		void hmp_carry_kill(long object_index, long player_index, short team_index, boolean headshot);
+
+		hmp_carry_kill(object_index, damage->owner_player_index, damage->owner_team_index, damage_headshot);
+	}
+	damage_headshot = FALSE;
+#endif
 	if (game_engine_can_score() &&
 		!TEST_FLAG(damage->flags, _damage_no_statistics_bit))
 	{
@@ -1259,6 +1273,9 @@ static void object_damage_body(
 				{
 					object->object.body_vitality = 0.f;
 					SET_FLAG(*being_damaged_flags, _object_being_damaged_killed_instantly_bit, TRUE);
+#if defined(HALO_XBOX_TARGET)
+					damage_headshot = TRUE;
+#endif
 					if (game_engine_running())
 						SET_FLAG(*being_damaged_flags, _object_being_damaged_force_hard_ping_bit, TRUE);
 				}

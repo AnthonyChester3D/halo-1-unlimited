@@ -92,7 +92,8 @@ static struct
 } *carry;
 
 static void carry_globals_clear(void);
-static void carry_globals_record(char const *target);
+static void carry_globals_record(char const *target, boolean keep_only);
+static void carry_stats_clear(void);
 
 /* the players' record only (a new one replacing it) */
 static void carry_players_clear(void)
@@ -107,6 +108,7 @@ static void carry_players_clear(void)
 void hmp_carry_clear(void)
 {
 	carry_globals_clear();
+	carry_stats_clear();
 	if (carry)
 	{
 		free(carry);
@@ -198,7 +200,7 @@ static boolean carry_unit_alive(long unit_index)
 void hmp_carry_record(char const *target)
 {
 	short local_player_index, recorded = 0;
-	carry_globals_record(target);
+	carry_globals_record(target, FALSE);
 	if (game_engine_running() || !carry_new(target, FALSE))
 		return;
 	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
@@ -243,6 +245,17 @@ void hmp_carry_menu(void)
 	hmp_carry_clear();
 }
 
+/* Restart mission, or a death with no checkpoint to go back to (main.c's main_reset_map_private): the piece starts
+with its profile, but keep_ globals keep their values and the players' counts go back to the map's start */
+void hmp_carry_reset(void)
+{
+	void carry_stats_back(boolean to_checkpoint);
+
+	carry_players_clear();
+	carry_globals_record(main_get_map_name(), TRUE);
+	carry_stats_back(FALSE);
+}
+
 /* ---- network co-op: the host's script's map_name (main.c), done from the main loop ---- */
 
 static char coop_switch_target[256];
@@ -267,7 +280,9 @@ void hmp_carry_coop_update(void)
 #if defined(OXBOX_CARRY_TEST)
 	{
 		void hmp_carry_globals_test(void);
+		void hmp_stats_test(void);
 		hmp_carry_globals_test();
+		hmp_stats_test();
 	}
 #endif
 	if (!coop_switch_pending)
@@ -534,6 +549,7 @@ menu). A checkpoint in the new map saves the given values as it does any global'
 #include "hs/hs_scenario_definitions.h"
 
 #define CARRY_GLOBAL_PREFIX "carry_"
+#define KEEP_GLOBAL_PREFIX "keep_"          /* (v1.167: also kept through a checkpoint revert or a restart) */
 #define CARRY_GLOBALS 32
 
 long hs_runtime_map_global_get(short global_index);
@@ -560,14 +576,15 @@ static void carry_globals_clear(void)
 	}
 }
 
-static boolean carry_global_carried(struct hs_global const *global)
+static boolean carry_global_carried(struct hs_global const *global, boolean keep_only)
 {
-	return !_strnicmp(global->name, CARRY_GLOBAL_PREFIX, sizeof(CARRY_GLOBAL_PREFIX) - 1) &&
+	return ((!keep_only && !_strnicmp(global->name, CARRY_GLOBAL_PREFIX, sizeof(CARRY_GLOBAL_PREFIX) - 1)) ||
+			!_strnicmp(global->name, KEEP_GLOBAL_PREFIX, sizeof(KEEP_GLOBAL_PREFIX) - 1)) &&
 		(global->type == _hs_type_boolean || global->type == _hs_type_real ||
 			global->type == _hs_type_short_integer || global->type == _hs_type_long_integer);
 }
 
-static void carry_globals_record(char const *target)
+static void carry_globals_record(char const *target, boolean keep_only)
 {
 	struct scenario *scenario;
 	short index;
@@ -580,7 +597,7 @@ static void carry_globals_record(char const *target)
 	{
 		struct hs_global const *global = TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, index, struct hs_global);
 
-		if (!carry_global_carried(global))
+		if (!carry_global_carried(global, keep_only))
 			continue;
 		if (!carry_globals)
 		{
@@ -602,7 +619,7 @@ static void carry_globals_record(char const *target)
 	}
 }
 
-void hmp_carry_globals_apply(void)
+static void carry_globals_give(void)
 {
 	struct scenario *scenario;
 	short index, k, given = 0;
@@ -621,7 +638,7 @@ void hmp_carry_globals_apply(void)
 	{
 		struct hs_global const *global = TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, index, struct hs_global);
 
-		if (!carry_global_carried(global))
+		if (!carry_global_carried(global, FALSE))
 			continue;
 		for (k = 0; k < carry_globals->count; k++)
 		{
@@ -639,7 +656,333 @@ void hmp_carry_globals_apply(void)
 	carry_globals_clear();
 }
 
+/* a map's start, or its restart (hs_runtime.c's hs_runtime_initialize_for_new_map): the globals carried or kept
+given, and the players' counts marked as the map's start */
+void hmp_carry_globals_apply(void)
+{
+	void carry_stats_mark_start(void);
+
+	carry_globals_give();
+	carry_stats_mark_start();
+}
+
+/* a checkpoint revert (game_state.c's game_state_revert): keep_ globals recorded before the saved game is read, and
+given back after it's read (then the players' kills and headshots go back to the checkpoint's, as the enemies do;
+their deaths don't) */
+void hmp_carry_revert(boolean read)
+{
+	void carry_stats_back(boolean to_checkpoint);
+
+	if (!read)
+	{
+		carry_globals_record(main_get_map_name(), TRUE);
+		return;
+	}
+	carry_globals_give();
+	carry_stats_back(TRUE);
+}
+
+/* ---- v1.167 (Boxfight's end-of-run stats): each player's kills, headshots and deaths in a campaign game, for
+scripts (hs.c's player_kills, player_deaths, player_headshots; by the player's index). Counted here,
+not in the game state (whose layout saved games keep): a kill is an enemy biped a player's damage killed (a headshot
+when the head took a shot that can kill outright: damage.c), a death a player's body dying (units.c). Kept through
+map switches like keep_ globals; a checkpoint revert takes kills and headshots back to the checkpoint's and a
+restart to the map's start (the enemies come back), never deaths. Cleared with the players' record (a game from the
+main menu, the main menu). Not counted in multiplayer ---- */
+
+#include "game/game_allegiance.h"
+
+#define STATS_PLAYERS 16
+
+struct carry_stats
+{
+	short kills, headshots, deaths;
+};
+static struct
+{
+	struct carry_stats now[STATS_PLAYERS], checkpoint[STATS_PLAYERS], start[STATS_PLAYERS];
+} stats;
+
+static void carry_stats_clear(void)
+{
+	csmemset(&stats, 0, sizeof(stats));
+}
+
+/* (game_state.c's game_state_save, once it's saved) */
+void hmp_carry_checkpoint_saved(void)
+{
+	csmemcpy(stats.checkpoint, stats.now, sizeof(stats.now));
+}
+
+void carry_stats_mark_start(void)
+{
+	hmp_carry_checkpoint_saved();
+	csmemcpy(stats.start, stats.now, sizeof(stats.now));
+}
+
+void carry_stats_back(boolean to_checkpoint)
+{
+	struct carry_stats const *mark = to_checkpoint ? stats.checkpoint : stats.start;
+	short k;
+
+	for (k = 0; k < STATS_PLAYERS; k++)
+	{
+		stats.now[k].kills = mark[k].kills;
+		stats.now[k].headshots = mark[k].headshots;
+	}
+	if (!to_checkpoint)
+		hmp_carry_checkpoint_saved();
+}
+
+/* an object's body killed by a damage (damage.c), whose owner was a player */
+void hmp_carry_kill(long object_index, long player_index, short team_index, boolean headshot)
+{
+	struct object_datum *object;
+	long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+
+	if (player_index == NONE || slot >= STATS_PLAYERS || game_engine_running())
+		return;
+	object = object_get(object_index);
+	if (object->object.type != _object_type_biped || !game_team_is_enemy(team_index, object->object.owner_team_index))
+		return;
+	stats.now[slot].kills++;
+	stats.now[slot].headshots += headshot != FALSE;
+}
+
+/* a player's body died (units.c) */
+void hmp_carry_died(long player_index)
+{
+	long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+
+	if (player_index != NONE && slot < STATS_PLAYERS && !game_engine_running())
+		stats.now[slot].deaths++;
+}
+
+/* hs.c: 0 kills, 1 deaths, 2 headshots, of player N (the game's player index: 0 is the first player, in a campaign
+game as in (players)); 0 for one that's out of range */
+short hmp_carry_count(short which, short player)
+{
+	if (player < 0 || player >= STATS_PLAYERS)
+		return 0;
+	return which == 0 ? stats.now[player].kills : which == 1 ? stats.now[player].deaths : stats.now[player].headshots;
+}
+
 #if defined(OXBOX_CARRY_TEST)
+/* (lab only, v1.167: a local campaign game's counts, keep_ globals and numbered titles played through, each step
+logged as "stats test:": two enemies killed by player 0's damage (the first with a shot to the head), a checkpoint,
+two globals set (one of them keep_: the lab's b30 has global_delay_music renamed keep_delay_music_x in its file,
+name and script alike), player 0 killed (the game goes back to the checkpoint by itself),
+then a restart. The first title's text is made to start with %d and shown with the counts, as a script would) */
+#include "objects/damage.h"
+#include "objects/damage_resistances.h"
+#include "objects/object_definitions.h"
+#include "physics/collision_model_definitions.h"
+#include "game/cheats.h"
+#include "saved games/game_state.h"
+#include <stdio.h>
+#include <math.h>
+
+boolean cinematic_title_lab_mark(char *name);
+
+static void stats_test_damage(long victim, long player_index, boolean head)
+{
+	struct object_datum *object = object_get(victim);
+	struct damage_data damage;
+	long jpt = tag_loaded('jpt!', "weapons\\pistol\\bullet");
+	short material = NONE;
+
+	if (jpt == NONE)
+		jpt = tag_loaded('jpt!', "weapons\\assault rifle\\bullet");
+	if (jpt == NONE)
+	{
+		platform_log("stats test: no bullet damage in this map");
+		return;
+	}
+	if (head)
+	{
+		long coll = object_definition_get(object->definition_index)->object.collision_model.index;
+
+		if (coll != NONE)
+		{
+			struct collision_model const *model = collision_model_definition_get(coll);
+			short k;
+
+			for (k = 0; k < model->resistance.materials.count && material == NONE; k++)
+			{
+				if (TAG_BLOCK_GET_ELEMENT(&model->resistance.materials, k, struct damage_resistance_material)->flags & 1)
+					material = k;
+			}
+		}
+	}
+	if (head)
+		object_deplete_shield(victim);
+	damage_data_new(&damage, jpt);
+	damage.owner_player_index = player_index;
+	damage.owner_object_index = player_index != NONE ? player_get(player_index)->unit_index : NONE;
+	damage.owner_team_index = player_index != NONE ? object_get(damage.owner_object_index)->object.owner_team_index : NONE;
+	damage.location = object->object.location;
+	damage.origin = object->object.bounding_sphere_center;
+	damage.epicenter = object->object.bounding_sphere_center;
+	/* (level, from player 0 to it: a shot straight down leaves a unit no facing) */
+	{
+		real_point3d const *from = &object_get(player_get(local_player_get_player_index(0))->unit_index)->object.bounding_sphere_center;
+		real i = object->object.bounding_sphere_center.x - from->x, j = object->object.bounding_sphere_center.y - from->y;
+		real length = (real)sqrt(i * i + j * j);
+
+		damage.direction.i = length > 0.01f ? i / length : 1.0f;
+		damage.direction.j = length > 0.01f ? j / length : 0.0f;
+		damage.direction.k = 0.0f;
+	}
+	damage.multiplier = head ? 1.0f : 1000.0f;   /* (scale weighs the damage's minimum against its range) */
+	object_cause_damage(&damage, victim, NONE, NONE, material, NULL);
+	platform_log("stats test: damaged biped %08lx (team %d, %s, damage %s) %s, head material %d: %s", victim,
+		(int)object->object.owner_team_index, tag_get_name(object->definition_index), tag_get_name(jpt), player_index != NONE ? "as player 0" : "with no owner", (int)material,
+		TEST_FLAG(object->object.damage_flags, _object_dead_bit) ? "dead" : "alive");
+}
+
+static long stats_test_enemy(long player_index, boolean unshielded)
+{
+	struct object_iterator iterator;
+	struct object_datum *object;
+	long unit_index = player_get(player_index)->unit_index;
+	short team = object_get(unit_index)->object.owner_team_index;
+
+	object_iterator_new(&iterator, _object_mask_biped, 0);
+	while ((object = object_iterator_next(&iterator)) != NULL)
+	{
+		if (iterator.index != unit_index && !TEST_FLAG(object->object.damage_flags, _object_dead_bit) &&
+			game_team_is_enemy(team, object->object.owner_team_index) &&
+			(!unshielded || object->object.maximum_shield_vitality <= 0.0f))
+		{
+			return iterator.index;
+		}
+	}
+
+	return NONE;
+}
+
+static void stats_test_log(char const *when, short keep, short plain)
+{
+	struct scenario *scenario = global_scenario_get();
+
+	platform_log("stats test: %s: kills %d, headshots %d, deaths %d; %.32s = %ld, %.32s = %ld", when,
+		(int)hmp_carry_count(0, 0), (int)hmp_carry_count(2, 0), (int)hmp_carry_count(1, 0),
+		TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, keep, struct hs_global)->name, hs_runtime_map_global_get(keep),
+		TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, plain, struct hs_global)->name, hs_runtime_map_global_get(plain));
+}
+
+static void stats_test_title(char const *count)
+{
+	static char name[TAG_STRING_LENGTH + 1];
+	static boolean marked;
+	char expression[160];
+
+	if (!marked && !(marked = cinematic_title_lab_mark(name)))
+	{
+		platform_log("stats test: no title to show");
+		return;
+	}
+	snprintf(expression, sizeof(expression), "(cinematic_set_title_number \"%s\" (%s 0))", name, count);
+	platform_log("stats test: %s: %s", expression, hs_compile_and_evaluate(expression) ? "evaluated" : "FAILED");
+}
+
+void hmp_stats_test(void)
+{
+	static int stage;
+	static unsigned long since;
+	static short keep = NONE, plain = NONE;
+	struct scenario *scenario;
+	long player_index;
+	unsigned long now = GetTickCount();
+	static unsigned long const at[] = { 12000, 18000, 34000, 40000, 50000 };
+
+	if (stage >= 5)
+		return;
+	if (!game_in_progress() || game_connection() != _game_connection_local || game_engine_running() ||
+		global_scenario_index == NONE || global_scenario_get()->type != _scenario_type_solo)
+	{
+		if (!stage)
+			since = 0;
+		return;
+	}
+	if (!since)
+		since = now;
+	if (now - since < at[stage] || (player_index = local_player_get_player_index(0)) == NONE)
+		return;
+	scenario = global_scenario_get();
+	switch (stage)
+	{
+	case 0:
+	{
+		short index;
+		long enemy;
+
+		for (index = 442; index <= 445; index++)
+			platform_log("stats test: script function %d is %s", (int)index, hs_function_get(index)->name);
+		for (index = 0; index < scenario->hs_globals.count && (keep == NONE || plain == NONE); index++)
+		{
+			struct hs_global *global = TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, index, struct hs_global);
+
+			if (global->type != _hs_type_short_integer && global->type != _hs_type_long_integer)
+				continue;
+			if (!_strnicmp(global->name, KEEP_GLOBAL_PREFIX, sizeof(KEEP_GLOBAL_PREFIX) - 1))
+			{
+				if (keep == NONE)
+					keep = index;
+			}
+			else if (plain == NONE)
+			{
+				plain = index;
+			}
+		}
+		if (keep == NONE || plain == NONE)
+		{
+			platform_log("stats test: this map hasn't a short or long keep_ global and another");
+			stage = 5;
+			return;
+		}
+		stats_test_log("at the start", keep, plain);
+		if ((enemy = stats_test_enemy(player_index, TRUE)) != NONE || (enemy = stats_test_enemy(player_index, FALSE)) != NONE)
+			stats_test_damage(enemy, player_index, TRUE);
+		else
+			platform_log("stats test: no enemy biped alive");
+		hs_runtime_map_global_set(keep, 5);
+		hs_runtime_map_global_set(plain, 5);
+		stats_test_log("one enemy killed, both globals 5", keep, plain);
+		stats_test_title("player_kills");
+		game_state_save();
+		break;
+	}
+	case 1:
+	{
+		long enemy = stats_test_enemy(player_index, FALSE);
+
+		if (enemy != NONE)
+			stats_test_damage(enemy, player_index, FALSE);
+		hs_runtime_map_global_set(keep, 7);
+		hs_runtime_map_global_set(plain, 7);
+		stats_test_log("after the checkpoint: another killed, both globals 7", keep, plain);
+		cheat.deathless_player = FALSE;
+		stats_test_damage(player_get(player_index)->unit_index, NONE, FALSE);
+		stats_test_log("player 0 killed", keep, plain);
+		break;
+	}
+	case 2:
+		stats_test_log("after the revert (expect kills 1, headshots 1, deaths 1, keep_ 7, the other 5)", keep, plain);
+		stats_test_title("player_deaths");
+		break;
+	case 3:
+		stats_test_log("restarting", keep, plain);
+		main_reset_map();
+		break;
+	case 4:
+		stats_test_log("after the restart (expect kills 0, headshots 0, deaths 1, keep_ 7, the other its start)", keep, plain);
+		stats_test_title("player_deaths");
+		break;
+	}
+	stage++;
+}
+
 /* (lab only: on a local game's folder map +carrytest/..., 20 s in, the carry_ globals set to test values and the
 map switched to itself by name, as a script's map_name does; 10 s into the next load, their values logged) */
 void hmp_carry_globals_test(void)
@@ -664,7 +1007,7 @@ void hmp_carry_globals_test(void)
 	{
 		struct hs_global const *global = TAG_BLOCK_GET_ELEMENT(&scenario->hs_globals, index, struct hs_global);
 
-		if (!carry_global_carried(global))
+		if (!carry_global_carried(global, FALSE))
 			continue;
 		if (stage == 0)
 		{

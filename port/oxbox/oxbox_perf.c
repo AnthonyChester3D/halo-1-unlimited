@@ -2481,7 +2481,9 @@ enum
 	SWEEP_COLUMN_NAME = 40
 };
 #define SWEEP_WARMUP_SECONDS 4.5f               /* (the showcase's 1.5 s settle, then 3 s of textures streaming) */
-#define SWEEP_FAIL_FPS 10.0
+#if !defined(SWEEP_FAIL_FPS)
+#define SWEEP_FAIL_FPS 10.0   /* (a lab build may set it lower: xemu draws a campaign level slower) */
+#endif
 #define SWEEP_FAIL_SECONDS 5.0
 #define SWEEP_WATCH_SECONDS 360                 /* (a run: its load, up to the showcase's 180 s, warm-up, leaving) */
 #define SWEEP_RETURN_SECONDS 180                /* (back to the main menu after a run) */
