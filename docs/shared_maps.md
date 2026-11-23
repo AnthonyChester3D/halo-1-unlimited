@@ -287,6 +287,10 @@ stay where they are, so shrinking them saves nothing until deleting is in.
 
 `port/oxbox/installer/tagpool.c RETAIL_MAPS_DIR OUT_DIR [--maps]` (a PC tool, `-lz`): format 4's stock tag pool,
 stocktags.shared, the 23 stock recipes and, with `--maps`, the retail maps with recipes for testing.
+`tagpool --pack STOCKTAGS PACK_SHARED NAME OUT_DIR MAP...`: format 4's pack pass over a pack's maps (made by
+shared_pass.py or Halo Map Porter, drawing on PACK_SHARED): `NAME-<checksum>.shared` with its tag part, and each map with
+its recipe, each checked to rebuild the same. Measured on CEX's 13 maps: a tag part of 2.4 MB, 9% of the tag data left in
+the maps as their own words; the maps and the pack's file 70.5 MB -> 44.1 MB (zlib 9).
 
 `port/oxbox/tools/verify_shared.py ORIGINAL_MAP CONVERTED_MAP PACK_SHARED STOCK_SHARED`: a converted map checked against its
 original, every block and BSP read back through its new offsets. Run it on anything a pass makes: a wrong one can load and
@@ -430,9 +434,12 @@ stock group it reads the frame's table entry (the table read forward in pieces),
 Adler-32) or takes it raw, and copies its runs into the tag data; the pack groups the same from the pack's tag part.
 Anything wrong (no stocktags.shared, another pool, a run outside the tag data or a frame, a damaged frame) refuses the map
 with a log line, as a map that can't load. A log line gives the frames, megabytes inflated, runs and milliseconds.
-Built in v1.175 (`cache_file_tags_rebuild`, cache_files_windows.c) for stock groups; a recipe with pack groups is refused
-until the pack's tag part is read. Tested in xemu: Blood Gulch, c20 and d20 from recipes, as stock maps and as folder
-maps, from a packed and a raw stocktags.shared, each CRC32 as its reference says (`-DOXBOX_TAG_RECIPE_CHECK`).
+The recipe may start anywhere after the tag data: the game reads it from the start of its sector. The pack's tag part is
+read as the pack's textures are, from the pack's file where it is or from the cache file it's copied into.
+Built in v1.175 (`cache_file_tags_rebuild`, cache_files_windows.c) for stock groups, v1.176 for pack groups. Tested in
+xemu: Blood Gulch, c20 and d20 from recipes, as stock maps and as folder maps, from a packed and a raw stocktags.shared;
+CEX's maps from stocktags.shared and their pack's tag part (one with its recipe off a sector boundary); each CRC32 as its
+reference says (`-DOXBOX_TAG_RECIPE_CHECK`).
 
 ### The installer
 
