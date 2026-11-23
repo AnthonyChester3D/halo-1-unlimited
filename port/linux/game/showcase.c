@@ -138,10 +138,10 @@ extern int oxbox_setting_perf_sweep;     /* perf_sweep = 1: the perf sweep (oxbo
 #define SHOWCASE_ARTISTIC_WEIGHT 1             /* ...and for a map in a genre named "Artistic" (the map browser's) */
 #define SHOWCASE_RETRY_MILLISECONDS (10 * 60 * 1000)
 #define SHOWCASE_SCORE_TO_WIN 999
-#define SHOWCASE_MENU_SETTLE_SECONDS 0.5f      /* the main menu back between maps, before the next lobby */
-#define SHOWCASE_LOBBY_MAP_SECONDS 0.3f        /* the lobby's map and variant set this long after the fast setup */
-#define SHOWCASE_LOBBY_PLAYER_SECONDS 0.5f     /* ... and the watching player added */
-#define SHOWCASE_LOBBY_START_SECONDS 1.0f      /* the start: once the bots are in, and no sooner than this */
+#define SHOWCASE_MENU_SETTLE_SECONDS 0.2f      /* the main menu back between maps, before the next lobby (v1.180: 0.5) */
+#define SHOWCASE_LOBBY_MAP_SECONDS 0.1f        /* the lobby's map and variant set this long after the fast setup (0.3) */
+#define SHOWCASE_LOBBY_PLAYER_SECONDS 0.2f     /* ... and the watching player added (0.5) */
+#define SHOWCASE_LOBBY_START_SECONDS 0.4f      /* the start: once the bots are in, and no sooner than this (1.0) */
 #define SHOWCASE_LOBBY_LONGEST_SECONDS 5.0f    /* ... or this, bots or not */
 #define SHOWCASE_TITLE_SECONDS 10.0f           /* the title card: the bars and the map's name, from the first shot */
 #define SHOWCASE_TITLE_SLIDE_SECONDS 1.0f      /* the bars sliding in and out (the campaign's letterbox: a second) */

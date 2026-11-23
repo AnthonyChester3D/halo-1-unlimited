@@ -1487,6 +1487,11 @@ void network_game_server_dispose(
 	struct network_game_server *server)
 {
 	match_assert(NETWORK_SERVER_MANAGER_FILE, 0x120, server);
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.180): the machines in the game before any is dropped below: the host's alone (the showcase's game, a
+	bot game nobody joined) needs no second for others to hear it quit */
+	long machines = server->game.machine_count;
+#endif
 
 	/* port: a won co-op round's next level belongs to this server alone */
 	network_game_server_cooperative_next_map[0] = 0;
@@ -1568,8 +1573,10 @@ void network_game_server_dispose(
 		network_connection_delete(server->connection);
 
 #if defined(HALO_XBOX_TARGET)
-	/* oxbox: the Xbox game's second for the clients to hear the host has quit before its sockets close */
-	SleepEx(MILLISECONDS_PER_SECOND, FALSE);
+	/* oxbox: the Xbox game's second for the clients to hear the host has quit before its sockets close (v1.180: only
+	when there are clients: the showcase's every map change waited it) */
+	if (machines > 1)
+		SleepEx(MILLISECONDS_PER_SECOND, FALSE);
 #endif
 #ifdef xbox
 	/* port: native transports flush before closing sockets, and unregistering
