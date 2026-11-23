@@ -285,6 +285,9 @@ stay where they are, so shrinking them saves nothing until deleting is in.
 
 `port/oxbox/tools/gen_stock_table.py RETAIL_MAPS_DIR OUT.h`: the installer's table.
 
+`port/oxbox/installer/tagpool.c RETAIL_MAPS_DIR OUT_DIR [--maps]` (a PC tool, `-lz`): format 4's stock tag pool,
+stocktags.shared, the 23 stock recipes and, with `--maps`, the retail maps with recipes for testing.
+
 `port/oxbox/tools/verify_shared.py ORIGINAL_MAP CONVERTED_MAP PACK_SHARED STOCK_SHARED`: a converted map checked against its
 original, every block and BSP read back through its new offsets. Run it on anything a pass makes: a wrong one can load and
 play with no error. Measured on 14 of the old packs: 211 maps, all clean, 5080 MB down to 1427 MB.
@@ -427,6 +430,9 @@ stock group it reads the frame's table entry (the table read forward in pieces),
 Adler-32) or takes it raw, and copies its runs into the tag data; the pack groups the same from the pack's tag part.
 Anything wrong (no stocktags.shared, another pool, a run outside the tag data or a frame, a damaged frame) refuses the map
 with a log line, as a map that can't load. A log line gives the frames, megabytes inflated, runs and milliseconds.
+Built in v1.175 (`cache_file_tags_rebuild`, cache_files_windows.c) for stock groups; a recipe with pack groups is refused
+until the pack's tag part is read. Tested in xemu: Blood Gulch, c20 and d20 from recipes, as stock maps and as folder
+maps, from a packed and a raw stocktags.shared, each CRC32 as its reference says (`-DOXBOX_TAG_RECIPE_CHECK`).
 
 ### The installer
 

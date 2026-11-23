@@ -408,7 +408,7 @@ static void map_write_test(struct map const *m, int k, char const *dir)
 	uint32_t recipe_offset = (m->file_length + 2047) & ~2047u, length = (recipe_offset + (uint32_t)m->recipe_size + 2047) & ~2047u;
 	uint8_t *image = calloc(1, length), *r;
 	uLongf packed_size = compressBound(length - HEADER);
-	uint8_t *packed = malloc(HEADER + packed_size);
+	uint8_t *packed = calloc(1, HEADER + packed_size + 2048);
 
 	memcpy(image, m->image, m->file_length);
 	memset(image + m->tag_offset, 0, m->tag_size);          /* (every word of a stock map's is the pool's) */
@@ -429,7 +429,8 @@ static void map_write_test(struct map const *m, int k, char const *dir)
 	if (compress2(packed + HEADER, &packed_size, image + HEADER, length - HEADER, 1) != Z_OK)
 		fail("zlib", NULL);
 	snprintf(path, sizeof(path), "%s/maps/%s.map", dir, map_names[k]);
-	write_file(path, packed, HEADER + packed_size);
+	/* (the file a whole number of 2048-byte sectors, as the disc's: the game copies maps a sector at a time) */
+	write_file(path, packed, (HEADER + packed_size + 2047) & ~(size_t)2047);
 	free(image), free(packed);
 }
 

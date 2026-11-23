@@ -425,7 +425,7 @@ static int map_head_read(const char *path, struct map_head *m) {
     if (got != sizeof hdr) return 0;
     m->chk = m->file_chk = *(u32 *)(hdr + 0x64);
     version = *(u32 *)(hdr + 0x704);
-    if (*(u32 *)(hdr + 0x700) == 'shrd' && (version == 1 || version == 2)) {   /* (the shared reference) */
+    if (*(u32 *)(hdr + 0x700) == 'shrd' && version >= 1 && version <= 3) {   /* (the shared reference; 3: format 4's recipe too) */
         m->size = *(u32 *)(hdr + 0x700 + 0x30);
         m->chk = *(u32 *)(hdr + 0x700 + 0x34);
         /* (a name that can't make a path: the game won't use it either, cache_files_windows.c) */
