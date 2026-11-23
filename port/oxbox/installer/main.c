@@ -57,7 +57,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 71
+#define INSTALLER_VERSION 72
 #endif
 __attribute__((used)) static struct
 {
@@ -4162,70 +4162,90 @@ static void library_step(void *context, char const *text)
 	log_file(text);
 }
 
-static void player_library(struct halo *h)
+static struct library library;          /* (the library's catalog: fetched once a run, again when its address changes) */
+static char library_loaded_from[512];
+
+/* the library's catalog here: 0 when it is (else the player was told why not) */
+static int library_load(void)
 {
-	static struct library library;
-	static char loaded_from[512];
-	struct menu_item *items;
-	char url[512], maps[200], error[256], address[32];
-	int k = 0, i;
-	if (!h)
-		return;
+	char url[512], error[256], address[32];
+	int i;
 	text_print(url, sizeof(url), "%s", developer_library[0] ? developer_library : LIBRARY_DEFAULT_URL);
-	text_print(maps, sizeof(maps), "%s\\maps", h->path);
 	check_wait();                      /* (one download at a time: the update check's is done) */
-	if (!library.items || strcmp(loaded_from, url))
+	if (library.items && !strcmp(library_loaded_from, url))
+		return 0;
+	library_free(&library);
+	player_heading("Download New Maps");
+	screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at the map library...");
+	screen_show();
+	library_started = GetTickCount();
+	if ((i = download_network(NULL, address, error) ? 1 :
+		library_fetch(url, developer_library[0] && developer_unsigned, &library, error)) != 0)
 	{
+		char text[400];
+		log_file(error);
+		text_print(text, sizeof(text), "Couldn't get the map library's list: %s.%s", error, i == 1 ?
+			" Is the Xbox connected to the internet?" : "");
+		page("Download New Maps", text);
 		library_free(&library);
-		player_heading("Map Library");
-		screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at the map library...");
-		screen_show();
-		library_started = GetTickCount();
-		if ((i = download_network(NULL, address, error) ? 1 :
-			library_fetch(url, developer_library[0] && developer_unsigned, &library, error)) != 0)
-		{
-			char text[400];
-			log_file(error);
-			text_print(text, sizeof(text), "Couldn't get the map library's list: %s.%s", error, i == 1 ?
-				" Is the Xbox connected to the internet?" : "");
-			page("Map Library", text);
-			library_free(&library);
-			return;
-		}
-		text_print(loaded_from, sizeof(loaded_from), "%s", url);
-		{
-			char line[200];
-			text_print(line, sizeof(line), "library: %d maps (serial %lu, %s) from %s in %lu ms", library.count,
-				library.serial, library.signer[0] ? library.signer : "not signed", url, GetTickCount() - library_started);
-			log_file(line);
-		}
+		return 1;
 	}
-	if (!library.count)
+	text_print(library_loaded_from, sizeof(library_loaded_from), "%s", url);
 	{
-		page("Map Library", "The map library has no maps in it yet.");
+		char line[200];
+		text_print(line, sizeof(line), "library: %d items (serial %lu, %s) from %s in %lu ms", library.count,
+			library.serial, library.signer[0] ? library.signer : "not signed", url, GetTickCount() - library_started);
+		log_file(line);
+	}
+	return 0;
+}
+
+/* the library's single maps (packs 0) or its whole map packs (packs 1): each one's state, A to get or remove it */
+static void player_library(struct halo *h, int packs)
+{
+	char const *list_title = packs ? "Full Map Packs" : "Individual Maps";
+	struct menu_item *items;
+	int *shown;
+	char maps[200], error[256];
+	int k = 0, i, count;
+	text_print(maps, sizeof(maps), "%s\\maps", h->path);
+	items = malloc(library.count * sizeof(*items));
+	shown = malloc(library.count * sizeof(*shown));
+	if (!items || !shown)
+	{
+		free(items);
+		free(shown);
 		return;
 	}
-	items = malloc(library.count * sizeof(*items));
-	if (!items)
-		return;
 	library_settle(&library, maps);
 	for (;;)
 	{
 		struct library_item *item;
 		static char const *const states[] = {"", "Installed", "Update", "Replaces yours", "Other version"};
 		library_states(&library, maps);
-		for (i = 0; i < library.count; i++)
+		for (i = 0, count = 0; i < library.count; i++)
 		{
 			item = &library.items[i];
-			text_print(items[i].text, sizeof(items[i].text), "%-26.26s %-9.9s %4lu MB  %s", item->name, item->group,
-				(item->size + 524288) >> 20, states[item->state]);
-			items[i].about = item->about[0] ? item->about : "A map from the library.";
-			items[i].disabled = 0;
+			if (!item->pack != !packs)
+				continue;
+			text_print(items[count].text, sizeof(items[count].text), "%-26.26s %-9.9s %4lu MB  %s", item->name,
+				item->group, (item->size + 524288) >> 20, states[item->state]);
+			items[count].about = item->about[0] ? item->about : packs ? "A map pack from the library." :
+				"A map from the library.";
+			items[count].disabled = 0;
+			shown[count++] = i;
 		}
-		if ((k = menu("Map Library", library.signer[0] ? "Maps made for Halo 1 Unlimited. A: get one." :
-			"Maps made for Halo 1 Unlimited (a TEST library, not signed). A: get one.", items, library.count, k)) < 0)
+		if (!count)
+		{
+			page(list_title, packs ? "The map library has no map packs in it yet." :
+				"The map library has no maps in it yet.");
 			break;
-		item = &library.items[k];
+		}
+		if ((k = menu(list_title, library.signer[0] ? packs ? "Whole map packs, ready to play. A: get one." :
+			"Maps made for Halo 1 Unlimited. A: get one." : "From a TEST library, not signed. A: get one.", items, count,
+			k)) < 0)
+			break;
+		item = &library.items[shown[k]];
 		{
 			struct menu_item choices[3];
 			char title[80], line[400], where[300];
@@ -4289,6 +4309,38 @@ static void player_library(struct halo *h)
 		}
 	}
 	free(items);
+	free(shown);
+}
+
+/* Download New Maps: the library's single maps, or its whole map packs */
+static void player_download(struct halo *h)
+{
+	struct menu_item items[3];
+	int k = 0, i, maps_count = 0, packs_count = 0;
+	if (!h || library_load())
+		return;
+	if (!library.count)
+	{
+		page("Download New Maps", "The map library has nothing in it yet.");
+		return;
+	}
+	for (i = 0; i < library.count; i++)
+		*(library.items[i].pack ? &packs_count : &maps_count) += 1;
+	memset(items, 0, sizeof(items));
+	text_print(items[0].text, sizeof(items[0].text), maps_count ? "Download Individual Maps (%d)" :
+		"Download Individual Maps (none yet)", maps_count);
+	items[0].about = "Maps made for Halo 1 Unlimited (Halo Map Porter's), one at a time: they go together in the Library "
+		"pack of its map list.";
+	items[0].disabled = !maps_count;
+	text_print(items[1].text, sizeof(items[1].text), packs_count ? "Download Full Map Packs (%d)" :
+		"Download Full Map Packs (none yet)", packs_count);
+	items[1].about = "Whole map packs, already made small: each one is a pack of its own in the map list.";
+	items[1].disabled = !packs_count;
+	text_print(items[2].text, sizeof(items[2].text), "Back");
+	if (!maps_count)
+		k = 1;
+	while ((k = menu("Download New Maps", NULL, items, 3, k)) >= 0 && k != 2)
+		player_library(h, k);
 }
 
 /* Halo 1 Unlimited as installed: the last install that worked (installer_last.txt), else the first found; NULL: none */
@@ -5425,7 +5477,7 @@ static void player_map_packs(void)
 	{
 		if (!packs_listed)
 		{
-			player_heading("Map Packs");
+			player_heading("Classic Map Packs");
 			screen_text(MENU_TOP, 1, COLOUR_GREY, "Looking at your map packs...");
 			screen_show();
 		}
@@ -5501,14 +5553,14 @@ static void player_map_packs(void)
 		}
 		if (!n)
 		{
-			page("Map Packs", "No map packs were found on your hard drive.\n\nA map pack is a modded Halo's folder (its "
+			page("Classic Map Packs", "No map packs were found on your hard drive.\n\nA map pack is a modded Halo's folder (its "
 				"default.xbe and maps) on E:, F: or G:.");
 			break;
 		}
 		if (pack_k >= 0)
 			k = first + pack_k;         /* (the pack chosen last, wherever the rows above it went) */
 		pack_k = -1;
-		if ((k = menu("Map Packs", "The map packs on your Xbox:", items, first + n, k)) < 0)
+		if ((k = menu("Classic Map Packs", "The map packs on your Xbox:", items, first + n, k)) < 0)
 			break;
 		if (k == all_consolidate || k == all_link)
 		{
@@ -5780,17 +5832,17 @@ static void player_main(void)
 				items[n].about = "Couldn't look online (is the Xbox connected?). Press A to try again.";
 			}
 			actions[n++] = UPDATE;
-			text_print(items[n].text, sizeof(items[n].text), "Map Packs");
-			items[n].about = "Add the map packs on your Xbox to Halo 1 Unlimited's map list.";
-			items[n].disabled = 0;
-			actions[n++] = PACKS;
 			if (library_ready() || developer_library[0])
 			{
-				text_print(items[n].text, sizeof(items[n].text), "Map Library");
-				items[n].about = "Download maps made for Halo 1 Unlimited (Halo Map Porter's) straight into its map list.";
+				text_print(items[n].text, sizeof(items[n].text), "Download New Maps");
+				items[n].about = "Download new maps for Halo 1 Unlimited.";
 				items[n].disabled = 0;
 				actions[n++] = LIBRARY;
 			}
+			text_print(items[n].text, sizeof(items[n].text), "Manage Classic Map Packs");
+			items[n].about = "Add the map packs on your Xbox to Halo 1 Unlimited's map list.";
+			items[n].disabled = 0;
+			actions[n++] = PACKS;
 			text_print(items[n].text, sizeof(items[n].text), "More...");
 			items[n].about = logs_url()[0] ? "Rebuild your original Halo, send your logs, and about this installer." :
 				"Rebuild your original Halo, and about this installer.";
@@ -5853,7 +5905,7 @@ static void player_main(void)
 			player_map_packs();
 			break;
 		case LIBRARY:
-			player_library(h);
+			player_download(h);
 			break;
 		case MORE:
 			player_more(h);

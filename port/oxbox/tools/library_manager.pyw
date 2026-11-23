@@ -7,7 +7,8 @@ The library's folder (chosen in Settings) holds:
     published.oxlb   the catalog last published (signed), what the Xboxes see now
     zips\\            each map's zip, made from its source
 
-Add maps (a map's folder, or a folder of them: HMP's "Crossplay"), Remove (or Restore), Check for changes (each map
+Add maps (a map's folder, or a folder of them: HMP's "Crossplay"), Add a pack (a whole map pack's folder, made small:
+its maps' folders and its .shared file; the Xbox puts it in maps\\<folder>\\ as a pack of its own), Remove (or Restore), Check for changes (each map
 made again from its source: a map HMP made again shows Changed), then Publish: the catalog signed with the library
 key (its passphrase asked, or remembered by Windows for this login), the new zips uploaded to the library
 repository's release, the catalog put in place of the old one, and zips nothing lists any more deleted from the
@@ -134,11 +135,12 @@ class Library:
         rows.sort(key=lambda r: (r[1].get('group', '').lower(), r[1]['name'].lower(), r[1]['item'].lower()))
         return rows
 
-    def add(self, folder, group, say):
-        """a map's folder (or each in a folder of them) made into its zip and put in the library"""
+    def add(self, folder, group, say, pack=False):
+        """a map's folder (or each in a folder of them; pack: a whole pack's folder) made into its zip and put in the
+        library"""
         made = 0
-        for map_folder in library.map_folders(folder):
-            item, data = library.make_item(map_folder, group)
+        for map_folder in [folder] if pack else library.map_folders(folder):
+            item, data = library.make_item(map_folder, group, pack=pack)
             name = os.path.basename(os.path.normpath(map_folder))
             if item is None:
                 say('skipped %s: %s' % (name, data))
@@ -176,7 +178,7 @@ class Library:
                 say('%s: its source isn\'t there (%s)' % (item['item'], source))
                 missing += 1
                 continue
-            fresh, data = library.make_item(source, item.get('group', ''))
+            fresh, data = library.make_item(source, item.get('group', ''), pack=item.get('kind') == 'pack')
             if fresh is None:
                 say('%s: %s' % (item['item'], data))
                 continue
@@ -380,7 +382,7 @@ class App:
         buttons = ttk.Frame(root, padding=(8, 0, 8, 8))
         buttons.pack(fill='x')
         self.buttons = []
-        for text, command in (('Add maps...', self.add_maps), ('Remove', self.remove), ('Restore', self.restore),
+        for text, command in (('Add maps...', self.add_maps), ('Add a pack...', self.add_pack), ('Remove', self.remove), ('Restore', self.restore),
                               ('Check for changes', self.check), ('Refresh from GitHub', self.refresh)):
             b = ttk.Button(buttons, text=text, command=command)
             b.pack(side='left', padx=(0, 6))
@@ -495,6 +497,27 @@ class App:
         return [i for i in self.library.items if library.item_key(i) in keys]
 
     # ---- the buttons ----
+
+    def add_pack(self):
+        if not self.need_library():
+            return
+        folder = filedialog.askdirectory(title='A whole map pack\'s folder (its maps\' folders and its .shared file)',
+                                         initialdir=self.settings.get('last_add') or self.library.folder)
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+        self.settings['last_add'] = os.path.dirname(folder)
+        save_settings(self.settings)
+        problem = library.pack_problem(folder)
+        if problem:
+            messagebox.showinfo('Add a pack', '%s: %s.' % (os.path.basename(folder), problem))
+            return
+        group = simpledialog.askstring('Add a pack', '%s: %d maps. Its group (for example Classic packs):' % (
+            os.path.basename(folder), len(library.map_folders(folder))), initialvalue='Packs', parent=self.root)
+        if group is None:
+            return
+        self.say('Adding the pack %s...' % folder)
+        self.run(lambda: self.say('%d made.' % self.library.add(folder, group.strip(), self.say, pack=True)))
 
     def add_maps(self):
         if not self.need_library():

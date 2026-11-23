@@ -1,16 +1,18 @@
 # The map library
 
-Maps made for Halo 1 Unlimited, downloaded from the installer's **Map Library** screen straight into the install's
-map list. The files live in a separate public repository's releases (github.com/h1u-librarian/map-library), never in
+Maps made for Halo 1 Unlimited, and whole map packs already made small, downloaded from the installer's **Download
+New Maps** screen straight into the install's map list. The files live in a separate public repository's releases (github.com/h1u-librarian/map-library), never in
 this one: the maps hold Halo's content.
 
 ## What a player sees
 
-Main menu > Map Library: the library's maps, each with its group (Halo Map Porter's "Crossplay" or "Xbox"), size and
+Main menu > Download New Maps (installer 72; before it, "Map Library") > **Download Individual Maps** or **Download
+Full Map Packs** (each with its count; greyed while there are none): the library's maps (or packs), each with its group (Halo Map Porter's "Crossplay" or "Xbox"), size and
 state: nothing (not on this Xbox), Installed, Update (a newer zip of the same map), Other version (the other group's
 copy of it is installed), Replaces yours (that folder holds a map that didn't come from the library). A downloads it
-into `<install>\maps\Library\<folder>\`: the library's maps together, one pack ("Library") in the game's list. (A
-whole pack from the library, `kind: pack`, goes in `maps\<its folder>\` as packs do; none yet.) Maps downloaded by
+into `<install>\maps\Library\<folder>\`: the library's maps together, one pack ("Library") in the game's list. A
+whole pack from the library (`kind: pack`: its maps' folders and its `.shared` file, as Halo Map Porter or
+`tagpool --pack` make it) goes in `maps\<its folder>\` as packs do, a pack of its own in the game's list. Maps downloaded by
 installer 62, which put them in `maps\<folder>\`, move into Library at the next visit; a copy put in `maps\<folder>\`
 by hand shows "Replaces yours" and is deleted once the library's is in. An installed one can be removed. The game
 lists it with no other step, and map sharing finds `+Library/X` and a hand-copied `+X` as the same map
@@ -62,6 +64,8 @@ install's drive.
 window with the library's maps and their state (New, Changed, Published, To remove), and buttons:
 
 - **Add maps...**: a map's folder, or a folder of them (HMP's `Copy to Xbox maps\Crossplay`), and their group.
+- **Add a pack...**: a whole map pack's folder, made small (its maps' folders and its `.shared` file); its name and
+  each map's with it at most 30 characters ("<pack>/<map>"). It's one item, `kind: pack`.
 - **Remove** / **Restore**: a map off the library at the next publish (or not).
 - **Check for changes**: every map made again from its source folder; one HMP made again shows Changed.
 - **Refresh from GitHub**: what's published now (the latest release's catalog).
@@ -85,7 +89,8 @@ stand-in for GitHub (~/h1u-lab/library/fake_github.py).
 
 `build` prints the zips that are new; upload those and the signed `catalog.oxlb` to the library repository's release
 (the installer reads `releases/latest/download/catalog.oxlb`). `--previous` keeps the items of the catalog now
-published that this build doesn't make again, and numbers the new one after it.
+published that this build doesn't make again, and numbers the new one after it. `--pack`: each folder given is a
+whole pack's (`build OUT ...\CEX --pack --group Classic --previous ...`), one `kind: pack` item each.
 
 The key: `python3 oxsign.py keygen library` once (library.oxkey stays on the owner's PC, with a backup offline); its
 public line (library.pub) goes in `library_keys.txt`. It's not the package key: a leaked library key can't sign an
