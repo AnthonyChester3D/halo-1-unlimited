@@ -57,7 +57,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 68
+#define INSTALLER_VERSION 69
 #endif
 __attribute__((used)) static struct
 {
@@ -5673,12 +5673,7 @@ static void player_more(struct halo *h)
 		{"Back", NULL, 0}};
 	int k, i, original = 0, count = 4, logs = 1;
 	char about[400];
-	for (i = 0; i < halo_count; i++)
-		if (halos[i].state == RETAIL && !halos[i].unfinished)
-			original = 1;
-	if (original)
-		items[0].about = "Your original Halo is still on your Xbox: there's nothing to rebuild.";
-	items[0].disabled = original || !h;
+	items[0].disabled = !h;
 	if (!logs_url()[0])
 	{
 		/* (no address for them yet: no item) */
@@ -5687,7 +5682,7 @@ static void player_more(struct halo *h)
 		count = 3;
 		logs = 0;
 	}
-	while ((k = menu("More", NULL, items, count, original ? 1 : 0)) >= 0 && k != count - 1)
+	while ((k = menu("More", NULL, items, count, 0)) >= 0 && k != count - 1)
 	{
 		if (logs && k == 1)
 		{
@@ -5699,6 +5694,20 @@ static void player_more(struct halo *h)
 		if (k == 0 && h)
 		{
 			struct menu_item sure[2] = {{"Rebuild it", NULL, 0}, {"Back", NULL, 0}};
+			/* (only now are the drives looked round: is the original Halo still there? The list is made again, so h with
+			it) */
+			find_halos();
+			h = player_install();
+			for (i = 0, original = 0; i < halo_count; i++)
+				if (halos[i].state == RETAIL && !halos[i].unfinished)
+					original = 1;
+			if (!h)
+				return;
+			if (original)
+			{
+				page("Rebuild original Halo", "Your original Halo is still on your Xbox: there's nothing to rebuild.");
+				continue;
+			}
 			if (menu("Rebuild your original Halo?", "Halo is made again exactly as it came, in a folder of its own. It "
 				"takes about half an hour, and about 1.7 GB.", sure, 2, 0) == 0)
 			{
@@ -5819,8 +5828,9 @@ static void player_main(void)
 			launch(NULL);
 		}
 		chosen = k;
-		/* (v1.142: these need every Halo folder: the drives looked round now, once a run; the list is made again) */
-		if (actions[k] == INSTALL || actions[k] == PACKS || actions[k] == MORE)
+		/* (v1.142: these need every Halo folder: the drives looked round now, once a run; the list is made again. More
+		looks round only when Rebuild original Halo is picked: player_more) */
+		if (actions[k] == INSTALL || actions[k] == PACKS)
 		{
 			find_halos();
 			h = player_install();
