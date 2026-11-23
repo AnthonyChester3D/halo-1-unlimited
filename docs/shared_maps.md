@@ -11,7 +11,7 @@ A map can keep its textures' and sounds' data in **shared files** instead of in 
 store it once. Only that data moves: the map keeps its tag data, BSPs and everything else, so shared files cost no
 memory while playing (textures and sounds are read from them as they're needed, as they are from a map).
 
-A map draws on up to two:
+A map draws on up to two for its textures and sounds (and, format 4, on up to two for its tag data: below):
 
 - **its pack's** `<name>.shared`: data two or more of the pack's maps use;
 - **`stock.shared`**: every texture and sound of the 13 stock multiplayer maps, and those of the stock campaign that three
@@ -291,7 +291,124 @@ play with no error. Measured on 14 of the old packs: 211 maps, all clean, 5080 M
 
 Tested in xemu (v1.94): Blood Gulch from stock.shared; CEX's Abyss from CEX.shared and stock.shared together.
 
+## Shared tag data (format 4) — DRAFT for review
+
+Status: being agreed with Halo Map Porter (2026-11-22); nothing below is built yet, and every number may still change
+until the console timing test (packed frames against unpacked) locks it. No released build reads it.
+
+A map's **tag data** can be rebuilt as it loads from bytes other maps already have, so it's stored once. Two places hold
+them:
+
+- **`stocktags.shared`**, per console: the **stock tag pool**, every word of the 23 retail maps' tag data stored once,
+  built by the installer from the player's own disc (and by this repo's tool from the same maps; never distributed). It's
+  a file of its own beside `stock.shared`, which stays exactly as it is.
+- **the pack's own `.shared` file**, per pack: its **tag part**, the words two or more of the pack's maps use that aren't
+  in the stock pool. No separate file.
+
+A map keeps in place only the words that are its own; every other word of its tag data is written over, as it loads, by a
+**recipe** (stored in the map) that copies ranges from the stock pool and the pack's tag part. Measured: the 23 retail
+maps' tag data, 105.5 MB packed in their small maps today, takes 22.1 MB of pool (packed) + 2.8 MB of recipes; CEX's 13
+maps 31.2 MiB -> 3.1 MiB in the maps + 2.2 MiB in the pack's file (HMP's matcher).
+
+### The stock tag pool
+
+Defined by the retail maps alone, so every console and tool makes the same words (only the pool's words have to match:
+how a file stores them may differ):
+
+1. The 23 maps in this order: beavercreek, bloodgulch, boardingaction, carousel, chillout, damnation, hangemhigh,
+   longest, prisoner, putput, ratrace, sidewinder, wizard, a10, a30, a50, b30, b40, c10, c20, c40, d20, d40. Each map's
+   tag data (header 0x010 offset, 0x014 size; all 23 are a whole number of words) as little-endian 4-byte words.
+2. Walking each map's words in order against the pool so far (every earlier map's new words, and this map's own as
+   they're added): at a word, its 8-word window is looked up; the candidate is the **earliest** pool position whose 8
+   words are equal (compared word for word, not just hashed), extended forward while the words match (up to the pool's
+   end). A match of **16 words (64 bytes) or more** is a copy; otherwise the words are **new**: appended to the pool
+   one by one, until a word starts an 8-word window found in the pool. (A shorter match found there goes back through
+   the same rule.)
+3. The pool is those new words in the order they were appended: 13,213,509 words, **52,854,036 bytes, CRC32 `c52152d9`**
+   (MD5 b9320efdb01018bd41161750e05e9e09; built the same by H1U's tool and HMP's own code from this rule). Each stock
+   map's tag data is then wholly pool ranges: its recipe.
+
+`stocktags.shared`:
+
+| Offset | Size | Value |
+|---|---|---|
+| 0x000 | 4 | `OXST` |
+| 0x004 | 4 | 1 (its version) |
+| 0x008 | 4 | file_length |
+| 0x00C | 4 | the pool's size in bytes (unpacked) |
+| 0x010 | 4 | the pool's CRC32 (zlib's, of its unpacked bytes): its identity |
+| 0x014 | 4 | frame size: 16384 |
+| 0x018 | 4 | frame count (the last frame may be shorter) |
+| 0x01C | 4 | the frame table's offset: 0x800 |
+| 0x020-0x7FF | | zeros |
+| 0x800 | 8 a frame | the frame table: each frame's offset in the file and its stored size |
+| then | | the frames, in order |
+
+A **frame** is 16 KB of the pool. It's stored either raw (stored size = the frame's own size) or as one zlib stream
+(2-byte header, deflate, Adler-32) when that's smaller: a builder stores a frame raw whenever zlib's output is the frame's
+size **or more**, so a stored size equal to the frame's size always means raw. Any zlib level may be used. An unpacked
+`stocktags.shared` is the same format with every frame raw.
+
+### The map
+
+**The reference** (the header's 0x700) is version **3** when the map has a recipe; version 3 adds after 0x68:
+
+| Offset | Size | Value |
+|---|---|---|
+| 0x68 | 4 | the recipe's offset in the map (unpacked; after the tag data, outside it and the BSPs, within file_length) |
+| 0x6C | 4 | the recipe's size in bytes |
+| 0x70 | 4 | the stock tag pool's CRC32 it was made against |
+| 0x74 | 4 | and the pool's size in bytes |
+
+The tag data keeps its size and place; the words a recipe writes should be zeros in the map (they then pack to almost
+nothing), the words it doesn't write are the map's own. A map without a recipe keeps reference version 2 and loads as
+today.
+
+**The recipe**, unsigned LEB128 varints throughout, lengths and offsets in words:
+
+```
+stock group count
+  per stock group (frames ascending):
+    frame: the frame's index for the first group, then the difference from the last group's (>= 1)
+    run count (>= 1)
+    per run (dest ascending within the group):
+      dest delta: words from the end of the group's previous run (from word 0 for the first)
+      offset in the frame
+      length (>= 1; offset + length <= the frame's words)
+pack group count
+  per pack group: the same, its frames 16 KB slices of the pack's tag part
+```
+
+No two runs (in any group) write the same word. A run never crosses a frame. The recipe's size is exactly what it
+holds.
+
+**A pack's tag part** is in its `.shared` file, after the header and the list: its offset and size (bytes, a whole number
+of words; 0 and 0 for none) at the file header's **0x068 and 0x06C**. It's stored as it is (the file as a whole may be
+packed, as now) and covered by the file's checksum (0x064), so a map's reference to the pack names its tag part too.
+
+**Budget**: tag data + 64 KB <= the tag cache's 22 MiB. The rebuild runs before any BSP loads, with its 64 KB of working
+memory (32 KB of recipe, a packed frame, an unpacked frame; the game's zlib state is its own) at the top of the tag
+cache, so a map's BSPs may sit where they always have (all 23 retail maps' end flush at the top). Shared BSP data, later,
+would need its working memory while a BSP is loaded: its maps would then keep their BSPs 64 KB below the top (Invader
+`-T 23003136`); HMP may build that way already.
+
+### What the game does
+
+In `scenario_tags_load` (cache_files.c), once the tag data is read and before it's checked and the free tag memory is
+lent to the texture cache: a version 3 reference with a recipe opens `maps\stocktags.shared` (found as stock.shared is),
+compares the pool's CRC32 and size with the reference's, then reads the recipe from the map a piece at a time; for each
+stock group it reads the frame's table entry (the table read forward in pieces), the frame, inflates it (zlib checks its
+Adler-32) or takes it raw, and copies its runs into the tag data; the pack groups the same from the pack's tag part.
+Anything wrong (no stocktags.shared, another pool, a run outside the tag data or a frame, a damaged frame) refuses the map
+with a log line, as a map that can't load. A log line gives the frames, megabytes inflated, runs and milliseconds.
+
+### The installer
+
+Builds `stocktags.shared` from the player's retail maps as it builds stock.shared, and the 23 small maps with recipes
+(their tag data's words zeros). A console can't run the matcher (the pool and its index don't fit 64 MB), so the 23
+stock recipes come baked in the package (about 2.8 MB): their runs that copy from the pool's end, as it then is, are the
+pool's new words, so the recipes alone also say how the pool is made. It checks the pool's CRC32.
+
 ## Not yet
 
-- Shared tag data (loaded into memory at a fixed address): much harder, and only safe when every map loading it uses
-  all of it.
+- Shared BSP data (above).
