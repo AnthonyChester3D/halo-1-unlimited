@@ -359,10 +359,18 @@ size **or more**, so a stored size equal to the frame's size always means raw. A
 | 0x6C | 4 | the recipe's size in bytes |
 | 0x70 | 4 | the stock tag pool's CRC32 it was made against |
 | 0x74 | 4 | and the pool's size in bytes |
+| 0x78 | 4 | the CRC32 (zlib's) of the tag data as rebuilt (all tag_data_size bytes, before the game checks or fixes anything) |
 
-The tag data keeps its size and place; the words a recipe writes should be zeros in the map (they then pack to almost
-nothing), the words it doesn't write are the map's own. A map without a recipe keeps reference version 2 and loads as
-today.
+The reference is then 0x7C bytes (0x700-0x77B); a tool taking a map's identity zeroes all of it, as now.
+
+The tag data keeps its size and place. The words a recipe writes **must be zeros** in the map: one map then has one
+encoding (whoever builds it, byte for byte), a non-zero word under a run means a mis-built map (any tool can check), and
+a recipe map carries none of the words it copies (the pool, Microsoft's tag data, is never distributed, and the maps
+don't carry its words either). The words no run writes are the map's own. A map without a recipe keeps reference version
+2 and loads as today.
+
+Tools check 0x78 whenever they read a map back. The game doesn't on a normal load (it costs a pass over up to 17 MB);
+a lab build may.
 
 **The recipe**, unsigned LEB128 varints throughout, lengths and offsets in words:
 
@@ -379,18 +387,36 @@ pack group count
   per pack group: the same, its frames 16 KB slices of the pack's tag part
 ```
 
-No two runs (in any group) write the same word. A run never crosses a frame. The recipe's size is exactly what it
-holds.
+No two runs (in any group) write the same word. A run never crosses a frame, and runs are **maximal**: two runs that
+continue each other in both the tag data and the source, within one frame, are one run (so a matched range is split
+only where it crosses a frame). The recipe's size is exactly what it holds.
 
-**A pack's tag part** is in its `.shared` file, after the header and the list: its offset and size (bytes, a whole number
-of words; 0 and 0 for none) at the file header's **0x068 and 0x06C**. It's stored as it is (the file as a whole may be
-packed, as now) and covered by the file's checksum (0x064), so a map's reference to the pack names its tag part too.
+**A pack's tag part** is in its `.shared` file: its offset and size (bytes, a whole number of words; 0 and 0 for none)
+at the file header's **0x068 and 0x06C**. It goes after the file's last block, starting at a 2048-byte boundary, the
+file padded after it, so a pack's texture and sound offsets are the same whether or not its maps have recipes, and the
+tag part never moves a block. It's stored as it is (the file as a whole may be packed, as now) and covered by the file's
+checksum (0x064), so a map's reference to the pack names its tag part too.
 
-**Budget**: tag data + 64 KB <= the tag cache's 22 MiB. The rebuild runs before any BSP loads, with its 64 KB of working
+**The pack pass**, defined as exactly as the pool so a pack's files are the same whoever makes them:
+
+1. The pack's maps in the order of their identities (as the textures and sounds pass lays them out). Each map's tag data
+   as words, matched against the stock pool and the pack's **candidates**: the words earlier maps of the pack kept as
+   their own, in the order they came. A map's own words become candidates when that map is done (a map never matches
+   its own words).
+2. At a word: its 8-word window's earliest equal position in the pool, extended forward (to the pool's end at most);
+   the same in the candidates (to their end at most); the longer wins, a tie goes to the pool. 16 words or more is a
+   run (then the walk goes on after it); otherwise this one word is the map's own, and the walk goes on at the next word.
+3. The tag part is the candidate words some later map's run uses, in candidate order (a used candidate range is used
+   whole, so it stays contiguous); runs into the candidates are given as tag part offsets. A map's own words that went
+   into the tag part are runs in its recipe too (from the tag part), zeros in the map; its other own words stay in
+   place.
+
+**Budget**: tag data + 64 KB <= the tag cache's 22 MiB as the map loads, and, as today, tag data + its largest BSP
+<= 22 MiB while it plays. The rebuild runs before any BSP loads, with its 64 KB of working
 memory (32 KB of recipe, a packed frame, an unpacked frame; the game's zlib state is its own) at the top of the tag
 cache, so a map's BSPs may sit where they always have (all 23 retail maps' end flush at the top). Shared BSP data, later,
 would need its working memory while a BSP is loaded: its maps would then keep their BSPs 64 KB below the top (Invader
-`-T 23003136`); HMP may build that way already.
+`-T 23003136`). Format 4 doesn't (tight maps like B30 Evolved can't spare the 64 KB).
 
 ### What the game does
 
