@@ -57,7 +57,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 70
+#define INSTALLER_VERSION 71
 #endif
 __attribute__((used)) static struct
 {
@@ -5664,34 +5664,31 @@ static void send_logs(struct halo *h)
 
 static void player_more(struct halo *h)
 {
-	struct menu_item items[4] = {
-		{"Rebuild original Halo", "Your original Halo, made again exactly as it came from Halo 1 Unlimited's maps, in a "
-			"folder of its own (about half an hour). Halo 1 Unlimited isn't changed.", 0},
+	/* (Send logs first: a player pressing A over and over lands on it, which asks first, not on Rebuild) */
+	static struct menu_item const all[4] = {
 		{"Send logs", "Something went wrong? Send Halo 1 Unlimited's logs to its developers (you choose each time: "
 			"nothing is ever sent otherwise).", 0},
+		{"Rebuild original Halo", "Your original Halo, made again exactly as it came from Halo 1 Unlimited's maps, in a "
+			"folder of its own (about half an hour). Halo 1 Unlimited isn't changed.", 0},
 		{"About", NULL, 0},
 		{"Back", NULL, 0}};
-	int k, i, original = 0, count = 4, logs = 1;
+	enum { LOGS, REBUILD, ABOUT, BACK };
+	struct menu_item items[4];
+	int actions[4], k, i, original = 0, count = 0;
 	char about[400];
-	items[0].disabled = !h;
-	if (!logs_url()[0])
+	for (i = 0; i < 4; i++)
 	{
-		/* (no address for them yet: no item) */
-		items[1] = items[2];
-		items[2] = items[3];
-		count = 3;
-		logs = 0;
+		if (i == LOGS && !logs_url()[0])
+			continue;              /* (no address for them yet: no item) */
+		items[count] = all[i];
+		items[count].disabled = i == REBUILD && !h;
+		actions[count++] = i;
 	}
-	while ((k = menu("More", NULL, items, count, 0)) >= 0 && k != count - 1)
+	while ((k = menu("More", NULL, items, count, 0)) >= 0 && actions[k] != BACK)
 	{
-		if (logs && k == 1)
-		{
+		if (actions[k] == LOGS)
 			send_logs(h);
-			continue;
-		}
-		if (logs && k == 2)
-			k = 1;                 /* (About) */
-		if (k == 0 && h)
+		else if (actions[k] == REBUILD && h)
 		{
 			struct menu_item sure[2] = {{"Rebuild it", NULL, 0}, {"Back", NULL, 0}};
 			/* (only now are the drives looked round: is the original Halo still there? The list is made again, so h with
@@ -5709,13 +5706,13 @@ static void player_more(struct halo *h)
 				continue;
 			}
 			if (menu("Rebuild your original Halo?", "Halo is made again exactly as it came, in a folder of its own. It "
-				"takes about half an hour, and about 1.7 GB.", sure, 2, 0) == 0)
+				"takes about half an hour, and about 1.7 GB.", sure, 2, 1) == 0)
 			{
 				rebuild_original(h);
 				return;
 			}
 		}
-		else if (k == 1)
+		else if (actions[k] == ABOUT)
 		{
 			text_print(about, sizeof(about), "%s\n\nInstaller version %d.\n%s", package_ok ? package.name :
 				"No Halo 1 Unlimited package is beside this installer.", INSTALLER_VERSION, h ? h->path : "");
