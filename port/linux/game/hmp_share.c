@@ -425,7 +425,7 @@ static int map_head_read(const char *path, struct map_head *m) {
     if (got != sizeof hdr) return 0;
     m->chk = m->file_chk = *(u32 *)(hdr + 0x64);
     version = *(u32 *)(hdr + 0x704);
-    if (*(u32 *)(hdr + 0x700) == 'shrd' && version >= 1 && version <= 3) {   /* (the shared reference; 3: format 4's recipe too) */
+    if (*(u32 *)(hdr + 0x700) == 'shrd' && version >= 1 && version <= 4) {   /* (the shared reference; 3, 4: format 4's recipe too) */
         m->size = *(u32 *)(hdr + 0x700 + 0x30);
         m->chk = *(u32 *)(hdr + 0x700 + 0x34);
         /* (a name that can't make a path: the game won't use it either, cache_files_windows.c) */
@@ -434,7 +434,7 @@ static int map_head_read(const char *path, struct map_head *m) {
             m->pack_chk = *(u32 *)(hdr + 0x728);
             m->pack_len = *(u32 *)(hdr + 0x72c);
         }
-        if (version == 2 && shared_name_ok((char *)hdr + 0x738)) {
+        if (version >= 2 && shared_name_ok((char *)hdr + 0x738)) {
             memcpy(m->stock, hdr + 0x738, 32);
             m->stock_chk = *(u32 *)(hdr + 0x758);
             m->stock_len = *(u32 *)(hdr + 0x75c);

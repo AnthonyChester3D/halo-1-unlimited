@@ -155,3 +155,136 @@ def stock_small(small, m, fields, recipe, pool_size, pool_crc):
     struct.pack_into('<I', out, 0x704, 3)
     struct.pack_into('<IIIII', out, 0x768, recipe_at, len(own), pool_crc, pool_size, tag_crc)
     return out, own, tag_crc
+
+
+# ---- revision 2 (reference version 4): the recipe in sections, the own words in it, the tag area not stored
+
+SECTION_STOCK, SECTION_PACK, SECTION_OWN = 1, 2, 3
+
+
+def groups_bytes(groups):
+    out = bytearray()
+    leb(out, len(groups))
+    last = 0
+    for g, (frame, runs) in enumerate(groups):
+        leb(out, frame - last if g else frame)
+        leb(out, len(runs))
+        end = 0
+        for d, o, n in runs:
+            leb(out, d - end)
+            leb(out, o)
+            leb(out, n)
+            end = d + n
+        last = frame
+    return bytes(out)
+
+
+def own_runs(groups_list, words):
+    """the maximal runs of the words no run of the groups writes: (dest, length), dest ascending"""
+    covered = bytearray(words)
+    for groups in groups_list:
+        for frame, runs in groups:
+            for d, o, n in runs:
+                assert not any(covered[d:d + n]), 'a word written twice'
+                covered[d:d + n] = b'\1' * n
+    out, w = [], 0
+    while w < words:
+        if covered[w]:
+            w = covered.find(0, w)
+            if w < 0:
+                break
+            continue
+        end = covered.find(1, w)
+        end = words if end < 0 else end
+        out.append((w, end - w))
+        w = end
+    return out
+
+
+def encode_v4(stock, pack, own, tags):
+    """the sectioned recipe: stock and pack groups, and the own runs ((dest, length)) with their words from tags"""
+    own_bytes = bytearray()
+    leb(own_bytes, len(own))
+    end = 0
+    for d, n in own:
+        leb(own_bytes, d - end)
+        leb(own_bytes, n)
+        own_bytes += tags[d * 4:(d + n) * 4]
+        end = d + n
+    out = bytearray()
+    leb(out, 3)
+    for kind, body in ((SECTION_STOCK, groups_bytes(stock)), (SECTION_PACK, groups_bytes(pack)), (SECTION_OWN, own_bytes)):
+        leb(out, kind)
+        leb(out, len(body))
+        out += body
+    return bytes(out)
+
+
+def decode_groups(b):
+    i, groups, frame = 0, [], 0
+    count, i = read_leb(b, i)
+    for g in range(count):
+        delta, i = read_leb(b, i)
+        frame = delta if g == 0 else frame + delta
+        n, i = read_leb(b, i)
+        runs, end = [], 0
+        for _ in range(n):
+            d, i = read_leb(b, i)
+            o, i = read_leb(b, i)
+            ln, i = read_leb(b, i)
+            runs.append((end + d, o, ln))
+            end += d + ln
+        groups.append((frame, runs))
+    assert i == len(b)
+    return groups
+
+
+def decode_v4(recipe):
+    """(stock groups, pack groups, own runs as (dest, the words' bytes))"""
+    i = 0
+    count, i = read_leb(recipe, i)
+    sections, last = {}, 0
+    for _ in range(count):
+        kind, i = read_leb(recipe, i)
+        size, i = read_leb(recipe, i)
+        assert kind > last, 'sections out of order'
+        last = kind
+        sections[kind] = recipe[i:i + size]
+        i += size
+    assert i == len(recipe) and set(sections) >= {1, 2, 3} and all(k >= 64 or k <= 3 for k in sections)
+    own, b, j, end = [], sections[SECTION_OWN], 0, 0
+    n, j = read_leb(b, j)
+    for _ in range(n):
+        d, j = read_leb(b, j)
+        ln, j = read_leb(b, j)
+        own.append((end + d, b[j:j + ln * 4]))
+        j += ln * 4
+        end += d + ln
+    assert j == len(b)
+    return decode_groups(sections[SECTION_STOCK]), decode_groups(sections[SECTION_PACK]), own
+
+
+def stock_small_v4(small, m, fields, recipe, pool_size, pool_crc):
+    """revision 2's small stock map: its recipe's stock section the retail map's less the words its fields are in (as
+    stock_small), no pack groups, its own words (the fields) in section 3; the file stops at its tag area (always its
+    last part), the recipe at the next 2048-byte boundary, the map padded to one; reference version 4. Returns (the map,
+    its recipe, the CRC32 of its tag data as rebuilt)"""
+    tag_at, size = struct.unpack_from('<I', small, 0x10)[0], m.tag_size
+    assert all(not any(small[tag_at + size:]) for _ in [0]), 'something after the tag area'
+    words = sorted(set((f - m.tag_offset) // 4 for f in fields))
+    assert all((f - m.tag_offset) % 4 == 0 and 0 <= f - m.tag_offset < size for f in fields)
+    stock, pack = decode(recipe)
+    assert not pack
+    groups = without(stock, words)
+    tags = bytes(small[tag_at:tag_at + size])
+    own = own_runs([groups], size // 4)
+    assert [w for d, n in own for w in range(d, d + n)] == words
+    r4 = encode_v4(groups, [], own, tags)
+    tag_crc = zlib.crc32(tags) & 0xFFFFFFFF
+    recipe_at = (tag_at + 2047) & ~2047
+    length = (recipe_at + len(r4) + 2047) & ~2047
+    out = bytearray(small[:tag_at]) + bytes(recipe_at - tag_at) + r4 + bytes(length - recipe_at - len(r4))
+    struct.pack_into('<I', out, 8, length)
+    struct.pack_into('<I', out, 0x704, 4)
+    struct.pack_into('<IIIIII', out, 0x768, recipe_at, len(r4), pool_crc, pool_size, tag_crc, 0)
+    return out, r4, tag_crc

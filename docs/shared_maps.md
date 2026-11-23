@@ -441,6 +441,85 @@ cache, so a map's BSPs may sit where they always have (all 23 retail maps' end f
 would need its working memory while a BSP is loaded: its maps would then keep their BSPs 64 KB below the top (Invader
 `-T 23003136`). Format 4 doesn't (tight maps like B30 Evolved can't spare the 64 KB).
 
+### Revision 2: the own words in the recipe (reference version 4)
+
+Agreed with Halo Map Porter 2026-11-23, after the console's load timing (v1.178): a recipe map's tag area is almost all zeros, yet the game
+reads all of it (0.27-0.65 s a load) only for the recipe to write over it, and every copy into the cache partition
+writes it (3.5-20 MB a map: 30-55% of a pack map unpacked, Boxfight's and CEX's). Revision 2 moves a map's own words
+into its recipe and leaves the tag area out of the file. Everything else stays: the stock tag pool, `stocktags.shared`,
+its frames, the pack pass, a pack's tag part. Version 3 maps still load as above.
+
+**The map**
+
+- Its tag area is the last part of the map: nothing else in it (the header, the BSPs, the data blocks) ends after
+  tag_data_offset. (So it is in all 23 retail maps and in every map Halo Map Porter and shared_pass.py make: checked on
+  Boxfight's and CEX's.) A tool that brings blocks back into a map (a re-share, when only one map still uses data its
+  pack's file held) places them before the tag area, at their remainders modulo 512 as before, never after it.
+- Its tag_data_size is a whole number of words (all 23 retail maps' and Halo Map Porter's are), so the stock, pack and
+  own runs cover all of it. A tool gives no recipe to a map whose tag data isn't.
+- The file stops there: from tag_data_offset on it holds no tag data. The rest of tag_data_offset's own 2048-byte sector
+  is zeros; the recipe starts at the next 2048-byte boundary, round_up(tag_data_offset, 2048), and the map ends after
+  it, padded to a 2048-byte boundary: that's file_length. tag_data_offset and tag_data_size keep their values (the game
+  sizes the tag memory by them; nothing else moves).
+- The reference is version **4**, 0x80 bytes (0x700-0x77F, all of it zeroed when a tool takes a map's identity): as
+  version 3 (0x68 the recipe's offset, which must be round_up(tag_data_offset, 2048); 0x6C its size; 0x70 and 0x74 the
+  pool's CRC32 and size; 0x78 the CRC32 of the tag data as rebuilt), and **0x7C, flags: 0**. A reader refuses a map with
+  a flag it doesn't know (none are defined yet).
+
+**The recipe** is a list of sections, unsigned LEB128 as before:
+
+```
+section count
+  per section (types ascending, each once):
+    type
+    size: the section's bytes, which follow
+```
+
+| Type | Section |
+|---|---|
+| 1 | stock groups: version 3's stock part (group count, then the groups) |
+| 2 | pack groups: version 3's pack part, its frames 16 KB slices of the pack's tag part |
+| 3 | own words |
+| 4-63 | (none yet) a reader that doesn't know one refuses the map |
+| 64 and up | (none yet) a reader that doesn't know one skips it: for additions an older game can do without |
+
+Types 1, 2 and 3 are all present, in that order (one with nothing to say holds a count of 0). A known section's size
+must be exactly what its contents take (a mismatch refuses the map, as a run outside the tag data does), and the
+recipe's size is exactly its section count and its sections.
+
+**The own words**, section 3:
+
+```
+run count
+  per run (dest ascending):
+    dest delta: words from the end of the previous own run (from word 0 for the first)
+    length (>= 1)
+    the words: length 4-byte little-endian words, as they are (not LEB128)
+```
+
+Every word of the tag data is written exactly once: by a stock run, a pack run or an own run. The own runs are the
+maximal runs of the words no stock or pack run writes, so they follow from the other two and a map still has one
+encoding whoever builds it. A zero the map holds is an own word like any other: nothing is left for the game to clear.
+What moves: Halo's maps have 1,400-8,700 own words (6-35 KB; a small stock map's own words are its fields, as now);
+a pack map, the words it keeps as its own (CEX: about 9% of its tag data).
+
+**What the game does with one**: it doesn't read the tag area; it reads the recipe a piece at a time, as now, and copies
+each section's runs into the tag memory, the own words straight from the recipe. A copy into the cache partition copies
+file_length, which no longer has the tag area in it.
+
+**The pack pass** is unchanged; a map's own words that didn't go into the pack's tag part go in its own-words section
+instead of staying in place. (Halo Map Porter measured the 34 maps' own words: 32.4 MiB, 15.7 MiB of them zero words,
+but never 16 or more zeros in a row (the pool's runs cover those), so the words stay as they are, with no form for runs
+of zeros.)
+
+**Who makes which**: once the game reads version 4, Halo Map Porter writes version 4 only; it still reads version 3, and
+a re-share rewrites a version 3 map as the version 4 map a fresh pass would make. H1U's installer makes its stock maps
+in version 4 (their own words are their fields).
+
+**Measured gains it's for** (the console, v1.178): no tag read (0.27-0.65 s a load); each copy into the cache shorter by
+the tag area (Blood Gulch CEX 12.9 -> 5.9 MB, Boxfight 2a 41.9 -> 28.1 MB, Boxfight Start 26.0 -> 13.7 MB; Halo's levels
+about 10% less), about 0.3-1.4 s at the console's ~14 MB/s; and a cache slot holds bigger maps.
+
 ### What the game does
 
 In `scenario_tags_load` (cache_files.c), once the tag data is read and before it's checked and the free tag memory is
@@ -452,7 +531,9 @@ Anything wrong (no stocktags.shared, another pool, a run outside the tag data or
 with a log line, as a map that can't load. A log line gives the frames, megabytes inflated, runs and milliseconds.
 The recipe may start anywhere after the tag data: the game reads it from the start of its sector. The pack's tag part is
 read as the pack's textures are, from the pack's file where it is or from the cache file it's copied into.
-Built in v1.175 (`cache_file_tags_rebuild`, cache_files_windows.c) for stock groups, v1.176 for pack groups. Tested in
+Built in v1.175 (`cache_file_tags_rebuild`, cache_files_windows.c) for stock groups, v1.176 for pack groups, v1.179 for
+revision 2 (version 4: the tag area not read, nor first filled with its 0xCD pattern; the sections read in order, the own
+words copied from the recipe as they come). Tested in
 xemu: Blood Gulch, c20 and d20 from recipes, as stock maps and as folder maps, from a packed and a raw stocktags.shared;
 CEX's maps from stocktags.shared and their pack's tag part (one with its recipe off a sector boundary); each CRC32 as its
 reference says (`-DOXBOX_TAG_RECIPE_CHECK`).
@@ -469,14 +550,16 @@ several times the time on the console's CPU).
 A small stock map's tag data differs from its retail map's only in its fields (each block's place in stock.shared or
 where it moved down to, each BSP's): every field is a whole word in the tag data. So its recipe is **its retail map's
 recipe less the words its fields are in** (a run cut there, a group left with none dropped; the other runs as they are,
-so a piece may be shorter than 16 words), and its tag data is zeros but for those words, which hold the fields. Its
-recipe goes after its data at a 2048-byte boundary, the map padded to one; reference version 3 (0x68-0x78), the rest of
-the reference as before. Only the installer (and `gen_stock_table.py`, which bakes what each must come out as) makes
+so a piece may be shorter than 16 words), and those words, holding the fields, are its own words. From installer 70
+(v1.179) it's a revision 2 map (reference version 4): the file stops at its tag area, the recipe's sections are the stock
+groups, no pack groups, and the fields as its own words. (Installer 66-69 made version 3: the tag area stored, zeros but
+for the fields.) Only the installer (and `gen_stock_table.py`, which bakes what each must come out as) makes
 these, so this is the installer's rule, not the pack pass's. Putting a map back makes its tag data from the pool with its
 retail map's recipe (every word), then undoes the rest as before; `stocktags.shared` goes with stock.shared.
 
 Measured: the small maps 737.9 MB -> 640.8 MB on the disk (multiplayer 40.7 -> 7.3 MB), plus stocktags.shared's
-23.3 MB: an install takes 74 MB less. Built in installer 66 (stockmaps.c); on a PC (stockmaps_test.c) the own-folder
+23.3 MB: an install takes 74 MB less. Revision 2 (installer 70): about the same on the disk (639.6 MB), but what the
+game copies into the cache 1434 -> 1192 MB unpacked (multiplayer 138 -> 45 MB). Built in installer 66 (stockmaps.c); on a PC (stockmaps_test.c) the own-folder
 build, the swap, its restore and Rebuild original Halo all give back the retail maps byte for byte.
 
 ## Not yet

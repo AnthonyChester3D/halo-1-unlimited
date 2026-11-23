@@ -179,11 +179,14 @@ def main():
         assert tag_size == m.tag_size and zlib.crc32(tags) & 0xFFFFFFFF == tag_crc and not pack_groups
         pool_end = tr.pool_add(pool, groups, tags)
         old_length = len(small)
-        small, own, small_tag_crc = tr.stock_small(small, m, [f for f, o, sz in m.blocks] + list(m.bsp_fields), recipe,
-                                                   pool_size, pool_crc)
+        small, own, small_tag_crc = tr.stock_small_v4(small, m, [f for f, o, sz in m.blocks] + list(m.bsp_fields), recipe,
+                                                      pool_size, pool_crc)
         at = sp.u32(small, 0x10)
-        check = bytearray(small[at:at + m.tag_size])
-        tr.apply(tr.decode(own)[0], check, pool)
+        stock4, pack4, own4 = tr.decode_v4(own)
+        check = bytearray(b'\xcd' * m.tag_size)
+        tr.apply(stock4, check, pool)
+        for d, words in own4:
+            check[d * 4:d * 4 + len(words)] = words
         assert zlib.crc32(check) & 0xFFFFFFFF == small_tag_crc
         packed_recipe = zlib.compress(recipe, 9)
         recipe_row = (len(blob), len(packed_recipe), len(recipe), pool_end, len(own), small_tag_crc)
@@ -193,7 +196,9 @@ def main():
         # (each map: how many moved ranges and staying ones, then each range as the gap from the last one's end and its size)
         moved = merge([(o, o + sz) for (f, o, sz), p in zip(m.blocks, places) if p != 0xFFFFFFFF])
         # (the file the console writes, reusing the retail map's packed data: checked by unpacking it)
-        runs, in_small, waiting = reuse_runs(m, small[:old_length], moved, m.tag_offset // sp.SECTOR * sp.SECTOR)
+        # (the small map as reuse_runs compares it: its stored part, zeros where its tag area isn't stored)
+        compared = bytes(small[:at]) + bytes(old_length - at)
+        runs, in_small, waiting = reuse_runs(m, compared, moved, m.tag_offset // sp.SECTOR * sp.SECTOR)
         most_pending = max(most_pending, waiting)
         most_runs = max(most_runs, len(runs))
         file = spliced(m.raw, small, in_small)

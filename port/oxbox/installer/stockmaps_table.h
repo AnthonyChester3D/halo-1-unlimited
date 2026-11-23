@@ -16594,7 +16594,7 @@ static struct first_copy const firsts_d40[1] = {
 #define MOST_MAP_LENGTH 279763456u
 #define MOST_TAIL 16996864u
 #define MOST_RECIPE 313310u
-#define MOST_SMALL_RECIPE 341129u
+#define MOST_SMALL_RECIPE 394241u
 #define MOST_RECIPE_GROUPS 1310u
 #define MOST_RUNS 37
 #define MOST_PENDING 0u
@@ -16602,29 +16602,29 @@ static struct first_copy const firsts_d40[1] = {
 #define STOCK_LEVELS 10
 
 static struct retail_map const retail_maps[STOCK_MAPS] = {
-	{"beavercreek", 22122496u, 0xccddcd8bu, 43565056u, 0xa831a7bfu, 0xb0822df7u, 1414, places_beavercreek, firsts_beavercreek, 1386, 10432512u, 0x132fa5eeu, 477184u, 0xe71ea59au, runs_beavercreek, 1, 0u, 65970u, 119384u, 1315860u, 124675u, 0x49a8d43du},
-	{"bloodgulch", 22571008u, 0x920a91b5u, 44328960u, 0x035e2da3u, 0x47367f94u, 1432, places_bloodgulch, firsts_bloodgulch, 68, 11229184u, 0x0718cc8eu, 806912u, 0x233a0e90u, runs_bloodgulch, 1, 65970u, 86311u, 141478u, 1559118u, 144093u, 0x1824adfau},
-	{"boardingaction", 22075392u, 0x93d513c0u, 45346304u, 0xa0d614f5u, 0x2185dd35u, 1454, places_boardingaction, firsts_boardingaction, 119, 11161600u, 0x39d5eb26u, 710656u, 0xda069d1bu, runs_boardingaction, 1, 152281u, 85991u, 140798u, 1771943u, 143507u, 0x6cd61933u},
-	{"carousel", 20215808u, 0x4e8d431au, 42367488u, 0xb38b62c7u, 0x539b3a7bu, 1406, places_carousel, firsts_carousel, 63, 10070016u, 0xee187122u, 346112u, 0xec861549u, runs_carousel, 1, 238272u, 85582u, 140098u, 1947095u, 142609u, 0x769c2cbau},
-	{"chillout", 20336640u, 0x30f9085fu, 41967104u, 0x086c74adu, 0xb0768e5du, 1397, places_chillout, firsts_chillout, 50, 10100736u, 0x2ad374a8u, 378880u, 0x3182f3d1u, runs_chillout, 1, 323854u, 86122u, 140483u, 2111646u, 142984u, 0xb8532067u},
-	{"damnation", 23756800u, 0x72b26164u, 47968768u, 0x911cd6eeu, 0x02ee5065u, 1483, places_damnation, firsts_damnation, 128, 11218944u, 0x94e05dd4u, 698368u, 0xc8a7176du, runs_damnation, 1, 409976u, 87203u, 142321u, 2318488u, 145153u, 0x8983dc78u},
-	{"hangemhigh", 21338112u, 0x9bca5277u, 43700224u, 0x8313bd85u, 0x439ccdd1u, 1384, places_hangemhigh, firsts_hangemhigh, 33, 10106880u, 0x6ed22cafu, 401408u, 0xa3fdc7cfu, runs_hangemhigh, 1, 497179u, 86117u, 140026u, 2478161u, 142438u, 0x8c35a917u},
-	{"longest", 20512768u, 0x646e3b39u, 42141696u, 0xdf1deaa6u, 0xd98cfeabu, 1385, places_longest, firsts_longest, 29, 9945088u, 0x752724a8u, 303104u, 0x2950bbbcu, runs_longest, 1, 583296u, 85691u, 139674u, 2641245u, 142138u, 0xf6abccf0u},
-	{"prisoner", 21323776u, 0xd497a860u, 43974656u, 0xb68da242u, 0x35bb3ebau, 1394, places_prisoner, firsts_prisoner, 5, 10428416u, 0xda8f1f3cu, 534528u, 0xee2037f5u, runs_prisoner, 1, 668987u, 85877u, 139605u, 2799810u, 141929u, 0x4ee20068u},
-	{"putput", 19777536u, 0x2cee2513u, 40668672u, 0xb3f87f50u, 0x4fc4dcf5u, 1379, places_putput, firsts_putput, 33, 11128832u, 0xfbf3c679u, 778240u, 0x38ff0c55u, runs_putput, 1, 754864u, 85794u, 139735u, 2964044u, 142154u, 0x99f645abu},
-	{"ratrace", 23840768u, 0x27f712b7u, 47403008u, 0xaf5f3831u, 0x74f4830cu, 1456, places_ratrace, firsts_ratrace, 26, 10254336u, 0xd070d920u, 382976u, 0xabc1b796u, runs_ratrace, 1, 840658u, 87001u, 140809u, 3132135u, 143256u, 0xb11275b2u},
-	{"sidewinder", 24823808u, 0x43164e3du, 48048128u, 0x4f8e749du, 0x827a458cu, 1463, places_sidewinder, firsts_sidewinder, 93, 11954176u, 0x05a42245u, 1085440u, 0xf30f6f7eu, runs_sidewinder, 1, 927659u, 88375u, 143800u, 3336812u, 146550u, 0x69b8256eu},
-	{"wizard", 19687424u, 0x00768890u, 40681984u, 0x2d5a08fcu, 0x8fc3a432u, 1384, places_wizard, firsts_wizard, 15, 10080256u, 0x72112ad8u, 374784u, 0x4563ffaeu, runs_wizard, 1, 1016034u, 87188u, 141402u, 3498475u, 143785u, 0x2dc22737u},
-	{"a10", 173903872u, 0x7b1e98a0u, 274734080u, 0xe6ac8e18u, 0xe3479875u, 7931, places_a10, firsts_a10, 4935, 173543424u, 0xf7570925u, 83599360u, 0xffd54d30u, runs_a10, 35, 1103222u, 127142u, 189264u, 5654526u, 216576u, 0xf9a22585u},
-	{"a30", 152610816u, 0x8f8d6459u, 213065216u, 0x5b4c2953u, 0xc90230abu, 7893, places_a30, firsts_a30, 786, 88107008u, 0xb1aba391u, 41586688u, 0xa2c63df8u, runs_a30, 29, 1230364u, 168990u, 257300u, 6829318u, 283714u, 0xc184a1a7u},
-	{"a50", 176224256u, 0x51f0f70bu, 250138624u, 0x2ae9c2edu, 0x6d39b21fu, 8556, places_a50, firsts_a50, 431, 132122624u, 0x243a6e9au, 70465536u, 0xf7e2cc34u, runs_a50, 22, 1399354u, 181209u, 277759u, 7885641u, 305875u, 0x69a537fau},
-	{"b30", 162877440u, 0xfcc719c6u, 224887296u, 0xcb35bb26u, 0xf1d4300eu, 8287, places_b30, firsts_b30, 193, 91117568u, 0xbb9d9231u, 44941312u, 0x4722ed95u, runs_b30, 18, 1580563u, 177006u, 273325u, 8651898u, 299982u, 0x31431305u},
-	{"b40", 186873856u, 0xadf16f0eu, 279763456u, 0x580cd8d3u, 0xfa286e9fu, 8665, places_b40, firsts_b40, 128, 145115136u, 0x63ba3ce1u, 68173824u, 0xe10269c1u, runs_b40, 22, 1757569u, 203303u, 313310u, 9452145u, 341129u, 0x365f1be7u},
-	{"c10", 166926336u, 0x22fd3510u, 252559360u, 0x4a170f76u, 0x772318a1u, 7979, places_c10, firsts_c10, 376, 123455488u, 0xe04b58d0u, 52813824u, 0x66da0bbcu, runs_c10, 20, 1960872u, 185900u, 285763u, 10843042u, 312380u, 0x72d0f35du},
-	{"c20", 76980224u, 0xb957aaecu, 142009856u, 0xd22193c1u, 0xa7b59c8du, 2469, places_c20, firsts_c20, 49, 104685568u, 0x8550dc53u, 50051072u, 0x4d73f9aau, runs_c20, 15, 2146772u, 104333u, 160088u, 11337556u, 165881u, 0xda43eee9u},
-	{"c40", 166295552u, 0xefe74a37u, 255975936u, 0x61a4799du, 0xa4dcbe6du, 6079, places_c40, firsts_c40, 0, 153104384u, 0x4e1f4aa9u, 80635904u, 0x24c8e751u, runs_c40, 24, 2251105u, 196326u, 293519u, 11929242u, 309563u, 0x31867b3fu},
-	{"d20", 131012608u, 0x8ccd72dfu, 205501952u, 0x3c590eecu, 0x3121edd3u, 5068, places_d20, firsts_d20, 0, 108062720u, 0x16fa39cdu, 50726912u, 0xeb83b982u, runs_d20, 23, 2447431u, 165266u, 250381u, 12495786u, 262460u, 0x9061b18du},
-	{"d40", 170405888u, 0x9cfcc06au, 274594816u, 0xeb84833eu, 0x03cb915cu, 5372, places_d40, firsts_d40, 0, 176846848u, 0xdaa10c11u, 90503168u, 0x30fafb27u, runs_d40, 37, 2612697u, 171916u, 257191u, 13213509u, 269525u, 0x0045faa6u},
+	{"beavercreek", 22122496u, 0xccddcd8bu, 43565056u, 0xa831a7bfu, 0xb0822df7u, 1414, places_beavercreek, firsts_beavercreek, 1386, 3231744u, 0xd3139a1cu, 444416u, 0x800239f0u, runs_beavercreek, 1, 0u, 65970u, 119384u, 1315860u, 133520u, 0x49a8d43du},
+	{"bloodgulch", 22571008u, 0x920a91b5u, 44328960u, 0x035e2da3u, 0x47367f94u, 1432, places_bloodgulch, firsts_bloodgulch, 68, 3852288u, 0x3072c6c0u, 772096u, 0x08b77aa3u, runs_bloodgulch, 1, 65970u, 86311u, 141478u, 1559118u, 153054u, 0x1824adfau},
+	{"boardingaction", 22075392u, 0x93d513c0u, 45346304u, 0xa0d614f5u, 0x2185dd35u, 1454, places_boardingaction, firsts_boardingaction, 119, 3934208u, 0x94916a0cu, 677888u, 0x9d4b2b75u, runs_boardingaction, 1, 152281u, 85991u, 140798u, 1771943u, 152581u, 0x6cd61933u},
+	{"carousel", 20215808u, 0x4e8d431au, 42367488u, 0xb38b62c7u, 0x539b3a7bu, 1406, places_carousel, firsts_carousel, 63, 2998272u, 0xe3005f74u, 313344u, 0x0c9f8e70u, runs_carousel, 1, 238272u, 85582u, 140098u, 1947095u, 151394u, 0x769c2cbau},
+	{"chillout", 20336640u, 0x30f9085fu, 41967104u, 0x086c74adu, 0xb0768e5du, 1397, places_chillout, firsts_chillout, 50, 3061760u, 0xc5aef478u, 346112u, 0x46556971u, runs_chillout, 1, 323854u, 86122u, 140483u, 2111646u, 151717u, 0xb8532067u},
+	{"damnation", 23756800u, 0x72b26164u, 47968768u, 0x911cd6eeu, 0x02ee5065u, 1483, places_damnation, firsts_damnation, 128, 3987456u, 0x8f5d4047u, 665600u, 0x05ca91b3u, runs_damnation, 1, 409976u, 87203u, 142321u, 2318488u, 154414u, 0x8983dc78u},
+	{"hangemhigh", 21338112u, 0x9bca5277u, 43700224u, 0x8313bd85u, 0x439ccdd1u, 1384, places_hangemhigh, firsts_hangemhigh, 33, 3076096u, 0x5337bb18u, 368640u, 0x990d7c5du, runs_hangemhigh, 1, 497179u, 86117u, 140026u, 2478161u, 151086u, 0x8c35a917u},
+	{"longest", 20512768u, 0x646e3b39u, 42141696u, 0xdf1deaa6u, 0xd98cfeabu, 1385, places_longest, firsts_longest, 29, 2875392u, 0xf2240e1fu, 270336u, 0x72276622u, runs_longest, 1, 583296u, 85691u, 139674u, 2641245u, 150790u, 0xf6abccf0u},
+	{"prisoner", 21323776u, 0xd497a860u, 43974656u, 0xb68da242u, 0x35bb3ebau, 1394, places_prisoner, firsts_prisoner, 5, 3403776u, 0xd24d77b1u, 501760u, 0x508c92a9u, runs_prisoner, 1, 668987u, 85877u, 139605u, 2799810u, 150639u, 0x4ee20068u},
+	{"putput", 19777536u, 0x2cee2513u, 40668672u, 0xb3f87f50u, 0x4fc4dcf5u, 1379, places_putput, firsts_putput, 33, 4104192u, 0xae88b612u, 745472u, 0x69d088c3u, runs_putput, 1, 754864u, 85794u, 139735u, 2964044u, 150773u, 0x99f645abu},
+	{"ratrace", 23840768u, 0x27f712b7u, 47403008u, 0xaf5f3831u, 0x74f4830cu, 1456, places_ratrace, firsts_ratrace, 26, 3164160u, 0xa945ef25u, 350208u, 0x8d5b7abcu, runs_ratrace, 1, 840658u, 87001u, 140809u, 3132135u, 152345u, 0xb11275b2u},
+	{"sidewinder", 24823808u, 0x43164e3du, 48048128u, 0x4f8e749du, 0x827a458cu, 1463, places_sidewinder, firsts_sidewinder, 93, 4599808u, 0x5679f21fu, 1050624u, 0x0db725d4u, runs_sidewinder, 1, 927659u, 88375u, 143800u, 3336812u, 155687u, 0x69b8256eu},
+	{"wizard", 19687424u, 0x00768890u, 40681984u, 0x2d5a08fcu, 0x8fc3a432u, 1384, places_wizard, firsts_wizard, 15, 3022848u, 0x9ddbafadu, 342016u, 0xbf8a46d0u, runs_wizard, 1, 1016034u, 87188u, 141402u, 3498475u, 152433u, 0x2dc22737u},
+	{"a10", 173903872u, 0x7b1e98a0u, 274734080u, 0xe6ac8e18u, 0xe3479875u, 7931, places_a10, firsts_a10, 4935, 159434752u, 0xe5e807abu, 83527680u, 0xf5e66851u, runs_a10, 35, 1103222u, 127142u, 189264u, 5654526u, 265166u, 0xf9a22585u},
+	{"a30", 152610816u, 0x8f8d6459u, 213065216u, 0x5b4c2953u, 0xc90230abu, 7893, places_a30, firsts_a30, 786, 72802304u, 0x126e5090u, 41508864u, 0xaaaa776au, runs_a30, 29, 1230364u, 168990u, 257300u, 6829318u, 332051u, 0xc184a1a7u},
+	{"a50", 176224256u, 0x51f0f70bu, 250138624u, 0x2ae9c2edu, 0x6d39b21fu, 8556, places_a50, firsts_a50, 431, 116504576u, 0x833de5bbu, 70387712u, 0x5bed42fbu, runs_a50, 22, 1399354u, 181209u, 277759u, 7885641u, 358223u, 0x69a537fau},
+	{"b30", 162877440u, 0xfcc719c6u, 224887296u, 0xcb35bb26u, 0xf1d4300eu, 8287, places_b30, firsts_b30, 193, 75450368u, 0x9968c1a7u, 44863488u, 0x78b4bf05u, runs_b30, 18, 1580563u, 177006u, 273325u, 8651898u, 350690u, 0x31431305u},
+	{"b40", 186873856u, 0xadf16f0eu, 279763456u, 0x580cd8d3u, 0xfa286e9fu, 8665, places_b40, firsts_b40, 128, 128172032u, 0xc5c7fe89u, 68089856u, 0x7f8703e5u, runs_b40, 22, 1757569u, 203303u, 313310u, 9452145u, 394241u, 0x365f1be7u},
+	{"c10", 166926336u, 0x22fd3510u, 252559360u, 0x4a170f76u, 0x772318a1u, 7979, places_c10, firsts_c10, 376, 106893312u, 0x5c337855u, 52731904u, 0x0a109cecu, runs_c10, 20, 1960872u, 185900u, 285763u, 10843042u, 361276u, 0x72d0f35du},
+	{"c20", 76980224u, 0xb957aaecu, 142009856u, 0xd22193c1u, 0xa7b59c8du, 2469, places_c20, firsts_c20, 49, 95748096u, 0x1a3b59f1u, 50010112u, 0xdfbec39fu, runs_c20, 15, 2146772u, 104333u, 160088u, 11337556u, 181124u, 0xda43eee9u},
+	{"c40", 166295552u, 0xefe74a37u, 255975936u, 0x61a4799du, 0xa4dcbe6du, 6079, places_c40, firsts_c40, 0, 136603648u, 0xbc00abd2u, 80556032u, 0xff819e07u, runs_c40, 24, 2251105u, 196326u, 293519u, 11929242u, 346881u, 0x31867b3fu},
+	{"d20", 131012608u, 0x8ccd72dfu, 205501952u, 0x3c590eecu, 0x3121edd3u, 5068, places_d20, firsts_d20, 0, 93569024u, 0x1cf03330u, 50657280u, 0xf1e0e95eu, runs_d20, 23, 2447431u, 165266u, 250381u, 12495786u, 293524u, 0x9061b18du},
+	{"d40", 170405888u, 0x9cfcc06au, 274594816u, 0xeb84833eu, 0x03cb915cu, 5372, places_d40, firsts_d40, 0, 161861632u, 0x91a50672u, 90431488u, 0x9ccceab0u, runs_d40, 37, 2612697u, 171916u, 257191u, 13213509u, 302490u, 0x0045faa6u},
 };
 
 #define STOCK_LAYOUT_LENGTH 559504u

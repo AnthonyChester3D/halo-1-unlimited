@@ -821,7 +821,7 @@ done:
 
 /* ---- a small map's recipe: its retail map's, less the words its fields are in ---- */
 
-static uint32_t field_words[MOST_BLOCKS + MOST_BSPS];
+static uint32_t field_words[MOST_BLOCKS + MOST_BSPS], field_values[MOST_BLOCKS + MOST_BSPS];
 static int field_word_count;
 
 /* fields[] (count of them, sorted) as words of the tag data (at tag_offset, tag_size bytes): 0 when each is a word in it */
@@ -835,7 +835,10 @@ static int fields_to_words(int count, uint32_t tag_offset, uint32_t tag_size)
 		if (at < tag_offset || at - tag_offset >= tag_size || (at - tag_offset) % 4)
 			return 1;
 		if (!field_word_count || field_words[field_word_count - 1] != (at - tag_offset) / 4)
+		{
+			field_values[field_word_count] = fields[i].value;
 			field_words[field_word_count++] = (at - tag_offset) / 4;
+		}
 	}
 	return 0;
 }
@@ -876,17 +879,28 @@ static uint32_t run_cut(uint32_t dest, uint32_t offset, uint32_t length, struct 
 	return count;
 }
 
-/* map k's small map's recipe into recipe_out (field_words set): 0 when it's the size the table says */
+/* a number's LEB128 size */
+static uint32_t leb_size(uint32_t v)
+{
+	uint32_t n = 1;
+	while (v >>= 7)
+		n++;
+	return n;
+}
+
+/* map k's small map's recipe into recipe_out (field_words set), revision 2's sections: 1 its retail map's stock groups
+less the field words, 2 no pack groups, 3 the field words as its own words. 0 when it's the size the table says */
 static int recipe_small(int k)
 {
 	struct cursor c;
-	struct emit e;
-	uint32_t groups, g, frame, kept = 0, last = 0, written;
-	int pass;
+	struct emit e, h;
+	uint32_t groups, g, frame, kept = 0, last = 0, written, body, own, runs;
+	unsigned char head[16];
+	int pass, i, j;
 	if (recipe_unpack(k))
 		return 1;
-	e.out = recipe_out;
-	e.room = MOST_SMALL_RECIPE;
+	e.out = recipe_out + 16;            /* (section 1's body, moved down once its header's size is known) */
+	e.room = MOST_SMALL_RECIPE - 16;
 	e.size = 0;
 	for (pass = 0; pass < 2; pass++)
 	{
@@ -938,8 +952,49 @@ static int recipe_small(int k)
 		}
 		if (c.bad || leb(&c) || c.bad || c.p != c.end)
 			return 1;
-		if (pass)
-			emit_leb(&e, 0);
+	}
+	if (e.size > e.room)
+		return 1;
+	body = e.size;
+	/* the own words' section: the field words in runs of neighbours, each word its field's value */
+	for (i = 0, runs = 0, own = 0; i < field_word_count; i = j)
+	{
+		for (j = i + 1; j < field_word_count && field_words[j] == field_words[j - 1] + 1; j++)
+			;
+		own += leb_size(field_words[i] - (i ? field_words[i - 1] + 1 : 0)) + leb_size((uint32_t)(j - i)) + 4u * (uint32_t)(j - i);
+		runs++;
+	}
+	own += leb_size(runs);
+	h.out = head;
+	h.room = sizeof(head);
+	h.size = 0;
+	emit_leb(&h, 3);
+	emit_leb(&h, 1);
+	emit_leb(&h, body);
+	if (h.size + body + 3 + 1 + leb_size(own) + own > MOST_SMALL_RECIPE)
+		return 1;
+	memmove(recipe_out + h.size, recipe_out + 16, body);
+	memcpy(recipe_out, head, h.size);
+	e.out = recipe_out;
+	e.room = MOST_SMALL_RECIPE;
+	e.size = h.size + body;
+	emit_leb(&e, 2);                    /* (section 2: no pack groups) */
+	emit_leb(&e, 1);
+	emit_leb(&e, 0);
+	emit_leb(&e, 3);
+	emit_leb(&e, own);
+	emit_leb(&e, runs);
+	for (i = 0; i < field_word_count; i = j)
+	{
+		for (j = i + 1; j < field_word_count && field_words[j] == field_words[j - 1] + 1; j++)
+			;
+		emit_leb(&e, field_words[i] - (i ? field_words[i - 1] + 1 : 0));
+		emit_leb(&e, (uint32_t)(j - i));
+		for (; i < j; i++)
+		{
+			put32(recipe_out + e.size, field_values[i]);
+			e.size += 4;
+		}
 	}
 	return e.size > e.room || e.size != retail_maps[k].small_recipe_size;
 }
@@ -952,7 +1007,8 @@ struct small
 	uint32_t length, gone;          /* the original's length unpacked, and the sectors left out of it */
 	uint32_t out, crc;              /* what's gone into it so far, unpacked (header and all), and its CRC32 */
 	uint32_t expect, recipe_at;     /* its length unpacked, as the table says, and where its recipe goes */
-	uint32_t tag_from, tag_to;      /* the original's tag data: zeros in it, but for the fields */
+	uint32_t tag_from, tag_to;      /* the original's tag data (revision 2: not stored; the file stops at its sector's end) */
+	uint32_t stop;
 	int first_moved, first_stay, first_field, field_count;
 	/* reusing the retail map's packed data (runs NULL: all of it packed, as before). The tap (small_tap) takes each run's
 	bits from what the retail map's reader reads, a little ahead of the small map's bytes (one CHUNK), and they wait in
@@ -1182,9 +1238,9 @@ static int small_open(struct small *s, struct restore_map const *map, uint32_t g
 	s->gone = gone;
 	s->out = SECTOR;
 	s->expect = retail->small_length;
-	s->recipe_at = (map->length - gone * SECTOR + 2047u) & ~2047u;
 	s->tag_from = u32(map->header + 0x10);
 	s->tag_to = s->tag_from + u32(map->header + 0x14);
+	s->stop = (s->tag_from + SECTOR - 1) / SECTOR * SECTOR;
 	s->first_moved = s->first_stay = 0;
 	s->runs = reuse && pending && reuse->run_count <= MOST_RUNS ? reuse->runs : NULL;
 	s->run_count = s->runs ? reuse->run_count : 0;
@@ -1196,11 +1252,12 @@ static int small_open(struct small *s, struct restore_map const *map, uint32_t g
 	if (moved_down(u32(map->header + 0x10), &to))
 		return 1;
 	put32(small_header + 0x10, to);
+	s->recipe_at = (to + 2047u) & ~2047u;
 	/* the reference (docs/shared_maps.md): no pack's file, the stock one's, and the map's identity kept; its recipe
-	(format 4: version 3) */
-	memset(small_header + REFERENCE_OFFSET, 0, 0x7C);
+	(format 4 revision 2: version 4, flags 0) */
+	memset(small_header + REFERENCE_OFFSET, 0, 0x80);
 	put32(small_header + REFERENCE_OFFSET, REFERENCE_SIGNATURE);
-	put32(small_header + REFERENCE_OFFSET + 4, 3);
+	put32(small_header + REFERENCE_OFFSET + 4, 4);
 	put32(small_header + REFERENCE_OFFSET + 0x30, map->raw_size);
 	put32(small_header + REFERENCE_OFFSET + 0x34, u32(map->header + 0x64));
 	memcpy(small_header + REFERENCE_OFFSET + 0x38, "stock", 5);
@@ -1278,14 +1335,14 @@ static int small_piece(struct small *s, uint32_t at, uint32_t size)
 			}
 		}
 	}
-	/* (its tag data: zeros but for the fields' words, the recipe's runs write the rest as it loads) */
+	/* (its tag area isn't stored: zeros from its start to its sector's end, nothing after; every field is a word in it,
+	and the fields are its recipe's own words) */
 	if (overlap(s->tag_from, s->tag_to, at, size, &in_piece, &in_block, &n))
 		memset(chunk + in_piece, 0, n);
-	set_fields(s->field_count, &s->first_field, at, size);
 	for (sector = 0; sector * SECTOR < size; sector++)
 	{
 		uint32_t part = size - sector * SECTOR > SECTOR ? SECTOR : size - sector * SECTOR;
-		if (covered[c + sector])
+		if (covered[c + sector] || at + sector * SECTOR >= s->stop)
 			continue;
 		if (small_out(s, at + sector * SECTOR, chunk + sector * SECTOR, part))
 			return 1;
@@ -1416,6 +1473,7 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 	unsigned char header[HEADER];
 	struct reader r;
 	uint32_t k, c, gone, sectors, crc, small_length, tag_from = u32(map->header + 0x10), tag_size = u32(map->header + 0x14);
+	uint32_t stored, pulled = HEADER;  /* (what of the original the small map holds: revision 2's stops at its tag area) */
 	int first_moved = 0, first_field = 0, field_count = 0, failed = 1, recipe = -1;
 
 	if (map->length > MOST_MAP_LENGTH || map->length < HEADER || map->bsps > MOST_BSPS)
@@ -1440,6 +1498,9 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 	if (reader_open(&r, small_path, header))
 		return 1;
 	small_length = map->length - gone * SECTOR;
+	stored = map->length;
+	if (u32(header + REFERENCE_OFFSET + 4) == 4)
+		stored = (tag_from + SECTOR - 1) / SECTOR * SECTOR;
 	if (u32(header + REFERENCE_OFFSET + 4) >= 3)
 	{
 		for (k = 0; k < STOCK_MAPS; k++)
@@ -1461,10 +1522,12 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 		for (s = 0; s * SECTOR < size; s++)
 		{
 			uint32_t part = size - s * SECTOR > SECTOR ? SECTOR : size - s * SECTOR;
-			if (covered[c + s])
+			if (covered[c + s] || at + s * SECTOR >= stored)
 				memset(chunk + s * SECTOR, 0, part);
 			else if (reader_pull(&r, chunk + s * SECTOR, part))
 				goto done;
+			else
+				pulled += part;
 		}
 		while (first_moved < moved_count && moved[first_moved].to <= at)
 			first_moved++;
@@ -1485,7 +1548,7 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 			goto done;
 	}
 	/* (the small map's recipe and what pads it: passed over) */
-	for (k = map->length - gone * SECTOR; k < small_length; k += CHUNK)
+	for (k = pulled; k < small_length; k += CHUNK)
 	{
 		if (reader_pull(&r, chunk, small_length - k > CHUNK ? CHUNK : small_length - k))
 			goto done;
