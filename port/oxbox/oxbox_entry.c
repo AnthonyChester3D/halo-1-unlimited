@@ -89,8 +89,7 @@ static void log_open(void)
 		}
 		if (k == 2 && log_file != INVALID_HANDLE_VALUE)
 		{
-			static const char note[] = "oxbox: D: can't be written (a disc or an ISO?): this log is T:\\oxbox_log.txt "
-				"(E:\\TDATA\\4c4a4855), debug.txt beside it\r\n";
+			static const char note[] = "oxbox: D: can't be written: this log is on T: (E:\\TDATA\\4c4a4855)\r\n";
 			unsigned long done;
 
 			WriteFile(log_file, note, sizeof(note) - 1, &done, NULL);

@@ -300,10 +300,24 @@ play with no error. Measured on 14 of the old packs: 211 maps, all clean, 5080 M
 
 Tested in xemu (v1.94): Blood Gulch from stock.shared; CEX's Abyss from CEX.shared and stock.shared together.
 
-## Shared tag data (format 4) — DRAFT for review
+## Shared tag data (format 4)
 
-Status: being agreed with Halo Map Porter (2026-11-22); nothing below is built yet, and every number may still change
-until the console timing test (packed frames against unpacked) locks it. No released build reads it.
+Status: agreed with Halo Map Porter (2026-11-22) and **locked** (2026-11-23) by the console's timing test (v1.175, pass
+10): `stocktags.shared`'s frames packed load as fast as raw or faster, so they're packed. The game reads it from v1.175
+(stock groups) and v1.176 (pack groups); the installer makes it from installer 66 (v1.177). No released build has it yet.
+
+Measured on the console (v1.175, the lab build that also checks each CRC32), the same maps from a packed and a raw
+stocktags.shared:
+
+| Map | Frames | Unpacked | Packed: read, time | Raw: read, time |
+|---|---|---|---|---|
+| Blood Gulch | 374 | 5.8 MB | 2.8 MB, 382-434 ms | 5.8 MB, 356-421 ms |
+| c20 | 775 | 12.1 MB | 5.4 MB, 882 ms | 12.1 MB, 1105 ms |
+| c40 | 1310 | 20.5 MB | 9.5 MB, 1438 ms | 20.5 MB, 1396 ms |
+| d20 | 1158 | 18.1 MB | 8.5 MB, 1229 ms | 18.1 MB, 1331 ms |
+
+The console's disk reads the raw frames about as slowly as its CPU inflates the packed ones, so the packed file (21.9 MB
+against 52.9 MB) costs nothing at load. A load takes about 0.4 s longer for a multiplayer map, 0.9-1.4 s for a level.
 
 A map's **tag data** can be rebuilt as it loads from bytes other maps already have, so it's stored once. Two places hold
 them:

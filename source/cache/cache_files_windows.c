@@ -3013,8 +3013,8 @@ boolean cache_file_tags_rebuild(
 		platform_log("tags: %s can't load: %s", scenario_name, why);
 		return FALSE;
 	}
-	platform_log("tags: %s rebuilt: %lu stock frames (%lu KB read, %lu KB unpacked), %lu of its pack's, %lu runs, %lu KB of "
-		"recipe, in %lu ms", scenario_name, r.frames_read, r.read_bytes / 1024, r.inflated / 1024, r.slices, r.runs,
+	platform_log("tags: %s rebuilt: %lu frames (%lu KB read, %lu KB unpacked), %lu pack slices, %lu runs, %lu KB recipe, "
+		"%lu ms", scenario_name, r.frames_read, r.read_bytes / 1024, r.inflated / 1024, r.slices, r.runs,
 		recipe_size / 1024, system_milliseconds() - started);
 #if defined(OXBOX_TAG_RECIPE_CHECK)
 	/* (a lab build: the rebuilt tag data's CRC32 against the reference's) */

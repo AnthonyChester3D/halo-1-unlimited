@@ -3302,14 +3302,14 @@ static void bots_report(
 				brain->last_position.x, brain->last_position.y, brain->last_position.z);
 		}
 #endif
-		bots_log("bots 10s: %d planless, %d waiting for a search, %d without corners, %d stuck; "
+		bots_log("bots 10s:%d planless, %d waiting for a search, %d without corners, %d stuck; "
 			"longest since a waypoint %ld s", planless, waiting, straight, stuck, slowest / BOTS_TICKS_PER_SECOND);
-		bots_log("bots 10s: fighting: %ld sightings, %ld ticks firing, %ld grenades, %ld melee, %ld weapon pickups; "
+		bots_log("bots 10s:fighting: %ld sightings, %ld ticks firing, %ld grenades, %ld melee, %ld weapon pickups; "
 			"longest walk %.2f ms (search %.2f ms), longest fight %.2f ms",
 			bots_route.sightings, bots_route.firing_ticks, bots_route.grenades, bots_route.melees, bots_route.pickups,
 			(double)bots_route.walk_cycles_maximum / 733000.0, (double)bots_route.search_cycles_maximum / 733000.0,
 			(double)bots_route.fight_cycles_maximum / 733000.0);
-		bots_log("bots 10s: moving: %ld jumps (%ld crouch-jumps), %ld got over, %ld crouched under something; "
+		bots_log("bots 10s:moving: %ld jumps (%ld crouch-jumps), %ld got over, %ld crouched under something; "
 			"hops finished straight: %ld up a ledge, %ld off one, %ld reached; %ld under a ramp; look-ahead %.2f ms a tick",
 			bots_route.jumps, bots_route.crouch_jumps, bots_route.jumps_landed, bots_route.crouches,
 			bots_route.straight_up, bots_route.straight_down, bots_route.straight_done, bots_route.overhangs,
@@ -3318,29 +3318,29 @@ static void bots_report(
 		{
 			long const *counts = bots_route.goal_counts;
 
-			/* (a count a third of a second: bot-seconds x 3) */
-			bots_log("bots 10s: objectives (bot-seconds): %ld carrying, %ld taking, %ld returning, %ld hunting a carrier, "
+			/* (a count a third of a second: bot-s x 3) */
+			bots_log("bots 10s:objectives (bot-s): %ld carrying, %ld taking, %ld returning, %ld hunting a carrier, "
 				"%ld escorting, %ld defending, %ld on the hill or a race's flag, %ld with none",
 				counts[_bots_reason_carry] / 3, counts[_bots_reason_take] / 3, counts[_bots_reason_return] / 3,
 				counts[_bots_reason_hunt] / 3, counts[_bots_reason_escort] / 3, counts[_bots_reason_defend] / 3,
 				counts[_bots_reason_hill] / 3, counts[_bots_reason_none] / 3);
 		}
-		bots_log("bots 10s: %s: %ld bot-seconds after power items (%ld taken), %ld backed off hurt, %ld headed for a teammate",
+		bots_log("bots 10s:%s: %ld bot-s after power items (%ld taken), %ld backed off hurt, %ld headed for a teammate",
 			bots_skill()->name, bots_route.goal_counts[_bots_reason_item] / 3, bots_route.items_taken, bots_route.retreats,
 			bots_route.regroups);
 		bots_route.items_taken = bots_route.retreats = bots_route.regroups = 0;
-		bots_log("bots 10s: vehicles: %ld got in, %ld got out, %.1f bot-seconds driving, %.1f gunning, %ld reversed; "
-			"%ld bot-seconds going for one", bots_route.vehicle_entries, bots_route.vehicle_exits,
+		bots_log("bots 10s:vehicles: %ld got in, %ld got out, %.1f bot-s driving, %.1f gunning, %ld reversed; "
+			"%ld bot-s going for one", bots_route.vehicle_entries, bots_route.vehicle_exits,
 			(double)bots_route.driving_ticks / BOTS_TICKS_PER_SECOND, (double)bots_route.gunning_ticks / BOTS_TICKS_PER_SECOND,
 			bots_route.vehicle_reverses, bots_route.goal_counts[_bots_reason_vehicle] / 3);
 		bots_route.vehicle_entries = bots_route.vehicle_exits = bots_route.driving_ticks = bots_route.gunning_ticks = 0;
 		bots_route.vehicle_reverses = 0;
-		bots_log("bots 10s: %.1f bot-seconds firing from vehicles, %ld drivers waited for a crew (%ld in vain); %ld weapon "
+		bots_log("bots 10s:%.1f bot-s firing from vehicles, %ld drivers waited for a crew (%ld in vain); %ld weapon "
 			"switches (%ld done), %ld reloads; %ld sniper looks; %ld got out of a vehicle's way",
 			(double)bots_route.vehicle_firing_ticks / BOTS_TICKS_PER_SECOND, bots_route.crew_waits, bots_route.crew_gave_up,
 			bots_route.weapon_switches, bots_route.weapon_switches_done, bots_route.reloads, bots_route.scouts,
 			bots_route.evades);
-		bots_log("bots 10s: %ld seats not got in time; %ld went round a parked vehicle", bots_route.seat_misses,
+		bots_log("bots 10s:%ld seats not got in time; %ld went round a parked vehicle", bots_route.seat_misses,
 			bots_route.went_around);
 		bots_route.crew_gave_up = bots_route.seat_misses = bots_route.went_around = 0;
 		bots_route.vehicle_firing_ticks = bots_route.crew_waits = bots_route.weapon_switches = bots_route.reloads = 0;
@@ -3353,20 +3353,20 @@ static void bots_report(
 		bots_route.walk_cycles_maximum = bots_route.search_cycles_maximum = bots_route.fight_cycles_maximum = 0;
 		bots_route.sightings = bots_route.firing_ticks = bots_route.grenades = bots_route.melees = bots_route.pickups = 0;
 #if defined(OXBOX_TEST_BOTS)
-		bots_log("bots 10s: failed searches: %ld no path, %ld ledges, %ld no closer; %ld bots stepped onto teleporters; "
+		bots_log("bots 10s:failed searches: %ld no path, %ld ledges, %ld no closer; %ld bots stepped onto teleporters; "
 			"%ld steps kept off a death cliff", bots_route.failed_no_path, bots_route.failed_ledge, bots_route.failed_stall,
 			bots_route.teleport_hops, bots_route.edge_stops);
 		bots_route.failed_no_path = bots_route.failed_ledge = bots_route.failed_stall = bots_route.teleport_hops = 0;
 		bots_route.edge_stops = 0;
 #endif
 		if (bots_route.gap_hops || bots_route.gap_links_found || bots_route.vehicle_links_learned)
-			bots_log("bots 10s: gaps: %ld jump links found, %ld hops over one, %ld jumps at the edge; %ld links a vehicle "
+			bots_log("bots 10s:gaps: %ld jump links found, %ld hops over one, %ld jumps at the edge; %ld links a vehicle "
 				"didn't fit", bots_route.gap_links_found, bots_route.gap_hops, bots_route.gap_jumps,
 				bots_route.vehicle_links_learned);
 		bots_route.gap_links_found = bots_route.gap_hops = bots_route.gap_jumps = bots_route.vehicle_links_learned = 0;
 	}
 	/* (the Xbox's processor: 733 MHz) */
-	bots_log("bots 10s: %d walking, %ld searches (%ld failed), %ld arrivals (%ld by teleporter), %ld give-ups; "
+	bots_log("bots 10s:%d walking, %ld searches (%ld failed), %ld arrivals (%ld by teleporter), %ld give-ups; "
 		"%d of %d waypoints visited this game; bots' time %.2f ms a tick (searches %.2f), at most %.2f ms",
 		bots_route.walking, bots_route.searches, bots_route.searches_failed, bots_route.arrivals, bots_route.teleports,
 		bots_route.give_ups,

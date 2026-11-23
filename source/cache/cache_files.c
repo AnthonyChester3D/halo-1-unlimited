@@ -146,6 +146,11 @@ void xgpu_static_buffers_remove(const void *buffers, long count, unsigned long s
 void xgpu_static_range_add(const void *start, unsigned long size, int indices);
 void xgpu_static_range_remove(const void *start, int indices);
 #endif
+#if defined(HALO_XBOX_TARGET)
+#include "oxbox_perf.h" /* (a map load's steps timed for the perf log, v1.178) */
+#else
+#define OXBOX_PERF_LOAD(step)
+#endif
 
 /* (Halo Universal's folder maps and map sharing: port/linux/game/hmp_maps.c, hmp_share.c; in the native builds
 map_share_xbox.c, for a dedicated server's folder maps) */
@@ -1610,6 +1615,7 @@ long scenario_tags_load(
 
 				return NONE;
 			}
+			OXBOX_PERF_LOAD(_oxbox_perf_load_tags_read)
 			/* port: format 4: the words the recipe names written over the zeros the map holds there, from the stock
 			tag pool (stocktags.shared), before anything reads the tags (cache_files_windows.c) */
 			if (recipe)
@@ -1628,6 +1634,7 @@ long scenario_tags_load(
 
 					return NONE;
 				}
+				OXBOX_PERF_LOAD(_oxbox_perf_load_tags_rebuilt)
 			}
 			if (!cache_file_tag_header_verify(
 				tag_cache_base_address,
@@ -1723,6 +1730,7 @@ long scenario_tags_load(
 			if (_stricmp(cache_file_globals.header.name, "ui"))
 				cache_file_lend_free_tag_memory();
 #endif
+			OXBOX_PERF_LOAD(_oxbox_perf_load_tags_checked)
 			result = cache_file_globals.tag_header->scenario_tag_index;
 		}
 		/* port: a map refused is closed for the next to open */

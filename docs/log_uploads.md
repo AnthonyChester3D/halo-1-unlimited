@@ -42,8 +42,10 @@ sender's country (Cloudflare's guess), not its address; it answers `ok <code>`. 
 `DELETE /v1/logs/<name>` need `Authorization: Bearer <READ_KEY>`. Tested with wrangler's local runtime and from xemu's
 installer (installer 66).
 
-The installer sends to `LOGS_DEFAULT_URL` (installer/logs.h), or developer.ini's `logs_url` (lab: wrangler dev at
-`http://10.0.2.2:8787/v1/logs` from xemu). With neither, *Send logs* isn't shown. Like the installer's downloads, the
+The installer sends to `LOGS_DEFAULT_URL` (installer/logs.h: `https://h1u-logs.h1u.workers.dev/v1/logs` from installer
+67), or developer.ini's `logs_url` (lab: wrangler dev at `http://10.0.2.2:8787/v1/logs` from xemu). With neither,
+*Send logs* isn't shown. Tested over the internet from xemu (installer 67): sent, kept, fetched back by
+`fetch_logs.py`. Like the installer's downloads, the
 connection is HTTPS but the server's certificate isn't checked (the installer has no certificate authorities or clock to
 check it with).
 
