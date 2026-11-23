@@ -262,3 +262,29 @@ def decode_v4(recipe):
         end += d + ln
     assert j == len(b)
     return decode_groups(sections[SECTION_STOCK]), decode_groups(sections[SECTION_PACK]), own
+
+
+def stock_small_v4(small, m, fields, recipe, pool_size, pool_crc):
+    """revision 2's small stock map: its recipe's stock section the retail map's less the words its fields are in (as
+    stock_small), no pack groups, its own words (the fields) in section 3; the file stops at its tag area (always its
+    last part), the recipe at the next 2048-byte boundary, the map padded to one; reference version 4. Returns (the map,
+    its recipe, the CRC32 of its tag data as rebuilt)"""
+    tag_at, size = struct.unpack_from('<I', small, 0x10)[0], m.tag_size
+    assert all(not any(small[tag_at + size:]) for _ in [0]), 'something after the tag area'
+    words = sorted(set((f - m.tag_offset) // 4 for f in fields))
+    assert all((f - m.tag_offset) % 4 == 0 and 0 <= f - m.tag_offset < size for f in fields)
+    stock, pack = decode(recipe)
+    assert not pack
+    groups = without(stock, words)
+    tags = bytes(small[tag_at:tag_at + size])
+    own = own_runs([groups], size // 4)
+    assert [w for d, n in own for w in range(d, d + n)] == words
+    r4 = encode_v4(groups, [], own, tags)
+    tag_crc = zlib.crc32(tags) & 0xFFFFFFFF
+    recipe_at = (tag_at + 2047) & ~2047
+    length = (recipe_at + len(r4) + 2047) & ~2047
+    out = bytearray(small[:tag_at]) + bytes(recipe_at - tag_at) + r4 + bytes(length - recipe_at - len(r4))
+    struct.pack_into('<I', out, 8, length)
+    struct.pack_into('<I', out, 0x704, 4)
+    struct.pack_into('<IIIIII', out, 0x768, recipe_at, len(r4), pool_crc, pool_size, tag_crc, 0)
+    return out, r4, tag_crc

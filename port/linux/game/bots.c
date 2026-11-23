@@ -1951,12 +1951,11 @@ static void bots_learned_save(
 	if (!(text = (char *)malloc(BOTS_LEARNED_FILE_MAXIMUM)))
 		return;
 	length = halo_linux_snprintf(text, BOTS_LEARNED_FILE_MAXIMUM,
-		"# Halo 1 Unlimited: what the bots learned on %s (port/linux/game/bots.c). Deleting this file forgets it.\r\n"
+		"# What the bots learned on %s (bots.c); deleting this file forgets it.\r\n"
 		"# node <x y z>: a waypoint (the map's spawns, weapons, flags and bot nodes)\r\n"
 		"# link <from x y z> <to x y z>: g walked, b unusable, j a jump over a gap, J a jump that failed, c walked straight\r\n"
 		"#   (no search), v vehicle types that don't fit\r\n"
-		"# ladder <foot x y z> <top x y z> <facing i j>: climbed along the facing (into the ladder) until the feet are\r\n"
-		"#   above the top end, then stepped off to it\r\n",
+		"# ladder <foot x y z> <top x y z> <facing i j>: climbed facing the ladder till the feet pass the top, then off\r\n",
 		bots_route.map);
 	/* (every waypoint, the map's own and its bot nodes: a copy of this file as another version's bots.txt brings them) */
 	for (from = 0; from < bots_route.waypoint_count && length > 0 && length < BOTS_LEARNED_FILE_MAXIMUM - 128; from++)
@@ -3024,8 +3023,7 @@ static void bots_stuck_log_write(
 	short count;
 
 	length = halo_linux_snprintf(text, sizeof(text),
-		"OpenCE bots: spots where bots gave up and picked another destination, most first.\r\n"
-		"(Spots are 2 world units apart. A world unit is about 3 m.)\r\n\r\n"
+		"Spots where bots gave up and turned elsewhere, most first (2 world units apart; a unit is about 3 m).\r\n\r\n"
 		"map                              times    spot (x y z)                heading for (x y z)\r\n");
 	csmemset(written, 0, sizeof(written));
 	for (count = 0; count < bots_route.stuck_spot_count; count++)
@@ -3215,7 +3213,7 @@ static void bots_report(
 			bots_route.sightings, bots_route.firing_ticks, bots_route.grenades, bots_route.melees, bots_route.pickups,
 			(double)bots_route.walk_cycles_maximum / 733000.0, (double)bots_route.search_cycles_maximum / 733000.0,
 			(double)bots_route.fight_cycles_maximum / 733000.0);
-		bots_log("bots 10s:moving: %ld jumps (%ld crouch-jumps), %ld got over, %ld crouched under something; "
+		bots_log("bots 10s:moving: %ld jumps (%ld crouch-jumps), %ld got over, %ld crouched under; "
 			"hops finished straight: %ld up a ledge, %ld off one, %ld reached; %ld under a ramp; look-ahead %.2f ms a tick",
 			bots_route.jumps, bots_route.crouch_jumps, bots_route.jumps_landed, bots_route.crouches,
 			bots_route.straight_up, bots_route.straight_down, bots_route.straight_done, bots_route.overhangs,

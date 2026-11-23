@@ -2634,8 +2634,8 @@ static void check_report(void)
 	}
 	GetSystemTime(&now);
 #define REPORT_FLUSH() do { WriteFile(file, buffer, (unsigned long)n, &put, NULL); n = 0; } while (0)
-	n += snprintf(buffer + n, sizeof(buffer) - n, "Halo 1 Unlimited map check (opence.ini map_check = 1), %04d-%02d-%02d %02d:%02d UTC\r\n"
-		"%ld folder maps: %ld failed, %ld passed, %ld not checked (busy, being loaded)\r\n",
+	n += snprintf(buffer + n, sizeof(buffer) - n, "Map check (opence.ini map_check = 1), %04d-%02d-%02d %02d:%02d UTC\r\n"
+		"%ld folder maps: %ld failed, %ld passed, %ld not checked (loading)\r\n",
 		now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, check.status_count, failed, passed, busy);
 	for (pass = 0; pass < 3; pass++)
 	{

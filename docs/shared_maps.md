@@ -531,7 +531,9 @@ Anything wrong (no stocktags.shared, another pool, a run outside the tag data or
 with a log line, as a map that can't load. A log line gives the frames, megabytes inflated, runs and milliseconds.
 The recipe may start anywhere after the tag data: the game reads it from the start of its sector. The pack's tag part is
 read as the pack's textures are, from the pack's file where it is or from the cache file it's copied into.
-Built in v1.175 (`cache_file_tags_rebuild`, cache_files_windows.c) for stock groups, v1.176 for pack groups. Tested in
+Built in v1.175 (`cache_file_tags_rebuild`, cache_files_windows.c) for stock groups, v1.176 for pack groups, v1.179 for
+revision 2 (version 4: the tag area not read, nor first filled with its 0xCD pattern; the sections read in order, the own
+words copied from the recipe as they come). Tested in
 xemu: Blood Gulch, c20 and d20 from recipes, as stock maps and as folder maps, from a packed and a raw stocktags.shared;
 CEX's maps from stocktags.shared and their pack's tag part (one with its recipe off a sector boundary); each CRC32 as its
 reference says (`-DOXBOX_TAG_RECIPE_CHECK`).
@@ -548,14 +550,16 @@ several times the time on the console's CPU).
 A small stock map's tag data differs from its retail map's only in its fields (each block's place in stock.shared or
 where it moved down to, each BSP's): every field is a whole word in the tag data. So its recipe is **its retail map's
 recipe less the words its fields are in** (a run cut there, a group left with none dropped; the other runs as they are,
-so a piece may be shorter than 16 words), and its tag data is zeros but for those words, which hold the fields. Its
-recipe goes after its data at a 2048-byte boundary, the map padded to one; reference version 3 (0x68-0x78), the rest of
-the reference as before. Only the installer (and `gen_stock_table.py`, which bakes what each must come out as) makes
+so a piece may be shorter than 16 words), and those words, holding the fields, are its own words. From installer 70
+(v1.179) it's a revision 2 map (reference version 4): the file stops at its tag area, the recipe's sections are the stock
+groups, no pack groups, and the fields as its own words. (Installer 66-69 made version 3: the tag area stored, zeros but
+for the fields.) Only the installer (and `gen_stock_table.py`, which bakes what each must come out as) makes
 these, so this is the installer's rule, not the pack pass's. Putting a map back makes its tag data from the pool with its
 retail map's recipe (every word), then undoes the rest as before; `stocktags.shared` goes with stock.shared.
 
 Measured: the small maps 737.9 MB -> 640.8 MB on the disk (multiplayer 40.7 -> 7.3 MB), plus stocktags.shared's
-23.3 MB: an install takes 74 MB less. Built in installer 66 (stockmaps.c); on a PC (stockmaps_test.c) the own-folder
+23.3 MB: an install takes 74 MB less. Revision 2 (installer 70): about the same on the disk (639.6 MB), but what the
+game copies into the cache 1434 -> 1192 MB unpacked (multiplayer 138 -> 45 MB). Built in installer 66 (stockmaps.c); on a PC (stockmaps_test.c) the own-folder
 build, the swap, its restore and Rebuild original Halo all give back the retail maps byte for byte.
 
 ## Not yet

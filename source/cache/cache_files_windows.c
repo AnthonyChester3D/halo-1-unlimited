@@ -2330,8 +2330,7 @@ static boolean shared_reference_get(
 		return FALSE;
 	csmemcpy(&reference, (byte const *)&header + SHARED_REFERENCE_OFFSET, sizeof(reference));
 	/* (version 3, format 4: a recipe after the same fields: cache_file_tags_rebuild) */
-	if (reference.signature != SHARED_REFERENCE_SIGNATURE ||
-		(reference.version != 1 && reference.version != 2 && reference.version != 3))
+	if (reference.signature != SHARED_REFERENCE_SIGNATURE || reference.version < 1 || reference.version > 4)
 		return FALSE;
 	if (reference.version == 1)
 		csmemset(reference.stock_name, 0, sizeof(reference.stock_name));
@@ -2694,6 +2693,7 @@ struct tags_rebuild
 {
 	byte *recipe;                       /* (the recipe's piece in hand) */
 	long recipe_at, recipe_end, held, used, skip;
+	unsigned long consumed;             /* (the recipe's bytes taken so far: a section's size checked) */
 	unsigned long part_at, part_size;   /* (the pack's tag part, in its shared file) */
 	HANDLE file;                        /* stocktags.shared */
 	unsigned long frames, pool_size;
@@ -2766,6 +2766,31 @@ static boolean tags_recipe_byte(
 		r->skip = 0;
 	}
 	*b = r->recipe[r->used++];
+	r->consumed++;
+	return TRUE;
+}
+
+/* the recipe's next n bytes, as they are (revision 2's own words) */
+static boolean tags_recipe_bytes(
+	struct tags_rebuild *r,
+	byte *to,
+	unsigned long n)
+{
+	while (n)
+	{
+		unsigned long piece;
+
+		if (r->used == r->held)
+		{
+			if (!tags_recipe_byte(r, to))
+				return FALSE;
+			to++, n--;
+			continue;
+		}
+		piece = (unsigned long)(r->held - r->used) < n ? (unsigned long)(r->held - r->used) : n;
+		csmemcpy(to, r->recipe + r->used, piece);
+		r->used += piece, r->consumed += piece, to += piece, n -= piece;
+	}
 	return TRUE;
 }
 
@@ -2813,33 +2838,33 @@ static char const *tags_frame(
 	unsigned long at, stored;
 
 	if (frame >= r->frames)
-		return "its recipe names a frame that isn't there";
+		return "recipe: out of bounds";
 	if (frame < r->table_first || frame >= r->table_first + r->table_count)
 	{
 		r->table_first = frame;
 		r->table_count = r->frames - frame < TAGS_TABLE_BUFFER / 8 ? r->frames - frame : TAGS_TABLE_BUFFER / 8;
 		if (!tags_read_at(r->file, 0x800 + frame * 8, r->table, r->table_count * 8))
-			return "stocktags.shared couldn't be read (its frame table)";
+			return "stocktags.shared: unread";
 	}
 	at = tags_u32(r->table + (frame - r->table_first) * 8);
 	stored = tags_u32(r->table + (frame - r->table_first) * 8 + 4);
 	*size = r->pool_size - frame * TAGS_FRAME < TAGS_FRAME ? r->pool_size - frame * TAGS_FRAME : TAGS_FRAME;
 	if (stored > *size || !stored)
-		return "stocktags.shared is damaged (a frame's stored size)";
+		return "stocktags.shared: bad";
 	if (!tags_read_at(r->file, at, stored == *size ? r->unpacked : r->packed, stored))
-		return "stocktags.shared couldn't be read (a frame)";
+		return "stocktags.shared: unread";
 	r->frames_read++;
 	r->read_bytes += stored;
 	if (stored < *size)
 	{
 		if (inflateReset(&r->stream) != Z_OK)
-			return "zlib couldn't start";
+			return "zlib";
 		r->stream.next_in = r->packed;
 		r->stream.avail_in = stored;
 		r->stream.next_out = r->unpacked;
 		r->stream.avail_out = *size;
 		if (inflate(&r->stream, Z_FINISH) != Z_STREAM_END || r->stream.avail_out)
-			return "stocktags.shared is damaged (a frame doesn't unpack)";
+			return "stocktags.shared: bad";
 		r->inflated += *size;
 	}
 	return NULL;
@@ -2855,17 +2880,17 @@ static char const *tags_groups(
 	unsigned long groups, g, frame = 0;
 
 	if (!tags_recipe_number(r, &groups))
-		return "its recipe ends too soon";
+		return "recipe: too short";
 	if (pack && groups)
 	{
 		/* (the pack's shared file's header: its tag part's offset and size at 0x068, 0x06C) */
 		if (!tags_cache_read((long)0x80000000, 0x800, r->packed))
-			return "its pack's tag part can't be read";
+			return "pack tag part: unread";
 		r->part_at = tags_u32(r->packed + 0x68);
 		r->part_size = tags_u32(r->packed + 0x6C);
 		if (!r->part_size || (r->part_at & 0x7FF) || (r->part_size & 3) || r->part_at < 0x800 ||
 			r->part_at > (unsigned long)shared_open_length[0] || r->part_size > (unsigned long)shared_open_length[0] - r->part_at)
-			return "its pack's shared file has no tag part";
+			return "pack tag part: unread";
 	}
 	for (g = 0; g < groups; g++)
 	{
@@ -2873,20 +2898,20 @@ static char const *tags_groups(
 		char const *why;
 
 		if (!tags_recipe_number(r, &step) || !tags_recipe_number(r, &count))
-			return "its recipe ends too soon";
+			return "recipe: too short";
 		if (g && !step)
-			return "its recipe's frames aren't in order";
+			return "recipe: out of order";
 		frame = g ? frame + step : step;
 		if (!pack)
 			why = tags_frame(r, frame, &size);
 		else if (frame >= (r->part_size + TAGS_FRAME - 1) / TAGS_FRAME)
-			why = "its recipe names a frame that isn't there";
+			why = "recipe: out of bounds";
 		else
 		{
 			/* (a 16 KB slice of the pack's tag part, as it's stored) */
 			size = r->part_size - frame * TAGS_FRAME < TAGS_FRAME ? r->part_size - frame * TAGS_FRAME : TAGS_FRAME;
 			why = tags_cache_read((long)(0x80000000 | (r->part_at + frame * TAGS_FRAME)), (long)size, r->unpacked) ? NULL :
-				"its pack's tag part can't be read";
+				"pack tag part: unread";
 			r->slices++;
 		}
 		if (why)
@@ -2896,16 +2921,79 @@ static char const *tags_groups(
 			unsigned long delta, offset, length;
 
 			if (!tags_recipe_number(r, &delta) || !tags_recipe_number(r, &offset) || !tags_recipe_number(r, &length))
-				return "its recipe ends too soon";
+				return "recipe: too short";
 			dest += delta;
 			if (!length || offset + length > size / 4 || dest > tag_words || length > tag_words - dest)
-				return "its recipe has a run outside its frame or the tag data";
+				return "recipe: out of bounds";
 			csmemcpy(tags + dest * 4, r->unpacked + offset * 4, length * 4);
 			dest += length;
 			r->runs++;
 		}
 	}
 	return NULL;
+}
+
+/* revision 2's own words (section 3): runs of them, each copied from the recipe as it is */
+static char const *tags_own(
+	struct tags_rebuild *r,
+	byte *tags,
+	unsigned long tag_words)
+{
+	unsigned long runs, k, dest = 0;
+
+	if (!tags_recipe_number(r, &runs))
+		return "recipe: too short";
+	for (k = 0; k < runs; k++)
+	{
+		unsigned long delta, length;
+
+		if (!tags_recipe_number(r, &delta) || !tags_recipe_number(r, &length))
+			return "recipe: too short";
+		dest += delta;
+		if (!length || dest > tag_words || length > tag_words - dest)
+			return "recipe: out of bounds";
+		if (!tags_recipe_bytes(r, tags + dest * 4, length * 4))
+			return "recipe: too short";
+		dest += length;
+	}
+	return NULL;
+}
+
+/* revision 2's recipe (reference version 4): its sections, types ascending: 1 the stock groups, 2 the pack groups, 3
+the own words, all three; then any of 64 and up, which this build passes over; each exactly its size */
+static char const *tags_sections(
+	struct tags_rebuild *r,
+	byte *tags,
+	unsigned long tag_words)
+{
+	unsigned long count, k, kind, size, last = 0, start;
+
+	if (!tags_recipe_number(r, &count))
+		return "recipe: too short";
+	for (k = 0; k < count; k++)
+	{
+		char const *why = NULL;
+		byte b;
+
+		if (!tags_recipe_number(r, &kind) || !tags_recipe_number(r, &size))
+			return "recipe: too short";
+		if (kind < 64 ? kind != last + 1 || kind > 3 : last < 3)
+			return "recipe: unknown section";
+		start = r->consumed;
+		if (kind < 3)
+			why = tags_groups(r, tags, tag_words, kind == 2);
+		else if (kind == 3)
+			why = tags_own(r, tags, tag_words);
+		else
+			while (r->consumed - start < size && !why)
+				why = tags_recipe_byte(r, &b) ? NULL : "recipe: too short";
+		if (!why && r->consumed - start != size)
+			why = "recipe: section size";
+		if (why)
+			return why;
+		last = kind;
+	}
+	return last >= 3 ? NULL : "recipe: unknown section";
 }
 
 /* TRUE when the map's tag data is rebuilt (or it has no recipe); FALSE, said in the log, when it can't be */
@@ -2921,9 +3009,9 @@ boolean cache_file_tags_rebuild(
 	char map_path[256], path[256];
 	byte stock_header[0x20];
 	char const *why = NULL;
-	unsigned long started = system_milliseconds(), recipe_offset, recipe_size;
+	unsigned long started = system_milliseconds(), recipe_offset, recipe_size, version = tags_u32(reference + 4);
 
-	if (tags_u32(reference) != SHARED_REFERENCE_SIGNATURE || tags_u32(reference + 4) != 3 || !tags_u32(reference + 0x6C))
+	if (tags_u32(reference) != SHARED_REFERENCE_SIGNATURE || (version != 3 && version != 4) || !tags_u32(reference + 0x6C))
 		return TRUE;
 	csmemset(&r, 0, sizeof(r));
 	recipe_offset = tags_u32(reference + 0x68);
@@ -2939,10 +3027,12 @@ boolean cache_file_tags_rebuild(
 	r.file = INVALID_HANDLE_VALUE;
 	map_path[0] = path[0] = 0;
 	if (tag_size < 0 || tag_size > TAG_CACHE_SIZE - TAGS_SCRATCH || (tag_size & 3))
-		why = "its tag data leaves the rebuild no room (tag data + 64 KB over 22 MiB)";
-	else if (recipe_offset < (unsigned long)(header->tag_data_offset + header->tag_data_size) ||
+		why = "tag data + 64 KB > 22 MiB";
+	else if ((version == 4 ? tags_u32(reference + 0x7C) ||
+			recipe_offset != (((unsigned long)header->tag_data_offset + 0x7FFul) & ~0x7FFul) :
+			recipe_offset < (unsigned long)(header->tag_data_offset + header->tag_data_size)) ||
 		recipe_size > (unsigned long)header->file_length || recipe_offset > (unsigned long)header->file_length - recipe_size)
-		why = "its recipe isn't after its tag data, inside the map";
+		why = "recipe: out of bounds";
 	if (!why)
 	{
 		/* (stocktags.shared: beside the map, in the folder above, or in the maps folder, as stock.shared is found) */
@@ -2955,25 +3045,25 @@ boolean cache_file_tags_rebuild(
 			cache_file_get_map_path(tag_name_strip_path(scenario_name), map_path);
 		shared_find(map_path, "stocktags", TRUE, path);
 		if (!path[0])
-			why = "stocktags.shared (the stock tag pool) is nowhere: the installer makes it";
+			why = "no stocktags.shared";
 	}
 	if (!why)
 	{
 		r.file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 		if (r.file == INVALID_HANDLE_VALUE || !tags_read_at(r.file, 0, stock_header, sizeof(stock_header)))
-			why = "stocktags.shared couldn't be read";
+			why = "stocktags.shared: unread";
 		else if (csmemcmp(stock_header, "OXST", 4) || tags_u32(stock_header + 0x04) != 1 ||
 			tags_u32(stock_header + 0x14) != TAGS_FRAME || tags_u32(stock_header + 0x1C) != 0x800)
-			why = "stocktags.shared isn't a stock tag pool this build reads";
+			why = "stocktags.shared: bad";
 		else if (tags_u32(stock_header + 0x10) != tags_u32(reference + 0x70) ||
 			tags_u32(stock_header + 0x0C) != tags_u32(reference + 0x74))
-			why = "it was made against another stock tag pool than this console's stocktags.shared";
+			why = "another stock tag pool's";
 		else
 		{
 			r.pool_size = tags_u32(stock_header + 0x0C);
 			r.frames = tags_u32(stock_header + 0x18);
 			if (r.frames != (r.pool_size + TAGS_FRAME - 1) / TAGS_FRAME)
-				why = "stocktags.shared is damaged (its frame count)";
+				why = "stocktags.shared: bad";
 		}
 	}
 	if (!why)
@@ -2982,14 +3072,19 @@ boolean cache_file_tags_rebuild(
 		r.stream.zfree = tags_zfree;
 		r.stream.opaque = &r;
 		if (inflateInit(&r.stream) != Z_OK)
-			why = "zlib couldn't start";
+			why = "zlib";
 		else
 		{
-			why = tags_groups(&r, tags, (unsigned long)tag_size / 4, FALSE);
-			if (!why)
-				why = tags_groups(&r, tags, (unsigned long)tag_size / 4, TRUE);
+			if (version == 4)
+				why = tags_sections(&r, tags, (unsigned long)tag_size / 4);
+			else
+			{
+				why = tags_groups(&r, tags, (unsigned long)tag_size / 4, FALSE);
+				if (!why)
+					why = tags_groups(&r, tags, (unsigned long)tag_size / 4, TRUE);
+			}
 			if (!why && (r.used != r.held || r.recipe_at != r.recipe_end))
-				why = "its recipe has more after its end";
+				why = "recipe: too long";
 			inflateEnd(&r.stream);
 		}
 	}

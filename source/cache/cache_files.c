@@ -929,11 +929,14 @@ boolean cache_file_header_verify(
 	and fits the tag cache, which it is read into whole (a size rounded up
 	to whole sectors still fits, the cache being whole sectors). Checked
 	without overflow: the offset and size are each checked first */
+	/* (format 4 revision 2, reference version 4: the tag area is the map's last part and isn't stored, so only its start
+	is in the map) */
 	if (header->file_length < (long)sizeof(struct cache_file_header) ||
 		header->tag_data_offset < 0 ||
 		header->tag_data_size < 0 ||
 		header->tag_data_size > TAG_CACHE_SIZE ||
-		header->tag_data_offset > header->file_length - header->tag_data_size)
+		header->tag_data_offset > header->file_length - (((unsigned long const *)((byte const *)header + 0x700))[0] == 'shrd' &&
+			((unsigned long const *)((byte const *)header + 0x700))[1] == 4 ? 0 : header->tag_data_size))
 	{
 		error(
 			_error_silent,
@@ -1529,9 +1532,11 @@ long scenario_tags_load(
 	}
 	if (cache_file_open(stripped_scenario_name, &cache_file_globals.header))
 	{
-		/* port: format 4 (docs/shared_maps.md): a map whose tag data has a recipe (its shared reference version 3) */
+		/* port: format 4 (docs/shared_maps.md): a map whose tag data has a recipe (its shared reference version 3); in
+		revision 2 (version 4) the tag area isn't in the map at all, the recipe writes every word of it */
 		unsigned long const *reference = (unsigned long const *)((byte const *)&cache_file_globals.header + 0x700);
-		boolean recipe = reference[0] == 'shrd' && reference[1] == 3 && reference[0x6C / 4];
+		boolean recipe = reference[0] == 'shrd' && (reference[1] == 3 || reference[1] == 4) && reference[0x6C / 4];
+		boolean stored = !recipe || reference[1] == 3;
 
 		tag_cache_base_address = physical_memory_get_tag_cache_base_address();
 		if (cache_file_header_verify(&cache_file_globals.header, scenario_name, TRUE))
@@ -1550,14 +1555,19 @@ long scenario_tags_load(
 						cache_file_globals.header.tag_data_size = TAG_CACHE_SIZE;
 				}
 			}
-			csmemset(tag_cache_base_address, 0xCD, 0x01600000);
-			cache_file_read(
-				NONE,
-				cache_file_globals.header.tag_data_offset,
-				cache_file_globals.header.tag_data_size,
-				tag_cache_base_address,
-				&read_complete,
-				TRUE);
+			/* (a version 4 map's recipe writes every word: no fill to look for) */
+			if (stored)
+				csmemset(tag_cache_base_address, 0xCD, 0x01600000);
+			if (stored)
+				cache_file_read(
+					NONE,
+					cache_file_globals.header.tag_data_offset,
+					cache_file_globals.header.tag_data_size,
+					tag_cache_base_address,
+					&read_complete,
+					TRUE);
+			else
+				read_complete = TRUE;
 			while (!read_complete)
 			{
 				SwitchToThread();
