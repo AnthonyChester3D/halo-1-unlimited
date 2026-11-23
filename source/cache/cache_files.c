@@ -1566,6 +1566,10 @@ long scenario_tags_load(
 	}
 	if (cache_file_open(stripped_scenario_name, &cache_file_globals.header))
 	{
+		/* port: format 4 (docs/shared_maps.md): a map whose tag data has a recipe (its shared reference version 3) */
+		unsigned long const *reference = (unsigned long const *)((byte const *)&cache_file_globals.header + 0x700);
+		boolean recipe = reference[0] == 'shrd' && reference[1] == 3 && reference[0x6C / 4];
+
 		tag_cache_base_address = physical_memory_get_tag_cache_base_address();
 		if (cache_file_header_verify(&cache_file_globals.header, scenario_name, TRUE))
 		{
@@ -1576,7 +1580,7 @@ long scenario_tags_load(
 				long rest = cache_file_globals.header.file_length -
 					(cache_file_globals.header.tag_data_offset + cache_file_globals.header.tag_data_size);
 
-				if (rest > 0 && rest < 0x800)
+				if (rest > 0 && rest < 0x800 && !recipe)
 				{
 					cache_file_globals.header.tag_data_size += rest;
 					if (cache_file_globals.header.tag_data_size > TAG_CACHE_SIZE)
@@ -1605,6 +1609,25 @@ long scenario_tags_load(
 				cache_file_close();
 
 				return NONE;
+			}
+			/* port: format 4: the words the recipe names written over the zeros the map holds there, from the stock
+			tag pool (stocktags.shared), before anything reads the tags (cache_files_windows.c) */
+			if (recipe)
+			{
+#if defined(HALO_XBOX_TARGET)
+				extern boolean cache_file_tags_rebuild(struct cache_file_header const *header, char const *scenario_name,
+					byte *tags, long tag_size);
+
+				if (!cache_file_tags_rebuild(&cache_file_globals.header, scenario_name, tag_cache_base_address,
+					cache_file_globals.header.tag_data_size))
+#endif
+				{
+					error(_error_silent, "the cache file '%s''s tag data couldn't be rebuilt from the stock tag pool",
+						scenario_name);
+					cache_file_close();
+
+					return NONE;
+				}
 			}
 			if (!cache_file_tag_header_verify(
 				tag_cache_base_address,
