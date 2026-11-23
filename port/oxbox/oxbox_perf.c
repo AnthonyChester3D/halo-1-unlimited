@@ -4482,9 +4482,10 @@ static struct
 	__int64 menu_start, menu_frame;          /* the main menu's load after it: its start, its first frame */
 } between;
 
-/* the first frame after a load: its line */
+/* the first frame after a load: its line (probe_marks: that frame's steps, main.c, when there are NUMBER_OF_MARKS) */
 static void load_finish(
-	void)
+	void const *probe_marks,
+	long mark_count)
 {
 	__int64 now = load_now(), *at = load.at;
 	__int64 tags_end = at[_oxbox_perf_load_tags_rebuilt] ? at[_oxbox_perf_load_tags_rebuilt] : at[_oxbox_perf_load_tags_read];
@@ -4512,6 +4513,28 @@ static void load_finish(
 		}
 		strncpy(between.from, load.map, sizeof(between.from) - 1);
 		between.menu_start = between.menu_frame = 0;
+	}
+	/* (v1.180: "to the first frame" in its parts: from the set up to the frame's start, then the frame's own steps) */
+	if (probe_marks && mark_count == NUMBER_OF_MARKS)
+	{
+		LARGE_INTEGER const *m = probe_marks;
+		__int64 step[NUMBER_OF_MARKS];
+		long index;
+
+		for (index = 0; index < NUMBER_OF_MARKS; index++)
+		{
+			step[index] = m[index].QuadPart;
+			if (index && step[index] < step[index - 1])
+				step[index] = step[index - 1];
+		}
+		platform_log("load: %s's first frame: %ld ms from its set up to the frame's start; the frame: input %ld, network %ld, "
+			"menus %ld, network end %ld, ticks %ld, camera %ld, drawing %ld, gpu wait %ld, present %ld, after %ld ms",
+			load.map[0] ? load.map : "?", load_ms(at[_oxbox_perf_load_setup], step[_mark_start]),
+			load_ms(step[_mark_start], step[_mark_input]), load_ms(step[_mark_input], step[_mark_network]),
+			load_ms(step[_mark_network], step[_mark_menus]), load_ms(step[_mark_menus], step[_mark_network_end]),
+			load_ms(step[_mark_network_end], step[_mark_ticks]), load_ms(step[_mark_ticks], step[_mark_camera]),
+			load_ms(step[_mark_camera], step[_mark_drawing]), load_ms(step[_mark_drawing], step[_mark_gpu_wait]),
+			load_ms(step[_mark_gpu_wait], step[_mark_present]), load_ms(step[_mark_present], now));
 	}
 	platform_log("load: %s: %ld ms: copied into the cache %ld ms (%ld file%s), the loading animation's end %ld ms, "
 		"the rest before the tags %ld ms; tags read %ld ms, rebuilt %ld ms, checked %ld ms; first BSP %ld ms; "
@@ -4543,7 +4566,7 @@ static void perf_frame(
 
 	oxbox_perf_frames++;
 	if (load.state == 2)
-		load_finish();
+		load_finish(probe_marks, mark_count);
 	if (sweep.on)
 		sweep_menu_frame();
 

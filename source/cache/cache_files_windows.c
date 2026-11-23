@@ -1278,7 +1278,7 @@ static int oxbox_shared_cache_drive(unsigned long size)
 	create_link(&link, &target_string);
 	if (GetFileAttributesA("q:\\") == (DWORD)-1)
 	{
-		platform_log("shared: cache drive %c: (partition %d) doesn't mount: no second cache drive", "XYZ"[drive], 3 + drive);
+		platform_log("shared: cache drive %c: (partition %d) doesn't mount: none", "XYZ"[drive], 3 + drive);
 		return 0;
 	}
 	/* (wiped before it's listed as ours: a power cut between leaves its old game to make its cache again) */
