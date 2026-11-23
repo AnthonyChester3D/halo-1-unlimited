@@ -663,3 +663,80 @@ int download(char const *url, unsigned long most, download_write_t put, void *wr
 	text_print(error, 256, "too many redirects");
 	return 1;
 }
+
+/* body (size bytes) POSTed to url (no redirects followed); the answer's first line or so into answer (answer_room
+bytes, 0-terminated): 0 when the server answered 200, else why not in error (256 bytes) */
+int download_post(char const *url, void const *body, unsigned long size, char *answer, unsigned long answer_room,
+	struct download_report const *report, char *error)
+{
+	static struct url u;
+	static struct connection c;
+	static char head[MOST_HEADER + 1];
+	char request[MOST_URL + 512], *end_of_head;
+	unsigned long have = 0, sent = 0;
+	int status = 0, result = 1;
+
+	answer[0] = 0;
+	if (parse_url(url, &u))
+	{
+		text_print(error, 256, "not an address it can send to: %.120s", url);
+		return 1;
+	}
+	if (connection_open(&c, u.host, u.port, u.tls, report, error))
+		return 1;
+	text_print(request, sizeof(request), "POST %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n"
+		"Content-Type: application/octet-stream\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n", u.path, u.host,
+		USER_AGENT, size);
+	if (connection_write(&c, request, strlen(request)))
+	{
+		text_print(error, 256, "couldn't send to %s", u.host);
+		goto done;
+	}
+	while (sent < size)
+	{
+		unsigned long part = size - sent > 16384 ? 16384 : size - sent;
+		if (connection_write(&c, (char const *)body + sent, part))
+		{
+			text_print(error, 256, "the sending stopped after %lu KB", sent / 1024);
+			goto done;
+		}
+		sent += part;
+		if (report && report->progress)
+			report->progress(report->context, sent, size);
+	}
+	/* the answer: its status, and what it says */
+	for (;;)
+	{
+		int n;
+		head[have] = 0;
+		if ((end_of_head = strstr(head, "\r\n\r\n")) != NULL && strlen(end_of_head + 4) >= 2)
+			break;
+		if (have == MOST_HEADER)
+			break;
+		n = connection_read(&c, (unsigned char *)head + have, MOST_HEADER - have);
+		if (n <= 0)
+			break;
+		have += (unsigned long)n;
+	}
+	if (sscanf(head, "HTTP/%*d.%*d %d", &status) != 1)
+	{
+		text_print(error, 256, "%s didn't answer", u.host);
+		goto done;
+	}
+	if ((end_of_head = strstr(head, "\r\n\r\n")) != NULL)
+	{
+		char *eol;
+		text_print(answer, answer_room, "%s", end_of_head + 4);
+		if ((eol = strpbrk(answer, "\r\n")) != NULL)
+			*eol = 0;
+	}
+	if (status != 200)
+	{
+		text_print(error, 256, "%s answered %d: %.80s", u.host, status, answer);
+		goto done;
+	}
+	result = 0;
+done:
+	connection_close(&c);
+	return result;
+}

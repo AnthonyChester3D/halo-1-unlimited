@@ -74,14 +74,20 @@ static void log_open(void)
 	if (log_opened)
 		return;
 	log_opened = 1;
-	log_file = CreateFileA("d:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-		FILE_ATTRIBUTE_NORMAL, NULL);
-	/* (D: can't be written, as a disc or an ISO: T:, the game's title data on the hard drive, E:\TDATA\4c4a4855) */
-	if (log_file == INVALID_HANDLE_VALUE)
+	/* d:, else (D: can't be written, as a disc or an ISO) T:, the game's title data on the hard drive, E:\TDATA\4c4a4855.
+	The last boot's log is kept beside it: after a crash it's the one that tells, and Send logs sends it too */
 	{
-		log_file = CreateFileA("T:\\oxbox_log.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-			FILE_ATTRIBUTE_NORMAL, NULL);
-		if (log_file != INVALID_HANDLE_VALUE)
+		static char path[] = "d:\\oxbox_log.txt", previous[] = "d:\\oxbox_log_previous.txt";
+		int k;
+
+		for (k = 0; k < 2 && log_file == INVALID_HANDLE_VALUE; k++)
+		{
+			path[0] = previous[0] = "dT"[k];
+			DeleteFileA(previous);
+			MoveFileA(path, previous);
+			log_file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		}
+		if (k == 2 && log_file != INVALID_HANDLE_VALUE)
 		{
 			static const char note[] = "oxbox: D: can't be written (a disc or an ISO?): this log is T:\\oxbox_log.txt "
 				"(E:\\TDATA\\4c4a4855), debug.txt beside it\r\n";

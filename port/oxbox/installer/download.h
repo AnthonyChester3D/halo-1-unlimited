@@ -33,4 +33,9 @@ typedef int (*download_write_t)(void *context, unsigned char const *data, unsign
 int download(char const *url, unsigned long most, download_write_t put, void *write_context,
 	struct download_report const *report, unsigned long *size, char *error);
 
+/* body (size bytes) POSTed to url, an answer's first line into answer (answer_room bytes): 0 when the server answered 200,
+else why not in error (256 bytes). The log uploads (logs.c) */
+int download_post(char const *url, void const *body, unsigned long size, char *answer, unsigned long answer_room,
+	struct download_report const *report, char *error);
+
 #endif
