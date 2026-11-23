@@ -120,6 +120,9 @@ symbols in this file:
 #include "input/input_abstraction.h"
 #include "interface/player_ui.h"
 #include "main/console.h"
+#if defined(OXBOX_SHOWCASE)
+#include "oxbox_showcase.h"
+#endif
 
 /* ---------- constants */
 
@@ -1134,6 +1137,13 @@ static void input_flush_rumble(
 		game_time_get_paused() ||
 		!game_in_progress();
 	short gamepad_index;
+
+#if defined(OXBOX_SHOWCASE)
+	/* oxbox: none in the showcase screensaver or the perf sweep's runs (they go through it): nobody's holding the
+	controller (v1.173; a sweep's deathless player, shot at, shook a controller off the desk onto its buttons) */
+	if (showcase_active())
+		suppress_rumble = TRUE;
+#endif
 
 	for (gamepad_index = 0; gamepad_index < MAXIMUM_GAMEPADS; gamepad_index++)
 	{
