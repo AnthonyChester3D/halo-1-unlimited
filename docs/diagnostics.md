@@ -15,6 +15,7 @@ and oxbox_entry.c:
 | `co-op: this map's scripts know co-op` / `name player0 alone` | the first co-op frame of a campaign map: whether the other players follow player0 (PC maps) or the map's own scripts place them (Bungie's) | none |
 | `co-op: a script moved a player to (x y z): N other players follow` | a script teleports a player in co-op, on a map that names player0 alone | none |
 | `shared: <map> opened with <name>.shared` / `... isn't cached` / `... neither beside it nor in the folder above` | a map drawing on a shared file (docs/shared_maps.md) opens, or can't | none |
+| `load: <map>: N ms: copied into the cache ..., the loading animation's end ..., tags read ..., rebuilt ..., checked ...; first BSP ...; set up ...; objects and AI placed ...; to the first frame ...` | each map load, once its first frame is drawn, with the perf log or the perf sweep on (v1.178; the marks in game.c, cache_files.c, scenario.c). A map a lobby copied before its game started shows no copy here | off: a call that finds no log at 10 points of a load; on: the log's |
 | `pools: <pool> used/max ...` | every 10 s of a map, with opence.ini `log_pools = 1` | off: one test a frame; on: 1.5 KB and a walk of the pools every 10 s |
 
 Memory: the code and its tables take about 5 KB of the image (measured in xemu on Precipice: 644 KB free in v1.89,

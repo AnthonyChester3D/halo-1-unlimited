@@ -68,6 +68,27 @@ struct oxbox_perf_hooks
 	/* (v1.138) the game crashed or halted (why: "crash", "halt"), its report written: a sweep under way restarts H1U
 	(the run written "crashed" at the next boot) rather than leave the console stopped; returns when it doesn't */
 	void (*sweep_fatal)(char const *why);
+	/* (v1.178) a map load's steps (enum oxbox_perf_load_step; name: the map's, at _oxbox_perf_load_begin): the log's
+	"load:" line, once the first frame is drawn */
+	void (*load)(long step, char const *name);
+};
+
+/* a map load's steps, each the end of one (game.c, cache_files.c, scenario.c): the copies into the cache (a map, its
+shared files) and the loading animation's finish after each, the tags read, rebuilt (format 4), checked, the scenario
+(its first BSP), the game's systems set up for the map, its objects and AI placed; the first frame drawn ends it */
+enum oxbox_perf_load_step
+{
+	_oxbox_perf_load_copy_begin,
+	_oxbox_perf_load_copy_copied,
+	_oxbox_perf_load_copy_end,
+	_oxbox_perf_load_begin,
+	_oxbox_perf_load_tags_read,
+	_oxbox_perf_load_tags_rebuilt,
+	_oxbox_perf_load_tags_checked,
+	_oxbox_perf_load_scenario,
+	_oxbox_perf_load_initialized,
+	_oxbox_perf_load_setup,
+	NUMBER_OF_OXBOX_PERF_LOAD_STEPS
 };
 
 /* the perf sweep's kinds of run (sweep_next) and how a run stopped (sweep_ended) */
@@ -172,6 +193,10 @@ enum
 extern struct oxbox_perf_hooks *oxbox_perf;
 
 #define OXBOX_PERF_MARK(step) { if (oxbox_perf) oxbox_perf->mark(step); }
+/* (a map load's marks call this, oxbox_sdk.c: one call each, not the test inlined, as the resident image is tight) */
+void oxbox_perf_load_mark(long step, char const *name);
+#define OXBOX_PERF_LOAD(step) oxbox_perf_load_mark(step, 0);
+#define OXBOX_PERF_LOAD_NAMED(step, name) oxbox_perf_load_mark(step, name);
 #define OXBOX_PERF_OBJECT(type_or_event) { if (oxbox_perf) oxbox_perf->object(type_or_event); }
 
 static __inline__ unsigned long oxbox_perf_cycles(void)

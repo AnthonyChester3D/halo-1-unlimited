@@ -194,6 +194,11 @@ symbols in this file:
 #include "sound/sound_manager.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
+#if defined(HALO_XBOX_TARGET)
+#include "oxbox_perf.h" /* (a map load's steps timed for the perf log, v1.178) */
+#else
+#define OXBOX_PERF_LOAD(step)
+#endif
 
 /* ---------- constants */
 
@@ -1210,6 +1215,7 @@ boolean scenario_load(
 				tag_loaded(GAME_GLOBALS_TAG, "globals\\globals"));
 			if (scenario_switch_structure_bsp(0))
 				result = TRUE;
+			OXBOX_PERF_LOAD(_oxbox_perf_load_scenario)
 		}
 		else
 		{

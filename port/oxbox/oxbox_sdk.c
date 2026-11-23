@@ -556,6 +556,12 @@ short oxbox_menus_description_frame(long list_tag_index, short index)
 
 struct oxbox_perf_hooks *oxbox_perf;
 
+void oxbox_perf_load_mark(long step, char const *name)
+{
+	if (oxbox_perf)
+		oxbox_perf->load(step, name);
+}
+
 void oxbox_perf_load(void)
 {
 	struct oxbox_perf_hooks *oxbox_perf_start(void);
@@ -725,16 +731,15 @@ static DWORD WINAPI boot_watch_thread(void *unused)
 		{
 			char const *detail = oxbox_boot_detail;
 
-			platform_log("boot watch: %lu s in, no frame drawn yet (the log's writer stood still %lu s); last step: %s%s%.64s",
+			platform_log("boot watch: %lu s in, no frame drawn yet (the log writer still %lu s); last step: %s%s%.64s",
 				seconds, writer_still, oxbox_boot_step, detail ? ": " : "", detail ? detail : "");
 			oxbox_log_flush();
 		}
 		if (main_still == 4 || main_still == 15 || writer_still == 4 || writer_still == 15)
 		{
-			platform_log("boot watch: %lu s in, the game's loop has stood still %lu s, the log's writer %lu s; last step: %s;"
-				" a movie %s, a loading screen %s; %lu KB free", seconds, main_still, writer_still, oxbox_boot_step,
-				bink_playback_in_progress() ? "plays" : "doesn't play", progress_bar_is_active() ? "up" : "not up",
-				free_kb());
+			platform_log("boot watch: %lu s in, the loop still %lu s, the log writer %lu s; last step: %s; movie %s, "
+				"loading screen %s; %lu KB free", seconds, main_still, writer_still, oxbox_boot_step,
+				bink_playback_in_progress() ? "yes" : "no", progress_bar_is_active() ? "yes" : "no", free_kb());
 			oxbox_log_flush();
 		}
 	}

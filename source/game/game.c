@@ -216,6 +216,10 @@ enum
 	game_tick_player_effect_section_step = _oxbox_perf_tick_player_effect,
 };
 #endif
+#ifndef OXBOX_PERF_LOAD
+#define OXBOX_PERF_LOAD(step)
+#define OXBOX_PERF_LOAD_NAMED(step, name)
+#endif
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -746,6 +750,7 @@ boolean game_load(
 
 	random_seed_debug_log(TRUE);
 	csmemcpy(&game_globals->options, options, sizeof(*options));
+	OXBOX_PERF_LOAD_NAMED(_oxbox_perf_load_begin, options->map_name)
 	if (scenario_load(options->map_name))
 	{
 		game_globals->map_loaded = TRUE;
@@ -817,6 +822,7 @@ void game_initialize_for_new_map(
 	hs_initialize_for_new_map();
 	recorded_animations_initialize_for_new_map();
 	cheats_initialize_for_new_map();
+	OXBOX_PERF_LOAD(_oxbox_perf_load_initialized)
 
 	game_globals->active = TRUE;
 	objects_place();
@@ -826,6 +832,7 @@ void game_initialize_for_new_map(
 	from now on go elsewhere, port/linux/game/network_objects.c) */
 	network_objects_placed();
 	ui_widgets_safe_to_load(TRUE);
+	OXBOX_PERF_LOAD(_oxbox_perf_load_setup)
 #if defined(OXBOX_MEMPROF)
 	{
 		void oxbox_memprof_report(const char *label);
@@ -1006,6 +1013,7 @@ void game_precache_new_map(
 					cache_files_precache_is_copying_map(map_name));
 			ui_widget_load_progress_widget();
 			progress_bar_begin(global_scenario_index != NONE);
+			OXBOX_PERF_LOAD(_oxbox_perf_load_copy_begin)
 			do
 			{
 				map_status = cache_files_precache_map_status(
@@ -1045,6 +1053,7 @@ void game_precache_new_map(
 					display_error_damaged_media();
 				}
 			}
+			OXBOX_PERF_LOAD(_oxbox_perf_load_copy_copied)
 			/* oxbox: let the loading animation play out (progress_bar.c) */
 			if (map_status != _cached_map_file_failed)
 			{
@@ -1061,6 +1070,7 @@ void game_precache_new_map(
 				progress_bar_oxbox_set_finishing(FALSE);
 			}
 #endif
+			OXBOX_PERF_LOAD(_oxbox_perf_load_copy_end)
 			progress_bar_end();
 			ui_widgets_close_all();
 			if (map_status == _cached_map_file_failed)

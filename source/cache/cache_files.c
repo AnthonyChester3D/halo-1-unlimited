@@ -138,6 +138,11 @@ symbols in this file:
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
 #include "cache_file_formats.h" /* port: CUSTOM_EDITION_TAG_CACHE_BYTES */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#if defined(HALO_XBOX_TARGET)
+#include "oxbox_perf.h" /* (a map load's steps timed for the perf log, v1.178) */
+#else
+#define OXBOX_PERF_LOAD(step)
+#endif
 
 #ifdef HALO_XBOX_TARGET
 /* (Halo Universal's folder maps and map sharing: port/linux/game/hmp_maps.c, hmp_share.c) */
@@ -1568,6 +1573,7 @@ long scenario_tags_load(
 
 				return NONE;
 			}
+			OXBOX_PERF_LOAD(_oxbox_perf_load_tags_read)
 			/* port: format 4: the words the recipe names written over the zeros the map holds there, from the stock
 			tag pool (stocktags.shared), before anything reads the tags (cache_files_windows.c) */
 			if (recipe)
@@ -1586,6 +1592,7 @@ long scenario_tags_load(
 
 					return NONE;
 				}
+				OXBOX_PERF_LOAD(_oxbox_perf_load_tags_rebuilt)
 			}
 			if (!cache_file_tag_header_verify(
 				tag_cache_base_address,
@@ -1668,6 +1675,7 @@ long scenario_tags_load(
 			if (_stricmp(cache_file_globals.header.name, "ui"))
 				cache_file_lend_free_tag_memory();
 #endif
+			OXBOX_PERF_LOAD(_oxbox_perf_load_tags_checked)
 			result = cache_file_globals.tag_header->scenario_tag_index;
 		}
 		/* port: a map refused is closed for the next to open */

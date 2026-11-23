@@ -1004,8 +1004,8 @@ static void slot_tick(struct slot *c, u32 now) {
         char w[16], *o = w;
         if (c->nst > 1) { o = put_u(o, (u32)c->nst); *o++ = 'x'; }
         o = put_u(o, per); *o = 0;
-        lg("host: player %d: %u of %u bytes sent, %u KB/s, %u frames, window %s KB, ping %u ms; thread %u passes (%u busy, "
-           "%u woken, longest gap %u ms), longest wait for the client %u ms", k, sent, c->total, (sent - c->beat_sent) / (now - c->beat),
+        lg("host: player %d: %u/%u bytes sent, %u KB/s, %u frames, window %s KB, ping %u ms; thread %u passes (%u busy, "
+           "%u woken, gap %u ms), client wait %u ms", k, sent, c->total, (sent - c->beat_sent) / (now - c->beat),
            g_ticks - c->beat_ticks, w, c->ping, g_ws.passes, g_ws.busy, g_ws.woke, g_ws.gap, c->wait_max);
         g_ws.passes = g_ws.busy = g_ws.woke = g_ws.gap = 0; c->wait_max = 0;
         c->beat = now; c->beat_sent = sent; c->beat_ticks = g_ticks;
@@ -2126,8 +2126,8 @@ static void cl_recv(u32 now) {
             lg("client: %u%% (%u bytes) at %u KB/s", g_cl.quarter * 25, done, ms ? g_cl.got_now / ms : 0);
         }
         if (now - g_cl.beat >= BEAT_MS) {
-            lg("client: %u of %u bytes, %u KB/s, %u frames; thread %u passes (%u busy, %u woken, longest gap %u ms), "
-               "longest wait for data %u ms, %u acks; disk %u ms, flush %u ms", done, g_cl.total,
+            lg("client: %u/%u bytes, %u KB/s, %u frames; thread %u passes (%u busy, %u woken, gap %u ms), "
+               "data wait %u ms, %u acks; disk %u ms, flush %u ms", done, g_cl.total,
                (g_cl.got_now - g_cl.beat_got) / (now - g_cl.beat), g_ticks - g_cl.beat_ticks, g_ws.passes, g_ws.busy,
                g_ws.woke, g_ws.gap, g_job.gap_max, g_job.acks, g_job.wr_max, g_job.fl_max);
             g_ws.passes = g_ws.busy = g_ws.woke = g_ws.gap = 0; g_job.gap_max = g_job.acks = g_job.wr_max = g_job.fl_max = 0;

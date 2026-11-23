@@ -4403,6 +4403,102 @@ static void window_reset(
 
 /* ---------- the hook */
 
+/* ---------- a map load's steps (v1.178): the "load:" line, how long each step of a map's load took, once its first
+frame is drawn (the marks: game.c game_precache_new_map, game_load and game_initialize_for_new_map, cache_files.c
+scenario_tags_load, scenario.c scenario_load) */
+
+static struct
+{
+	long state;                              /* 0: no load under way; 1: loading; 2: set up, the first frame to come */
+	__int64 start, at[NUMBER_OF_OXBOX_PERF_LOAD_STEPS];
+	__int64 copy_from, copied_at, copying, finishing;
+	long copies;
+	char map[64];
+} load;
+
+static __int64 load_now(
+	void)
+{
+	LARGE_INTEGER counter;
+
+	QueryPerformanceCounter(&counter);
+	return counter.QuadPart;
+}
+
+static void perf_load(
+	long step,
+	char const *name)
+{
+	__int64 now = load_now();
+
+	if (step < 0 || step >= NUMBER_OF_OXBOX_PERF_LOAD_STEPS)
+		return;
+	/* (a load begins at its first copy, or at the tags when nothing's copied) */
+	if (load.state != 1 && (step == _oxbox_perf_load_copy_begin || step == _oxbox_perf_load_begin))
+	{
+		memset(&load, 0, sizeof(load));
+		load.state = 1;
+		load.start = now;
+	}
+	if (load.state != 1)
+		return;
+	if (step == _oxbox_perf_load_copy_begin)
+	{
+		load.copy_from = now;
+		load.copies++;
+	}
+	else if (step == _oxbox_perf_load_copy_copied && load.copy_from)
+	{
+		load.copying += now - load.copy_from;
+		load.copied_at = now;
+		load.copy_from = 0;
+	}
+	else if (step == _oxbox_perf_load_copy_end && load.copied_at)
+	{
+		load.finishing += now - load.copied_at;
+		load.copied_at = 0;
+	}
+	else if (step == _oxbox_perf_load_begin && name)
+	{
+		strncpy(load.map, name, sizeof(load.map) - 1);
+	}
+	load.at[step] = now;
+	if (step == _oxbox_perf_load_setup)
+		load.state = 2;
+}
+
+/* milliseconds from one step's end to another's (-1: one didn't come) */
+static long load_ms(
+	__int64 from,
+	__int64 to)
+{
+	return from && to && to >= from ? (long)((to - from) * 1000 / perf.frequency) : -1;
+}
+
+/* the first frame after a load: its line */
+static void load_finish(
+	void)
+{
+	__int64 now = load_now(), *at = load.at;
+	__int64 tags_end = at[_oxbox_perf_load_tags_rebuilt] ? at[_oxbox_perf_load_tags_rebuilt] : at[_oxbox_perf_load_tags_read];
+	long before = load_ms(load.start, at[_oxbox_perf_load_begin]);
+	long copying = (long)(load.copying * 1000 / perf.frequency), finishing = (long)(load.finishing * 1000 / perf.frequency);
+
+	load.state = 0;
+	platform_log("load: %s: %ld ms: copied into the cache %ld ms (%ld file%s), the loading animation's end %ld ms, "
+		"the rest before the tags %ld ms; tags read %ld ms, rebuilt %ld ms, checked %ld ms; first BSP %ld ms; "
+		"set up %ld ms; objects and AI placed %ld ms; to the first frame %ld ms",
+		load.map[0] ? load.map : "?", load_ms(load.start, now), copying, load.copies, load.copies == 1 ? "" : "s",
+		finishing, before >= 0 ? before - copying - finishing : -1,
+		load_ms(at[_oxbox_perf_load_begin], at[_oxbox_perf_load_tags_read]),
+		at[_oxbox_perf_load_tags_rebuilt] ? load_ms(at[_oxbox_perf_load_tags_read], at[_oxbox_perf_load_tags_rebuilt]) : 0,
+		load_ms(tags_end, at[_oxbox_perf_load_tags_checked]),
+		load_ms(at[_oxbox_perf_load_tags_checked], at[_oxbox_perf_load_scenario]),
+		load_ms(at[_oxbox_perf_load_scenario], at[_oxbox_perf_load_initialized]),
+		load_ms(at[_oxbox_perf_load_initialized], at[_oxbox_perf_load_setup]),
+		load_ms(at[_oxbox_perf_load_setup], now));
+}
+
 static void perf_frame(
 	void const *probe_marks,
 	long mark_count)
@@ -4418,6 +4514,8 @@ static void perf_frame(
 	unsigned long hook_start = cycles_now();
 
 	oxbox_perf_frames++;
+	if (load.state == 2)
+		load_finish();
 	if (sweep.on)
 		sweep_menu_frame();
 
@@ -4631,6 +4729,7 @@ struct oxbox_perf_hooks *oxbox_perf_start(
 
 	/* (the section's zero-filled part: the kernel gives fresh pages, but to be sure) */
 	memset(&perf, 0, sizeof(perf));
+	perf_hooks.load = perf_load;
 	perf.slow_frame_ms = 34;
 	perf.gpu_sample_ms = 1;
 	perf.cycle_frequency = 733333333.0;

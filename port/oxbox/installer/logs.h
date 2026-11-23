@@ -6,7 +6,7 @@ and sent to the log uploads' address, when the player chooses to: nothing is eve
 #include "download.h"
 
 /* where they go (developer.ini's logs_url takes its place; empty: the menu item isn't shown) */
-#define LOGS_DEFAULT_URL ""
+#define LOGS_DEFAULT_URL "https://h1u-logs.h1u.workers.dev/v1/logs"
 
 #define LOGS_SOURCE_GAME 1
 #define LOGS_SOURCE_INSTALLER 2
