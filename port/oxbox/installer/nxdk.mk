@@ -7,7 +7,7 @@ MONOCYPHER = $(CURDIR)/../../third_party/monocypher
 MBEDTLS = $(CURDIR)/../../third_party/mbedtls
 SRCS = $(CURDIR)/main.c $(CURDIR)/package.c $(CURDIR)/packs.c $(CURDIR)/packart.c $(CURDIR)/pictures.c $(CURDIR)/screen.c $(CURDIR)/sha256.c \
 	$(CURDIR)/stockmaps.c $(CURDIR)/mapstream.c $(CURDIR)/consolidate.c $(CURDIR)/scancache.c \
-	$(CURDIR)/download.c $(CURDIR)/library.c $(MONOCYPHER)/monocypher.c $(MONOCYPHER)/monocypher-ed25519.c
+	$(CURDIR)/download.c $(CURDIR)/library.c $(CURDIR)/logs.c $(MONOCYPHER)/monocypher.c $(MONOCYPHER)/monocypher-ed25519.c
 NXDK_SDL = y
 KEYS ?= $(CURDIR)/keys.txt
 # (and the map library's catalog's: library_keys.txt, LIBRARY_KEYS=other.txt to test with a key of your own)

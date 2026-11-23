@@ -36,6 +36,7 @@ NAS's; with an allow_unsigned line in it, the test packages there (not signed) a
 
 #include "download.h"
 #include "library.h"
+#include "logs.h"
 #include "package.h"
 #include "packs.h"
 #include "pictures.h"
@@ -91,6 +92,7 @@ static int developer;              /* (developer.ini beside the installer says d
 static char developer_url[512];    /* (its update_url: a test update location, as update_url.txt's) */
 static int developer_unsigned;     /* (its allow_unsigned = 1) */
 static char developer_library[512]; /* (its library_url: a test map library's catalog; allow_unsigned counts for it too) */
+static char developer_logs[512];    /* (its logs_url: where Send logs sends them, for testing) */
 static int quiet;                  /* (a player's screen runs an operation: its details only in the log: say_in) */
 static char task_title[80];        /* (what that screen says it's doing: heading) */
 static int stepping;               /* (step: a line for the player, shown under the title) */
@@ -5512,14 +5514,54 @@ static void rebuild_original(struct halo *h)
 		task_wait();
 }
 
+/* ---- Send logs (logs.c; docs/log_uploads.md): the player's choice, each time ---- */
+
+static char const *logs_url(void)
+{
+	return developer_logs[0] ? developer_logs : LOGS_DEFAULT_URL;
+}
+
+static void send_logs(struct halo *h)
+{
+	struct menu_item sure[2] = {{"Send them", NULL, 0}, {"Back", NULL, 0}};
+	struct download_report report = {library_step, library_progress, "Sending"};
+	char code[9], error[256], text[400];
+	unsigned long kilobytes;
+	int files;
+	if (menu("Send your logs?", "Sends Halo 1 Unlimited's logs to its developers, so they can see what went wrong: what "
+		"the game and this installer did, the maps played, your profile names and your Xbox's network addresses. "
+		"Nothing else on your Xbox is sent, and they're deleted after 30 days.", sure, 2, 0) != 0)
+		return;
+	check_wait();                      /* (one connection at a time: the update check's is done) */
+	player_heading("Sending your logs");
+	screen_text(MENU_TOP, 1, COLOUR_GREY, "Packing the logs and sending them...");
+	screen_show();
+	if (logs_send(logs_url(), h ? h->path : NULL, LOG_PATH, package_ok ? package.build : 0, INSTALLER_VERSION, code,
+		&files, &kilobytes, &report, error))
+	{
+		text_print(text, sizeof(text), "logs: not sent: %s", error);
+		log_file(text);
+		text_print(text, sizeof(text), "They couldn't be sent: %s. Is the Xbox connected to the internet?", error);
+		page("Your logs weren't sent", text);
+		return;
+	}
+	text_print(text, sizeof(text), "logs: sent, code %s (%d files, %lu KB)", code, files, kilobytes);
+	log_file(text);
+	text_print(text, sizeof(text), "Your code is %.4s-%.4s\n\nTell the Halo 1 Unlimited developers this code, and they'll "
+		"find your logs with it.\n\n(%d files, %lu KB)", code, code + 4, files, kilobytes);
+	page("Your logs were sent", text);
+}
+
 static void player_more(struct halo *h)
 {
-	struct menu_item items[3] = {
+	struct menu_item items[4] = {
 		{"Rebuild original Halo", "Your original Halo, made again exactly as it came from Halo 1 Unlimited's maps, in a "
 			"folder of its own (about half an hour). Halo 1 Unlimited isn't changed.", 0},
+		{"Send logs", "Something went wrong? Send Halo 1 Unlimited's logs to its developers (you choose each time: "
+			"nothing is ever sent otherwise).", 0},
 		{"About", NULL, 0},
 		{"Back", NULL, 0}};
-	int k, i, original = 0;
+	int k, i, original = 0, count = 4, logs = 1;
 	char about[400];
 	for (i = 0; i < halo_count; i++)
 		if (halos[i].state == RETAIL && !halos[i].unfinished)
@@ -5527,8 +5569,23 @@ static void player_more(struct halo *h)
 	if (original)
 		items[0].about = "Your original Halo is still on your Xbox: there's nothing to rebuild.";
 	items[0].disabled = original || !h;
-	while ((k = menu("More", NULL, items, 3, original ? 1 : 0)) >= 0 && k != 2)
+	if (!logs_url()[0])
 	{
+		/* (no address for them yet: no item) */
+		items[1] = items[2];
+		items[2] = items[3];
+		count = 3;
+		logs = 0;
+	}
+	while ((k = menu("More", NULL, items, count, original ? 1 : 0)) >= 0 && k != count - 1)
+	{
+		if (logs && k == 1)
+		{
+			send_logs(h);
+			continue;
+		}
+		if (logs && k == 2)
+			k = 1;                 /* (About) */
 		if (k == 0 && h)
 		{
 			struct menu_item sure[2] = {{"Rebuild it", NULL, 0}, {"Back", NULL, 0}};
@@ -5619,7 +5676,8 @@ static void player_main(void)
 				actions[n++] = LIBRARY;
 			}
 			text_print(items[n].text, sizeof(items[n].text), "More...");
-			items[n].about = "Rebuild your original Halo, and about this installer.";
+			items[n].about = logs_url()[0] ? "Rebuild your original Halo, send your logs, and about this installer." :
+				"Rebuild your original Halo, and about this installer.";
 			items[n].disabled = 0;
 			actions[n++] = MORE;
 		}
@@ -5723,6 +5781,8 @@ static void developer_read(void)
 			developer_unsigned = atoi(value) != 0;
 		else if (!_stricmp(key, "library_url"))
 			text_print(developer_library, sizeof(developer_library), "%s", value);
+		else if (!_stricmp(key, "logs_url"))
+			text_print(developer_logs, sizeof(developer_logs), "%s", value);
 	}
 	fclose(file);
 	log_file(developer ? "developer.ini: developer = 1" : "developer.ini: no developer = 1");
