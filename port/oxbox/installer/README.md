@@ -161,7 +161,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `THIRD_PARTY.txt` | the notices of the code in its XBE, which it writes beside itself (`notices.h`, by `tools/mkembed.py`) |
 | `text.h` | snprintf that always ends its text (nxdk's PDCLib doesn't when it cuts it short) |
 | `mkpictures.c`, `oxpatch.c`, `stockmaps_test.c` (`stockmaps_host.h`), `consolidate_test.c` | the PC tools |
-| `tagpool.c` | a PC tool: the stock tag pool (`stocktags.shared`), the 23 stock maps' recipes (`stock_recipes.bin`, what the installer will carry) and, with `--maps`, the retail maps with recipes for testing; checks each map rebuilds as the disc's (docs/shared_maps.md, format 4; `cc -O2 -o tagpool tagpool.c -lz`, about 4 GB of memory with `--maps`). Nothing it writes may be distributed |
+| `tagpool.c` | a PC tool: the stock tag pool (`stocktags.shared`), the 23 stock maps' recipes (`stock_recipes.bin`, what the installer will carry) and, with `--maps`, the retail maps with recipes for testing; with `--pack`, a pack's pass (its shared file's tag part and its maps' recipes); checks each map rebuilds as it was (docs/shared_maps.md, format 4; `cc -O2 -o tagpool tagpool.c -lz`, about 4 GB of memory with `--maps`). Nothing it writes may be distributed |
 
 ### Signing releases (the project's owner)
 

@@ -2674,7 +2674,8 @@ void cache_files_map_file_path(
 /* ---------- oxbox: shared tag data, format 4 (docs/shared_maps.md): a map's tag data rebuilt as it loads
 
 A map with a recipe (its shared reference version 3, a recipe size) keeps only its own words of its tag data; the rest are
-zeros it's read with, written over here from the stock tag pool (stocktags.shared: 16 KB frames, each zlib or raw) before
+zeros it's read with, written over here from the stock tag pool (stocktags.shared: 16 KB frames, each zlib or raw) and
+its pack's tag part (in its pack's shared file, read as its textures are: 16 KB slices, stored as they are) before
 anything reads the tags. The rebuild's memory is the tag cache's top 64 KB, free while a map's tags load (no BSP is
 loaded yet, and the last map's lent memory was given back when it closed): the recipe read from the map's cache file
 16 KB at a time, 4 KB of the frame table, zlib's state, a packed frame and an unpacked one. */
@@ -2692,7 +2693,8 @@ enum
 struct tags_rebuild
 {
 	byte *recipe;                       /* (the recipe's piece in hand) */
-	long recipe_at, recipe_end, held, used;
+	long recipe_at, recipe_end, held, used, skip;
+	unsigned long part_at, part_size;   /* (the pack's tag part, in its shared file) */
 	HANDLE file;                        /* stocktags.shared */
 	unsigned long frames, pool_size;
 	byte *table;                        /* (the frame table's piece in hand: table_count entries from table_first) */
@@ -2700,7 +2702,7 @@ struct tags_rebuild
 	byte *packed, *unpacked, *arena;
 	unsigned long arena_used;
 	z_stream stream;
-	unsigned long frames_read, runs, inflated, read_bytes;
+	unsigned long frames_read, runs, inflated, read_bytes, slices;
 };
 
 static unsigned long tags_u32(
@@ -2733,25 +2735,35 @@ static void tags_zfree(
 	(void)opaque, (void)address;
 }
 
+/* a read of the open map's (or, with the top bit, its pack's shared file's: cache_file_read), waited for */
+static boolean tags_cache_read(
+	long at,
+	long size,
+	void *buffer)
+{
+	boolean done = FALSE;
+
+	cache_file_read(NONE, at, size, buffer, &done, TRUE);
+	while (!done)
+		SwitchToThread();
+	return done == TRUE;
+}
+
 static boolean tags_recipe_byte(
 	struct tags_rebuild *r,
 	byte *b)
 {
 	if (r->used == r->held)
 	{
+		/* (from the sector the recipe starts in: the map's cache file is read a whole sector at a time) */
 		long size = r->recipe_end - r->recipe_at < TAGS_RECIPE_BUFFER ? r->recipe_end - r->recipe_at : TAGS_RECIPE_BUFFER;
-		boolean done = FALSE;
 
-		if (size <= 0)
-			return FALSE;
-		cache_file_read(NONE, r->recipe_at, size, r->recipe, &done, TRUE);
-		while (!done)
-			SwitchToThread();
-		if (done != TRUE)
+		if (size <= 0 || !tags_cache_read(r->recipe_at, size, r->recipe))
 			return FALSE;
 		r->recipe_at += size;
 		r->held = size;
-		r->used = 0;
+		r->used = r->skip;
+		r->skip = 0;
 	}
 	*b = r->recipe[r->used++];
 	return TRUE;
@@ -2801,7 +2813,7 @@ static char const *tags_frame(
 	unsigned long at, stored;
 
 	if (frame >= r->frames)
-		return "names a frame the pool hasn't";
+		return "its recipe names a frame that isn't there";
 	if (frame < r->table_first || frame >= r->table_first + r->table_count)
 	{
 		r->table_first = frame;
@@ -2845,7 +2857,16 @@ static char const *tags_groups(
 	if (!tags_recipe_number(r, &groups))
 		return "its recipe ends too soon";
 	if (pack && groups)
-		return "its recipe draws on its pack's tag part, which this build doesn't read yet";
+	{
+		/* (the pack's shared file's header: its tag part's offset and size at 0x068, 0x06C) */
+		if (!tags_cache_read((long)0x80000000, 0x800, r->packed))
+			return "its pack's tag part can't be read";
+		r->part_at = tags_u32(r->packed + 0x68);
+		r->part_size = tags_u32(r->packed + 0x6C);
+		if (!r->part_size || (r->part_at & 0x7FF) || (r->part_size & 3) || r->part_at < 0x800 ||
+			r->part_at > (unsigned long)shared_open_length[0] || r->part_size > (unsigned long)shared_open_length[0] - r->part_at)
+			return "its pack's shared file has no tag part";
+	}
 	for (g = 0; g < groups; g++)
 	{
 		unsigned long step, count, k, size, dest = 0;
@@ -2856,7 +2877,19 @@ static char const *tags_groups(
 		if (g && !step)
 			return "its recipe's frames aren't in order";
 		frame = g ? frame + step : step;
-		if ((why = tags_frame(r, frame, &size)) != NULL)
+		if (!pack)
+			why = tags_frame(r, frame, &size);
+		else if (frame >= (r->part_size + TAGS_FRAME - 1) / TAGS_FRAME)
+			why = "its recipe names a frame that isn't there";
+		else
+		{
+			/* (a 16 KB slice of the pack's tag part, as it's stored) */
+			size = r->part_size - frame * TAGS_FRAME < TAGS_FRAME ? r->part_size - frame * TAGS_FRAME : TAGS_FRAME;
+			why = tags_cache_read((long)(0x80000000 | (r->part_at + frame * TAGS_FRAME)), (long)size, r->unpacked) ? NULL :
+				"its pack's tag part can't be read";
+			r->slices++;
+		}
+		if (why)
 			return why;
 		for (k = 0; k < count; k++)
 		{
@@ -2900,7 +2933,8 @@ boolean cache_file_tags_rebuild(
 	r.arena = r.table + TAGS_TABLE_BUFFER;
 	r.packed = r.arena + TAGS_ZLIB_ARENA;
 	r.unpacked = r.packed + TAGS_FRAME;
-	r.recipe_at = (long)recipe_offset;
+	r.recipe_at = (long)(recipe_offset & ~(CACHE_FILE_SECTOR_SIZE - 1ul));
+	r.skip = (long)(recipe_offset & (CACHE_FILE_SECTOR_SIZE - 1ul));
 	r.recipe_end = (long)(recipe_offset + recipe_size);
 	r.file = INVALID_HANDLE_VALUE;
 	map_path[0] = path[0] = 0;
@@ -2966,9 +3000,9 @@ boolean cache_file_tags_rebuild(
 		platform_log("tags: %s can't load: %s", scenario_name, why);
 		return FALSE;
 	}
-	platform_log("tags: %s rebuilt from the stock tag pool: %lu frames (%lu KB read, %lu KB unpacked), %lu runs, %lu KB of "
-		"recipe, in %lu ms", scenario_name, r.frames_read, r.read_bytes / 1024, r.inflated / 1024, r.runs, recipe_size / 1024,
-		system_milliseconds() - started);
+	platform_log("tags: %s rebuilt: %lu stock frames (%lu KB read, %lu KB unpacked), %lu of its pack's, %lu runs, %lu KB of "
+		"recipe, in %lu ms", scenario_name, r.frames_read, r.read_bytes / 1024, r.inflated / 1024, r.slices, r.runs,
+		recipe_size / 1024, system_milliseconds() - started);
 #if defined(OXBOX_TAG_RECIPE_CHECK)
 	/* (a lab build: the rebuilt tag data's CRC32 against the reference's) */
 	{
