@@ -406,8 +406,8 @@ checksum (0x064), so a map's reference to the pack names its tag part too.
 2. At a word: its 8-word window's earliest equal position in the pool, extended forward (to the pool's end at most);
    the same in the candidates (to their end at most); the longer wins, a tie goes to the pool. 16 words or more is a
    run (then the walk goes on after it); otherwise this one word is the map's own, and the walk goes on at the next word.
-3. The tag part is the candidate words some later map's run uses, in candidate order (a used candidate range is used
-   whole, so it stays contiguous); runs into the candidates are given as tag part offsets. A map's own words that went
+3. The tag part is every candidate word some later map's run uses, in candidate order (so each run's words stay
+   contiguous in it); runs into the candidates are given as tag part offsets. A map's own words that went
    into the tag part are runs in its recipe too (from the tag part), zeros in the map; its other own words stay in
    place.
 
