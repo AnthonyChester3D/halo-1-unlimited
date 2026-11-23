@@ -91,7 +91,7 @@ What it changes in the Halo folder:
 | `default.xbe` | OpenCE, made from the retail XBE |
 | `default_retail.xbe` | the retail XBE, kept as it was (from `default.xbe` on the first install) |
 | `default_old.xbe` | an XBE that was there and that the installer didn't make (a modified Halo), kept |
-| `maps\<the 23 retail maps>.map`, `maps\stock.shared`, `maps\stock.index`, `maps\stock.restore` | if you take the offer: the small maps, what they share, and how to put the originals back ([docs/shared_maps.md](../../../docs/shared_maps.md)) |
+| `maps\<the 23 retail maps>.map`, `maps\stock.shared`, `maps\stocktags.shared`, `maps\stock.index`, `maps\stock.restore` | if you take the offer: the small maps, what they share, and how to put the originals back ([docs/shared_maps.md](../../../docs/shared_maps.md)) |
 
 And in its own folder: `installer_log.txt` (what it did), `installer_last.txt` (the last install's folder),
 `opence_old.oxpk` (the package a download replaced), `installer_old.xbe` (the installer an update replaced),
@@ -153,7 +153,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `pictures.c`, `pictures.h` | the pictures, from ui.map |
 | `consolidate.c`, `consolidate.h` | consolidating a pack: what it would save (**White**, *See what consolidating would save*: it only reads), *Make its maps small* (its multiplayer maps and modded campaign), and on the game's install *Shrink maps* (full-size maps a pack's file here was made from: docs/shared_maps.md) |
 | `mapstream.c`, `mapstream.h` | a cache file read and written a piece at a time, and a map's blocks found |
-| `stockmaps_table.h` | the retail maps' sizes and CRCs and which levels' blocks go in stock.shared (made by `tools/gen_stock_table.py`) |
+| `stockmaps_table.h`, `stock_recipes.h` | the retail maps' sizes and CRCs and which levels' blocks go in stock.shared; their recipes (format 4), from which it makes `stocktags.shared` and each small map's recipe (made by `tools/gen_stock_table.py`) |
 | `stockmaps.c`, `stockmaps.h` | the stock maps swapped for small ones drawing on stock.shared, and put back exactly |
 | `packs.c`, `packs.h` | importing another Halo's maps (White): its maps' headers, names and pictures from its ui.map, its XBE's multiplayer level order |
 | `sha256.c`, `sha256.h` | SHA-256 |
@@ -161,7 +161,7 @@ PC and an install made on the Xbox from the same retail XBE and package are the 
 | `THIRD_PARTY.txt` | the notices of the code in its XBE, which it writes beside itself (`notices.h`, by `tools/mkembed.py`) |
 | `text.h` | snprintf that always ends its text (nxdk's PDCLib doesn't when it cuts it short) |
 | `mkpictures.c`, `oxpatch.c`, `stockmaps_test.c` (`stockmaps_host.h`), `consolidate_test.c` | the PC tools |
-| `tagpool.c` | a PC tool: the stock tag pool (`stocktags.shared`), the 23 stock maps' recipes (`stock_recipes.bin`, what the installer will carry) and, with `--maps`, the retail maps with recipes for testing; with `--pack`, a pack's pass (its shared file's tag part and its maps' recipes); checks each map rebuilds as it was (docs/shared_maps.md, format 4; `cc -O2 -o tagpool tagpool.c -lz`, about 4 GB of memory with `--maps`). Nothing it writes may be distributed |
+| `tagpool.c` | a PC tool: the stock tag pool (`stocktags.shared`), the 23 stock maps' recipes (`stock_recipes.bin`, which `gen_stock_table.py` bakes into `stock_recipes.h`) and, with `--maps`, the retail maps with recipes for testing; with `--pack`, a pack's pass (its shared file's tag part and its maps' recipes); checks each map rebuilds as it was (docs/shared_maps.md, format 4; `cc -O2 -o tagpool tagpool.c -lz`, about 4 GB of memory with `--maps`). Nothing it writes may be distributed |
 
 ### Signing releases (the project's owner)
 

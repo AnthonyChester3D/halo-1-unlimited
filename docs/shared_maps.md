@@ -283,7 +283,9 @@ stay where they are, so shrinking them saves nothing until deleting is in.
 - `shared_pass.py stock OUT_DIR STOCK_MAP... [--levels LEVEL...]`: stock.shared and the stock maps drawing on it.
 - `shared_pass.py [--stock STOCK_MAPS_DIR] NAME OUT_DIR MAP...`: a pack's NAME.shared and its maps.
 
-`port/oxbox/tools/gen_stock_table.py RETAIL_MAPS_DIR OUT.h`: the installer's table.
+`port/oxbox/tools/gen_stock_table.py RETAIL_MAPS_DIR OUT.h STOCK_RECIPES`: the installer's table, and beside it
+`stock_recipes.h`, the 23 retail maps' recipes (from tagpool.c's `stock_recipes.bin`), each packed. `tools/tagrecipe.py`:
+format 4's recipes in Python (read, written, the pool made as the installer makes it, a small stock map's recipe).
 
 `port/oxbox/installer/tagpool.c RETAIL_MAPS_DIR OUT_DIR [--maps]` (a PC tool, `-lz`): format 4's stock tag pool,
 stocktags.shared, the 23 stock recipes and, with `--maps`, the retail maps with recipes for testing.
@@ -443,10 +445,25 @@ reference says (`-DOXBOX_TAG_RECIPE_CHECK`).
 
 ### The installer
 
-Builds `stocktags.shared` from the player's retail maps as it builds stock.shared, and the 23 small maps with recipes
-(their tag data's words zeros). A console can't run the matcher (the pool and its index don't fit 64 MB), so the 23
-stock recipes come baked in the package (about 2.8 MB): their runs that copy from the pool's end, as it then is, are the
-pool's new words, so the recipes alone also say how the pool is made. It checks the pool's CRC32.
+Builds `stocktags.shared` from the player's retail maps as it builds stock.shared, and the 23 small maps with recipes.
+A console can't run the matcher (the pool and its index don't fit 64 MB), so the 23 stock recipes come baked in the
+installer (`stock_recipes.h`, 2.8 MB packed): their runs that copy from past the pool's end, as it then is, are the
+pool's new words (any run over a word has it), so the recipes alone also say how the pool is made. It checks the pool's
+CRC32 as it's made, and the file as it reads back. Its frames: zlib level 1 (23.3 MB; level 9 would save 1.4 MB at
+several times the time on the console's CPU).
+
+A small stock map's tag data differs from its retail map's only in its fields (each block's place in stock.shared or
+where it moved down to, each BSP's): every field is a whole word in the tag data. So its recipe is **its retail map's
+recipe less the words its fields are in** (a run cut there, a group left with none dropped; the other runs as they are,
+so a piece may be shorter than 16 words), and its tag data is zeros but for those words, which hold the fields. Its
+recipe goes after its data at a 2048-byte boundary, the map padded to one; reference version 3 (0x68-0x78), the rest of
+the reference as before. Only the installer (and `gen_stock_table.py`, which bakes what each must come out as) makes
+these, so this is the installer's rule, not the pack pass's. Putting a map back makes its tag data from the pool with its
+retail map's recipe (every word), then undoes the rest as before; `stocktags.shared` goes with stock.shared.
+
+Measured: the small maps 737.9 MB -> 640.8 MB on the disk (multiplayer 40.7 -> 7.3 MB), plus stocktags.shared's
+23.3 MB: an install takes 74 MB less. Built in installer 66 (stockmaps.c); on a PC (stockmaps_test.c) the own-folder
+build, the swap, its restore and Rebuild original Halo all give back the retail maps byte for byte.
 
 ## Not yet
 
