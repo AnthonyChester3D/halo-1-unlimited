@@ -57,7 +57,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 67
+#define INSTALLER_VERSION 68
 #endif
 __attribute__((used)) static struct
 {
@@ -4006,10 +4006,16 @@ static void player_heading(char const *title)
 	screen_show();
 }
 
+/* (menu_steps: lines between a menu's intro and its items, the answers so far and the question they answer; the items
+indented under them) */
+static char const *const *menu_lines;
+static unsigned long const *menu_line_colours;
+static int menu_line_count, menu_indent;
+
 /* a menu: the item chosen (A), or -1 (B). intro: a line or two above it (NULL: none) */
 static int menu(char const *title, char const *intro, struct menu_item const *items, int count, int chosen)
 {
-	int top = MENU_TOP, k, b;
+	int top = MENU_TOP, k, b, l;
 	if (chosen < 0 || chosen >= count)
 		chosen = 0;
 	for (;;)
@@ -4018,6 +4024,8 @@ static int menu(char const *title, char const *intro, struct menu_item const *it
 		top = MENU_TOP;
 		if (intro)
 			top += wrapped(MENU_TOP, 1, SCREEN_COLUMNS - 2, 4, COLOUR_GREY, intro) + 1;
+		for (l = 0; l < menu_line_count; l++)
+			screen_text(top++, 3, menu_line_colours[l], "%s", menu_lines[l]);
 		{
 			/* (a long list scrolls: the chosen item shown, with what's above and below it marked) */
 			int rows = PANEL_TOP - 1 - top, first = 0, r;
@@ -4029,8 +4037,8 @@ static int menu(char const *title, char const *intro, struct menu_item const *it
 			{
 				k = first + r;
 				screen_row(top + r, k == chosen ? COLOUR_BAR : COLOUR_BLACK);
-				screen_text(top + r, 3, items[k].disabled ? COLOUR_DIM : k == chosen ? COLOUR_WHITE : COLOUR_GREEN, "%s",
-					items[k].text);
+				screen_text(top + r, 3 + menu_indent, items[k].disabled ? COLOUR_DIM : k == chosen ? COLOUR_WHITE :
+					COLOUR_GREEN, "%s", items[k].text);
 			}
 			if (first)
 				screen_text(top, 1, COLOUR_DIM, "^");
@@ -4053,6 +4061,28 @@ static int menu(char const *title, char const *intro, struct menu_item const *it
 		else if (b == A && !items[chosen].disabled)
 			return chosen;
 	}
+}
+
+/* a menu under a question: lines, the answers chosen so far (the first locked of them, in grey) and then the question
+(in white), its items indented under it: as menu() */
+static int menu_steps(char const *title, char const *intro, char const *const *lines, int line_count, int locked,
+	struct menu_item const *items, int count, int chosen)
+{
+	unsigned long colours[8];
+	int k;
+	if (line_count > 8)
+		line_count = 8;
+	for (k = 0; k < line_count; k++)
+		colours[k] = k < locked ? COLOUR_GREY : COLOUR_WHITE;
+	menu_lines = lines;
+	menu_line_colours = colours;
+	menu_line_count = line_count;
+	menu_indent = 2;
+	k = menu(title, intro, items, count, chosen);
+	menu_lines = NULL;
+	menu_line_colours = NULL;
+	menu_line_count = menu_indent = 0;
+	return k;
 }
 
 /* a page of text, read until A or B */
@@ -4572,12 +4602,26 @@ static void player_map_packs(void);
 static int packs_look(char *stock, int size);
 static unsigned long packs_saving(void);
 
+/* room on a drive as people read it: "686 GB", "795 MB" (two at a time) */
+static char const *space_text(unsigned long long bytes)
+{
+	static char text[2][24];
+	static int next;
+	char *t = text[next++ & 1];
+	unsigned long mb = (unsigned long)(bytes >> 20);
+	if (mb >= 10240)
+		text_print(t, sizeof(text[0]), "%lu GB", mb / 1024);
+	else
+		text_print(t, sizeof(text[0]), "%lu MB", mb);
+	return t;
+}
+
 static int player_install_flow(void)
 {
 	struct menu_item items[MENU_MOST];
 	struct halo *choice[MENU_MOST];
 	char line[160], folder[200], source_path[160];
-	int n = 0, i, k, failed, campaign = 1, d, drive = -1, step = 0;
+	int n = 0, i, k, failed, campaign = 1, d, drive = -1, stage = 0;
 	static char const drives[3] = {'F', 'G', 'E'};   /* (E: last: it's the console's smallest) */
 	for (i = 0; i < halo_count && n < MENU_MOST; i++)
 	{
@@ -4599,77 +4643,143 @@ static int player_install_flow(void)
 			"installer again.");
 		return 1;
 	}
+	/* one question at a time, each answer locked in (in grey) as the next is asked; B goes back a step: the Halo, the
+	drive, the campaign, then Start */
 	for (k = 0; k < n && items[k].disabled; k++)
 		;
-	k = menu("Choose your Halo", "Halo 1 Unlimited is built from a copy of Halo on your hard drive.", items, n,
-		k < n ? k : 0);
-	if (k < 0)
-		return 1;
-	text_print(source_path, sizeof(source_path), "%s", choice[k]->path);
-	/* the drive: the first with room, F: and G: before E: */
-	for (d = 0; d < 3 && drive < 0; d++)
-		if (drive_free(drives[d]) >= own_need(choice[k], campaign))
-			drive = d;
+	if (k >= n)
+		k = 0;
 	for (;;)
 	{
-		struct menu_item go[4];
-		unsigned long long need = own_need(choice[k], campaign), with = own_need(choice[k], 1),
-			without = own_need(choice[k], 0);
-		int room = drive >= 0 && drive_free(drives[drive]) >= need;
+		unsigned long long with, without;
+		char intro[240], drive_line[80], campaign_line[80];
+		char const *lines[3];
+		struct menu_item go[3];
+		int r, count = 0, map[3];
+		if (stage == 0)
+		{
+			r = menu("Choose your Halo", "Halo 1 Unlimited is built from a copy of Halo on your hard drive.", items, n, k);
+			if (r == -2)
+				continue;
+			if (r < 0)
+				return 1;
+			k = r;
+			text_print(source_path, sizeof(source_path), "%s", choice[k]->path);
+			drive = -1;
+			stage = 1;
+			continue;
+		}
+		with = own_need(choice[k], 1);
+		without = own_need(choice[k], 0);
+		place_name(source_path, line, sizeof(line));
+		text_print(intro, sizeof(intro), "Halo 1 Unlimited will be built from %s.", line);
+		if (drive < 0)
+		{
+			/* (the one picked first: the first with room for it all, F: and G: before E:) */
+			for (d = 0; d < 3 && drive < 0; d++)
+				if (drive_free(drives[d]) >= with)
+					drive = d;
+			for (d = 0; d < 3 && drive < 0; d++)
+				if (drive_free(drives[d]) >= without)
+					drive = d;
+			campaign = drive >= 0 && drive_free(drives[drive]) >= with;
+		}
 		if (drive >= 0)
-			text_print(go[0].text, sizeof(go[0].text), "Install to: %c: (%lu MB free)", drives[drive],
-				(unsigned long)(drive_free(drives[drive]) >> 20));
-		else
-			text_print(go[0].text, sizeof(go[0].text), "Install to: no drive has room");
-		go[0].about = "Press A to choose another drive. Halo 1 Unlimited goes in a folder of its own there.";
-		go[0].disabled = 0;
-		text_print(go[1].text, sizeof(go[1].text), campaign ? "Campaign: Included (+%lu MB)" :
-			"Campaign: Not included (saves %lu MB)", (unsigned long)((with - without) >> 20));
-		go[1].about = campaign ? "Halo's campaign is installed too. Press A to leave it out." :
-			"Only multiplayer. Press A to include Halo's campaign. Without it, Halo's campaign can't be played in Halo 1 "
-			"Unlimited.";
-		go[1].disabled = 0;
-		text_print(go[2].text, sizeof(go[2].text), "Start install (about 6 minutes, needs %lu MB)",
-			(unsigned long)(need >> 20));
-		if (room)
+			text_print(drive_line, sizeof(drive_line), "Install to: %c: (%s free)", drives[drive],
+				space_text(drive_free(drives[drive])));
+		text_print(campaign_line, sizeof(campaign_line), campaign ? "Campaign: Included (+%s)" :
+			"Campaign: Not included (saves %s)", space_text(with - without));
+		if (stage == 1)
+		{
+			/* the drive: E:, F: and G: as they're there */
+			static char const order[3] = {'E', 'F', 'G'};
+			int chosen = 0, dd;
+			for (dd = 0; dd < 3; dd++)
+			{
+				int at;
+				ULARGE_INTEGER available, total, free_total;
+				char root[4] = {order[dd], ':', '\\', 0};
+				if (!GetDiskFreeSpaceExA(root, &available, &total, &free_total))
+					continue;
+				for (at = 0; at < 3 && drives[at] != order[dd]; at++)
+					;
+				text_print(go[count].text, sizeof(go[count].text), "%c: (%s free)", order[dd],
+					space_text(available.QuadPart));
+				go[count].disabled = available.QuadPart < without;
+				go[count].about = go[count].disabled ? "There isn't room for Halo 1 Unlimited on this drive." :
+					"Halo 1 Unlimited goes in a folder of its own on this drive.";
+				if (at == drive)
+					chosen = count;
+				map[count++] = at;
+			}
+			if (!count)
+			{
+				page("Install Halo 1 Unlimited", "No drive was found to install to.");
+				return 1;
+			}
+			lines[0] = "Install to:";
+			r = menu_steps("Install Halo 1 Unlimited", intro, lines, 1, 0, go, count, chosen);
+			if (r == -2)
+				continue;
+			if (r < 0)
+			{
+				stage = 0;
+				continue;
+			}
+			drive = map[r];
+			if (drive_free(drives[drive]) < with)
+				campaign = 0;
+			stage = 2;
+			continue;
+		}
+		if (stage == 2)
+		{
+			char question[80];
+			int room = drive_free(drives[drive]) >= with;
+			text_print(question, sizeof(question), "Campaign: Included? (+%s)", space_text(with - without));
+			text_print(go[0].text, sizeof(go[0].text), "Yes");
+			go[0].about = room ? "Halo's campaign is installed too." :
+				"There isn't room on this drive for the campaign too: leave it out, or go back and pick another drive.";
+			go[0].disabled = !room;
+			text_print(go[1].text, sizeof(go[1].text), "No");
+			go[1].about = "Only multiplayer: Halo's campaign can't be played in Halo 1 Unlimited.";
+			go[1].disabled = 0;
+			lines[0] = drive_line;
+			lines[1] = question;
+			r = menu_steps("Install Halo 1 Unlimited", intro, lines, 2, 1, go, 2, campaign && room ? 0 : 1);
+			if (r == -2)
+				continue;
+			if (r < 0)
+			{
+				stage = 1;
+				continue;
+			}
+			campaign = r == 0;
+			stage = 3;
+			continue;
+		}
+		/* Start */
 		{
 			static char summary[300];
+			unsigned long long need = campaign ? with : without;
 			own_folder_on(drives[drive], folder, sizeof(folder));
-			text_print(summary, sizeof(summary), "Installs Halo 1 Unlimited to %s. It will use %lu MB.", folder,
-				(unsigned long)(need >> 20));
-			go[2].about = summary;
-		}
-		else
-			go[2].about = "There isn't room on any drive. Free some space (or leave the campaign out), then try again.";
-		go[2].disabled = !room;
-		text_print(go[3].text, sizeof(go[3].text), "Back");
-		go[3].about = NULL;
-		go[3].disabled = 0;
-		place_name(source_path, line, sizeof(line));
-		{
-			char intro[240];
-			text_print(intro, sizeof(intro), "Halo 1 Unlimited will be built from %s.", line);
-			step = menu("Install Halo 1 Unlimited", intro, go, 4, step);
-		}
-		if (step < 0 || step == 3)
-			return 1;
-		if (step == 0)
-		{
-			/* (the next drive with room for it) */
-			for (d = 1; d <= 3; d++)
+			text_print(go[0].text, sizeof(go[0].text), "Start install (about 6 minutes, needs %s)", space_text(need));
+			text_print(summary, sizeof(summary), "Installs Halo 1 Unlimited to %s. It will use %s.", folder,
+				space_text(need));
+			go[0].about = summary;
+			go[0].disabled = drive_free(drives[drive]) < need;
+			lines[0] = drive_line;
+			lines[1] = campaign_line;
+			r = menu_steps("Install Halo 1 Unlimited", intro, lines, 2, 2, go, 1, 0);
+			if (r == -2)
+				continue;
+			if (r < 0)
 			{
-				int next = ((drive < 0 ? 0 : drive) + d) % 3;
-				if (drive_free(drives[next]) >= need)
-				{
-					drive = next;
-					break;
-				}
+				stage = 2;
+				continue;
 			}
-		}
-		else if (step == 1)
-			campaign = !campaign;
-		else if (step == 2)
 			break;
+		}
 	}
 	own_folder_on(drives[drive], folder, sizeof(folder));
 	task_begin("Installing Halo 1 Unlimited", "Building Halo 1 Unlimited from your Halo...");
