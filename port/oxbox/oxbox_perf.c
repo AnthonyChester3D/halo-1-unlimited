@@ -90,6 +90,7 @@ thread still never touches the disk. The format (tour_parse):
 #include "input/input.h"
 #include "interface/hud_messaging.h"
 #include "interface/event_manager.h"
+#include "interface/ui_widget.h"
 #include "units/units.h"
 #include "cutscene/cinematics.h"
 #include "main/main.h"
@@ -2581,6 +2582,7 @@ static struct
 	long scale;                                 /* (opence.ini res_scale, 1-99: a scaled pass; 0 the normal one) */
 	long pass;                                  /* (opence.ini perf_sweep_pass, 1-99: a pass of its own; 0 the normal one) */
 	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
+	long runs_this_boot;                        /* (rows written since this boot: the sweep complete box's text) */
 } sweep;
 
 /* the watchdog (sweep_watch, on the writer thread): on while a run is under way or coming back from one */
@@ -3340,6 +3342,7 @@ static void sweep_finish(
 		sweep.run = failed_run;
 	}
 	sweep_marker(0);
+	sweep.runs_this_boot++;
 	sweep.active = sweep.measuring = FALSE;
 	sweep.over = TRUE;
 	sweep_set_scale(0);
@@ -3874,6 +3877,10 @@ static long sweep_next(
 	sweep.halted = TRUE;
 	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\%s)",
 		sweep.drive, sweep.results);
+	/* (v1.174: an error box at the main menu says so, till A: whoever left the sweep running sees it's done) */
+	display_error_text_deferred(sweep.runs_this_boot ?
+		L"Sweeps complete.\r\nEvery map in this pass\r\nhas been measured.\r\nSend the Logs folder." :
+		L"Sweeps complete.\r\nEvery map in this pass\r\nwas measured before:\r\nnothing left to do.", NONE);
 	return _oxbox_sweep_none;
 }
 
