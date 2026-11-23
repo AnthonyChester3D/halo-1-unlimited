@@ -441,6 +441,73 @@ cache, so a map's BSPs may sit where they always have (all 23 retail maps' end f
 would need its working memory while a BSP is loaded: its maps would then keep their BSPs 64 KB below the top (Invader
 `-T 23003136`). Format 4 doesn't (tight maps like B30 Evolved can't spare the 64 KB).
 
+### Revision 2: the own words in the recipe (reference version 4) — DRAFT for review
+
+Proposed 2026-11-23, after the console's load timing (v1.178): a recipe map's tag area is almost all zeros, yet the game
+reads all of it (0.27-0.65 s a load) only for the recipe to write over it, and every copy into the cache partition
+writes it (3.5-20 MB a map: 30-55% of a pack map unpacked, Boxfight's and CEX's). Revision 2 moves a map's own words
+into its recipe and leaves the tag area out of the file. Everything else stays: the stock tag pool, `stocktags.shared`,
+its frames, the pack pass, a pack's tag part. Version 3 maps still load as above.
+
+**The map**
+
+- Its tag area is the last part of the map: nothing else in it (the header, the BSPs, the data blocks) ends after
+  tag_data_offset. (So it is in all 23 retail maps and in every map Halo Map Porter and shared_pass.py make: checked on
+  Boxfight's and CEX's.)
+- The file stops there: from tag_data_offset on it holds no tag data. The rest of tag_data_offset's own 2048-byte sector
+  is zeros; the recipe starts at the next 2048-byte boundary, round_up(tag_data_offset, 2048), and the map ends after
+  it, padded to a 2048-byte boundary: that's file_length. tag_data_offset and tag_data_size keep their values (the game
+  sizes the tag memory by them; nothing else moves).
+- The reference is version **4**, 0x80 bytes (0x700-0x77F): as version 3 (0x68 the recipe's offset, which must be
+  round_up(tag_data_offset, 2048); 0x6C its size; 0x70 and 0x74 the pool's CRC32 and size; 0x78 the CRC32 of the tag
+  data as rebuilt), and **0x7C, flags: 0**. A reader refuses a map with a flag it doesn't know (none are defined yet).
+
+**The recipe** is a list of sections, unsigned LEB128 as before:
+
+```
+section count
+  per section (types ascending, each once):
+    type
+    size: the section's bytes, which follow
+```
+
+| Type | Section |
+|---|---|
+| 1 | stock groups: version 3's stock part (group count, then the groups) |
+| 2 | pack groups: version 3's pack part, its frames 16 KB slices of the pack's tag part |
+| 3 | own words |
+| 4-63 | (none yet) a reader that doesn't know one refuses the map |
+| 64 and up | (none yet) a reader that doesn't know one skips it: for additions an older game can do without |
+
+Types 1, 2 and 3 are all present, in that order (one with nothing to say holds a count of 0).
+
+**The own words**, section 3:
+
+```
+run count
+  per run (dest ascending):
+    dest delta: words from the end of the previous own run (from word 0 for the first)
+    length (>= 1)
+    the words: length 4-byte little-endian words, as they are (not LEB128)
+```
+
+Every word of the tag data is written exactly once: by a stock run, a pack run or an own run. The own runs are the
+maximal runs of the words no stock or pack run writes, so they follow from the other two and a map still has one
+encoding whoever builds it. A zero the map holds is an own word like any other: nothing is left for the game to clear.
+What moves: Halo's maps have 1,400-8,700 own words (6-35 KB; a small stock map's own words are its fields, as now);
+a pack map, the words it keeps as its own (CEX: about 9% of its tag data).
+
+**What the game does with one**: it doesn't read the tag area; it reads the recipe a piece at a time, as now, and copies
+each section's runs into the tag memory, the own words straight from the recipe. A copy into the cache partition copies
+file_length, which no longer has the tag area in it.
+
+**The pack pass** is unchanged; a map's own words that didn't go into the pack's tag part go in its own-words section
+instead of staying in place.
+
+**Measured gains it's for** (the console, v1.178): no tag read (0.27-0.65 s a load); each copy into the cache shorter by
+the tag area (Blood Gulch CEX 12.9 -> 5.9 MB, Boxfight 2a 41.9 -> 28.1 MB, Boxfight Start 26.0 -> 13.7 MB; Halo's levels
+about 10% less), about 0.3-1.4 s at the console's ~14 MB/s; and a cache slot holds bigger maps.
+
 ### What the game does
 
 In `scenario_tags_load` (cache_files.c), once the tag data is read and before it's checked and the free tag memory is
