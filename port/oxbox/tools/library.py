@@ -112,8 +112,9 @@ def make_zip(folder):
     unpacked = 0
     with zipfile.ZipFile(out, 'w') as z:
         for name in names:
-            if name.count('/') > 1 or len(name) > 42 * 2:
-                sys.exit('library: %s: %s is too deep or too long a name' % (folder, name))
+            if name.count('/') > 1 or len(name) > 42 * 2 or any(len(part) > 42 for part in name.split('/')):
+                sys.exit('library: %s: %s is too deep or too long a name (an Xbox file or folder name: 42 characters '
+                         'at most)' % (folder, name))
             data = open(os.path.join(folder, name), 'rb').read()
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
             info.create_system = 0

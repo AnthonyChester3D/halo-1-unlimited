@@ -4475,6 +4475,13 @@ static long load_ms(
 	return from && to && to >= from ? (long)((to - from) * 1000 / perf.frequency) : -1;
 }
 
+/* (v1.180: one map to the next through the main menu, as the showcase goes: the "switch:" line) */
+static struct
+{
+	char from[64];                           /* the last map that wasn't the main menu ("": none yet) */
+	__int64 menu_start, menu_frame;          /* the main menu's load after it: its start, its first frame */
+} between;
+
 /* the first frame after a load: its line */
 static void load_finish(
 	void)
@@ -4483,8 +4490,29 @@ static void load_finish(
 	__int64 tags_end = at[_oxbox_perf_load_tags_rebuilt] ? at[_oxbox_perf_load_tags_rebuilt] : at[_oxbox_perf_load_tags_read];
 	long before = load_ms(load.start, at[_oxbox_perf_load_begin]);
 	long copying = (long)(load.copying * 1000 / perf.frequency), finishing = (long)(load.finishing * 1000 / perf.frequency);
+	boolean menu = !strcmp(load.map, "levels\\ui\\ui");
 
 	load.state = 0;
+	/* from the main menu's load (the last map left) to this map's first frame: the menu's load, the time at the menu
+	and in the lobby (the showcase's waits: SHOWCASE_MENU_SETTLE_SECONDS, the lobby's), this map's load (its copy
+	into the cache with it, when the lobby's precache copies) */
+	if (menu)
+	{
+		between.menu_start = between.from[0] ? load.start : 0;
+		between.menu_frame = between.from[0] ? now : 0;
+	}
+	else if (load.map[0])
+	{
+		if (between.menu_frame)
+		{
+			platform_log("switch: %s to %s: %ld ms from the main menu's load to its first frame: the main menu %ld ms, "
+				"at the menu and in the lobby %ld ms, its load %ld ms", between.from, load.map,
+				load_ms(between.menu_start, now), load_ms(between.menu_start, between.menu_frame),
+				load_ms(between.menu_frame, load.start), load_ms(load.start, now));
+		}
+		strncpy(between.from, load.map, sizeof(between.from) - 1);
+		between.menu_start = between.menu_frame = 0;
+	}
 	platform_log("load: %s: %ld ms: copied into the cache %ld ms (%ld file%s), the loading animation's end %ld ms, "
 		"the rest before the tags %ld ms; tags read %ld ms, rebuilt %ld ms, checked %ld ms; first BSP %ld ms; "
 		"set up %ld ms; objects and AI placed %ld ms; to the first frame %ld ms",
