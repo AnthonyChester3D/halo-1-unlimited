@@ -1,6 +1,6 @@
 """library.py: the map library's files (docs/map_library.md), made on the PC from Halo Map Porter's output.
 
-    python3 library.py build OUT FOLDER... [--group NAME] [--previous CATALOG] [--base URL]
+    python3 library.py build OUT FOLDER... [--group NAME] [--previous CATALOG] [--base URL] [--pack]
     python3 library.py show CATALOG
 
 build: each FOLDER is a map's folder (a .map and what goes with it: info.txt, preview.bin, bots.txt, showcase.txt,
@@ -10,7 +10,9 @@ the same files always make the same zip, so an unchanged map keeps its file and 
 catalog.oxlb, NOT signed: sign it on the owner's PC with oxsign.py (python3 oxsign.py sign library.oxkey
 catalog.oxlb). --previous: the catalog now published, whose serial this one's goes past and whose items are kept
 when they aren't made again (so a build can add one group at a time); the zips to upload are those it lists as new.
---base: where the zips are, when not beside the catalog (a URL ending in /).
+--base: where the zips are, when not beside the catalog (a URL ending in /). --pack: each FOLDER is a whole map pack's
+folder (its maps' folders and its .shared file, as Halo Map Porter or tagpool --pack make it), one item "kind: pack"
+that the Xbox puts in maps\\<folder>\\ as a pack of its own.
 
 A folder's name is where the Xbox puts the map (maps\\Library\\<folder>\\, the library's maps together), and the map's
 name in map sharing ("+Library/<folder>", which the game also finds as a copy put in maps\\<folder>\\ by hand), so it
@@ -22,6 +24,7 @@ import hashlib, io, os, struct, sys, time, unicodedata, zipfile
 MAGIC = b'OXLB'
 FORMAT = 1
 MAXIMUM_FOLDER = 22   # (the Xbox's maps\Library\<folder>: the game's 30 for "Library/<folder>")
+MAXIMUM_NAME = 30     # (the game's, for a pack's name and its map's together: "<pack>/<map>")
 MAXIMUM_ABOUT = 300
 FATX_BAD = set('<>:"/\\|?*')
 STORED = ('.map', '.zip')   # (Xbox maps are zlib inside already: 98% of their size when packed again)
@@ -74,6 +77,27 @@ def folder_problem(name):
         return 'its name has characters an Xbox folder can\'t have'
     if '.hmp_' in name.lower():
         return 'its name has ".hmp_" in it (the game skips such folders)'
+    return None
+
+
+def pack_problem(folder):
+    """a whole pack's folder: its name, and each of its maps' names with it, within the game's limit"""
+    name = os.path.basename(os.path.normpath(folder))
+    if len(name) > MAXIMUM_NAME - 2:
+        return 'its name is longer than %d characters' % (MAXIMUM_NAME - 2)
+    if any(c in FATX_BAD or not 32 <= ord(c) < 127 for c in name) or name != name.strip() or name.endswith('.'):
+        return 'its name has characters an Xbox folder can\'t have'
+    if '.hmp_' in name.lower() or name.lower() == 'library':
+        return 'its name can\'t be "%s"' % name
+    maps = [m for m in map_folders(folder) if m != folder]
+    if not maps:
+        return 'no map\'s folder in it (a pack\'s maps are each in a folder of their own)'
+    for m in maps:
+        leaf = os.path.basename(m)
+        if len(name) + 1 + len(leaf) > MAXIMUM_NAME:
+            return '"%s/%s" is longer than the game\'s %d characters' % (name, leaf, MAXIMUM_NAME)
+        if any(c in FATX_BAD or not 32 <= ord(c) < 127 for c in leaf):
+            return '%s: its name has characters an Xbox folder can\'t have' % leaf
     return None
 
 
@@ -132,7 +156,7 @@ def catalog_bytes(serial, items):
              'date: %s' % time.strftime('%Y-%m-%d', time.gmtime()), '']
     for item in items:
         lines.append('item: %s' % item['item'])
-        for key in ('name', 'group', 'about', 'version', 'file', 'size', 'unpacked', 'files', 'sha256'):
+        for key in ('kind', 'name', 'group', 'about', 'version', 'file', 'size', 'unpacked', 'files', 'sha256'):
             if item.get(key):
                 lines.append('%s: %s' % (key, item[key]))
         lines.append('')
@@ -159,10 +183,10 @@ def zip_name(folder_name, digest):
     return '%s-%s.zip' % (safe.strip('_.-') or 'map', digest[:8])
 
 
-def make_item(folder, group, base=''):
-    """a map's folder as an item: (its catalog fields, its zip's bytes), or (None, why not)"""
+def make_item(folder, group, base='', pack=False):
+    """a map's folder (pack: a whole pack's) as an item: (its catalog fields, its zip's bytes), or (None, why not)"""
     name = os.path.basename(os.path.normpath(folder))
-    problem = folder_problem(name)
+    problem = pack_problem(folder) if pack else folder_problem(name)
     if problem:
         return None, problem
     data, unpacked, count = make_zip(folder)
@@ -177,6 +201,8 @@ def make_item(folder, group, base=''):
     item = {'item': name, 'name': ascii_text(title)[:48] or name, 'about': about, 'group': ascii_text(group or '')[:24],
             'file': base + zip_name(name, digest), 'size': str(len(data)), 'unpacked': str(unpacked),
             'files': str(count), 'version': ascii_text(version)[:12], 'sha256': digest}
+    if pack:
+        item['kind'] = 'pack'
     return item, data
 
 
@@ -184,21 +210,21 @@ def sort_items(items):
     items.sort(key=lambda item: (item.get('group', '').lower(), item['name'].lower(), item['item'].lower()))
 
 
-def build(out, folders, group=None, previous=None, base=None):
+def build(out, folders, group=None, previous=None, base=None, pack=False):
     os.makedirs(out, exist_ok=True)
     serial, kept = read_catalog(previous) if previous else (0, [])
     published = {item['file'] for item in kept}
     seen = set()
     made, new = [], []
     for given in folders:
-        for folder in map_folders(given):
+        for folder in [given] if pack else map_folders(given):
             in_group = group or (os.path.basename(os.path.normpath(given)) if folder != given else '')
             name = os.path.basename(os.path.normpath(folder))
             if (name.lower(), in_group.lower()) in seen:
                 print('  skipped %s: a second folder of that name in the group' % name)
                 continue
             seen.add((name.lower(), in_group.lower()))
-            item, data = make_item(folder, in_group, base or '')
+            item, data = make_item(folder, in_group, base or '', pack)
             if item is None:
                 print('  skipped %s: %s' % (name, data))
                 continue
@@ -223,8 +249,8 @@ def show(path):
     print('%s: serial %d, %d items, %s' % (path, serial, len(items),
                                           'signed' if data[12 + size:12 + size + 4] == b'OXSG' else 'not signed'))
     for item in items:
-        print('  %-24s %-30s %7.1f MB  %s' % (item.get('group', ''), item['item'], int(item['size']) / 1e6,
-                                             item['file']))
+        print('  %-24s %-30s %7.1f MB  %s%s' % (item.get('group', ''), item['item'], int(item['size']) / 1e6,
+                                               item['file'], '  (pack)' if item.get('kind') == 'pack' else ''))
 
 
 def main():
@@ -235,6 +261,9 @@ def main():
             at = args.index(flag)
             options[flag[2:]] = args[at + 1]
             del args[at:at + 2]
+    if '--pack' in args:
+        args.remove('--pack')
+        options['pack'] = True
     if len(args) >= 3 and args[0] == 'build':
         build(args[1], args[2:], **options)
     elif len(args) == 2 and args[0] == 'show':
