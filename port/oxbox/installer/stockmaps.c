@@ -75,6 +75,9 @@ struct retail_map
 	uint32_t small_disk, small_file_crc; /* its small map's file as the one pass makes it (reusing runs): its size and CRC */
 	struct reuse_run const *runs;   /* the runs of the retail file's deflate blocks the small map has as they are */
 	int run_count;
+	/* format 4: its recipe in stock_recipes[] (packed), and its size unpacked; the stock tag pool's size in words once
+	this map's new words are in it; its small map's recipe's size, and the CRC32 of its small map's tag data rebuilt */
+	uint32_t recipe_at, recipe_packed, recipe_size, pool_end, small_recipe_size, small_tag_crc;
 };
 
 /* maps\stock.index: this, then each block of stock.shared's in its order (the table has them: the same on every console) */
@@ -429,6 +432,518 @@ static int overlap(uint32_t from, uint32_t to, uint32_t at, uint32_t size, uint3
 	return 1;
 }
 
+/* ---- format 4 (docs/shared_maps.md, "Shared tag data"): the stock tag pool (stocktags.shared) made from the retail maps'
+tag data and their recipes, baked in stock_recipes.h (a map's runs that copy from past the pool's end, as it then is, are its
+new words: any run over a word has it); each small map's recipe, its retail map's less the words its fields are in (it holds
+those, the rest of its tag data zeros); and, putting a map back, its tag data made again from the pool ---- */
+
+#include "stock_recipes.h"
+#define FRAME 16384u
+#define FRAME_WORDS (FRAME / 4u)
+#define POOL_FRAMES ((POOL_SIZE + FRAME - 1u) / FRAME)
+#define POOL_TABLE (POOL_FRAMES * 8u)
+#define POOL_ROOM ((unsigned long long)HEADER + POOL_TABLE + POOL_SIZE) /* (stocktags.shared at its biggest: frames all raw) */
+#define POOL_LEVEL 1                    /* zlib's level for its frames (0: every frame raw; a frame zlib can't make smaller is) */
+
+static voidpf layout_alloc(voidpf opaque, uInt items, uInt size);
+static void layout_free(voidpf opaque, voidpf address);
+
+static unsigned char recipe_in[MOST_RECIPE];        /* a retail map's recipe, unpacked */
+static uint32_t recipe_in_size;
+static unsigned char recipe_out[MOST_SMALL_RECIPE]; /* a small map's */
+
+/* map k's recipe unpacked into recipe_in: 0 when it's there */
+static int recipe_unpack(int k)
+{
+	struct retail_map const *retail = &retail_maps[k];
+	z_stream z;
+	int ok;
+	recipe_in_size = 0;
+	if (retail->recipe_size > MOST_RECIPE || retail->recipe_at > STOCK_RECIPES_SIZE ||
+		retail->recipe_packed > STOCK_RECIPES_SIZE - retail->recipe_at)
+		return 1;
+	memset(&z, 0, sizeof(z));
+	z.zalloc = layout_alloc;
+	z.zfree = layout_free;
+	if (inflateInit(&z) != Z_OK)
+		return 1;
+	z.next_in = (Bytef *)(stock_recipes + retail->recipe_at);
+	z.avail_in = retail->recipe_packed;
+	z.next_out = recipe_in;
+	z.avail_out = MOST_RECIPE;
+	ok = inflate(&z, Z_FINISH) == Z_STREAM_END && z.total_out == retail->recipe_size;
+	inflateEnd(&z);
+	if (ok)
+		recipe_in_size = retail->recipe_size;
+	return !ok;
+}
+
+/* a recipe read: unsigned LEB128 */
+struct cursor
+{
+	unsigned char const *p, *end;
+	int bad;
+};
+
+static uint32_t leb(struct cursor *c)
+{
+	uint32_t v = 0;
+	int shift;
+	for (shift = 0; shift < 35 && c->p < c->end; shift += 7)
+	{
+		unsigned char b = *c->p++;
+		v |= (uint32_t)(b & 0x7F) << shift;
+		if (!(b & 0x80))
+			return v;
+	}
+	c->bad = 1;
+	return 0;
+}
+
+/* a recipe written (or counted, past room) */
+struct emit
+{
+	unsigned char *out;
+	uint32_t size, room, end;       /* (end: where the group's last run ended) */
+};
+
+static void emit_leb(struct emit *e, uint32_t v)
+{
+	do
+	{
+		unsigned char b = (unsigned char)(v & 0x7F);
+		v >>= 7;
+		if (e->size < e->room)
+			e->out[e->size] = v ? (unsigned char)(b | 0x80) : b;
+		e->size++;
+	} while (v);
+}
+
+/* ---- the pool, made: its frames written as they fill (each zlib or raw), the header and frame table at the end ---- */
+
+static struct
+{
+	HANDLE file;
+	z_stream z;
+	int packing;
+	uint32_t frame;                 /* the frame being filled: those before it are written */
+	uint32_t have;                  /* the pool's words so far */
+	uint32_t at;                    /* where the next frame goes in the file */
+	uint32_t crc, frames_crc;       /* the pool's CRC32 so far, and its frames' as written */
+	uint32_t table[POOL_FRAMES * 2];/* each frame's place in the file and its stored size */
+	unsigned char head[HEADER];
+	unsigned char words[FRAME], packed[FRAME];
+} pool;
+
+static void pool_abandon(void)
+{
+	if (pool.packing)
+		deflateEnd(&pool.z);
+	pool.packing = 0;
+	if (pool.file != INVALID_HANDLE_VALUE)
+		file_close(pool.file);
+	pool.file = INVALID_HANDLE_VALUE;
+}
+
+/* the pool's file begun at path (its header and frame table zeros till the end): 0 when it's open */
+static int pool_open(char const *path)
+{
+	uint32_t left;
+	memset(pool.table, 0, sizeof(pool.table));
+	memset(pool.words, 0, FRAME);
+	pool.frame = pool.have = 0;
+	pool.at = HEADER + POOL_TABLE;
+	pool.crc = pool.frames_crc = crc_add(0, NULL, 0);
+	pool.packing = 0;
+	pool.file = create(path);
+	if (pool.file == INVALID_HANDLE_VALUE)
+		return 1;
+	memset(&pool.z, 0, sizeof(pool.z));
+	pool.z.zalloc = layout_alloc;
+	pool.z.zfree = layout_free;
+	if (POOL_LEVEL)
+	{
+		if (deflateInit(&pool.z, POOL_LEVEL) != Z_OK)
+		{
+			pool_abandon();
+			return 1;
+		}
+		pool.packing = 1;
+	}
+	for (left = pool.at; left;)
+	{
+		uint32_t part = left > SECTOR ? SECTOR : left;
+		if (write_all(pool.file, zeros, part))
+		{
+			pool_abandon();
+			return 1;
+		}
+		left -= part;
+	}
+	return 0;
+}
+
+/* the frame being filled, written: 0 when it is */
+static int pool_flush(void)
+{
+	uint32_t size, stored;
+	unsigned char const *data = pool.words;
+	if (pool.frame >= POOL_FRAMES)
+		return 1;
+	size = POOL_SIZE - pool.frame * FRAME < FRAME ? POOL_SIZE - pool.frame * FRAME : FRAME;
+	stored = size;
+	pool.crc = crc_add(pool.crc, pool.words, size);
+	if (pool.packing)
+	{
+		if (deflateReset(&pool.z) != Z_OK)
+			return 1;
+		pool.z.next_in = pool.words;
+		pool.z.avail_in = size;
+		pool.z.next_out = pool.packed;
+		pool.z.avail_out = FRAME;
+		/* (raw unless zlib's is smaller: a stored size equal to the frame's means raw) */
+		if (deflate(&pool.z, Z_FINISH) == Z_STREAM_END && pool.z.total_out < size)
+		{
+			data = pool.packed;
+			stored = (uint32_t)pool.z.total_out;
+		}
+	}
+	if (write_all(pool.file, data, stored))
+		return 1;
+	pool.frames_crc = crc_add(pool.frames_crc, data, stored);
+	pool.table[pool.frame * 2] = pool.at;
+	pool.table[pool.frame * 2 + 1] = stored;
+	pool.at += stored;
+	pool.frame++;
+	memset(pool.words, 0, FRAME);
+	return 0;
+}
+
+/* map k's new words into the pool (the maps in their order; tags: its tag data): 0 when they're in */
+static int pool_map(int k, unsigned char const *tags, uint32_t tag_size)
+{
+	uint32_t end = retail_maps[k].pool_end, words = tag_size / 4, groups, g, frame = 0;
+	struct cursor c;
+	if (recipe_unpack(k) || end < pool.have || end > POOL_SIZE / 4 || (tag_size & 3))
+		return 1;
+	c.p = recipe_in;
+	c.end = recipe_in + recipe_in_size;
+	c.bad = 0;
+	groups = leb(&c);
+	for (g = 0; g < groups && !c.bad; g++)
+	{
+		uint32_t runs, r, dest = 0, base;
+		frame = g ? frame + leb(&c) : leb(&c);
+		runs = leb(&c);
+		if (frame >= POOL_FRAMES)
+			return 1;
+		base = frame * FRAME_WORDS;
+		/* (a frame the map's words come to next: the ones before it are whole) */
+		while (pool.frame < frame)
+		{
+			if ((pool.frame + 1) * FRAME_WORDS > end || pool_flush())
+				return 1;
+		}
+		for (r = 0; r < runs && !c.bad; r++)
+		{
+			uint32_t offset, length, skip;
+			dest += leb(&c);
+			offset = leb(&c);
+			length = leb(&c);
+			if (c.bad || !length || offset >= FRAME_WORDS || length > FRAME_WORDS - offset || dest > words ||
+				length > words - dest || base + offset + length > end)
+				return 1;
+			if (frame == pool.frame && base + offset + length > pool.have)
+			{
+				skip = pool.have > base + offset ? pool.have - (base + offset) : 0;
+				memcpy(pool.words + (offset + skip) * 4, tags + (dest + skip) * 4, (length - skip) * 4);
+			}
+			dest += length;
+		}
+	}
+	if (c.bad || leb(&c) || c.bad || c.p != c.end)
+		return 1;
+	while ((pool.frame + 1) * FRAME_WORDS <= end)
+	{
+		if (pool_flush())
+			return 1;
+	}
+	pool.have = end;
+	return 0;
+}
+
+/* the pool finished: its last frame, then its header and frame table; checked against the table's size and CRC32. 0 when
+it's all written */
+static int pool_close(void)
+{
+	int failed;
+	if (pool.have != POOL_SIZE / 4 || (POOL_SIZE % FRAME && pool_flush()) || pool.frame != POOL_FRAMES ||
+		pool.crc != POOL_CRC)
+	{
+		pool_abandon();
+		return 1;
+	}
+	memset(pool.head, 0, HEADER);
+	memcpy(pool.head, "OXST", 4);
+	put32(pool.head + 0x04, 1);
+	put32(pool.head + 0x08, pool.at);
+	put32(pool.head + 0x0C, POOL_SIZE);
+	put32(pool.head + 0x10, POOL_CRC);
+	put32(pool.head + 0x14, FRAME);
+	put32(pool.head + 0x18, POOL_FRAMES);
+	put32(pool.head + 0x1C, HEADER);
+	failed = disk_seek(pool.file, 0) || write_all(pool.file, pool.head, HEADER) || write_all(pool.file, pool.table, POOL_TABLE);
+	if (pool.packing)
+		deflateEnd(&pool.z);
+	pool.packing = 0;
+	if (!finish(pool.file))
+		failed = 1;
+	pool.file = INVALID_HANDLE_VALUE;
+	return failed;
+}
+
+/* stocktags.shared read back: its header and frame table as written, its frames' CRC32 as written. 0 when it's right */
+static int pool_check(char const *path)
+{
+	HANDLE file = open_read(path);
+	uint32_t at = 0, crc = crc_add(0, NULL, 0);
+	unsigned char *data;
+	struct ahead ahead;
+	DWORD got;
+	int bad = 0;
+	if (file == INVALID_HANDLE_VALUE)
+		return 1;
+	ahead_open(&ahead, file, io_in, io_in2);
+	while (!bad && !ahead_next(&ahead, &data, &got) && got)
+	{
+		uint32_t i = 0;
+		for (; i < got && at < HEADER + POOL_TABLE; i++, at++)
+		{
+			unsigned char want = at < HEADER ? pool.head[at] : ((unsigned char const *)pool.table)[at - HEADER];
+			if (data[i] != want)
+				bad = 1;
+		}
+		crc = crc_add(crc, data + i, got - i);
+		at += got - i;
+	}
+	file_close(file);
+	return bad || at != pool.at || crc != pool.frames_crc;
+}
+
+/* ---- the pool, read (putting a map back): stocktags.shared's frame table, then the frames a recipe names ---- */
+
+/* stocktags.shared opened and its header and frame table read and checked (pool.table): the file, or INVALID_HANDLE_VALUE */
+static HANDLE pool_read_open(char const *path)
+{
+	HANDLE file = open_read(path);
+	uint32_t length, f;
+	if (file == INVALID_HANDLE_VALUE)
+		return file;
+	length = GetFileSize(file, NULL);
+	if (read_all(file, pool.head, HEADER) || memcmp(pool.head, "OXST", 4) || u32(pool.head + 0x04) != 1 ||
+		u32(pool.head + 0x08) != length || u32(pool.head + 0x0C) != POOL_SIZE || u32(pool.head + 0x10) != POOL_CRC ||
+		u32(pool.head + 0x14) != FRAME || u32(pool.head + 0x18) != POOL_FRAMES || u32(pool.head + 0x1C) != HEADER ||
+		read_all(file, pool.table, POOL_TABLE))
+	{
+		file_close(file);
+		return INVALID_HANDLE_VALUE;
+	}
+	for (f = 0; f < POOL_FRAMES; f++)
+	{
+		uint32_t size = POOL_SIZE - f * FRAME < FRAME ? POOL_SIZE - f * FRAME : FRAME;
+		if (pool.table[f * 2 + 1] > size || pool.table[f * 2] > length || pool.table[f * 2 + 1] > length - pool.table[f * 2])
+		{
+			file_close(file);
+			return INVALID_HANDLE_VALUE;
+		}
+	}
+	return file;
+}
+
+/* map k's tag data made from the pool (file: pool_read_open's) into tags (every word: a retail map's recipe has them all):
+0 when it's there */
+static int pool_tags(HANDLE file, int k, unsigned char *tags, uint32_t tag_size)
+{
+	uint32_t words = tag_size / 4, groups, g, frame = 0;
+	struct cursor c;
+	z_stream z;
+	int failed = 1;
+	if (file == INVALID_HANDLE_VALUE || recipe_unpack(k) || (tag_size & 3))
+		return 1;
+	memset(&z, 0, sizeof(z));
+	z.zalloc = layout_alloc;
+	z.zfree = layout_free;
+	if (inflateInit(&z) != Z_OK)
+		return 1;
+	c.p = recipe_in;
+	c.end = recipe_in + recipe_in_size;
+	c.bad = 0;
+	groups = leb(&c);
+	for (g = 0; g < groups && !c.bad; g++)
+	{
+		uint32_t runs, r, dest = 0, size, stored;
+		frame = g ? frame + leb(&c) : leb(&c);
+		runs = leb(&c);
+		if (c.bad || frame >= POOL_FRAMES)
+			goto done;
+		size = POOL_SIZE - frame * FRAME < FRAME ? POOL_SIZE - frame * FRAME : FRAME;
+		stored = pool.table[frame * 2 + 1];
+		if (disk_seek(file, pool.table[frame * 2]) || read_all(file, stored == size ? pool.words : pool.packed, stored))
+			goto done;
+		if (stored != size)
+		{
+			if (inflateReset(&z) != Z_OK)
+				goto done;
+			z.next_in = pool.packed;
+			z.avail_in = stored;
+			z.next_out = pool.words;
+			z.avail_out = size;
+			if (inflate(&z, Z_FINISH) != Z_STREAM_END || z.total_out != size)
+				goto done;
+		}
+		for (r = 0; r < runs && !c.bad; r++)
+		{
+			uint32_t offset, length;
+			dest += leb(&c);
+			offset = leb(&c);
+			length = leb(&c);
+			if (c.bad || !length || offset * 4 >= size || length > (size / 4) - offset || dest > words || length > words - dest)
+				goto done;
+			memcpy(tags + dest * 4, pool.words + offset * 4, length * 4);
+			dest += length;
+		}
+	}
+	failed = c.bad || leb(&c) || c.bad || c.p != c.end;
+done:
+	inflateEnd(&z);
+	return failed;
+}
+
+/* ---- a small map's recipe: its retail map's, less the words its fields are in ---- */
+
+static uint32_t field_words[MOST_BLOCKS + MOST_BSPS];
+static int field_word_count;
+
+/* fields[] (count of them, sorted) as words of the tag data (at tag_offset, tag_size bytes): 0 when each is a word in it */
+static int fields_to_words(int count, uint32_t tag_offset, uint32_t tag_size)
+{
+	int i;
+	field_word_count = 0;
+	for (i = 0; i < count; i++)
+	{
+		uint32_t at = fields[i].at;
+		if (at < tag_offset || at - tag_offset >= tag_size || (at - tag_offset) % 4)
+			return 1;
+		if (!field_word_count || field_words[field_word_count - 1] != (at - tag_offset) / 4)
+			field_words[field_word_count++] = (at - tag_offset) / 4;
+	}
+	return 0;
+}
+
+/* a run, less the field words: how many pieces it leaves, each written (e not NULL) */
+static uint32_t run_cut(uint32_t dest, uint32_t offset, uint32_t length, struct emit *e)
+{
+	int low = 0, high = field_word_count;
+	uint32_t count = 0;
+	while (low < high)
+	{
+		int middle = (low + high) / 2;
+		if (field_words[middle] < dest)
+			low = middle + 1;
+		else
+			high = middle;
+	}
+	while (length)
+	{
+		uint32_t cut = low < field_word_count && field_words[low] < dest + length ? field_words[low] : dest + length, step;
+		if (cut > dest)
+		{
+			count++;
+			if (e)
+			{
+				emit_leb(e, dest - e->end);
+				emit_leb(e, offset);
+				emit_leb(e, cut - dest);
+				e->end = cut;
+			}
+		}
+		step = cut - dest + (cut < dest + length ? 1u : 0u);
+		dest += step;
+		offset += step;
+		length -= step;
+		low++;
+	}
+	return count;
+}
+
+/* map k's small map's recipe into recipe_out (field_words set): 0 when it's the size the table says */
+static int recipe_small(int k)
+{
+	struct cursor c;
+	struct emit e;
+	uint32_t groups, g, frame, kept = 0, last = 0, written;
+	int pass;
+	if (recipe_unpack(k))
+		return 1;
+	e.out = recipe_out;
+	e.room = MOST_SMALL_RECIPE;
+	e.size = 0;
+	for (pass = 0; pass < 2; pass++)
+	{
+		c.p = recipe_in;
+		c.end = recipe_in + recipe_in_size;
+		c.bad = 0;
+		groups = leb(&c);
+		frame = 0;
+		written = 0;
+		if (pass)
+			emit_leb(&e, kept);
+		for (g = 0; g < groups && !c.bad; g++)
+		{
+			struct cursor runs_at;
+			uint32_t runs, r, dest = 0, count = 0;
+			frame = g ? frame + leb(&c) : leb(&c);
+			runs = leb(&c);
+			runs_at = c;
+			for (r = 0; r < runs && !c.bad; r++)
+			{
+				uint32_t offset, length;
+				dest += leb(&c);
+				offset = leb(&c);
+				length = leb(&c);
+				count += run_cut(dest, offset, length, NULL);
+				dest += length;
+			}
+			if (!count)
+				continue;
+			if (!pass)
+			{
+				kept++;
+				continue;
+			}
+			emit_leb(&e, written ? frame - last : frame);
+			emit_leb(&e, count);
+			e.end = 0;
+			for (r = 0, dest = 0; r < runs && !runs_at.bad; r++)
+			{
+				uint32_t offset, length;
+				dest += leb(&runs_at);
+				offset = leb(&runs_at);
+				length = leb(&runs_at);
+				run_cut(dest, offset, length, &e);
+				dest += length;
+			}
+			last = frame;
+			written++;
+		}
+		if (c.bad || leb(&c) || c.bad || c.p != c.end)
+			return 1;
+		if (pass)
+			emit_leb(&e, 0);
+	}
+	return e.size > e.room || e.size != retail_maps[k].small_recipe_size;
+}
+
 /* one small map being made, a piece of the original at a time (covered[] set first: cover() or cover_baked()) */
 struct small
 {
@@ -436,6 +951,8 @@ struct small
 	HANDLE file;
 	uint32_t length, gone;          /* the original's length unpacked, and the sectors left out of it */
 	uint32_t out, crc;              /* what's gone into it so far, unpacked (header and all), and its CRC32 */
+	uint32_t expect, recipe_at;     /* its length unpacked, as the table says, and where its recipe goes */
+	uint32_t tag_from, tag_to;      /* the original's tag data: zeros in it, but for the fields */
 	int first_moved, first_stay, first_field, field_count;
 	/* reusing the retail map's packed data (runs NULL: all of it packed, as before). The tap (small_tap) takes each run's
 	bits from what the retail map's reader reads, a little ahead of the small map's bytes (one CHUNK), and they wait in
@@ -656,14 +1173,18 @@ static int small_fields(struct small *s, struct restore_map const *map, struct m
 
 /* the small map's file begun at path, its header written: 0 when it's open (small_piece, then small_close or
 small_abandon). map: the original's header and length; gone: the sectors covered */
-static int small_open(struct small *s, struct restore_map const *map, uint32_t gone, int level, struct retail_map const *reuse,
-	char const *path)
+static int small_open(struct small *s, struct restore_map const *map, uint32_t gone, int level, struct retail_map const *retail,
+	struct retail_map const *reuse, char const *path)
 {
 	unsigned char small_header[HEADER];
 	uint32_t to;
 	s->length = map->length;
 	s->gone = gone;
 	s->out = SECTOR;
+	s->expect = retail->small_length;
+	s->recipe_at = (map->length - gone * SECTOR + 2047u) & ~2047u;
+	s->tag_from = u32(map->header + 0x10);
+	s->tag_to = s->tag_from + u32(map->header + 0x14);
 	s->first_moved = s->first_stay = 0;
 	s->runs = reuse && pending && reuse->run_count <= MOST_RUNS ? reuse->runs : NULL;
 	s->run_count = s->runs ? reuse->run_count : 0;
@@ -675,16 +1196,24 @@ static int small_open(struct small *s, struct restore_map const *map, uint32_t g
 	if (moved_down(u32(map->header + 0x10), &to))
 		return 1;
 	put32(small_header + 0x10, to);
-	/* the reference (docs/shared_maps.md): no pack's file, the stock one's, and the map's identity kept */
-	memset(small_header + REFERENCE_OFFSET, 0, 92);
+	/* the reference (docs/shared_maps.md): no pack's file, the stock one's, and the map's identity kept; its recipe
+	(format 4: version 3) */
+	memset(small_header + REFERENCE_OFFSET, 0, 0x7C);
 	put32(small_header + REFERENCE_OFFSET, REFERENCE_SIGNATURE);
-	put32(small_header + REFERENCE_OFFSET + 4, 2);
+	put32(small_header + REFERENCE_OFFSET + 4, 3);
 	put32(small_header + REFERENCE_OFFSET + 0x30, map->raw_size);
 	put32(small_header + REFERENCE_OFFSET + 0x34, u32(map->header + 0x64));
 	memcpy(small_header + REFERENCE_OFFSET + 0x38, "stock", 5);
 	put32(small_header + REFERENCE_OFFSET + 0x58, STOCK_CHECKSUM);
 	put32(small_header + REFERENCE_OFFSET + 0x5C, STOCK_LENGTH);
-	put32(small_header + 8, map->length - gone * SECTOR);
+	put32(small_header + REFERENCE_OFFSET + 0x68, s->recipe_at);
+	put32(small_header + REFERENCE_OFFSET + 0x6C, retail->small_recipe_size);
+	put32(small_header + REFERENCE_OFFSET + 0x70, POOL_CRC);
+	put32(small_header + REFERENCE_OFFSET + 0x74, POOL_SIZE);
+	put32(small_header + REFERENCE_OFFSET + 0x78, retail->small_tag_crc);
+	put32(small_header + 8, s->expect);
+	if (s->recipe_at + retail->small_recipe_size > s->expect)
+		return 1;
 	s->file = create(path);
 	if (s->file == INVALID_HANDLE_VALUE)
 		return 1;
@@ -749,6 +1278,9 @@ static int small_piece(struct small *s, uint32_t at, uint32_t size)
 			}
 		}
 	}
+	/* (its tag data: zeros but for the fields' words, the recipe's runs write the rest as it loads) */
+	if (overlap(s->tag_from, s->tag_to, at, size, &in_piece, &in_block, &n))
+		memset(chunk + in_piece, 0, n);
 	set_fields(s->field_count, &s->first_field, at, size);
 	for (sector = 0; sector * SECTOR < size; sector++)
 	{
@@ -760,6 +1292,36 @@ static int small_piece(struct small *s, uint32_t at, uint32_t size)
 		if (!s->runs) /* (reusing runs, the file's checked against the table's size and CRC instead) */
 			s->crc = crc_add(s->crc, chunk + sector * SECTOR, part);
 		s->out += part;
+	}
+	return 0;
+}
+
+/* the small map's last part, after the original's: zeros to its recipe, the recipe (recipe_out), zeros to its end. 0 when
+it's in */
+static int small_recipe_tail(struct small *s, uint32_t recipe_size)
+{
+	uint32_t from = s->length;          /* (past the original's end, for small_out: no run's there) */
+	int part;
+	if (s->out > s->recipe_at || s->recipe_at + recipe_size > s->expect)
+		return 1;
+	for (part = 0; part < 3; part++)
+	{
+		uint32_t left = part == 0 ? s->recipe_at - s->out : part == 1 ? recipe_size : s->expect - s->recipe_at - recipe_size;
+		unsigned char const *p = recipe_out;
+		while (left)
+		{
+			uint32_t n = part == 1 ? left : left > SECTOR ? SECTOR : left;
+			if (part != 1)
+				p = zeros;
+			if (small_out(s, from, p, n))
+				return 1;
+			if (!s->runs)
+				s->crc = crc_add(s->crc, p, n);
+			s->out += n;
+			from += n;
+			left -= n;
+			p += n;
+		}
 	}
 	return 0;
 }
@@ -778,7 +1340,7 @@ static int small_close(struct small *s, uint32_t *small_length, uint32_t *small_
 {
 	uint32_t tail;
 	int failed;
-	if (s->out != s->length - s->gone * SECTOR)
+	if (s->out != s->expect)
 	{
 		small_abandon(s);
 		return 1;
@@ -818,7 +1380,8 @@ static int write_small(char const *retail_path, struct retail_map const *retail,
 	gone = cover(blocks, map->blocks, map->length);
 	if (small_fields(&s, map, bsps, blocks) || reader_open(&r, retail_path, header))
 		return 1;
-	if (small_open(&s, map, gone, level, NULL, path))
+	if (fields_to_words(s.field_count, u32(map->header + 0x10), u32(map->header + 0x14)) || recipe_small((int)(retail - retail_maps)) ||
+		small_open(&s, map, gone, level, retail, NULL, path))
 	{
 		reader_close(&r);
 		return 1;
@@ -829,7 +1392,8 @@ static int write_small(char const *retail_path, struct retail_map const *retail,
 		if (reader_pull(&r, chunk, size) || small_piece(&s, at, size))
 			goto stop;
 	}
-	if (reader_pull(&r, NULL, 0) || reader_raw(&r, &raw_size, &raw_crc) || raw_size != retail->raw_size || raw_crc != retail->raw_crc)
+	if (reader_pull(&r, NULL, 0) || reader_raw(&r, &raw_size, &raw_crc) || raw_size != retail->raw_size || raw_crc != retail->raw_crc ||
+		small_recipe_tail(&s, retail->small_recipe_size))
 		goto stop;
 	reader_close(&r);
 	return small_close(&s, small_length, small_crc, file_size, file_crc);
@@ -843,14 +1407,16 @@ stop:
 
 
 /* the original's unpacked bytes, every step undoing one of write_small's: checked against its CRC, and given to w if it's
-there (the retail file's stream). small_path: the small map; stock: stock.shared */
+there (the retail file's stream). small_path: the small map; stock: stock.shared; pool_file: stocktags.shared
+(pool_read_open's) and tags, room for a map's tag data (MOST_TAG_SIZE): a small map with a recipe (format 4) has its tag
+data made from the pool (its retail map's recipe: every word), and what follows the original's bytes is passed over */
 static int make_original(char const *small_path, struct restore_map const *map, struct map_bsp const *bsps,
-	struct restore_block const *blocks, HANDLE stock, struct writer *w)
+	struct restore_block const *blocks, HANDLE stock, HANDLE pool_file, unsigned char *tags, struct writer *w)
 {
 	unsigned char header[HEADER];
 	struct reader r;
-	uint32_t k, c, gone, sectors, crc;
-	int first_moved = 0, first_field = 0, field_count = 0, failed = 1;
+	uint32_t k, c, gone, sectors, crc, small_length, tag_from = u32(map->header + 0x10), tag_size = u32(map->header + 0x14);
+	int first_moved = 0, first_field = 0, field_count = 0, failed = 1, recipe = -1;
 
 	if (map->length > MOST_MAP_LENGTH || map->length < HEADER || map->bsps > MOST_BSPS)
 		return 1;
@@ -873,7 +1439,18 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 	gone = cover(blocks, map->blocks, map->length);
 	if (reader_open(&r, small_path, header))
 		return 1;
-	if (u32(header + 8) != map->length - gone * SECTOR)
+	small_length = map->length - gone * SECTOR;
+	if (u32(header + REFERENCE_OFFSET + 4) >= 3)
+	{
+		for (k = 0; k < STOCK_MAPS; k++)
+			if (!strcmp(retail_maps[k].name, map->name))
+				recipe = (int)k;
+		if (recipe < 0 || !tags || tag_size > MOST_TAG_SIZE || tag_from > map->length - tag_size ||
+			u32(header + 8) != retail_maps[recipe].small_length || pool_tags(pool_file, recipe, tags, tag_size))
+			goto done;
+		small_length = retail_maps[recipe].small_length;
+	}
+	if (u32(header + 8) != small_length)
 		goto done;
 	sectors = map->length / SECTOR + (map->length % SECTOR ? 1 : 0);
 	crc = crc_add(crc_add(0, NULL, 0), map->header, HEADER);
@@ -900,9 +1477,17 @@ static int make_original(char const *small_path, struct restore_map const *map, 
 					goto done;
 			}
 		}
+		if (recipe >= 0 && overlap(tag_from, tag_from + tag_size, at, size, &in_piece, &in_block, &n))
+			memcpy(chunk + in_piece, tags + in_block, n);
 		set_fields(field_count, &first_field, at, size);
 		crc = crc_add(crc, chunk, size);
 		if (w && writer_put(w, chunk, size))
+			goto done;
+	}
+	/* (the small map's recipe and what pads it: passed over) */
+	for (k = map->length - gone * SECTOR; k < small_length; k += CHUNK)
+	{
+		if (reader_pull(&r, chunk, small_length - k > CHUNK ? CHUNK : small_length - k))
 			goto done;
 	}
 	failed = reader_pull(&r, NULL, 0) || crc != map->crc;
@@ -938,14 +1523,15 @@ static void here_clear(char const *halo);
 
 static void recover(char const *halo)
 {
-	char table[240], path[240], old[240], fresh[240], temp[240], building[240];
+	char table[240], path[240], old[240], fresh[240], temp[240], building[240], building_tags[240];
 	int k, committed, small = 0;
 	stockmaps_cache_clear();
 	here_clear(halo);
 	maps_file(table, sizeof(table), halo, "stock.restore");
 	maps_file(building, sizeof(building), halo, "stock.shared.oxtmp");
+	maps_file(building_tags, sizeof(building_tags), halo, "stocktags.shared.oxtmp");
 	committed = exists(table);
-	if (!committed && !exists(building))
+	if (!committed && !exists(building) && !exists(building_tags))
 		return;
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
@@ -976,6 +1562,7 @@ static void recover(char const *halo)
 			move_file(fresh, path);
 	}
 	delete_file(building);
+	delete_file(building_tags);
 	maps_file(temp, sizeof(temp), halo, "stock.index.oxtmp");
 	delete_file(temp);
 	maps_file(temp, sizeof(temp), halo, "stock.restore.oxtmp");
@@ -997,6 +1584,8 @@ static void recover(char const *halo)
 	{
 		maps_file(temp, sizeof(temp), halo, "stock.shared");
 		delete_file(temp);
+		maps_file(temp, sizeof(temp), halo, "stocktags.shared");
+		delete_file(temp);
 		maps_file(temp, sizeof(temp), halo, "stock.index");
 		delete_file(temp);
 		delete_file(table);
@@ -1007,7 +1596,7 @@ static void recover(char const *halo)
 void stockmaps_examine(char const *halo, struct stockmaps_look *look)
 {
 	char path[240];
-	int k;
+	int k, recipes = 0;
 	recover(halo);
 	memset(look, 0, sizeof(*look));
 	for (k = 0; k < STOCK_MAPS; k++)
@@ -1021,13 +1610,18 @@ void stockmaps_examine(char const *halo, struct stockmaps_look *look)
 		if (GetFileSize(file, NULL) == retail_maps[k].raw_size)
 			look->retail_sized++;
 		if (!read_all(file, header, HEADER) && u32(header + REFERENCE_OFFSET) == REFERENCE_SIGNATURE)
+		{
 			look->small++;
+			recipes += u32(header + REFERENCE_OFFSET + 4) >= 3;
+		}
 		file_close(file);
 	}
 	maps_file(path, sizeof(path), halo, "stock.restore");
 	look->restorable = exists(path);
 	maps_file(path, sizeof(path), halo, "stock.shared");
 	look->restorable = look->restorable && exists(path);
+	maps_file(path, sizeof(path), halo, "stocktags.shared");
+	look->restorable = look->restorable && (!recipes || exists(path));
 }
 
 static unsigned long long free_bytes(char const *path)
@@ -1140,6 +1734,8 @@ static void clear_temporary(char const *halo)
 	delete_file(path);
 	maps_file(path, sizeof(path), halo, "stock.shared.oxtmp");
 	delete_file(path);
+	maps_file(path, sizeof(path), halo, "stocktags.shared.oxtmp");
+	delete_file(path);
 	maps_file(path, sizeof(path), halo, "stock.restore.oxtmp");
 	delete_file(path);
 	maps_file(path, sizeof(path), halo, "stock.unpacked");
@@ -1148,7 +1744,7 @@ static void clear_temporary(char const *halo)
 }
 
 /* the room while it works: stock.shared, the two tables, and the biggest small map beside its retail one */
-#define SWAP_ROOM ((unsigned long long)STOCK_LENGTH + SMALL_LEVEL_ROOM + 8u * MB)
+#define SWAP_ROOM ((unsigned long long)STOCK_LENGTH + POOL_ROOM + SMALL_LEVEL_ROOM + 8u * MB)
 
 /* ---- the cache drives: each small map made there in the one pass, then copied into the maps folder ---- */
 
@@ -1361,8 +1957,8 @@ static int copy_small(char const *from, char const *to, uint32_t size, uint32_t 
 
 /* step 1: stock.shared's file and the restore table, in one pass through the retail maps; with layout (the table's, unpacked)
 and a cache drive with room, each map's small map too (cached[]). 0 when done, else error[256] */
-static int build_stock(char const *halo, char const *building_path, unsigned char *table, uint32_t *table_size, struct block *found,
-	unsigned char *tail, unsigned char const *layout, uint32_t layout_size, stockmaps_say_t say, char *error)
+static int build_stock(char const *halo, char const *building_path, char const *pool_path, unsigned char *table, uint32_t *table_size,
+	struct block *found, unsigned char *tail, unsigned char const *layout, uint32_t layout_size, stockmaps_say_t say, char *error)
 {
 	char path[240], cache_path[240];
 	unsigned char header[HEADER], stock_header[HEADER];
@@ -1389,6 +1985,12 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 		left -= part;
 	}
 	step_end("stock.shared filled with zeros");
+	if (pool_open(pool_path))
+	{
+		file_close(stock);
+		text_print(error, 256, "Couldn't write maps\\stocktags.shared: nothing changed.");
+		return 1;
+	}
 	for (k = 0; k < STOCK_MAPS; k++)
 	{
 		struct retail_map const *retail = &retail_maps[k];
@@ -1409,6 +2011,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			say_text(say, 1, "(%s.map: its header isn't the retail map's)", retail->name);
 			text_print(error, 256, "%s.map isn't the retail map this knows: nothing changed.", retail->name);
 			file_close(stock);
+		pool_abandon();
 			return 1;
 		}
 		memset(map, 0, sizeof(*map));
@@ -1436,7 +2039,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			!cover_baked(layout, layout_size, k, retail->length, &gone))
 		{
 			s.field_count = s.first_field = 0;
-			if (!small_open(&s, map, gone, 1, retail, cache_path))
+			if (!small_open(&s, map, gone, 1, retail, retail, cache_path))
 			{
 				making = 1;
 				if (s.runs)
@@ -1467,6 +2070,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 					{
 						reader_close(&r);
 						file_close(stock);
+		pool_abandon();
 						if (making)
 						{
 							small_abandon(&s);
@@ -1503,6 +2107,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			}
 			text_print(error, 256, "%s.map isn't the retail map this knows: nothing changed.", retail->name);
 			file_close(stock);
+		pool_abandon();
 			return 1;
 		}
 		reader_close(&r);
@@ -1518,17 +2123,23 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 			blocks[b].size = found[b].size;
 			blocks[b].stock = retail->places[b];
 		}
+		/* (its new words into the stock tag pool) */
+		if (pool_map(k, view.tags, view.tag_size))
+			goto bad_tags;
 		*table_size += (uint32_t)(sizeof(*map) + map->bsps * sizeof(*bsps) + map->blocks * sizeof(*blocks));
 		/* (the small map's last part, its fields set now; it must be the small map the table says, else it's made as before) */
 		if (making)
 		{
-			int failed = small_fields(&s, map, bsps, blocks) || (s.field_count && fields[0].at < defer);
+			int failed = small_fields(&s, map, bsps, blocks) || (s.field_count && fields[0].at < defer) ||
+				fields_to_words(s.field_count, view.tag_offset, view.tag_size) || recipe_small(k);
 			for (at = defer; !failed && at < retail->length; at += CHUNK)
 			{
 				uint32_t size = retail->length - at > CHUNK ? CHUNK : retail->length - at;
 				memcpy(chunk, tail + (at - defer), size);
 				failed = small_piece(&s, at, size);
 			}
+			if (!failed)
+				failed = small_recipe_tail(&s, retail->small_recipe_size);
 			if (failed)
 				small_abandon(&s);
 			else
@@ -1554,6 +2165,7 @@ static int build_stock(char const *halo, char const *building_path, unsigned cha
 bad_map:
 		reader_close(&r);
 		file_close(stock);
+		pool_abandon();
 		if (making)
 		{
 			small_abandon(&s);
@@ -1563,6 +2175,7 @@ bad_map:
 		return 1;
 bad_tags:
 		file_close(stock);
+		pool_abandon();
 		if (making)
 		{
 			small_abandon(&s);
@@ -1581,9 +2194,16 @@ bad_tags:
 	memcpy(stock_header + 0x7FC, "toof", 4);
 	if (disk_seek(stock, 0) || write_all(stock, stock_header, HEADER) || !finish(stock))
 	{
+		pool_abandon();
 		text_print(error, 256, "Couldn't finish maps\\stock.shared: nothing changed.");
 		return 1;
 	}
+	if (pool_close())
+	{
+		text_print(error, 256, "Couldn't finish maps\\stocktags.shared: nothing changed.");
+		return 1;
+	}
+	step_end("stocktags.shared finished (%lu KB)", (unsigned long)(pool.at / 1024));
 	return 0;
 }
 
@@ -1688,6 +2308,7 @@ static unsigned char *layout_unpack(void)
 static int convert(char const *halo, stockmaps_say_t say, char *error)
 {
 	char path[240], other[240], building_path[240], shared_path[240], table_path[240], temp_table[240], index_path[240], temp_index[240];
+	char tags_path[240], temp_tags[240];
 	unsigned char *table = NULL, *tail = NULL, *layout = NULL;
 	struct block *found = NULL;
 	struct stockmaps_look look;
@@ -1703,6 +2324,8 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 	maps_file(building_path, sizeof(building_path), halo, "stock.shared.oxtmp");
 	maps_file(temp_table, sizeof(temp_table), halo, "stock.restore.oxtmp");
 	maps_file(temp_index, sizeof(temp_index), halo, "stock.index.oxtmp");
+	maps_file(tags_path, sizeof(tags_path), halo, "stocktags.shared");
+	maps_file(temp_tags, sizeof(temp_tags), halo, "stocktags.shared.oxtmp");
 	whole_begin();
 	if (look.small == STOCK_MAPS)
 	{
@@ -1713,6 +2336,13 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 	if (look.small && !committed)
 	{
 		text_print(error, 256, "%d of the stock maps draw on stock.shared, but stock.shared or stock.restore isn't there.", look.small);
+		return 1;
+	}
+	if (committed && !exists(tags_path))
+	{
+		/* (an older installer's swap, its small maps without recipes: this one's would need stocktags.shared) */
+		text_print(error, 256, "An older installer made %d of the stock maps small: put them back with X first, then swap them "
+			"again.", look.small);
 		return 1;
 	}
 	if (source_folder && free_bytes(halo) < stockmaps_build_need(!leave_levels))
@@ -1774,7 +2404,8 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 		}
 		/* 1. the shared file and the restore table */
 		step_begin();
-		failed = build_stock(halo, building_path, table, &table_size, found, tail, layout, STOCK_LAYOUT_LENGTH, say, error);
+		failed = build_stock(halo, building_path, temp_tags, table, &table_size, found, tail, layout, STOCK_LAYOUT_LENGTH, say,
+			error);
 		back_step(1); /* (the last small map's read-back finished) */
 		if (failed)
 			goto done;
@@ -1794,6 +2425,12 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 			goto done;
 		}
 		step_end("stock.shared read back");
+		if (pool_check(temp_tags))
+		{
+			text_print(error, 256, "stocktags.shared didn't read back right: nothing changed.");
+			goto done;
+		}
+		step_end("stocktags.shared read back");
 		if (index_write(temp_index))
 		{
 			text_print(error, 256, "Couldn't write stock.index: nothing changed.");
@@ -1833,10 +2470,19 @@ static int convert(char const *halo, stockmaps_say_t say, char *error)
 			text_print(error, 256, "Couldn't put stock.shared in place: nothing changed.");
 			goto done;
 		}
+		delete_file(tags_path);
+		if (!move_file(temp_tags, tags_path))
+		{
+			delete_file(shared_path);
+			delete_file(index_path);
+			text_print(error, 256, "Couldn't put stocktags.shared in place: nothing changed.");
+			goto done;
+		}
 		flush(halo);
 		delete_file(table_path);
 		if (!move_file(temp_table, table_path))
 		{
+			delete_file(tags_path);
 			delete_file(shared_path);
 			delete_file(index_path);
 			text_print(error, 256, "Couldn't put stock.restore in place: nothing changed.");
@@ -1964,8 +2610,9 @@ done:
 
 static int restore(char const *halo, stockmaps_say_t say, char *error)
 {
-	char path[240], other[240], shared_path[240], table_path[240], index_path[240];
-	unsigned char *table = NULL;
+	char path[240], other[240], shared_path[240], table_path[240], index_path[240], tags_path[240];
+	unsigned char *table = NULL, *tags = NULL;
+	HANDLE pool_file = INVALID_HANDLE_VALUE;
 	struct stockmaps_look look;
 	struct restore_file *file_head;
 	HANDLE file = INVALID_HANDLE_VALUE;
@@ -1986,6 +2633,7 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 	maps_file(table_path, sizeof(table_path), halo, "stock.restore");
 	maps_file(shared_path, sizeof(shared_path), halo, "stock.shared");
 	maps_file(index_path, sizeof(index_path), halo, "stock.index");
+	maps_file(tags_path, sizeof(tags_path), halo, "stocktags.shared");
 	/* the table, checked */
 	if (table_read(table_path, &table, &table_size, error))
 		goto done;
@@ -2051,6 +2699,18 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 		text_print(error, 256, "Couldn't read stock.shared: nothing changed.");
 		goto done;
 	}
+	/* (format 4's small maps make their tag data from stocktags.shared: an older swap's have none) */
+	if (exists(tags_path))
+	{
+		pool_file = pool_read_open(tags_path);
+		tags = malloc(MOST_TAG_SIZE);
+		if (pool_file == INVALID_HANDLE_VALUE || !tags)
+		{
+			text_print(error, 256, pool_file == INVALID_HANDLE_VALUE ? "stocktags.shared isn't the one these maps were made "
+				"with: nothing changed." : "Not enough memory: nothing changed.");
+			goto done;
+		}
+	}
 	/* each map */
 	at = sizeof(struct restore_file);
 	for (k = 0; k < STOCK_MAPS; k++)
@@ -2097,7 +2757,7 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 			writer_open(&w, 6, out, crc_add(crc_add(0, NULL, 0), map->header, HEADER));
 		if (!failed)
 		{
-			failed = make_original(path, map, bsps, blocks, file, &w);
+			failed = make_original(path, map, bsps, blocks, file, pool_file, tags, &w);
 			if (failed)
 				deflateEnd(&w.z);
 			else
@@ -2153,7 +2813,11 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 		goto done;
 	}
 	/* all back: what the swap added goes */
+	if (pool_file != INVALID_HANDLE_VALUE)
+		file_close(pool_file);
+	pool_file = INVALID_HANDLE_VALUE;
 	delete_file(shared_path);
+	delete_file(tags_path);
 	delete_file(index_path);
 	flush(halo);
 	delete_file(table_path);
@@ -2163,6 +2827,9 @@ static int restore(char const *halo, stockmaps_say_t say, char *error)
 done:
 	if (file != INVALID_HANDLE_VALUE)
 		file_close(file);
+	if (pool_file != INVALID_HANDLE_VALUE)
+		file_close(pool_file);
+	free(tags);
 	free(table);
 	return result;
 }
@@ -2170,7 +2837,7 @@ done:
 /* (with the disk thread on: it reads ahead and writes behind while zlib works) */
 unsigned long long stockmaps_build_need(int campaign)
 {
-	unsigned long long need = (unsigned long long)STOCK_LENGTH + 8u * MB;
+	unsigned long long need = (unsigned long long)STOCK_LENGTH + POOL_ROOM + 8u * MB;
 	int k;
 	for (k = 0; k < STOCK_MAPS; k++)
 		if (campaign || k < MULTIPLAYER_MAPS)

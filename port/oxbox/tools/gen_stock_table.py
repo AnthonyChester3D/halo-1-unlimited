@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gen_stock_table.py RETAIL_MAPS_DIR OUT.h: the installer's table of the retail maps (installer/stockmaps_table.h): each file's
+"""gen_stock_table.py RETAIL_MAPS_DIR OUT.h STOCK_RECIPES: the installer's table of the retail maps (installer/stockmaps_table.h): each file's
 size and CRC, and unpacked, as shared_pass.py reads them; where each of its blocks is in stock.shared (a level's blocks that
 fewer than three levels use stay in it); and which it's the first copy of, by offset: all a console needs to build stock.shared
 in one pass through the maps, with no hashing and no counting; each small map's length and CRC32 unpacked (what the console's
@@ -13,8 +13,11 @@ bytes (and the 32 KB before each, which a block can refer back to) the small map
 followed by an empty stored block (so what follows starts on a byte), and only the rest is packed (zlib level 1, raw, from a
 fresh start after each run): a console packs a fifth of what it did. The table has each map's runs (where they are unpacked,
 and in the retail file's bits, and the Adler-32 of their bytes) and the small map's file as it must come out (its size and
-CRC); and each retail map's CRC unpacked (the restore table's: the file's CRC and zlib's own check say it's that). It holds no
-data of the maps' but those figures."""
+CRC); and each retail map's CRC unpacked (the restore table's: the file's CRC and zlib's own check say it's that).
+Format 4 (docs/shared_maps.md): each small map has a recipe (tagrecipe.stock_small: its tag data zeros but for its fields'
+words), and stock_recipes.h, beside OUT.h, has each retail map's recipe from STOCK_RECIPES (tagpool.c's stock_recipes.bin),
+packed one by one: the console makes the stock tag pool (stocktags.shared) from them and each small map's recipe. It holds no
+data of the maps' but those figures (a recipe holds places and lengths, no word of the tag data)."""
 import ctypes
 import ctypes.util
 import hashlib
@@ -25,6 +28,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shared_pass as sp
+import tagrecipe as tr
 
 
 def merge(ranges):
@@ -138,11 +142,14 @@ def spliced(raw, small, runs):
 
 
 def main():
-    folder, out = sys.argv[1], sys.argv[2]
+    folder, out, recipes_path = sys.argv[1], sys.argv[2], sys.argv[3]
     path = lambda n: os.path.join(folder, n + '.map')
+    pool_size, pool_crc, recipes = tr.stock_recipes(recipes_path)
+    pool, blob, most_recipe, most_small_recipe, most_groups = bytearray(), bytearray(), 0, 0, 0
     stock, _ = sp.stock_layout([path(n) for n in sp.STOCK_NAMES], [path(n) for n in sp.LEVEL_NAMES])
     lines = ['/* stockmaps_table.h: made by tools/gen_stock_table.py from the retail maps (the same on the three NTSC discs) */',
-             '#define STOCK_LENGTH %uu' % len(stock.data), '#define STOCK_CHECKSUM 0x%08xu' % stock.checksum, '']
+             '#define STOCK_LENGTH %uu' % len(stock.data), '#define STOCK_CHECKSUM 0x%08xu' % stock.checksum,
+             '#define POOL_SIZE %uu' % pool_size, '#define POOL_CRC 0x%08xu' % pool_crc, '']
     rows, most_blocks, most_block, most_tags, most_length = [], 0, 0, 0, 0
     written = set()
     layout, most_tail = bytearray(), 0
@@ -165,10 +172,28 @@ def main():
             small = sp.rebuild(m, [(sp.STOCK_BIT, stock.placed[k]) for k in keys], None, stock, pad=False)
         else:
             small = sp.rebuild(m, [(sp.STOCK_BIT, stock.placed[k]) if k in stock.placed else None for k in keys], None, stock, pad=False)
+        # (format 4: the pool grown by this map's new words, and its small map with its recipe, checked rebuilt from the pool)
+        tag_size, tag_crc, recipe = recipes[n]
+        groups, pack_groups = tr.decode(recipe)
+        tags = m.data[m.tag_offset:m.tag_offset + m.tag_size]
+        assert tag_size == m.tag_size and zlib.crc32(tags) & 0xFFFFFFFF == tag_crc and not pack_groups
+        pool_end = tr.pool_add(pool, groups, tags)
+        old_length = len(small)
+        small, own, small_tag_crc = tr.stock_small(small, m, [f for f, o, sz in m.blocks] + list(m.bsp_fields), recipe,
+                                                   pool_size, pool_crc)
+        at = sp.u32(small, 0x10)
+        check = bytearray(small[at:at + m.tag_size])
+        tr.apply(tr.decode(own)[0], check, pool)
+        assert zlib.crc32(check) & 0xFFFFFFFF == small_tag_crc
+        packed_recipe = zlib.compress(recipe, 9)
+        recipe_row = (len(blob), len(packed_recipe), len(recipe), pool_end, len(own), small_tag_crc)
+        blob += packed_recipe
+        most_recipe, most_small_recipe = max(most_recipe, len(recipe)), max(most_small_recipe, len(own))
+        most_groups = max(most_groups, len(groups))
         # (each map: how many moved ranges and staying ones, then each range as the gap from the last one's end and its size)
         moved = merge([(o, o + sz) for (f, o, sz), p in zip(m.blocks, places) if p != 0xFFFFFFFF])
         # (the file the console writes, reusing the retail map's packed data: checked by unpacking it)
-        runs, in_small, waiting = reuse_runs(m, small, moved, m.tag_offset // sp.SECTOR * sp.SECTOR)
+        runs, in_small, waiting = reuse_runs(m, small[:old_length], moved, m.tag_offset // sp.SECTOR * sp.SECTOR)
         most_pending = max(most_pending, waiting)
         most_runs = max(most_runs, len(runs))
         file = spliced(m.raw, small, in_small)
@@ -200,15 +225,19 @@ def main():
         if not firsts:
             lines.append('\t{0,0,0},')
         lines.append('};')
-        rows.append('\t{"%s", %uu, 0x%08xu, %uu, 0x%08xu, 0x%08xu, %d, places_%s, firsts_%s, %d, %uu, 0x%08xu, %uu, 0x%08xu, runs_%s, %d},' % (n,
+        rows.append('\t{"%s", %uu, 0x%08xu, %uu, 0x%08xu, 0x%08xu, %d, places_%s, firsts_%s, %d, %uu, 0x%08xu, %uu, 0x%08xu, runs_%s, %d, '
+                    '%uu, %uu, %uu, %uu, %uu, 0x%08xu},' % ((n,
                     len(m.raw), zlib.crc32(m.raw) & 0xFFFFFFFF, len(m.data), sp.u32(m.data, 0x64), zlib.crc32(bytes(m.data)) & 0xFFFFFFFF,
                     len(m.blocks), n, n, len(firsts), len(small), zlib.crc32(bytes(small)) & 0xFFFFFFFF, packed, zlib.crc32(file) & 0xFFFFFFFF,
-                    n, len(runs)))
+                    n, len(runs)) + recipe_row))
         print(n, 'runs', len(runs), 'reused %.1f MB of %.1f' % (sum(r[1] - r[0] for r in runs) / 1e6, len(small) / 1e6), 'file %.1f MB' % (packed / 1e6), flush=True)
     assert len(written) == len(stock.placed)
+    assert len(pool) == pool_size and zlib.crc32(pool) & 0xFFFFFFFF == pool_crc
     lines += ['', '#define MOST_MAP_BLOCKS %d' % most_blocks, '#define MOST_BLOCK_SIZE %uu' % most_block,
               '#define MOST_TAG_SIZE %uu' % most_tags, '#define MOST_MAP_LENGTH %uu' % most_length,
-              '#define MOST_TAIL %uu' % most_tail, '#define MOST_RUNS %d' % most_runs, '#define MOST_PENDING %uu' % most_pending, '#define STOCK_BLOCKS %d' % len(stock.placed), '#define STOCK_LEVELS %d' % len(sp.LEVEL_NAMES), '',
+              '#define MOST_TAIL %uu' % most_tail,
+              '#define MOST_RECIPE %uu' % most_recipe, '#define MOST_SMALL_RECIPE %uu' % most_small_recipe,
+              '#define MOST_RECIPE_GROUPS %uu' % most_groups, '#define MOST_RUNS %d' % most_runs, '#define MOST_PENDING %uu' % most_pending, '#define STOCK_BLOCKS %d' % len(stock.placed), '#define STOCK_LEVELS %d' % len(sp.LEVEL_NAMES), '',
               'static struct retail_map const retail_maps[STOCK_MAPS] = {'] + rows + ['};', '']
     # stock.index's entries, in stock.shared's order
     # the maps' blocks and BSPs, packed
@@ -225,6 +254,13 @@ def main():
         lines.append('\t{{%s}, %uu, %uu},' % (','.join('%u' % b for b in digest), at, size))
     lines += ['};', '']
     open(out, 'w').write('\n'.join(lines))
+    # each retail map's recipe, packed one by one (retail_maps[].recipe_at, recipe_packed)
+    recipe_lines = ['/* stock_recipes.h: made by tools/gen_stock_table.py: the 23 retail maps\' recipes (format 4), each packed with zlib */',
+                    '#define STOCK_RECIPES_SIZE %uu' % len(blob), 'static unsigned char const stock_recipes[STOCK_RECIPES_SIZE] = {']
+    for at in range(0, len(blob), 40):
+        recipe_lines.append(','.join('%u' % b for b in blob[at:at + 40]) + ',')
+    recipe_lines += ['};', '']
+    open(os.path.join(os.path.dirname(os.path.abspath(out)), 'stock_recipes.h'), 'w').write('\n'.join(recipe_lines))
     for l in lines:
         if l.startswith('#define'):
             print(l)
