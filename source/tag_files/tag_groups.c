@@ -59,10 +59,30 @@ place of whatever lies past the block, the data or the tags. Whatever
 reads it reads an element or tag with nothing in it (no elements in its
 blocks, no tags referenced, every index 0); whatever writes it writes
 nowhere that matters */
+static long tag_empty_data_given = TAG_EMPTY_DATA_SIZE;
+
 void *tag_empty_data(
 	void)
 {
 	csmemset(tag_empty_data_bytes, 0, sizeof(tag_empty_data_bytes));
+	tag_empty_data_given = TAG_EMPTY_DATA_SIZE;   /* (v1.187: all of it given: the next sized caller zeroes all) */
+
+	return tag_empty_data_bytes;
+}
+
+/* oxbox (v1.187): the empty data for a caller that asked for size bytes (an element or a tag's data): only those
+zeroed again. A map that asks every frame for an element that isn't there (Boxfight's T4d Flood Room: an index of -1
+into an empty block, many times a frame) had all 16 KB zeroed each time, ~2 MB a frame: memset was 60% of the
+processor there (console profile). Zeroed: what this caller asked for and what the one before was given (what it
+may have written), so the buffer stays zeros but for the last caller's part, as when all of it was zeroed each time */
+static void *tag_empty_data_sized(
+	long size)
+{
+	long zero = size > tag_empty_data_given ? size : tag_empty_data_given;
+
+	if (zero > 0)
+		csmemset(tag_empty_data_bytes, 0, (unsigned long)zero);
+	tag_empty_data_given = size > 0 ? size : 0;
 
 	return tag_empty_data_bytes;
 }
@@ -113,7 +133,7 @@ void* tag_data_get_pointer(
 	if (size < 0 || offset < 0 || offset > data->size || size > data->size - offset || (size && !data->address))
 	{
 		tag_index_error("data", offset, data->size);
-		return size <= TAG_EMPTY_DATA_SIZE ? tag_empty_data() : NULL;
+		return size <= TAG_EMPTY_DATA_SIZE ? tag_empty_data_sized(size) : NULL;
 	}
 
 	return (void *)((byte *)data->address + offset);
@@ -147,7 +167,7 @@ void *tag_block_get_element_with_size(
 	if (index < 0 || index >= block->count || !block->address)
 	{
 		tag_index_error("block element", index, block->count);
-		return element_size <= TAG_EMPTY_DATA_SIZE ? tag_empty_data() : NULL;
+		return element_size <= TAG_EMPTY_DATA_SIZE ? tag_empty_data_sized(element_size) : NULL;
 	}
 
 	return (void *)((byte *)block->address + (index * element_size));

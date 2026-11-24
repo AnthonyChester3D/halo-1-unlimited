@@ -484,6 +484,13 @@ boolean collision_test_vector(
 	struct collision_result *collision)
 {
 	boolean hit = FALSE;
+#if defined(OXBOX_CALL_COUNT)
+	{
+		extern void oxbox_count_call(int kind, unsigned long caller);
+
+		oxbox_count_call(5, (unsigned long)__builtin_return_address(0));
+	}
+#endif
 	boolean test_environment = TEST_FLAG(flags, _collision_test_structure_bit) ||
 		TEST_FLAG(flags, _collision_test_media_bit) ||
 		TEST_FLAG(flags, _collision_test_objects_bit);

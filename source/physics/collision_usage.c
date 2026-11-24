@@ -574,6 +574,12 @@ static short collision_log_get_current_user(
 void collision_log_start_time(
 	LARGE_INTEGER *start_time)
 {
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox (v1.186): the collision usage table is a debug build's (the retail XBE has none of its names); it ran
+	around every collision test, asking twice whether a game was in progress */
+	(void)start_time;
+	return;
+#endif
 	/* port: the clock is read only when the times are shown
 	(collision_log_time): this runs twice for every collision test, and a
 	read of the clock is slow in a browser */
@@ -594,6 +600,13 @@ void collision_log_end_time(
 	LARGE_INTEGER end_time;
 	short user;
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox (v1.186): the collision usage table is a debug build's (the retail XBE has none of its names); it ran
+	around every collision test, asking twice whether a game was in progress */
+	(void)collision_function;
+	(void)start_time;
+	return;
+#endif
 	user = collision_log_get_current_user(collision_function);
 	/* port: not timed (collision_log_start_time) */
 	if (user != NONE && start_time)
@@ -617,6 +630,12 @@ void collision_log_usage(
 {
 	short user;
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox (v1.186): the collision usage table is a debug build's (the retail XBE has none of its names); it ran
+	around every collision test, asking twice whether a game was in progress */
+	(void)collision_function;
+	return;
+#endif
 	user = collision_log_get_current_user(collision_function);
 	if (user != NONE)
 	{

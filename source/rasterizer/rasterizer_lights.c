@@ -837,6 +837,24 @@ void rasterizer_lens_flare_submit_for_cluster(
 			structure_lens_flare= TAG_BLOCK_GET_ELEMENT(&structure_bsp->lens_flares, marker->lens_flare_index, struct structure_lens_flare);
 
 			{
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox (v1.187): the two compressed vectors depend only on the marker's three direction bytes,
+				and were worked out again for every visible marker every frame (a perpendicular, two
+				normalizations, two compressions: ~3% of a10's hangar shot with the flares' compression, console
+				profile). Kept by those bytes: the same answers, worked out once */
+				static struct { unsigned long key, direction, up; } marker_vectors[512];
+				unsigned long const key = 0x1000000 | (unsigned long)(byte)marker->i_direction |
+					((unsigned long)(byte)marker->j_direction << 8) | ((unsigned long)(byte)marker->k_direction << 16);
+				unsigned long const slot = ((key * 2654435761u) >> 23) & 511;
+
+				if (marker_vectors[slot].key == key)
+				{
+					parameters.compressed_direction= marker_vectors[slot].direction;
+					parameters.compressed_up= marker_vectors[slot].up;
+				}
+				else
+#endif
+				{
 				real_vector3d direction;
 				real_vector3d up;
 
@@ -852,6 +870,12 @@ void rasterizer_lens_flare_submit_for_cluster(
 
 				parameters.compressed_direction= compress_real_vector3d_to_int32_clamp(&direction);
 				parameters.compressed_up= compress_real_vector3d_to_int32_clamp(&up);
+#if defined(HALO_XBOX_TARGET)
+				marker_vectors[slot].key = key;
+				marker_vectors[slot].direction = parameters.compressed_direction;
+				marker_vectors[slot].up = parameters.compressed_up;
+#endif
+				}
 			}
 
 			parameters.definition= lens_flare_definition_get(structure_lens_flare->lens_flare.index);
