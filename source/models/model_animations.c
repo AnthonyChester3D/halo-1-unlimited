@@ -1311,7 +1311,7 @@ void overlay_animation_apply_continuous(
 	}
 
 	fraction = (real)fmod((double)real_frame_index, 1.0);
-	frame_index = (short)fast_ftol((real)floor(fabs(real_frame_index)));
+	frame_index = (short)real_floor_to_long(fabs(real_frame_index));
 
 	if (real_frame_index < 0.0f || real_frame_index > (real)animation->frame_count)
 	{
@@ -1572,7 +1572,7 @@ void overlay_animation_apply_continuous_scaled(
 {
 	real inverse_animation_scale = 1.0f-animation_scale;
 	real fraction = (real)fmod((double)real_frame_index, 1.0);
-	short frame_index = (short)fast_ftol((real)floor(real_frame_index));
+	short frame_index = (short)real_floor_to_long(real_frame_index);
 
 	/* port: no frames, no overlay (a map's frame count of 0 made the frame
 	-1, read before the animation's data, every frame) */
@@ -2209,7 +2209,7 @@ static void animation_get_keyframe_rotation(
 
 	keyframe_rotations = (struct compressed_quaternion_6byte const *)(data+header->rotation_keyframes_offset)+first_keyframe_index;
 	keyframe_frame_indices = (word const *)(data+header->rotation_keyframe_frame_indices_offset)+first_keyframe_index;
-	frame_index = (short)fast_ftol(floor(real_frame_index));
+	frame_index = (short)real_floor_to_long(real_frame_index);
 
 	match_assert(
 		"c:\\halo\\SOURCE\\models\\model_animations.c",
@@ -2345,7 +2345,7 @@ static void animation_get_keyframe_translation(
 	{
 		real_point3d const *keyframe_translations = (real_point3d const *)(data+header->translation_keyframes_offset)+first_keyframe_index;
 		word const *keyframe_frame_indices = (word const *)(data+header->translation_keyframe_frame_indices_offset)+first_keyframe_index;
-		short frame_index = (short)fast_ftol(floor(real_frame_index));
+		short frame_index = (short)real_floor_to_long(real_frame_index);
 		real_point3d const *this_keyframe;
 		real_point3d const *next_keyframe;
 		short this_keyframe_frame_index;
@@ -2479,7 +2479,7 @@ static void animation_get_keyframe_scale(
 	{
 		real const *keyframe_scales = (real const *)(data+header->scale_keyframes_offset)+first_keyframe_index;
 		word const *keyframe_frame_indices = (word const *)(data+header->scale_keyframe_frame_indices_offset)+first_keyframe_index;
-		short frame_index = (short)fast_ftol(floor(real_frame_index));
+		short frame_index = (short)real_floor_to_long(real_frame_index);
 		real this_keyframe_scale;
 		real next_keyframe_scale;
 		short this_keyframe_frame_index;

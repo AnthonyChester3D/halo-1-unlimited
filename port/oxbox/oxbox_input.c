@@ -133,6 +133,13 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 			GlobalMemoryStatus(&memory);
 			/* (test build 24: and the textures and sounds read into their caches in those 10 seconds: many textures read
 			over and over means the texture cache is too small for what's in view) */
+#if defined(OXBOX_ROUND_COUNT)
+			{
+				extern void oxbox_round_dump(void);
+
+				oxbox_round_dump();
+			}
+#endif
 			platform_log("mem %lus: free %lu KB, C heap %lu KB (peak %lu KB, %lu blocks), game heap %lu KB (peak %lu KB), text cache misses %lu; "
 				"textures read %lu (%lu KB), sounds read %lu", t / 1000,
 				memory.dwAvailPhys / 1024, oxbox_heap_live / 1024, oxbox_heap_peak / 1024, oxbox_heap_blocks,

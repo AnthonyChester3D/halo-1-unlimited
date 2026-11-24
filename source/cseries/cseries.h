@@ -345,15 +345,57 @@ extern const union real_rgb_color *global_real_rgb_violet;
 
 /* ---------- public code */
 
+/* oxbox (v1.184): a value to the nearest whole long under the x87's control word (the game's: to nearest) with one
+FISTP, as the retail game's inline conversions did. The port had written them (long)__builtin_rint(x): on the Xbox
+(x87 doubles, no SSE2) that is a call of rint (FRNDINT, ~30 micro-ops on the Pentium III) and C's truncating
+conversion, which sets and restores the control word around its FISTP (two FLDCWs, 10 cycles each and a stall of
+the x87): ~60-80 cycles a conversion, a few here. The same result for every value: out of range and NaN give
+0x80000000 both ways */
+__inline long rint_to_long(
+	double value)
+{
+#if defined(__i386__)
+	long result;
+
+	__asm__ ("fistpl %0" : "=m"(result) : "t"(value) : "st");
+	return result;
+#else
+	return (long)__builtin_rint(value);
+#endif
+}
+
+/* oxbox (v1.184): (long)floor(y) and (long)ceil(y) of a real without floor's call and C's conversion of its double
+(two FLDCWs on the Xbox, as above): SSE's truncating conversion and one step. The same for every y: out of range and
+NaN give 0x80000000 as before */
+__inline long real_floor_to_long(
+	real y)
+{
+#if defined(__i386__)
+	long t = (long)y;
+
+	return t != (long)0x80000000 && (real)t > y ? t - 1 : t;
+#else
+	return (long)__builtin_floor(y);
+#endif
+}
+
+__inline long real_ceil_to_long(
+	real y)
+{
+#if defined(__i386__)
+	long t = (long)y;
+
+	return t != (long)0x80000000 && (real)t < y ? t + 1 : t;
+#else
+	return (long)__builtin_ceil(y);
+#endif
+}
+
 __inline long fast_ftol(
 	real value)
 {
-	long result;
-
 	/* FISTP: round to nearest under the default control word */
-	result = (long)__builtin_rint((double)value);
-
-	return result;
+	return rint_to_long((double)value);
 }
 
 #endif // __CSERIES_H

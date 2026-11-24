@@ -369,17 +369,13 @@ short compress_real_to_int16(
 {
 	match_assert("c:\\halo\\SOURCE\\rasterizer\\rasterizer_geometry.c", 55, z>=-1.0f && z<=1.0f);
 
-	z = (real)floor(z * 32767.5f);
-
-	return (short)fast_ftol(z);
+	return (short)real_floor_to_long(z * 32767.5f);
 }
 
 short compress_real_to_int16_clamp(
 	real z)
 {
-	z = (real)floor(PIN(z, -1.0f, 1.0f) * 32767.5f);
-
-	return (short)fast_ftol(z);
+	return (short)real_floor_to_long(PIN(z, -1.0f, 1.0f) * 32767.5f);
 }
 
 unsigned long compress_real_vector3d_to_int32(
@@ -391,9 +387,9 @@ unsigned long compress_real_vector3d_to_int32(
 	match_assert("c:\\halo\\SOURCE\\rasterizer\\rasterizer_geometry.c", 69, v);
 	match_vassert("c:\\halo\\SOURCE\\rasterizer\\rasterizer_geometry.c", 78, v->i>=-1.0f && v->i<=1.0f && v->j>=-1.0f && v->j<=1.0f && v->k>=-1.0f && v->k<=1.0f, csprintf(temporary, "invalid vector= [%f %f %f] 0x%x%x%x", v->i, v->j, v->k, *((long *)&v->i), *((long *)&v->j), *((long *)&v->k)));
 
-	i = fast_ftol((real)floor(v->i * 1023.5f)) & 0x7ff;
-	j = fast_ftol((real)floor(v->j * 1023.5f)) & 0x7ff;
-	k = fast_ftol((real)floor(v->k * 511.5f)) & 0x3ff;
+	i = real_floor_to_long(v->i * 1023.5f) & 0x7ff;
+	j = real_floor_to_long(v->j * 1023.5f) & 0x7ff;
+	k = real_floor_to_long(v->k * 511.5f) & 0x3ff;
 
 	v2 = uncompress_int32_to_real_vector3d(((k << 11) | j) << 11 | i);
 
@@ -412,9 +408,9 @@ unsigned long compress_real_vector3d_to_int32_clamp(
 
 	match_assert("c:\\halo\\SOURCE\\rasterizer\\rasterizer_geometry.c", 104, v);
 
-	i = fast_ftol((real)floor(PIN(v->i, -1.0f, 1.0f) * 1023.5f)) & 0x7ff;
-	j = fast_ftol((real)floor(PIN(v->j, -1.0f, 1.0f) * 1023.5f)) & 0x7ff;
-	k = fast_ftol((real)floor(PIN(v->k, -1.0f, 1.0f) * 511.5f)) & 0x3ff;
+	i = real_floor_to_long(PIN(v->i, -1.0f, 1.0f) * 1023.5f) & 0x7ff;
+	j = real_floor_to_long(PIN(v->j, -1.0f, 1.0f) * 1023.5f) & 0x7ff;
+	k = real_floor_to_long(PIN(v->k, -1.0f, 1.0f) * 511.5f) & 0x3ff;
 
 	v2 = uncompress_int32_to_real_vector3d(((k << 11) | j) << 11 | i);
 
