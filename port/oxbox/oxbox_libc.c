@@ -142,12 +142,34 @@ void *memmove(void *destination, const void *source, size_t count)
 	return destination;
 }
 
+/* v1.186: 4 bytes a store (REP STOSD) between a byte-stored head (to a 4-byte boundary) and tail; REP STOSB stored
+one byte a step, ~5 cycles each on the Pentium III (Agner Fog's tables). The same bytes: every size to 300 at every
+alignment and 200,000 random ones checked against the C library's */
 void *memset(void *destination, int value, size_t count)
 {
-	void *d = destination;
-	size_t c = count;
+	unsigned char *d = destination;
+	unsigned long v = (unsigned char)value * 0x01010101ul;
 
-	__asm__ volatile ("rep stosb" : "+D"(d), "+c"(c) : "a"(value) : "memory");
+#if defined(OXBOX_CALL_COUNT)
+	{
+		extern void oxbox_count_add(int kind, unsigned long caller, unsigned long amount);
+
+		oxbox_count_add(6, (unsigned long)__builtin_return_address(0), 1);
+		oxbox_count_add(7, (unsigned long)__builtin_return_address(0), (unsigned long)count);
+	}
+#endif
+
+	if (count >= 16)
+	{
+		size_t head = (size_t)(-(unsigned long)d & 3), dwords;
+
+		count -= head;
+		__asm__ volatile ("rep stosb" : "+D"(d), "+c"(head) : "a"(v) : "memory");
+		dwords = count >> 2;
+		count &= 3;
+		__asm__ volatile ("rep stosl" : "+D"(d), "+c"(dwords) : "a"(v) : "memory");
+	}
+	__asm__ volatile ("rep stosb" : "+D"(d), "+c"(count) : "a"(v) : "memory");
 	return destination;
 }
 

@@ -69,28 +69,38 @@ datum_get, object_get_and_verify_type, tag_get, tag_loaded and collision_test_ve
 each kind's most frequent callers every 10 s) */
 int snprintf(char *, unsigned int, char const *, ...);
 void platform_log(char const *, ...);
-enum { COUNT_KINDS = 6, COUNT_SLOTS = 1024 };
+enum { COUNT_KINDS = 8, COUNT_SLOTS = 1024 };
 static char const *const count_names[COUNT_KINDS] = { "round", "datum_get", "object_get_and_verify_type", "tag_get",
-	"tag_loaded", "collision_test_vector" };
+	"tag_loaded", "collision_test_vector", "memset", "memset_bytes" };
 static struct { unsigned long caller, count; } count_table[COUNT_KINDS][COUNT_SLOTS];
 static unsigned long count_calls[COUNT_KINDS], count_lost[COUNT_KINDS];
+static int count_dumping;
+
+void oxbox_count_add(int kind, unsigned long caller, unsigned long amount);
 
 void oxbox_count_call(int kind, unsigned long caller)
 {
+	oxbox_count_add(kind, caller, 1);
+}
+
+void oxbox_count_add(int kind, unsigned long caller, unsigned long amount)
+{
 	unsigned long slot = (caller * 2654435761u) >> 22, k;
 
-	count_calls[kind]++;
+	if (count_dumping)
+		return;
+	count_calls[kind] += amount;
 	for (k = 0; k < COUNT_SLOTS; k++, slot = (slot + 1) & (COUNT_SLOTS - 1))
 	{
 		if (count_table[kind][slot].caller == caller)
 		{
-			count_table[kind][slot].count++;
+			count_table[kind][slot].count += amount;
 			return;
 		}
 		if (!count_table[kind][slot].caller)
 		{
 			count_table[kind][slot].caller = caller;
-			count_table[kind][slot].count = 1;
+			count_table[kind][slot].count = amount;
 			return;
 		}
 	}
@@ -101,6 +111,7 @@ void oxbox_round_dump(void)
 {
 	int kind;
 
+	count_dumping = 1;
 	for (kind = 0; kind < COUNT_KINDS; kind++)
 	{
 		char line[600];
@@ -129,6 +140,7 @@ void oxbox_round_dump(void)
 			count_table[kind][k].caller = count_table[kind][k].count = 0;
 		count_calls[kind] = count_lost[kind] = 0;
 	}
+	count_dumping = 0;
 }
 #define COUNTED oxbox_count_call(0, (unsigned long)__builtin_return_address(0)),
 #else

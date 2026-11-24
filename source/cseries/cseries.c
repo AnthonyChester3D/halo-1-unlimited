@@ -519,6 +519,14 @@ void *csmemset(
 {
 	cseries_match_assert("c:\\halo\\SOURCE\\cseries\\cseries.c", 279, buffer);
 	cseries_match_assert("c:\\halo\\SOURCE\\cseries\\cseries.c", 280, size>=0 && size<=MAXIMUM_MEMSET_SIZE);
+#if defined(OXBOX_CALL_COUNT)
+	/* (lab: csmemset's callers counted, calls and bytes, as memset's are) */
+	{
+		extern void oxbox_count_add(int kind, unsigned long caller, unsigned long amount);
+
+		oxbox_count_add(0, (unsigned long)__builtin_return_address(0), size);
+	}
+#endif
 
 	return memset(buffer, c, size);
 }
