@@ -807,6 +807,15 @@ static void lruv_cache_verify(
 	struct lruv_cache_block *next_block;
 	struct lruv_cache_block *previous_block;
 
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox (v1.185): a debug build's check, as the retail XBE shows ('weee' appears only where a cache is made,
+	never compared). It walked every block of the cache on each touch, new block and lookup: the texture and sound
+	caches' hundreds of blocks, tens of thousands of times a second */
+	(void)cache;
+	(void)verify_blocks;
+	return;
+#endif
+
 	match_assert("c:\\halo\\SOURCE\\memory\\lruv_cache.c", 754, cache);
 	match_assert("c:\\halo\\SOURCE\\memory\\lruv_cache.c", 755, cache->signature==LRUV_CACHE_SIGNATURE);
 	data_verify(cache->blocks);

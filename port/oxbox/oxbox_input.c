@@ -133,7 +133,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 			GlobalMemoryStatus(&memory);
 			/* (test build 24: and the textures and sounds read into their caches in those 10 seconds: many textures read
 			over and over means the texture cache is too small for what's in view) */
-#if defined(OXBOX_ROUND_COUNT)
+#if defined(OXBOX_ROUND_COUNT) || defined(OXBOX_CALL_COUNT)
 			{
 				extern void oxbox_round_dump(void);
 

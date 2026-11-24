@@ -63,60 +63,74 @@ static __attribute__((noinline)) double whole(double x, int way)
 	return r == 0.0 ? x * 0.0 : r;
 }
 
-#if defined(OXBOX_ROUND_COUNT)
-/* (lab builds only: each rounding call counted by its caller; oxbox_round_dump logs the most frequent every 10 s) */
+#if defined(OXBOX_ROUND_COUNT) || defined(OXBOX_CALL_COUNT)
+/* (lab builds only: calls counted by their caller, a table a kind (0 these rounding functions; OXBOX_CALL_COUNT adds
+datum_get, object_get_and_verify_type, tag_get and tag_loaded, counted where they're defined); oxbox_round_dump logs
+each kind's most frequent callers every 10 s) */
 int snprintf(char *, unsigned int, char const *, ...);
 void platform_log(char const *, ...);
-static struct { unsigned long caller, count; } round_callers[1024];
-static unsigned long round_calls, round_lost;
+enum { COUNT_KINDS = 5, COUNT_SLOTS = 1024 };
+static char const *const count_names[COUNT_KINDS] = { "round", "datum_get", "object_get_and_verify_type", "tag_get",
+	"tag_loaded" };
+static struct { unsigned long caller, count; } count_table[COUNT_KINDS][COUNT_SLOTS];
+static unsigned long count_calls[COUNT_KINDS], count_lost[COUNT_KINDS];
 
-static void round_count(unsigned long caller)
+void oxbox_count_call(int kind, unsigned long caller)
 {
 	unsigned long slot = (caller * 2654435761u) >> 22, k;
 
-	round_calls++;
-	for (k = 0; k < 1024; k++, slot = (slot + 1) & 1023)
+	count_calls[kind]++;
+	for (k = 0; k < COUNT_SLOTS; k++, slot = (slot + 1) & (COUNT_SLOTS - 1))
 	{
-		if (round_callers[slot].caller == caller)
+		if (count_table[kind][slot].caller == caller)
 		{
-			round_callers[slot].count++;
+			count_table[kind][slot].count++;
 			return;
 		}
-		if (!round_callers[slot].caller)
+		if (!count_table[kind][slot].caller)
 		{
-			round_callers[slot].caller = caller;
-			round_callers[slot].count = 1;
+			count_table[kind][slot].caller = caller;
+			count_table[kind][slot].count = 1;
 			return;
 		}
 	}
-	round_lost++;
+	count_lost[kind]++;
 }
 
 void oxbox_round_dump(void)
 {
-	char line[600];
-	int used, n, k;
+	int kind;
 
-	used = snprintf(line, sizeof(line), "round: %lu calls in 10 s (%lu not counted); by caller:", round_calls, round_lost);
-	for (n = 0; n < 24; n++)
+	for (kind = 0; kind < COUNT_KINDS; kind++)
 	{
-		int best = -1;
+		char line[600];
+		int used, n, k;
 
-		for (k = 0; k < 1024; k++)
-			if (round_callers[k].count && (best < 0 || round_callers[k].count > round_callers[best].count))
-				best = k;
-		if (best < 0)
-			break;
-		if (used < (int)sizeof(line) - 24)
-			used += snprintf(line + used, sizeof(line) - used, " %lx:%lu", round_callers[best].caller, round_callers[best].count);
-		round_callers[best].count = 0;
+		if (!count_calls[kind])
+			continue;
+		used = snprintf(line, sizeof(line), "count %s: %lu calls in 10 s (%lu not counted); by caller:", count_names[kind],
+			count_calls[kind], count_lost[kind]);
+		for (n = 0; n < 24; n++)
+		{
+			int best = -1;
+
+			for (k = 0; k < COUNT_SLOTS; k++)
+				if (count_table[kind][k].count && (best < 0 || count_table[kind][k].count > count_table[kind][best].count))
+					best = k;
+			if (best < 0)
+				break;
+			if (used < (int)sizeof(line) - 24)
+				used += snprintf(line + used, sizeof(line) - used, " %lx:%lu", count_table[kind][best].caller,
+					count_table[kind][best].count);
+			count_table[kind][best].count = 0;
+		}
+		platform_log("%s", line);
+		for (k = 0; k < COUNT_SLOTS; k++)
+			count_table[kind][k].caller = count_table[kind][k].count = 0;
+		count_calls[kind] = count_lost[kind] = 0;
 	}
-	platform_log("%s", line);
-	for (k = 0; k < 1024; k++)
-		round_callers[k].caller = round_callers[k].count = 0;
-	round_calls = round_lost = 0;
 }
-#define COUNTED round_count((unsigned long)__builtin_return_address(0)),
+#define COUNTED oxbox_count_call(0, (unsigned long)__builtin_return_address(0)),
 #else
 #define COUNTED
 #endif

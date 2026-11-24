@@ -74,6 +74,20 @@ static __inline__ void *datum_get_fast(
 	return header->identifier && (!identifier || identifier == header->identifier) ? header : NULL;
 }
 #endif
+#if defined(HALO_XBOX_TARGET) && !defined(OXBOX_NO_FAST_LOOKUPS)
+/* oxbox (v1.185): datum_get with its usual case inline, for the busiest callers (the cluster partitions' walks as
+objects move and the lights' per-cluster lists: ~45% of datum_get's calls in a game with bots, xemu count) */
+static __inline__ void *datum_get_inline(
+	struct data_array *data,
+	long index)
+{
+	void *header = datum_get_fast(data, index);
+
+	return header ? header : datum_get(data, index);
+}
+#else
+#define datum_get_inline datum_get
+#endif
 struct data_array *data_new(const char *name, short maximum_count, short size);
 void data_dispose(struct data_array *data);
 void data_make_invalid(struct data_array *data);
