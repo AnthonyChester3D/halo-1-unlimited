@@ -4369,6 +4369,9 @@ mode). Threads are named by their base priority (not the current one, which a wa
 calling this), lwIP's (highest: 10), internet play's (above normal: 9), the boot watch's (time critical); each also
 with its start address and base priority. Offsets from nxdk's xboxkrnl.h: KernelTime 0x18, BasePriority 0x70,
 ApcState.Process 0x44, ThreadListEntry 0x104; KPROCESS.ThreadListHead 0x8; ETHREAD.StartAddress 0x130) */
+static unsigned char *volatile sampler_game;                 /* (the profile's, below) */
+static unsigned long __stdcall sampler_thread(void *parameter);
+
 static void threads_line(
 	double t)
 {
@@ -4392,7 +4395,15 @@ static void threads_line(
 	if (!current || !raise || !lower)
 		return;
 	if (!game)
+	{
+		HANDLE sampler;
+
 		game = current();
+		sampler_game = game;
+		sampler = CreateThread(NULL, 0x2000, sampler_thread, NULL, 0, NULL);
+		if (sampler)
+			SetThreadPriority(sampler, 15);                  /* (time critical) */
+	}
 	head = (struct list *)(*(unsigned char **)(game + 0x44) + 0x8);
 	old = raise();
 	for (entry = head->next; entry != head && count < 48; entry = entry->next)
@@ -4438,6 +4449,113 @@ static void threads_line(
 	platform_log("%s", line);
 	memcpy(last, now, sizeof(now[0]) * count);
 	last_count = count;
+}
+#endif
+
+#if defined(OXBOX_DENSE_PERF)
+/* (lab builds only: a sampling profile of the game's thread. A thread at time-critical priority wakes every
+millisecond; the game's thread is then waiting (KTHREAD.State 5: for the graphics chip, a frame's end) or was
+preempted by the clock (1, ready): its kernel stack (KTHREAD.KernelStack 0x24, up to StackBase 0x1c) then holds the
+clock interrupt's trap frame, whose first code address is the instruction it was at. Those addresses are counted;
+every SAMPLER_WINDOW samples the most taken go to the log ("profile N s: ..."), symbolized on the PC with oxbox.elf) */
+enum { SAMPLER_SLOTS = 4096, SAMPLER_WINDOW = 20000, SAMPLER_TOP = 48 };
+static struct { unsigned long address, count; } sampler_table[SAMPLER_SLOTS];
+static unsigned long sampler_samples, sampler_waiting, sampler_ready, sampler_other, sampler_lost, sampler_windows;
+
+static void sampler_note(unsigned long address)
+{
+	unsigned long slot = (address * 2654435761u) >> 20, k;
+
+	for (k = 0; k < SAMPLER_SLOTS; k++, slot++)
+	{
+		slot &= SAMPLER_SLOTS - 1;
+		if (sampler_table[slot].address == address)
+		{
+			sampler_table[slot].count++;
+			return;
+		}
+		if (!sampler_table[slot].address)
+		{
+			sampler_table[slot].address = address;
+			sampler_table[slot].count = 1;
+			return;
+		}
+	}
+	sampler_lost++;
+}
+
+static void sampler_dump(void)
+{
+	char line[LINE_SIZE];
+	int used, k, n;
+
+	used = _snprintf(line, sizeof(line), "profile %lu s: %lu samples, waiting %lu, ready %lu (%lu not in code), other %lu; top:",
+		++sampler_windows * (SAMPLER_WINDOW / 1000), sampler_samples, sampler_waiting, sampler_ready, sampler_lost,
+		sampler_other);
+	for (n = 0; n < SAMPLER_TOP; n++)
+	{
+		int best = -1;
+
+		for (k = 0; k < SAMPLER_SLOTS; k++)
+		{
+			if (sampler_table[k].count && (best < 0 || sampler_table[k].count > sampler_table[best].count))
+				best = k;
+		}
+		if (best < 0)
+			break;
+		if (used < (int)sizeof(line) - 24)
+			used += _snprintf(line + used, sizeof(line) - used, " %lx:%lu", sampler_table[best].address,
+				sampler_table[best].count);
+		sampler_table[best].count = 0;
+	}
+	platform_log("%s", line);
+	memset(sampler_table, 0, sizeof(sampler_table));
+	sampler_samples = sampler_waiting = sampler_ready = sampler_other = sampler_lost = 0;
+}
+
+static unsigned long __stdcall sampler_thread(void *parameter)
+{
+	(void)parameter;
+	for (;;)
+	{
+		unsigned char *game;
+		unsigned long esp, base, k;
+
+		Sleep(1);
+		game = sampler_game;
+		if (!game)
+			continue;
+		sampler_samples++;
+		if (game[0x2c] == 5)
+			sampler_waiting++;
+		else if (game[0x2c] != 1)
+			sampler_other++;
+		else
+		{
+			sampler_ready++;
+			esp = *(unsigned long *)(game + 0x24);
+			base = *(unsigned long *)(game + 0x1c);
+			/* (the clock interrupt's frame: on the Xbox every thread runs in ring 0, so the interrupt pushed the
+			interrupted EIP, CS (0x0008) and EFLAGS (bit 1 always set; interrupts were on: 0x200) on the thread's own
+			stack: found by that pattern, not by the first code-like value (saved registers and the interrupted code's
+			return addresses are there too)) */
+			for (k = 0; k + 2 < 512 && esp + (k + 2) * 4 < base; k++)
+			{
+				unsigned long const *v = (unsigned long const *)esp + k;
+
+				if (v[1] == 0x0008 && (v[2] & 0x202) == 0x202 && v[2] < 0x400000 && v[0] >= 0x11000 && v[0] < 0x4e0000)
+				{
+					sampler_note(v[0]);
+					break;
+				}
+			}
+			if (k + 2 >= 512 || esp + (k + 2) * 4 >= base)
+				sampler_lost++;
+		}
+		if (sampler_samples >= SAMPLER_WINDOW)
+			sampler_dump();
+	}
+	return 0;
 }
 #endif
 
