@@ -4400,7 +4400,7 @@ static void threads_line(
 
 		game = current();
 		sampler_game = game;
-		sampler = CreateThread(NULL, 0x2000, sampler_thread, NULL, 0, NULL);
+		sampler = CreateThread(NULL, 0x4000, sampler_thread, NULL, 0, NULL);
 		if (sampler)
 			SetThreadPriority(sampler, 15);                  /* (time critical) */
 	}
@@ -4458,14 +4458,25 @@ millisecond; the game's thread is then waiting (KTHREAD.State 5: for the graphic
 preempted by the clock (1, ready): its kernel stack (KTHREAD.KernelStack 0x24, up to StackBase 0x1c) then holds the
 clock interrupt's trap frame, whose first code address is the instruction it was at. Those addresses are counted;
 every SAMPLER_WINDOW samples the most taken go to the log ("profile N s: ..."), symbolized on the PC with oxbox.elf) */
-enum { SAMPLER_SLOTS = 4096, SAMPLER_WINDOW = 20000, SAMPLER_TOP = 48 };
+enum { SAMPLER_SLOTS = 16384, SAMPLER_WINDOW = 10000, SAMPLER_TOP = 48, SAMPLER_BUCKET = 16 };
+/* (v2: 16-byte buckets of code in a 16384-slot table (v1's 4096 exact addresses overflowed in a10's busy hangar shot),
+and every window's whole table also goes to perf\profile.bin: its header (SAMPLER_FIELDS words: 'OXPF', version 1,
+window, session ms at its end, samples, waiting, ready, other, no frame found, table full, buckets taken once) then
+each bucket taken twice or more as 6 bytes: its address (4) and count (2); tools/perf_profile.py reads it) */
+enum { SAMPLER_FIELDS = 12 };
 static struct { unsigned long address, count; } sampler_table[SAMPLER_SLOTS];
-static unsigned long sampler_samples, sampler_waiting, sampler_ready, sampler_other, sampler_lost, sampler_windows;
+static unsigned long sampler_samples, sampler_waiting, sampler_ready, sampler_other, sampler_no_frame, sampler_full,
+	sampler_windows;
+static HANDLE sampler_file = INVALID_HANDLE_VALUE;
+static boolean sampler_file_tried;
+static unsigned char sampler_chunk[1536];
 
 static void sampler_note(unsigned long address)
 {
-	unsigned long slot = (address * 2654435761u) >> 20, k;
+	unsigned long slot, k;
 
+	address &= ~(unsigned long)(SAMPLER_BUCKET - 1);
+	slot = (address * 2654435761u) >> 18;
 	for (k = 0; k < SAMPLER_SLOTS; k++, slot++)
 	{
 		slot &= SAMPLER_SLOTS - 1;
@@ -4481,16 +4492,102 @@ static void sampler_note(unsigned long address)
 			return;
 		}
 	}
-	sampler_lost++;
+	sampler_full++;
+}
+
+static void sampler_write(
+	void const *data,
+	unsigned long size)
+{
+	unsigned long written;
+
+	if (sampler_file != INVALID_HANDLE_VALUE && (!WriteFile(sampler_file, data, size, &written, NULL) || written != size))
+	{
+		CloseHandle(sampler_file);
+		sampler_file = INVALID_HANDLE_VALUE;
+	}
+}
+
+/* (the whole table to perf\profile.bin, from the sampler's own thread: no samples while it writes) */
+static void sampler_save(
+	unsigned long session_ms)
+{
+	unsigned long header[SAMPLER_FIELDS], singles = 0, entries = 0, used = 0;
+	int k;
+
+	if (!sampler_file_tried)
+	{
+		static char const *const paths[] = { "D:\\perf\\profile.bin", "T:\\perf\\profile.bin" };
+
+		sampler_file_tried = TRUE;
+		for (k = 0; k < 2 && sampler_file == INVALID_HANDLE_VALUE; k++)
+		{
+			char folder[8];
+
+			memcpy(folder, paths[k], 7);
+			folder[7] = 0;
+			CreateDirectoryA(folder, NULL);
+			sampler_file = CreateFileA(paths[k], GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+				FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+		}
+	}
+	if (sampler_file == INVALID_HANDLE_VALUE)
+		return;
+	for (k = 0; k < SAMPLER_SLOTS; k++)
+	{
+		if (sampler_table[k].count == 1)
+			singles++;
+		else if (sampler_table[k].count > 1)
+			entries++;
+	}
+	header[0] = 0x4650584f;
+	header[1] = 1;
+	header[2] = sampler_windows;
+	header[3] = session_ms;
+	header[4] = sampler_samples;
+	header[5] = sampler_waiting;
+	header[6] = sampler_ready;
+	header[7] = sampler_other;
+	header[8] = sampler_no_frame;
+	header[9] = sampler_full;
+	header[10] = singles;
+	header[11] = entries;
+	sampler_write(header, sizeof(header));
+	for (k = 0; k < SAMPLER_SLOTS; k++)
+	{
+		unsigned long count = sampler_table[k].count;
+
+		if (count < 2)
+			continue;
+		if (count > 0xffff)
+			count = 0xffff;
+		memcpy(sampler_chunk + used, &sampler_table[k].address, 4);
+		sampler_chunk[used + 4] = (unsigned char)count;
+		sampler_chunk[used + 5] = (unsigned char)(count >> 8);
+		used += 6;
+		if (used == sizeof(sampler_chunk))
+		{
+			sampler_write(sampler_chunk, used);
+			used = 0;
+		}
+	}
+	if (used)
+		sampler_write(sampler_chunk, used);
 }
 
 static void sampler_dump(void)
 {
 	char line[LINE_SIZE];
 	int used, k, n;
+	LARGE_INTEGER now;
+	unsigned long session_ms;
 
+	QueryPerformanceCounter(&now);
+	session_ms = perf.frequency > 0 ? (unsigned long)((now.QuadPart - perf.session_start) * 1000 / perf.frequency) : 0;
+	sampler_windows++;
+	sampler_save(session_ms);
 	used = _snprintf(line, sizeof(line), "profile %lu s: %lu samples, waiting %lu, ready %lu (%lu not in code), other %lu; top:",
-		++sampler_windows * (SAMPLER_WINDOW / 1000), sampler_samples, sampler_waiting, sampler_ready, sampler_lost,
+		session_ms / 1000, sampler_samples, sampler_waiting, sampler_ready, sampler_no_frame + sampler_full,
 		sampler_other);
 	for (n = 0; n < SAMPLER_TOP; n++)
 	{
@@ -4510,7 +4607,7 @@ static void sampler_dump(void)
 	}
 	platform_log("%s", line);
 	memset(sampler_table, 0, sizeof(sampler_table));
-	sampler_samples = sampler_waiting = sampler_ready = sampler_other = sampler_lost = 0;
+	sampler_samples = sampler_waiting = sampler_ready = sampler_other = sampler_no_frame = sampler_full = 0;
 }
 
 static unsigned long __stdcall sampler_thread(void *parameter)
@@ -4550,7 +4647,7 @@ static unsigned long __stdcall sampler_thread(void *parameter)
 				}
 			}
 			if (k + 2 >= 512 || esp + (k + 2) * 4 >= base)
-				sampler_lost++;
+				sampler_no_frame++;
 		}
 		if (sampler_samples >= SAMPLER_WINDOW)
 			sampler_dump();
