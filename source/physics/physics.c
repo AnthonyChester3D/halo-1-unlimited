@@ -1641,6 +1641,31 @@ void physics_update_new(
 			in_water_count += TEST_FLAG(mass_point->flags, _point_in_water_bit);
 		}
 
+#if defined(OXBOX_VEHICLE_REST_TEST)
+		/* (lab builds only: which of the rest test's conditions failed; vehicles.c logs them each second) */
+		{
+			extern long vehicle_rest_fail[7];
+			extern float vehicle_rest_values[4][2];
+			float v[4] = { magnitude_squared3d(&linear_velocity), magnitude_squared3d(&angular_velocity),
+				magnitude_squared3d(&linear_acceleration), magnitude_squared3d(&angular_acceleration) };
+			long k;
+
+			vehicle_rest_fail[0] += at_rest_count != mass_point_count;
+			vehicle_rest_fail[1] += on_ground_count < 3;
+			vehicle_rest_fail[2] += on_volatile_surface_count != 0;
+			vehicle_rest_fail[3] += v[0] > 0.0011111111f;
+			vehicle_rest_fail[4] += v[1] > 0.0027415568f;
+			vehicle_rest_fail[5] += v[2] > 0.00000030864197f;
+			vehicle_rest_fail[6] += v[3] > 0.0000030461742f;
+			for (k = 0; k < 4; k++)
+			{
+				if (vehicle_rest_values[k][0] < 0.0f || v[k] < vehicle_rest_values[k][0])
+					vehicle_rest_values[k][0] = v[k];
+				if (v[k] > vehicle_rest_values[k][1])
+					vehicle_rest_values[k][1] = v[k];
+			}
+		}
+#endif
 		SET_FLAG(
 			vehicle->object.flags,
 			_object_at_rest_bit,

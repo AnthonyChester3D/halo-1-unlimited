@@ -1200,7 +1200,16 @@ static void options_start_installer(void)
 		{ "\\Device\\Harddisk0\\Partition7\\", "G:\\" } };
 	void oxbox_launch_title(char const *launch);
 	char path[260], check[264], *slash;
+#if defined(OXBOX_LAB_LAUNCH)
+	/* (lab builds only: updater\\launch_lab.txt, which no installer writes, names another XBE to start: the retail
+	Halo's, for comparisons in xemu) */
+	FILE *file = fopen("D:\\updater\\launch_lab.txt", "rb");
+
+	if (!file)
+		file = fopen("D:\\updater\\installer.txt", "rb");
+#else
 	FILE *file = fopen("D:\\updater\\installer.txt", "rb");
+#endif
 	size_t length = 0, prefix;
 	long k;
 

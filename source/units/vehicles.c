@@ -2446,6 +2446,62 @@ body has the same padded size and 98 relocations. The remaining residual is
 instruction scheduling, branch layout, and relocation placement. Keep the
 file-static call topology intact while closing it. */
 
+#if defined(OXBOX_VEHICLE_REST_TEST)
+/* (lab builds only: each second's vehicle updates, how many were at rest, attached to a parent, or ran their physics,
+and the physics' cycles, for the a10 hangar's slow frames) */
+static struct
+{
+	unsigned long second;
+	long updates, at_rest, parented, physics, by_type[8];
+	unsigned long long cycles;
+} vehicle_rest_test;
+long vehicle_rest_fail[7];             /* (physics.c: the rest test's conditions that failed) */
+float vehicle_rest_values[4][2] = { { -1.0f, 0.0f }, { -1.0f, 0.0f }, { -1.0f, 0.0f }, { -1.0f, 0.0f } };
+
+static void vehicle_rest_test_note(
+	struct vehicle_datum *vehicle)
+{
+	void platform_log(char const *format, ...);
+	unsigned long system_milliseconds(void);
+	unsigned long second = system_milliseconds() / 1000;
+
+	if (second != vehicle_rest_test.second)
+	{
+		if (vehicle_rest_test.updates)
+		{
+			platform_log("vehicles: %ld updates a second: at rest %ld, attached %ld, physics %ld (%lu M cycles; by type "
+				"%ld %ld %ld %ld %ld %ld %ld)", vehicle_rest_test.updates, vehicle_rest_test.at_rest,
+				vehicle_rest_test.parented, vehicle_rest_test.physics, (unsigned long)(vehicle_rest_test.cycles / 1000000),
+				vehicle_rest_test.by_type[0], vehicle_rest_test.by_type[1], vehicle_rest_test.by_type[2],
+				vehicle_rest_test.by_type[3], vehicle_rest_test.by_type[4], vehicle_rest_test.by_type[5],
+				vehicle_rest_test.by_type[6]);
+			if (vehicle_rest_test.physics)
+				platform_log("vehicles: not at rest because: mass points moving %ld, under 3 on the ground %ld, on a volatile "
+					"surface %ld, velocity %ld, spin %ld, acceleration %ld, spin acceleration %ld; squared (min-max, limit): "
+					"velocity %.3g-%.3g (1.1e-3), spin %.3g-%.3g (2.7e-3), acceleration %.3g-%.3g (3.1e-7), spin acceleration "
+					"%.3g-%.3g (3.0e-6)", vehicle_rest_fail[0], vehicle_rest_fail[1], vehicle_rest_fail[2], vehicle_rest_fail[3],
+					vehicle_rest_fail[4], vehicle_rest_fail[5], vehicle_rest_fail[6],
+					vehicle_rest_values[0][0], vehicle_rest_values[0][1], vehicle_rest_values[1][0], vehicle_rest_values[1][1],
+					vehicle_rest_values[2][0], vehicle_rest_values[2][1], vehicle_rest_values[3][0], vehicle_rest_values[3][1]);
+		}
+		memset(&vehicle_rest_test, 0, sizeof(vehicle_rest_test));
+		memset(vehicle_rest_fail, 0, sizeof(vehicle_rest_fail));
+		{
+			long k;
+
+			for (k = 0; k < 4; k++)
+				vehicle_rest_values[k][0] = -1.0f, vehicle_rest_values[k][1] = 0.0f;
+		}
+		vehicle_rest_test.second = second;
+	}
+	vehicle_rest_test.updates++;
+	if (TEST_FLAG(vehicle->object.flags, _object_at_rest_bit))
+		vehicle_rest_test.at_rest++;
+	if (vehicle->object.parent_object_index != NONE)
+		vehicle_rest_test.parented++;
+}
+#endif
+
 boolean vehicle_update(
 	long vehicle_index)
 {
@@ -2461,6 +2517,9 @@ boolean vehicle_update(
 	definition = vehicle_specific_definition_get(vehicle->definition_index);
 
 	profile_enter(vehicle_update_section);
+#if defined(OXBOX_VEHICLE_REST_TEST)
+	vehicle_rest_test_note(vehicle);
+#endif
 
 	if (vehicle->object.parent_object_index!=NONE)
 	{
@@ -2640,6 +2699,9 @@ boolean vehicle_update(
 		vehicle_mass_points_fit(vehicle_index, NUMBEROF(mass_points), NUMBEROF(powered_mass_points)))
 	{
 		real_vector3d previous_velocity = vehicle->object.translational_velocity;
+#if defined(OXBOX_VEHICLE_REST_TEST)
+		unsigned long long physics_start = __builtin_ia32_rdtsc();
+#endif
 
 		switch (definition->vehicle_type)
 		{
@@ -2670,6 +2732,12 @@ boolean vehicle_update(
 		if (!update_suspension(vehicle_index))
 			create_crashing_effects(vehicle_index, &previous_velocity, mass_points);
 		compute_airborne_ticks(vehicle_index, mass_points, powered_mass_points);
+#if defined(OXBOX_VEHICLE_REST_TEST)
+		vehicle_rest_test.physics++;
+		vehicle_rest_test.cycles += __builtin_ia32_rdtsc() - physics_start;
+		if (definition->vehicle_type >= 0 && definition->vehicle_type < 8)
+			vehicle_rest_test.by_type[definition->vehicle_type]++;
+#endif
 
 		if (TEST_FLAG(vehicle->object.flags, _object_at_rest_bit))
 			vehicle->vehicle.stop_time = 15;
