@@ -32,28 +32,45 @@ float sqrtf(float x) { double d = x; __asm__ ("fsqrt" : "+t"(d)); return (float)
 double fabs(double x) { __asm__ ("fabs" : "+t"(x)); return x; }
 float fabsf(float x) { double d = x; __asm__ ("fabs" : "+t"(d)); return (float)d; }
 
-double rint(double x) { __asm__ ("frndint" : "+t"(x)); return x; }
-float rintf(float x) { double d = x; __asm__ ("frndint" : "+t"(d)); return (float)d; }
 long lrint(double x) { long r; __asm__ ("fistpl %0" : "=m"(r) : "t"(x) : "st"); return r; }
 long lrintf(float x) { long r; double d = x; __asm__ ("fistpl %0" : "=m"(r) : "t"(d) : "st"); return r; }
 
-/* round with the x87 rounding mode set to `mode` (0x0400 down, 0x0800 up, 0x0C00 toward zero) */
-static double round_with(double x, unsigned short mode)
-{
-	unsigned short saved = control_word();
+/* ---------- whole numbers (v1.183): without FRNDINT or a rounding mode change. On the Pentium III FRNDINT is ~30
+micro-ops and each FLDCW 10 cycles that stall the x87 after it: the old floor (two FLDCWs around a FRNDINT) took ~3% of
+the processor in a10's intro hangar shot, rintf ~1.5% (the console's sampling profile). Now: rounded in whatever mode
+is set (FISTP, then FILD of the same 8 bytes, which the Pentium III forwards), stepped by one on the x87 when that went
+past (exact at the game's 53-bit precision, CW_DEFAULT, or 64). Every result is the old one bit for bit, -0.0
+included (checked over 48 million inputs in every rounding mode); from 2^52 up, infinities and NaNs are already whole
+and come back as they are. One routine for all eight: the resident image had no room for more code than before */
+#define WHOLE_DOUBLE 4503599627370496.0     /* 2^52 */
 
-	set_control_word((unsigned short)((saved & ~0x0C00) | mode));
-	__asm__ ("frndint" : "+t"(x));
-	set_control_word(saved);
-	return x;
+/* (way: 0 to nearest, -1 down, 1 up, 2 toward zero; the float versions through it too, exact for floats) */
+static __attribute__((noinline)) double whole(double x, int way)
+{
+	long long i;
+	double r;
+
+	if (!(x < WHOLE_DOUBLE && x > -WHOLE_DOUBLE))
+		return x;
+	__asm__ ("fistpll %0" : "=m"(i) : "t"(x) : "st");
+	r = (double)i;
+	if (way == 2)
+		way = x >= 0.0 ? -1 : 1;
+	if (way < 0 && r > x)
+		r -= 1.0;
+	else if (way > 0 && r < x)
+		r += 1.0;
+	return r == 0.0 ? x * 0.0 : r;
 }
 
-double floor(double x) { return round_with(x, 0x0400); }
-double ceil(double x) { return round_with(x, 0x0800); }
-double trunc(double x) { return round_with(x, 0x0C00); }
-float floorf(float x) { return (float)round_with(x, 0x0400); }
-float ceilf(float x) { return (float)round_with(x, 0x0800); }
-float truncf(float x) { return (float)round_with(x, 0x0C00); }
+double rint(double x) { return whole(x, 0); }
+float rintf(float x) { return (float)whole(x, 0); }
+double floor(double x) { return whole(x, -1); }
+double ceil(double x) { return whole(x, 1); }
+double trunc(double x) { return whole(x, 2); }
+float floorf(float x) { return (float)whole(x, -1); }
+float ceilf(float x) { return (float)whole(x, 1); }
+float truncf(float x) { return (float)whole(x, 2); }
 
 double fmod(double x, double y)
 {

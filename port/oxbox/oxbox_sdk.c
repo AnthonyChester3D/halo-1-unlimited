@@ -1147,10 +1147,9 @@ unload:
 		{
 			oxbox_update.offer = 1;
 			oxbox_update.updater_missing = GetFileAttributesA(OXBOX_UPDATER_PATH) == 0xFFFFFFFF;
-			platform_log("update: release %ld build %ld is newer than this one (release %ld build %d): offered on the main "
-				"menu%s", oxbox_update_found_release, oxbox_update_found_build, oxbox_update.installed_release,
+			platform_log("update: release %ld build %ld is newer (this: %ld build %d), offered%s", oxbox_update_found_release, oxbox_update_found_build, oxbox_update.installed_release,
 				OXBOX_BUILD_NUMBER,
-				oxbox_update.updater_missing ? " (no updater in D:\\updater: the installer's Y)" : "");
+				oxbox_update.updater_missing ? " (no updater)" : "");
 			oxbox_update_status(_update_status_none);
 		}
 		else if (oxbox_update.forced)
