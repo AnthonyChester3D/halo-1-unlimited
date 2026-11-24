@@ -680,6 +680,17 @@ int oxbox_online_stock_map(char const *map)
 
 /* whether ONLINE PLAY's games list is on the screen (drawn in the last 3 seconds): the master servers' lists are
 asked for while it is (oxbox_sdk.c oxbox_masters_frame) */
+/* (v1.182: ONLINE PLAY's browsing let go once its list has been off the screen 30 seconds: while browsing, every
+public game's listing keeps coming from the brokers, which cost a console's game 6% of the processor all the time) */
+void hmp_online_browse_idle(void)
+{
+	if (online.browsing && system_milliseconds() - online.shown_at > 30000)
+	{
+		p2p_lobby_browse(FALSE);
+		online.browsing = FALSE;
+	}
+}
+
 int hmp_online_list_shown(void)
 {
 	return online.shown_at && system_milliseconds() - online.shown_at < 3000;
