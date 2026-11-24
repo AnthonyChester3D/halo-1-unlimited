@@ -65,13 +65,13 @@ static __attribute__((noinline)) double whole(double x, int way)
 
 #if defined(OXBOX_ROUND_COUNT) || defined(OXBOX_CALL_COUNT)
 /* (lab builds only: calls counted by their caller, a table a kind (0 these rounding functions; OXBOX_CALL_COUNT adds
-datum_get, object_get_and_verify_type, tag_get and tag_loaded, counted where they're defined); oxbox_round_dump logs
+datum_get, object_get_and_verify_type, tag_get, tag_loaded and collision_test_vector, counted where they're defined); oxbox_round_dump logs
 each kind's most frequent callers every 10 s) */
 int snprintf(char *, unsigned int, char const *, ...);
 void platform_log(char const *, ...);
-enum { COUNT_KINDS = 5, COUNT_SLOTS = 1024 };
+enum { COUNT_KINDS = 6, COUNT_SLOTS = 1024 };
 static char const *const count_names[COUNT_KINDS] = { "round", "datum_get", "object_get_and_verify_type", "tag_get",
-	"tag_loaded" };
+	"tag_loaded", "collision_test_vector" };
 static struct { unsigned long caller, count; } count_table[COUNT_KINDS][COUNT_SLOTS];
 static unsigned long count_calls[COUNT_KINDS], count_lost[COUNT_KINDS];
 

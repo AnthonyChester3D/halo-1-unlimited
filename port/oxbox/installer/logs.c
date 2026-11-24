@@ -23,7 +23,8 @@ much is kept, how much that packs to, then the packed bytes. A settings file's p
 #define MOST_KEPT (3u * 1024u * 1024u)   /* (a file's last part, at most) */
 #define MOST_FILES 48
 #define MOST_PERF_FILES 16      /* (the sweeps' files) */
-#define MOST_PERF_LOGS 4        /* (the newest of the rest: perf_log = 1's, one a map) */
+#define MOST_PERF_LOGS 8        /* (the newest of the rest: perf_log = 1's, one a map, and a profile build's
+                                   profile.bin; installer 75: 8, as 4 left out a10's after three games) */
 
 static char const alphabet[] = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 

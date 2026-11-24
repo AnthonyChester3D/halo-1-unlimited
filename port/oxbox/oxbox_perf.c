@@ -4458,8 +4458,9 @@ millisecond; the game's thread is then waiting (KTHREAD.State 5: for the graphic
 preempted by the clock (1, ready): its kernel stack (KTHREAD.KernelStack 0x24, up to StackBase 0x1c) then holds the
 clock interrupt's trap frame, whose first code address is the instruction it was at. Those addresses are counted;
 every SAMPLER_WINDOW samples the most taken go to the log ("profile N s: ..."), symbolized on the PC with oxbox.elf) */
-enum { SAMPLER_SLOTS = 16384, SAMPLER_WINDOW = 10000, SAMPLER_TOP = 48, SAMPLER_BUCKET = 16 };
-/* (v2: 16-byte buckets of code in a 16384-slot table (v1's 4096 exact addresses overflowed in a10's busy hangar shot),
+enum { SAMPLER_SLOTS = 16384, SAMPLER_WINDOW = 2500, SAMPLER_TOP = 48, SAMPLER_BUCKET = 16 };
+/* (v2: 16-byte buckets of code in a 16384-slot table (v1's 4096 exact addresses overflowed in a10's busy hangar shot);
+v1.186: windows of 2,500 samples (~5 s on the console: a10's hangar shot is ~15 s, its worst stretch 5),
 and every window's whole table also goes to perf\profile.bin: its header (SAMPLER_FIELDS words: 'OXPF', version 1,
 window, session ms at its end, samples, waiting, ready, other, no frame found, table full, buckets taken once) then
 each bucket taken twice or more as 6 bytes: its address (4) and count (2); tools/perf_profile.py reads it) */

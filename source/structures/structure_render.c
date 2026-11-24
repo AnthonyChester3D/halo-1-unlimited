@@ -273,6 +273,43 @@ static void structure_render_dynamic_triangles_from_bitvector(
 	long surface_index_index = 0;
 	long surface_index = 0;
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.186): every frame, each visible surface's triangle into the frame's index buffer. Bungie's loop tested
+	all 32 bits of each word with any set, one at a time, and checked the surfaces' block for each surface (~4% of the
+	processor in a10's hangar shot, console profile); now straight to each set bit (BSF) and the block checked once.
+	The same surfaces, in the same order, the same indices; and never more triangles than the buffer was made for */
+	if (structure_bsp->surfaces.count > 0)
+	{
+		long const count = structure_bsp->surfaces.count;
+		struct structure_surface const *surfaces = TAG_BLOCK_GET_ELEMENT(
+			&structure_bsp->surfaces,
+			0,
+			struct structure_surface);
+
+		for (surface_index = 0; surface_index < count; surface_index += LONG_BITS, surface_flags++)
+		{
+			unsigned long bits = *surface_flags;
+
+			while (bits)
+			{
+				long const index = surface_index + __builtin_ctzl(bits);
+				struct structure_surface const *surface;
+
+				bits &= bits - 1;
+				if (index >= count || surface_index_index >= surface_count)
+					break;
+				surface = &surfaces[index];
+				*surface_indices++ = index;
+				triangles[0] = surface->vertex_indices[0];
+				triangles[1] = surface->vertex_indices[1];
+				triangles[2] = surface->vertex_indices[2];
+				triangles += NUMBER_OF_VERTICES_PER_TRIANGLE;
+				surface_index_index++;
+			}
+		}
+	}
+	return;
+#endif
 	if (structure_bsp->surfaces.count > 0)
 	{
 		do
