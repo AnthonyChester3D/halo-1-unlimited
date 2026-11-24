@@ -660,10 +660,17 @@ unsigned long __stdcall oxbox_lwip_test_thread(void *parameter)
 
 		for (second = 0; second < 10; second++)
 		{
+			extern int oxbox_net_test_screen;
 			char line[64];
 
-			oxbox_p2p_test_status(line, sizeof(line), oxbox_net_test_join);
-			oxbox_net_test_status(line);
+			/* (v1.182: only for the test screen or the join test: the status line browses the public games'
+			listings, which kept every console on all of them from boot to power-off: ~50 broker messages a second,
+			internet play's thread 6% of the processor, above the game's priority (a console's dense perf log, a10)) */
+			if (oxbox_net_test_screen || oxbox_net_test_join)
+			{
+				oxbox_p2p_test_status(line, sizeof(line), oxbox_net_test_join);
+				oxbox_net_test_status(line);
+			}
 			Sleep(1000);
 		}
 #else

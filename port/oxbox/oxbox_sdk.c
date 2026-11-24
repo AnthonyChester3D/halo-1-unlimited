@@ -977,9 +977,13 @@ static void oxbox_masters_frame(int menus)
 	void oxbox_masters_done(void);
 	int p2p_lobby_browsing(void);
 	int hmp_online_list_shown(void);
+	void hmp_online_browse_idle(void);
 	extern int oxbox_online;
 	unsigned long now = GetTickCount();
-	int wanted = menus && oxbox_online && p2p_lobby_browsing() && hmp_online_list_shown();
+	int wanted;
+
+	hmp_online_browse_idle();
+	wanted = menus && oxbox_online && p2p_lobby_browsing() && hmp_online_list_shown();
 
 	if (!oxbox_masters.loaded)
 	{
@@ -995,7 +999,7 @@ static void oxbox_masters_frame(int menus)
 		section = oxbox_update_section();
 		if (!load_section || !section || load_section(section) < 0)
 		{
-			platform_log("masters: the OXUPD section couldn't be loaded: no master servers' lists");
+			platform_log("masters: OXUPD didn't load");
 			oxbox_masters.asked = now;
 			return;
 		}
