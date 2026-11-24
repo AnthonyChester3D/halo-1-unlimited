@@ -2109,10 +2109,13 @@ static short animation_keyframe_search(
 			break;
 		}
 
+		/* oxbox (v1.185): counted before the assertion, which release builds compile out (the port's break below
+		needs the count) */
+		++infinite_loop_killer;
 		match_assert(
 			"c:\\halo\\SOURCE\\models\\model_animations.c",
 			1356,
-			++infinite_loop_killer<200);
+			infinite_loop_killer<200);
 		/* port: a map's frame indices out of order would loop forever */
 		if (infinite_loop_killer>=200)
 		{

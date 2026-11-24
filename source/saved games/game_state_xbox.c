@@ -436,14 +436,19 @@ void game_state_read_core(
 	file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
 		NULL);
 	/* port: read beside the game state, and taken once checked */
-	match_vassert(
-		"c:\\halo\\SOURCE\\saved games\\game_state_xbox.c",
-		226,
-		image && file != INVALID_HANDLE_VALUE &&
+	/* oxbox (v1.185): the read and its check made before the assertion, which release builds compile out */
+	{
+		boolean read = image && file != INVALID_HANDLE_VALUE &&
 			ReadFile(file, image, buffer_size, &bytes_read, NULL) &&
 			bytes_read == buffer_size &&
-			game_state_image_accept(image, buffer_size),
-		"game state has been corrupted (thank you, come again)");
+			game_state_image_accept(image, buffer_size);
+
+		match_vassert(
+			"c:\\halo\\SOURCE\\saved games\\game_state_xbox.c",
+			226,
+			read,
+			"game state has been corrupted (thank you, come again)");
+	}
 	(void)buffer;
 	CloseHandle(file);
 	OXBOX_GAME_STATE_IMAGE_FREE(image);

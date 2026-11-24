@@ -3144,10 +3144,13 @@ boolean hs_parse_set(
 					}
 					else
 					{
+						/* oxbox (v1.185): the parse made before the assertion, which release builds compile out */
+						boolean parsed = hs_parse_variable(variable_expression_index);
+
 						match_vassert(
 							"c:\\halo\\source\\hs\\hs_library_internal_compile.h",
 							0x126,
-							hs_parse_variable(variable_expression_index),
+							parsed,
 							"asserted");
 						if (!expression->type)
 							expression->type = variable_expression->type;
