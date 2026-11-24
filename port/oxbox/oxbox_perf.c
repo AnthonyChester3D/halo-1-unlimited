@@ -2208,8 +2208,10 @@ static void session_start(
 	char name[96], map[0x20];
 	long index;
 
-	/* the map's name, for a file name: letters, digits, - and _ */
-	for (index = 0; index < (long)sizeof(map) - 1 && cache_file_globals.header.name[index]; index++)
+	/* the map's name, for a file name: letters, digits, - and _; at most 22 of them (v1.187), as a FATX name holds 42
+	and "_YYYYMMDD-HHMMSS.csv" takes 20 (+Boxfight/T4d Flood Room's 24 made a 44-character name that couldn't be
+	made: no file for it, only "perf: 1 writes to the log failed") */
+	for (index = 0; index < 22 && cache_file_globals.header.name[index]; index++)
 	{
 		char c = cache_file_globals.header.name[index];
 
