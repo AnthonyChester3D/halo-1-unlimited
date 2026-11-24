@@ -18,7 +18,8 @@ writes with the rest.
 
 OPTIONS, the main menu's (hmp_game.c opens it in place of its old dialog, and keeps the settings): SCREEN SHAPE,
 ATTRACT MODE (the showcase, Halo's movies, off), ATTRACT MODE WAIT, KEEP DOWNLOADS UNDER (map sharing's limit:
-hmp_share.c) and CHECK FOR UPDATES.
+hmp_share.c), CHECK FOR UPDATES and INSTALLER (v1.181: A starts the installer that last started the game, which
+writes its place in updater\installer.txt (installer 73): for maps, map packs and Send logs; its Play comes back).
 
 SELECT CAMPAIGN, when there's a campaign besides Halo's (an imported pack's levels, or Halo Map Porter's: hmp_maps.c):
 a copy of the level select's screen, its cards the campaigns (Halo's first), opened by the profile screens in place of
@@ -39,6 +40,7 @@ Bungie's.
 #include "text/text_group.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 void platform_log(char const *format, ...);
@@ -120,7 +122,7 @@ enum
 	_widget_type_spinner_list,
 
 	VEHICLE_OPTION_ROWS = 1 + NUMBER_OF_VEHICLE_CATEGORIES,
-	OPTIONS_ROWS = 5,
+	OPTIONS_ROWS = 6,
 	MAXIMUM_ROWS = 8,
 	ROW_STEP = 30,
 	EDIT_ROW_STEP = 33,
@@ -1016,7 +1018,7 @@ static void vehicle_editor_patch(struct cache_file_tag_instance *grown, long scr
 /* ---- the main menu's OPTIONS (hmp_game.c opens it, and keeps the settings: hmp_options_get, hmp_options_set) */
 
 static char const *const options_labels[OPTIONS_ROWS] =
-	{ "SCREEN SHAPE:", "ATTRACT MODE:", "ATTRACT MODE WAIT:", "KEEP DOWNLOADS UNDER:", "CHECK FOR UPDATES:" };
+	{ "SCREEN SHAPE:", "ATTRACT MODE:", "ATTRACT MODE WAIT:", "KEEP DOWNLOADS UNDER:", "CHECK FOR UPDATES:", "INSTALLER:" };
 static char const *const options_shape_values[3] = { "AS THE DASHBOARD", "4:3", "WIDESCREEN" };
 static char const *const options_shape_help[3] = {
 	"The screen shape the Xbox dashboard's settings\r\nsay (the dashboard's Settings, Video).",
@@ -1043,6 +1045,9 @@ static char const *const options_downloads_help[5] = {
 static char const *const options_updates_values[1] = { "NOW" };
 static char const *const options_updates_help[1] = {
 	"Press A to look online for a newer release now.\r\nIt's looked for at every startup too." };
+static char const *const options_installer_values[1] = { "OPEN" };
+static char const *const options_installer_help[1] = {
+	"Press A for the installer: new maps and map\r\npacks, Send logs. Its Play brings you back." };
 
 static void options_rows(struct menu_row *rows)
 {
@@ -1056,6 +1061,8 @@ static void options_rows(struct menu_row *rows)
 	rows[3].values = options_downloads_values, rows[3].help = (char const **)options_downloads_help;
 	rows[4].label = options_labels[4], rows[4].model = _row_model_yes_no, rows[4].value_count = 1;
 	rows[4].values = options_updates_values, rows[4].help = (char const **)options_updates_help;
+	rows[5].label = options_labels[5], rows[5].model = _row_model_wide, rows[5].value_count = 1;
+	rows[5].values = options_installer_values, rows[5].help = (char const **)options_installer_help;
 }
 
 static void menus_build(void)
@@ -1185,10 +1192,70 @@ static boolean vehicle_options_function(struct menu_widget_instance *list, boole
 	return TRUE;
 }
 
+/* OPTIONS > INSTALLER's A: the installer that last started the game (above); returns only when it couldn't */
+static void options_start_installer(void)
+{
+	static char const *const partitions[4][2] = { { "\\Device\\Harddisk0\\Partition1\\", "E:\\" },
+		{ "\\Device\\Harddisk0\\Partition2\\", "C:\\" }, { "\\Device\\Harddisk0\\Partition6\\", "F:\\" },
+		{ "\\Device\\Harddisk0\\Partition7\\", "G:\\" } };
+	void oxbox_launch_title(char const *launch);
+	char path[260], check[264], *slash;
+	FILE *file = fopen("D:\\updater\\installer.txt", "rb");
+	size_t length = 0, prefix;
+	long k;
+
+	if (file)
+	{
+		length = fread(path, 1, sizeof(path) - 1, file);
+		fclose(file);
+	}
+	while (length && (path[length - 1] == '\r' || path[length - 1] == '\n' || path[length - 1] == ' '))
+		length--;
+	path[length] = 0;
+	check[0] = 0;
+	for (k = 0; k < 4; k++)
+	{
+		prefix = strlen(partitions[k][0]);
+		if (length > prefix && !strncmp(path, partitions[k][0], prefix))
+		{
+			strcpy(check, partitions[k][1]);
+			strcat(check, path + prefix);
+		}
+	}
+	/* (the game maps E:, F: and G: only, oxbox_entry.c; an installer on C: is looked for through a C: made now, as the
+	game's own are made: IoCreateSymbolicLink) */
+	if (check[0] == 'C')
+	{
+		typedef struct { unsigned short length, maximum_length; char *buffer; } object_string;
+		void *oxbox_kernel_export(unsigned long ordinal);
+		long (__stdcall *create_link)(object_string *, object_string *) =
+			(long (__stdcall *)(object_string *, object_string *))oxbox_kernel_export(67);
+		static char name[] = "\\??\\C:", target[] = "\\Device\\Harddisk0\\Partition2\\";
+		object_string link = { 6, 7, name }, to = { sizeof(target) - 1, sizeof(target), target };
+
+		if (create_link)
+			create_link(&link, &to);
+	}
+	file = check[0] ? fopen(check, "rb") : NULL;
+	if (!file || (slash = strrchr(path, '\\')) == NULL)
+	{
+		if (file)
+			fclose(file);
+		platform_log("options: no installer to start (%s): start Halo 1 Unlimited from the installer once",
+			length ? path : "no updater\\installer.txt");
+		return;
+	}
+	fclose(file);
+	*slash = ';';                                /* ("\\Device\\...\\folder;default.xbe": the folder as its D:) */
+	platform_log("options: starting the installer, %s", check);
+	oxbox_launch_title(path);
+	platform_log("options: the installer didn't start");
+}
+
 static boolean options_function(struct menu_widget_instance *list, boolean save)
 {
 	struct menu_widget_instance *spinners[OPTIONS_ROWS];
-	short values[OPTIONS_ROWS];
+	short values[OPTIONS_ROWS] = { 0 };          /* (hmp_options_get fills the settings' rows; the actions' are 0) */
 	long index;
 
 	if (spinners_of(list, spinners, OPTIONS_ROWS) != OPTIONS_ROWS)
@@ -1207,14 +1274,19 @@ static boolean options_function(struct menu_widget_instance *list, boolean save)
 		values[index] = spinners[index]->selected_index;
 	hmp_options_set(values);
 	/* (A on CHECK FOR UPDATES: the settings kept as any A keeps them, then a look online now, its answer on the main
-	menu the screen goes back to: oxbox_sdk.c) */
+	menu the screen goes back to: oxbox_sdk.c. A on INSTALLER: kept, then the installer that last started the game
+	(updater\\installer.txt, its own place as the kernel names it, written by installers 73 and later), started as the
+	dashboard starts a title (oxbox_sdk.c's oxbox_launch_title), when it's still there. Not the install's own updater
+	copy: without its package beside it, it can't tell the install from another Halo) */
 	{
 		struct menu_widget_instance *row = list->child;
 
-		for (index = 0; row && index < 4; index++)
+		for (index = 0; row && list->focused_child != row; index++)
 			row = row->next;
-		if (row && list->focused_child == row)
+		if (row && index == 4)
 			oxbox_update_check_now();
+		if (row && index == 5)
+			options_start_installer();
 	}
 	return TRUE;
 }

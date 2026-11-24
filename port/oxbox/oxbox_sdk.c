@@ -1164,8 +1164,9 @@ unload:
 /* starts the updater, this folder's updater\\default.xbe, with its own folder as its D:, the way a dashboard starts a
 title ("\\Device\\...\\Halo\\updater;default.xbe" in the launch data page, then a quick reboot). XLaunchNewImage
 ("D:\\updater\\default.xbe") gave it this game's D:, the Halo folder, so it worked on the game's files as its own. Returns
-only when it couldn't */
-static void oxbox_launch_updater(void)
+only when it couldn't. launch (v1.181, OPTIONS > INSTALLER: oxbox_menus.c): another XBE started that way instead,
+"\\Device\\...\\folder;name.xbe" */
+void oxbox_launch_title(char const *launch)
 {
 	typedef struct { unsigned short Length, MaximumLength; char *Buffer; } oxbox_ansi_string;
 	oxbox_ansi_string *image = (oxbox_ansi_string *)oxbox_kernel_export(326);       /* XeImageFileName */
@@ -1196,9 +1197,9 @@ static void oxbox_launch_updater(void)
 	persist(page, 0x1000, 1);
 	memset(page, 0, 0x1000);
 	*(unsigned long *)(page + 4) = *(const unsigned long *)(certificate + 8);   /* (the title id: LDT_TITLE, 0) */
-	if (halo_linux_snprintf((char *)page + 8, 520, "%s\\updater;default.xbe", folder) >= 520)
+	if (halo_linux_snprintf((char *)page + 8, 520, launch ? "%s" : "%s\\updater;default.xbe", launch ? launch : folder) >= 520)
 		return;
-	platform_log("update: starting %s", (char *)page + 8);
+	platform_log("starting %s", (char *)page + 8);
 	{
 		void oxbox_quiesce_devices(void);   /* (oxbox_entry.c: the network card and USB stopped writing, v1.171) */
 
@@ -1327,7 +1328,7 @@ int oxbox_update_prompt_button(int a, int b, int pressed)
 		}
 		CloseHandle(note);
 		platform_log("update: starting the updater");
-		oxbox_launch_updater();
+		oxbox_launch_title(NULL);
 		XLaunchNewImageA(OXBOX_UPDATER_PATH, NULL);   /* (if that couldn't: as before) */
 		platform_log("update: the updater didn't start");
 		DeleteFileA(OXBOX_UPDATER_NOTE);

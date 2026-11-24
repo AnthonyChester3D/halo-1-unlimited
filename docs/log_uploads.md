@@ -1,6 +1,6 @@
 # Send logs: players sending their logs to the developers
 
-A player who hits a problem picks **Send logs** (the installer's *More...*; later the game's Options too). It says what's
+A player who hits a problem picks **Send logs** (the installer's *More...*; from the game, OPTIONS > INSTALLER opens the installer, v1.181). It says what's
 sent and asks first, every time: nothing is ever sent otherwise. The logs go, packed, to a small Cloudflare Worker that
 keeps them 30 days, and the player gets a code (`X5EB-3RLU`) to quote. The developers fetch them with
 `port/oxbox/tools/fetch_logs.py`. No one has to copy files off an Xbox by FTP.

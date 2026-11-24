@@ -57,7 +57,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 72
+#define INSTALLER_VERSION 73
 #endif
 __attribute__((used)) static struct
 {
@@ -2526,8 +2526,19 @@ static void launch(char const *device)
 
 static void launch_halo(struct halo *h)
 {
-	char device[240];
+	char device[240], own[260], note[260];
 	text_print(device, sizeof(device), "%s\\default.xbe", h->device);
+	/* (installer 73: the game's OPTIONS > INSTALLER starts the installer that last started it, this one, which has its
+	package beside it; never the install's own updater copy, which hasn't, and can't tell the install from another) */
+	own_image(own, sizeof(own));
+	text_print(note, sizeof(note), "%s\\" UPDATER_FOLDER "\\", h->device);
+	if (own[0] && _strnicmp(own, note, strlen(note)))
+	{
+		text_print(note, sizeof(note), "%s\\" UPDATER_FOLDER "\\installer.txt", h->path);
+		log_file(write_checked(note, (unsigned char const *)own, (unsigned long)strlen(own)) ?
+			"couldn't write updater\\installer.txt (the game's way back to this installer)" :
+			"updater\\installer.txt: this installer (the game's OPTIONS > INSTALLER starts it)");
+	}
 	log_file("starting");
 	log_file(device);
 	launch(device);
