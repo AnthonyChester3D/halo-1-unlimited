@@ -141,13 +141,14 @@ symbols in this file:
 #if defined(HALO_XBOX_TARGET)
 #include "oxbox_perf.h" /* (a map load's steps timed for the perf log, v1.178) */
 
+#else
+#define OXBOX_PERF_LOAD(step)
+#endif
+
 #if defined(HALO_XBOX_TARGET)
 static void tag_loaded_forget(void);                   /* (tag_loaded's answers kept, v1.185: below) */
 #else
 #define tag_loaded_forget()
-#endif
-#else
-#define OXBOX_PERF_LOAD(step)
 #endif
 
 #ifdef HALO_XBOX_TARGET
