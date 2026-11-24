@@ -142,7 +142,7 @@ void reference_list_remove(
 
 	while (*reference_index != NONE)
 	{
-		reference = (struct data_reference *)datum_get(array, *reference_index);
+		reference = (struct data_reference *)datum_get_inline(array, *reference_index);
 		if (reference->datum_index == datum_index)
 		{
 			datum_delete(array, *reference_index);
@@ -456,7 +456,7 @@ void cluster_partition_disconnect(
 
 	while (cluster_reference_index != NONE)
 	{
-		struct data_reference *cluster_reference = (struct data_reference *)datum_get(
+		struct data_reference *cluster_reference = (struct data_reference *)datum_get_inline(
 			partition->cluster_reference_data,
 			cluster_reference_index);
 		short const cluster_index = (short)cluster_reference->datum_index;
@@ -526,7 +526,7 @@ static long cluster_partition_port_add(
 
 	if (reference_index != NONE)
 	{
-		struct data_reference *reference = (struct data_reference *)datum_get(array, reference_index);
+		struct data_reference *reference = (struct data_reference *)datum_get_inline(array, reference_index);
 
 		reference->datum_index = datum_index;
 		reference->next_reference_index = *first_reference_index;
@@ -588,7 +588,7 @@ static void cluster_partition_port_remove(
 
 		while (index != NONE)
 		{
-			reference = (struct data_reference *)datum_get(array, index);
+			reference = (struct data_reference *)datum_get_inline(array, index);
 			if (reference->datum_index == datum_index)
 			{
 				reference_index = index;
@@ -608,13 +608,13 @@ static void cluster_partition_port_remove(
 		return;
 	}
 	partition->port_modification_count++;
-	reference = (struct data_reference *)datum_get(array, reference_index);
+	reference = (struct data_reference *)datum_get_inline(array, reference_index);
 	next_index = reference->next_reference_index;
 	datum_delete(array, reference_index);
 	if (previous_index == NONE)
 		*first_reference_index = next_index;
 	else
-		((struct data_reference *)datum_get(array, previous_index))->next_reference_index = next_index;
+		((struct data_reference *)datum_get_inline(array, previous_index))->next_reference_index = next_index;
 	if (previous_references && next_index != NONE)
 		previous_references[DATUM_INDEX_TO_ABSOLUTE_INDEX(next_index)] = previous_index;
 }

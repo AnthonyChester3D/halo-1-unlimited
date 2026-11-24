@@ -570,6 +570,130 @@ static void item_align_to_normal_and_point(
 	return;
 }
 
+/* oxbox (v1.185): an item stuck bouncing comes to rest. Bungie's rule (the retail XBE's too) rests an item only on a
+surface flatter than 45 degrees it meets slowly; elsewhere it bounces (40% of its speed into the surface back, all its
+sliding speed kept, its spin never slowed) with a landing sound and an impact effect each time. Caught in a crease of
+steeper surfaces (custom maps have many: Anxiety's sniper rifle spawns) it bounced, spun and clattered for the rest
+of the game, a moving object every tick for the host to test and send. Now an item that has kept meeting a surface it
+could rest on (structure, scenery, a device, facing up) for STUCK_ITEM_TICKS without getting STUCK_ITEM_RADIUS from
+where that began rests there as a landing does. One sliding down a slope leaves that radius within a second and
+slides as before. A few at a time are followed: one not met again within STUCK_ITEM_GAP_TICKS starts over */
+enum
+{
+	STUCK_ITEMS = 16,
+	STUCK_ITEM_TICKS = 3 * 30,
+	STUCK_ITEM_GAP_TICKS = 30
+};
+#define STUCK_ITEM_RADIUS 0.25f
+
+void platform_log(char const *format, ...);
+
+static struct stuck_item
+{
+	long item_index;
+	long first_time;
+	long last_time;
+	real_point3d anchor;
+} stuck_items[STUCK_ITEMS];
+
+static boolean item_stuck_bouncing(
+	long item_index,
+	real_point3d const *point)
+{
+	long now = game_time_get();
+	short k, slot = NONE, oldest = 0;
+
+	for (k = 0; k < STUCK_ITEMS; k++)
+	{
+		if (stuck_items[k].item_index == item_index)
+		{
+			slot = k;
+			break;
+		}
+		if (stuck_items[k].last_time < stuck_items[oldest].last_time)
+			oldest = k;
+	}
+	if (slot == NONE || now < stuck_items[slot].last_time || now - stuck_items[slot].last_time > STUCK_ITEM_GAP_TICKS ||
+		distance_squared3d(&stuck_items[slot].anchor, point) > STUCK_ITEM_RADIUS * STUCK_ITEM_RADIUS)
+	{
+		if (slot == NONE)
+			slot = oldest;
+		stuck_items[slot].item_index = item_index;
+		stuck_items[slot].first_time = now;
+		stuck_items[slot].anchor = *point;
+	}
+	stuck_items[slot].last_time = now;
+	if (now - stuck_items[slot].first_time < STUCK_ITEM_TICKS)
+		return FALSE;
+	stuck_items[slot].item_index = 0;
+	/* (said in every build: rare, and where it happens says which maps have such creases) */
+	platform_log("items: one stuck bouncing at (%.1f %.1f %.1f) laid to rest", point->x, point->y, point->z);
+#if defined(OXBOX_STUCK_ITEM_RULE_OFF)
+	return FALSE;
+#else
+	return TRUE;
+#endif
+}
+
+#if defined(OXBOX_STUCK_ITEM_TEST)
+/* (lab builds only: from 10 s into a multiplayer game, an assault rifle dropped every 20 ticks on a 9x9 grid 0.6
+apart, 0.6 above Anxiety's sniper rifle spawn #1 (-0.09 61.35 2.30), thrown out a little as a dying player's are, kept
+active with no player near; every 10 s those still moving are logged) */
+void oxbox_stuck_item_test(
+	void)
+{
+	enum { GRID = 9, COUNT = GRID * GRID };
+	static long next_time, dropped, items[COUNT], report_time;
+	long now = game_time_get();
+	long definition = tag_loaded('weap', "cmt\\weapons\\human\\assault_rifle\\assault rifle cc_mp");   /* (Anxiety's) */
+
+	if (definition == NONE)
+		definition = tag_loaded('weap', "weapons\\assault rifle\\assault rifle");
+	short k;
+
+	if (definition == NONE || now < 300)
+		return;
+	if (dropped < COUNT && now >= next_time)
+	{
+		struct object_placement_data placement;
+
+		next_time = now + 20;
+		k = (short)dropped;
+		object_placement_data_new(&placement, definition, NONE);
+		placement.position.x = -0.09f + (real)(k % GRID - GRID / 2) * 0.6f;
+		placement.position.y = 61.35f + (real)(k / GRID - GRID / 2) * 0.6f;
+		placement.position.z = 2.30f + 0.6f;
+		placement.translational_velocity.i = (real)(k % GRID - GRID / 2) * 0.01f;
+		placement.translational_velocity.j = (real)(k / GRID - GRID / 2) * 0.01f;
+		placement.translational_velocity.k = 0.03f;
+		items[k] = object_new(&placement);
+		if (items[k] != NONE)
+			object_set_automatic_deactivation(items[k], FALSE);
+		dropped++;
+	}
+	if (now >= report_time)
+	{
+		long moving = 0;
+
+		report_time = now + 300;
+		for (k = 0; k < dropped; k++)
+		{
+			struct item_datum *item = items[k] != NONE ? (struct item_datum *)object_try_and_get_and_verify_type(items[k],
+				_object_mask_item) : NULL;
+
+			if (item && !TEST_FLAG(item->object.flags, _object_at_rest_bit))
+			{
+				moving++;
+				platform_log("stuck test: rifle %d (dropped at %.1f %.1f) moving at (%.2f %.2f %.2f)", k,
+					-0.09f + (real)(k % GRID - GRID / 2) * 0.6f, 61.35f + (real)(k / GRID - GRID / 2) * 0.6f,
+					item->object.position.x, item->object.position.y, item->object.position.z);
+			}
+		}
+		platform_log("stuck test: %ld s, %ld of %ld rifles dropped still moving", now / 30, moving, dropped);
+	}
+}
+#endif
+
 boolean item_update(
 	long item_index)
 {
@@ -685,13 +809,50 @@ boolean item_update(
 						impact_scale);
 				}
 
-				if ((collision.type == _collision_result_structure ||
+				boolean rest_surface = collision.type == _collision_result_structure ||
 					(collision.type == _collision_result_object &&
 						TEST_FLAG(
 							_object_mask_scenery | _object_mask_device,
-							object_get_type(collision.object_index)))) &&
+							object_get_type(collision.object_index)));
+				boolean rest = rest_surface &&
 					collision.plane.n.k > 0.7071f &&
-					-dot_product3d(&collision.plane.n, &new_velocity) < 0.05f)
+					-dot_product3d(&collision.plane.n, &new_velocity) < 0.05f;
+
+				/* oxbox (v1.185): or stuck bouncing (above) */
+				if (!rest && rest_surface && collision.plane.n.k > 0.f &&
+					item_stuck_bouncing(item_index, &collision.point))
+				{
+					rest = TRUE;
+				}
+#if defined(OXBOX_STUCK_ITEM_TEST)
+				/* (lab: any item colliding for 3 s without resting, whatever it meets, said once) */
+				if (!rest)
+				{
+					static long seen_item, seen_since, seen_last, said;
+
+					if (seen_item != item_index || game_time_get() - seen_last > 30)
+					{
+						seen_item = item_index;
+						seen_since = game_time_get();
+						said = FALSE;
+					}
+					seen_last = game_time_get();
+					if (!said && seen_last - seen_since >= 90)
+					{
+						said = TRUE;
+						platform_log("stuck diag: item %08lx at (%.2f %.2f %.2f) meets %s%s n.k %.3f, speed %.4f",
+							item_index, collision.point.x, collision.point.y, collision.point.z,
+							collision.type == _collision_result_structure ? "structure" :
+							collision.type == _collision_result_object ? "an object of type " : "other",
+							collision.type == _collision_result_object ?
+								(object_get_type(collision.object_index) == 2 ? "weapon" :
+								object_get_type(collision.object_index) == 3 ? "equipment" :
+								object_get_type(collision.object_index) == 6 ? "scenery" : "other") : "",
+							collision.plane.n.k, magnitude3d(&new_velocity));
+					}
+				}
+#endif
+				if (rest)
 				{
 					new_position = collision.point;
 					item_align_to_normal_and_point(

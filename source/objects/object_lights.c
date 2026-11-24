@@ -242,7 +242,7 @@ enum
 /* ---------- macros */
 
 #define light_get(index) \
-	((struct light_datum *)datum_get(light_data, (index)))
+	((struct light_datum *)datum_get_inline(light_data, (index)))
 
 #define light_definition_get(index) \
 	((struct point_light_definition *)tag_get(LIGHT_DEFINITION_TAG, (index)))

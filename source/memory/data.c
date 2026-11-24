@@ -210,6 +210,13 @@ void *datum_get(
 	long index)
 {
 	void *header = datum_get_fast(data, index);
+#if defined(OXBOX_CALL_COUNT)
+	{
+		extern void oxbox_count_call(int kind, unsigned long caller);
+
+		oxbox_count_call(1, (unsigned long)__builtin_return_address(0));
+	}
+#endif
 
 	return header ? header : datum_get_checked(data, index, __builtin_return_address(0));
 }
@@ -276,6 +283,12 @@ void *datum_get(
 void data_verify(
 	struct data_array *data)
 {
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_STRIP)
+	/* oxbox (v1.185): a debug build's check, as the retail XBE shows: its 'd@t@' appears only where arrays are made,
+	never compared. The port ran it in every data function (each step of every object walk) */
+	(void)data;
+	return;
+#endif
 	match_assert("c:\\halo\\SOURCE\\memory\\data.c", 457, data);
 
 	match_vassert(

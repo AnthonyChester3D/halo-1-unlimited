@@ -5139,6 +5139,13 @@ void game_engine_update(
 		game_engine_update_weapons();
 		game_engine_update_item_spawn();
 		game_engine_update_vehicle_respawn();
+#if defined(OXBOX_STUCK_ITEM_TEST)
+		{
+			extern void oxbox_stuck_item_test(void);
+
+			oxbox_stuck_item_test();
+		}
+#endif
 
 		{
 			struct data_iterator player_iterator;

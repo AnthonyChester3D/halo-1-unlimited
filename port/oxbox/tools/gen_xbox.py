@@ -32,7 +32,7 @@ abi = ['--target=i686-linux-gnu', '-m32', '-fms-extensions', '-fshort-wchar', '-
        # Xbox code (MSVC, the libraries, the kernel) keeps the stack 4-byte aligned, not 16
        '-mstack-alignment=4',
        '-ffunction-sections', '-fdata-sections', '-fno-stack-protector', '-fno-asynchronous-unwind-tables',
-       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=184', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
+       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=185', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
 abi += [f'-fno-builtin-{n}' for n in ('wcslen', 'wcsnlen', 'wcschr', 'wcsrchr', 'wcscmp', 'wcsncmp', 'wcscpy', 'wcsncpy',
                                       'wcscat', 'wcsncat', 'wmemchr', 'wmemcmp', 'wmemcpy', 'wmemmove', 'wmemset')]
 gflags = ['-std=gnu89', '-D__STRICT_ANSI__', '-w', '-Wno-error=incompatible-pointer-types',
@@ -103,13 +103,22 @@ if FAST_SCRIPTS:
 # (v1.180: fast scripts are every build's now, so their menus and perf logs no longer say "O2"; only HOT_EXTRA's do)
 VARIANT = ['-DOXBOX_BUILD_O2'] if HOT_EXTRA else []
 VARIANT_UNITS = ('ui_widget_game_data_input_functions', 'oxbox_perf')
+# (v1.185: the per-frame code's checks (match_assert and kin, cseries.h) compiled out in test builds too, as the retail
+# game had all of them: in every console run since v1.178 none of theirs fired (5 checks of ~5,000 ever did, all in
+# loading, tags, networking and one map's broken collision), and they cost speed and image. Loading's, tags', saved
+# games', networking's, scripts', AI's and the game's are kept (debug.txt's "EXCEPTION assert" lines). Release builds
+# compile out every one (OXBOX_EXTRA=-DOXBOX_NO_ASSERTS); OXBOX_ALL_ASSERTS=1 keeps every one, for a hunt)
+ALL_ASSERTS = os.environ.get('OXBOX_ALL_ASSERTS') == '1'
 for s in srcs + port_game + [Path('port/third_party/stb_vorbis/stb_vorbis.c')]:
     add(s, 'game')
     parts = Path(s).parts
     flags = []
     hot_file = len(parts) > 2 and parts[0] == 'source' and (parts[1], Path(s).stem) in HOT_FILES
-    if not (len(parts) > 1 and parts[0] == 'source' and (parts[1] in HOT or hot_file)) or Path(s).stem in COLD:
+    hot = len(parts) > 1 and parts[0] == 'source' and (parts[1] in HOT or hot_file)
+    if not hot or Path(s).stem in COLD:
         flags.append('-Os')
+    if hot and not ALL_ASSERTS:
+        flags.append('-DOXBOX_NO_ASSERTS')
     if Path(s).stem in VARIANT_UNITS:
         flags += VARIANT
     if flags:

@@ -344,6 +344,13 @@ void *object_get_and_verify_type(
 {
 	struct object_datum *result;
 
+#if defined(OXBOX_CALL_COUNT)
+	{
+		extern void oxbox_count_call(int kind, unsigned long caller);
+
+		oxbox_count_call(2, (unsigned long)__builtin_return_address(0));
+	}
+#endif
 #if defined(HALO_XBOX_TARGET) && !defined(OXBOX_NO_FAST_LOOKUPS)
 	/* oxbox (v1.137): the usual case (the object there, of a type asked for) without datum_get's call */
 	{

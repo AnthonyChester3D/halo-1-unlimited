@@ -129,7 +129,12 @@ static void clean_up_for_image_launch(
 		cache_files_precache_map_end();
 	}
 
-	match_vassert("c:\\halo\\SOURCE\\interface\\marketing_and_strategic_business_development.c", 64,
-		SUCCEEDED(IDirect3DDevice8_PersistDisplay(global_d3d_device)),
-		"IDirect3DDevice8_PersistDisplay() failed in clean_up_for_image_launch()");
+	/* oxbox (v1.185): the call made before the assertion, which release builds compile out */
+	{
+		HRESULT persisted = IDirect3DDevice8_PersistDisplay(global_d3d_device);
+
+		match_vassert("c:\\halo\\SOURCE\\interface\\marketing_and_strategic_business_development.c", 64,
+			SUCCEEDED(persisted),
+			"IDirect3DDevice8_PersistDisplay() failed in clean_up_for_image_launch()");
+	}
 }

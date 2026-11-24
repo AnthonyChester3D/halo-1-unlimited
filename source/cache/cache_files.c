@@ -148,6 +148,12 @@ void xgpu_static_range_remove(const void *start, int indices);
 #endif
 #if defined(HALO_XBOX_TARGET)
 #include "oxbox_perf.h" /* (a map load's steps timed for the perf log, v1.178) */
+
+#if defined(HALO_XBOX_TARGET)
+static void tag_loaded_forget(void);                   /* (tag_loaded's answers kept, v1.185: below) */
+#else
+#define tag_loaded_forget()
+#endif
 #else
 #define OXBOX_PERF_LOAD(step)
 #endif
@@ -668,6 +674,7 @@ void scenario_tags_unload(
 	cache_file_globals.tags_loaded = FALSE;
 	global_tag_instances = NULL;
 	global_tag_count = 0;
+	tag_loaded_forget();
 
 	return;
 }
@@ -722,6 +729,37 @@ unsigned long tag_groups_checksum(
 	return cache_file_globals.tag_header->checksum;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.185): tag_loaded's answers kept while the tags stay the same. The HUD's and the multiplayer score's
+drawing look tags up by name every frame (slayer_engine_display_score, multiplayer_message_internal, ...), and each
+lookup walks every tag (thousands, one cache miss each): ~2% of the processor in an online game on the console. An
+answer is kept only for its exact group and name (the name copied: a caller's buffer may change), and all are
+forgotten when tags load or unload, or the table's place or count changes (the menus add tags to a loaded map) */
+enum { TAG_LOADED_KEPT = 32, TAG_LOADED_NAME = 64 };
+static struct tag_loaded_kept
+{
+	long group_tag;
+	long result;
+	char name[TAG_LOADED_NAME];
+} tag_loaded_kept[TAG_LOADED_KEPT];
+static void const *tag_loaded_kept_instances;
+static long tag_loaded_kept_count;
+
+static void tag_loaded_forget(
+	void)
+{
+	short k;
+
+	for (k = 0; k < TAG_LOADED_KEPT; k++)
+	{
+		tag_loaded_kept[k].group_tag = 0;
+		tag_loaded_kept[k].name[0] = 0;
+	}
+	tag_loaded_kept_instances = global_tag_instances;
+	tag_loaded_kept_count = global_tag_count;
+}
+#endif
+
 long tag_loaded(
 	long group_tag,
 	char const *name)
@@ -730,7 +768,34 @@ long tag_loaded(
 	0x7FFF, and the walk never ended) */
 	long absolute_index;
 	long result = NONE;
+#if defined(HALO_XBOX_TARGET)
+	struct tag_loaded_kept *kept = NULL;
+	unsigned long length = 0;
 
+	if (cache_file_globals.tags_loaded && group_tag && name[0])
+	{
+		unsigned long hash = (unsigned long)group_tag * 2654435761u;
+
+		while (name[length] && length < TAG_LOADED_NAME)
+			hash = (hash ^ (unsigned char)name[length++]) * 16777619u;
+		if (length < TAG_LOADED_NAME)
+		{
+			if (tag_loaded_kept_instances != global_tag_instances || tag_loaded_kept_count != global_tag_count)
+				tag_loaded_forget();
+			kept = &tag_loaded_kept[hash >> 27];
+			if (kept->group_tag == group_tag && !strcmp(kept->name, name))
+				return kept->result;
+		}
+	}
+#endif
+
+#if defined(OXBOX_CALL_COUNT)
+	{
+		extern void oxbox_count_call(int kind, unsigned long caller);
+
+		oxbox_count_call(4, (unsigned long)__builtin_return_address(0));
+	}
+#endif
 	if (cache_file_globals.tags_loaded)
 	{
 		match_assert(
@@ -750,6 +815,14 @@ long tag_loaded(
 			}
 		}
 	}
+#if defined(HALO_XBOX_TARGET)
+	if (kept)
+	{
+		kept->group_tag = group_tag;
+		kept->result = result;
+		memcpy(kept->name, name, length + 1);
+	}
+#endif
 
 	return result;
 }
@@ -1548,6 +1621,7 @@ long scenario_tags_load(
 			global_tag_instances = cache_file_globals.tag_header->tag_instances;
 			global_tag_count = cache_file_globals.tag_header->tag_count;
 			cache_file_globals.tags_loaded = TRUE;
+			tag_loaded_forget();
 			/* (the menus' tags, as for this build's maps below) */
 			{
 				extern void menu_tags_loaded(char const *map_name);
@@ -1701,6 +1775,7 @@ long scenario_tags_load(
 			}
 #endif
 			cache_file_globals.tags_loaded = TRUE;
+			tag_loaded_forget();
 			/* port: a PAL map played as the NTSC maps are (port/linux/game/pal_tags.c) */
 			{
 				extern void pal_tags_loaded(char const *build);
@@ -1952,6 +2027,13 @@ void *tag_get(
 {
 	short absolute_index = (short)tag_index;
 
+#if defined(OXBOX_CALL_COUNT)
+	{
+		extern void oxbox_count_call(int kind, unsigned long caller);
+
+		oxbox_count_call(3, (unsigned long)__builtin_return_address(0));
+	}
+#endif
 	if (cache_file_globals.tags_loaded && global_tag_instances && absolute_index >= 0 &&
 		absolute_index < global_tag_count)
 	{

@@ -124,10 +124,22 @@ address it failed at (build/oxbox.map names the function), as the retail
 game, which compiled them out, keeps no text either. About 5,000 checks'
 expressions, file names and calls come out of the XBE. */
 void oxbox_assert_failed(void);
+#if defined(OXBOX_NO_ASSERTS)
+/* oxbox (v1.185): RELEASE builds (OXBOX_EXTRA adds -DOXBOX_NO_ASSERTS) compile the checks out, as the retail game
+had them; test builds keep them (debug.txt's "EXCEPTION assert" lines). Their expressions are type-checked but not
+evaluated, so no check may do the work itself: the six that did (a saved game's read, an AI path's heap insertion,
+the display persisted for a launch, a script variable's parse, a key agreement's message type, an animation search's
+loop count) do it before their check now. ~91 KB of the resident image */
+#define match_assert(file, line, expr) if (0) { (void)sizeof(!(expr)); }
+#define match_vassert(file, line, expr, string) if (0) { (void)sizeof(!(expr)); }
+#define match_warn(file, line, expr) if (0) { (void)sizeof(!(expr)); }
+#define match_vwarn(file, line, expr, string) if (0) { (void)sizeof(!(expr)); }
+#else
 #define match_assert(file, line, expr) if (!(expr)) { oxbox_assert_failed(); }
 #define match_vassert(file, line, expr, string) if (!(expr)) { oxbox_assert_failed(); }
 #define match_warn(file, line, expr) if (!(expr)) { oxbox_assert_failed(); }
 #define match_vwarn(file, line, expr, string) if (!(expr)) { oxbox_assert_failed(); }
+#endif
 #else
 #define match_assert(file, line, expr) if (!(expr)) { release_assert_failed(#expr, MATCH_FILE(file), MATCH_LINE(line), TRUE); }
 #define match_vassert(file, line, expr, string) if (!(expr)) { release_assert_failed(RELEASE_ASSERT_MESSAGE(string), MATCH_FILE(file), MATCH_LINE(line), TRUE); }

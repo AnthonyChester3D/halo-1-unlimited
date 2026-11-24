@@ -357,10 +357,12 @@ static char key_agreement_get_packet_type(
 	byte message_type;
 	word message_size = GET_MESSAGE_SIZE(*msgptr);
 
+	/* oxbox (v1.185): set before the assertion, which release builds compile out */
+	message_type= GET_MESSAGE_TYPE(*msgptr);
 	match_assert(
 		KEY_AGREEMENT_FILE,
 		0x4D,
-		(message_type= GET_MESSAGE_TYPE(*msgptr)) == _message_type_packet);
+		message_type == _message_type_packet);
 
 	return ((char const *)msgptr)[message_size - 1];
 }
