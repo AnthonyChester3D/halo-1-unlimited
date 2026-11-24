@@ -4362,6 +4362,85 @@ static void objects_fold(
 	perf_hooks.translate_clusters = 0;
 }
 
+#if defined(OXBOX_DENSE_PERF)
+/* (lab builds only: each second, every thread's processor time in the game's process, from the kernel's own count
+(KTHREAD.KernelTime: a clock tick, 1 ms, for the thread running at each tick; on the Xbox all threads run in kernel
+mode). Threads are named by their base priority (not the current one, which a wait's end boosts): the game's (the one
+calling this), lwIP's (highest: 10), internet play's (above normal: 9), the boot watch's (time critical); each also
+with its start address and base priority. Offsets from nxdk's xboxkrnl.h: KernelTime 0x18, BasePriority 0x70,
+ApcState.Process 0x44, ThreadListEntry 0x104; KPROCESS.ThreadListHead 0x8; ETHREAD.StartAddress 0x130) */
+static void threads_line(
+	double t)
+{
+	struct list { struct list *next, *previous; };
+	struct seen { unsigned char *thread; unsigned long ticks; };
+	static struct seen last[48];
+	static long last_count;
+	static unsigned char *game;
+	struct seen now[48];
+	unsigned char *(__stdcall *current)(void) = (unsigned char *(__stdcall *)(void))oxbox_kernel_export(104);
+	unsigned char (__stdcall *raise)(void) = (unsigned char (__stdcall *)(void))oxbox_kernel_export(129);
+	void (__attribute__((fastcall)) *lower)(unsigned char) =
+		(void (__attribute__((fastcall)) *)(unsigned char))oxbox_kernel_export(161);
+	char line[LINE_SIZE];
+	unsigned long total = 0, game_ticks = 0;
+	long count = 0, index, k;
+	int used = 0;
+	struct list *head, *entry;
+	unsigned char old;
+
+	if (!current || !raise || !lower)
+		return;
+	if (!game)
+		game = current();
+	head = (struct list *)(*(unsigned char **)(game + 0x44) + 0x8);
+	old = raise();
+	for (entry = head->next; entry != head && count < 48; entry = entry->next)
+	{
+		now[count].thread = (unsigned char *)entry - 0x104;
+		now[count].ticks = *(unsigned long *)(now[count].thread + 0x18);
+		count++;
+	}
+	lower(old);
+	used = _snprintf(line, sizeof(line), "threads %.0f s:", t);
+	for (index = 0; index < count; index++)
+	{
+		unsigned char *thread = now[index].thread;
+		unsigned long delta = now[index].ticks;
+		signed char priority = *(signed char *)(thread + 0x70);
+		char const *name;
+
+		for (k = 0; k < last_count; k++)
+		{
+			if (last[k].thread == thread)
+			{
+				delta = now[index].ticks - last[k].ticks;
+				break;
+			}
+		}
+		if (k == last_count)
+			continue;                                         /* (new this second: next second's line has it) */
+		total += delta;
+		name = thread == game ? "game" : priority == 10 ? "lwip" : priority == 9 ? "p2p" : priority >= 15 ? "watch" : NULL;
+		if (thread == game)
+			game_ticks = delta;
+		if (!delta && thread != game)
+			continue;
+		if (used < (int)sizeof(line) - 64)
+		{
+			used += _snprintf(line + used, sizeof(line) - used, " %s%s%p/p%d %lu", name ? name : "", name ? ":" : "",
+				*(void **)(thread + 0x130), (int)priority, delta);
+		}
+	}
+	if (used < (int)sizeof(line) - 48)
+		_snprintf(line + used, sizeof(line) - used, "; all threads %lu ms, the game %lu%% of them", total,
+			total ? game_ticks * 100 / total : 0);
+	platform_log("%s", line);
+	memcpy(last, now, sizeof(now[0]) * count);
+	last_count = count;
+}
+#endif
+
 /* the second's sums (or a tour view's) in a row, and the next ones' start */
 static void window_row(
 	char kind,
@@ -4383,6 +4462,10 @@ static void window_row(
 	if (sweep.measuring && kind == 'P')
 		sweep_window();
 	frame_row(kind, ticks_to_ms(now - perf.session_start) / 1000.0, &perf.second);
+#if defined(OXBOX_DENSE_PERF)
+	if (kind == 'P')
+		threads_line(ticks_to_ms(now - perf.session_start) / 1000.0);
+#endif
 	window_reset();
 	perf.second_start = now;
 	perf.second_counters = *counters;

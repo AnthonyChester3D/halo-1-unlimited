@@ -2456,6 +2456,8 @@ static struct
 	unsigned long long cycles;
 } vehicle_rest_test;
 long vehicle_rest_fail[7];             /* (physics.c: the rest test's conditions that failed) */
+unsigned long long vehicle_ground_cycles; /* (physics.c: its mass points' ground tests, compute_ground_plane) */
+long vehicle_ground_calls;
 float vehicle_rest_values[4][2] = { { -1.0f, 0.0f }, { -1.0f, 0.0f }, { -1.0f, 0.0f }, { -1.0f, 0.0f } };
 
 static void vehicle_rest_test_note(
@@ -2469,9 +2471,10 @@ static void vehicle_rest_test_note(
 	{
 		if (vehicle_rest_test.updates)
 		{
-			platform_log("vehicles: %ld updates a second: at rest %ld, attached %ld, physics %ld (%lu M cycles; by type "
-				"%ld %ld %ld %ld %ld %ld %ld)", vehicle_rest_test.updates, vehicle_rest_test.at_rest,
+			platform_log("vehicles: %ld updates a second: at rest %ld, attached %ld, physics %ld (%lu M cycles, of them ground "
+				"tests %lu M in %ld calls; by type %ld %ld %ld %ld %ld %ld %ld)", vehicle_rest_test.updates, vehicle_rest_test.at_rest,
 				vehicle_rest_test.parented, vehicle_rest_test.physics, (unsigned long)(vehicle_rest_test.cycles / 1000000),
+				(unsigned long)(vehicle_ground_cycles / 1000000), vehicle_ground_calls,
 				vehicle_rest_test.by_type[0], vehicle_rest_test.by_type[1], vehicle_rest_test.by_type[2],
 				vehicle_rest_test.by_type[3], vehicle_rest_test.by_type[4], vehicle_rest_test.by_type[5],
 				vehicle_rest_test.by_type[6]);
@@ -2486,6 +2489,8 @@ static void vehicle_rest_test_note(
 		}
 		memset(&vehicle_rest_test, 0, sizeof(vehicle_rest_test));
 		memset(vehicle_rest_fail, 0, sizeof(vehicle_rest_fail));
+		vehicle_ground_cycles = 0;
+		vehicle_ground_calls = 0;
 		{
 			long k;
 

@@ -841,7 +841,19 @@ void physics_compute_new(
 		cross_product3d(&object->object.angular_velocity, &mass_point->radius, &mass_point->velocity);
 		add_vectors3d(&object->object.translational_velocity, &mass_point->velocity, &mass_point->velocity);
 
+#if defined(OXBOX_VEHICLE_REST_TEST)
+		{
+			extern unsigned long long vehicle_ground_cycles;
+			extern long vehicle_ground_calls;
+			unsigned long long ground_start = __builtin_ia32_rdtsc();
+
+			compute_ground_plane(instance->object_index, mass_point, mass_point_definition);
+			vehicle_ground_cycles += __builtin_ia32_rdtsc() - ground_start;
+			vehicle_ground_calls++;
+		}
+#else
 		compute_ground_plane(instance->object_index, mass_point, mass_point_definition);
+#endif
 		mass_point->water_depth = scenario_location_water_depth(&mass_point->location, &mass_point->position);
 
 		if (mass_point->ground_depth > 0.0f)
@@ -1832,7 +1844,19 @@ static void physics_update_old(
 			&mass_point->velocity,
 			&mass_point->velocity);
 
+#if defined(OXBOX_VEHICLE_REST_TEST)
+		{
+			extern unsigned long long vehicle_ground_cycles;
+			extern long vehicle_ground_calls;
+			unsigned long long ground_start = __builtin_ia32_rdtsc();
+
+			compute_ground_plane(object_index, mass_point, mass_point_definition);
+			vehicle_ground_cycles += __builtin_ia32_rdtsc() - ground_start;
+			vehicle_ground_calls++;
+		}
+#else
 		compute_ground_plane(object_index, mass_point, mass_point_definition);
+#endif
 		mass_point->water_depth = scenario_location_water_depth(
 			&mass_point->location,
 			&mass_point->position);
