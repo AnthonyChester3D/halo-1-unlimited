@@ -1013,6 +1013,13 @@ int oxbox_entry(int argc, char **argv, char **envp)
 	report_hardware(memory.dwTotalPhys / 1024);
 	read_settings("D:\\opence.ini");
 	read_settings("T:\\opence.ini");
+#if defined(OXBOX_DENSE_PERF)
+	/* (a lab build made for the dense perf log: on whatever opence.ini says, so a missed copy of the test's ini can't
+	leave it silent) */
+	if (!oxbox_setting_perf_log)
+		platform_log("settings: perf_log on (a dense perf log build)");
+	oxbox_setting_perf_log = 1;
+#endif
 	if (!oxbox_setting_audio_effects)
 		platform_log("settings: no DirectSound effects image (audio_effects = 0)");
 	/* (the developers' perf log: its section loaded and started only with perf_log = 1, or perf_sweep = 1, oxbox_sdk.c) */
