@@ -63,14 +63,72 @@ static __attribute__((noinline)) double whole(double x, int way)
 	return r == 0.0 ? x * 0.0 : r;
 }
 
-double rint(double x) { return whole(x, 0); }
-float rintf(float x) { return (float)whole(x, 0); }
-double floor(double x) { return whole(x, -1); }
-double ceil(double x) { return whole(x, 1); }
-double trunc(double x) { return whole(x, 2); }
-float floorf(float x) { return (float)whole(x, -1); }
-float ceilf(float x) { return (float)whole(x, 1); }
-float truncf(float x) { return (float)whole(x, 2); }
+#if defined(OXBOX_ROUND_COUNT)
+/* (lab builds only: each rounding call counted by its caller; oxbox_round_dump logs the most frequent every 10 s) */
+int snprintf(char *, unsigned int, char const *, ...);
+void platform_log(char const *, ...);
+static struct { unsigned long caller, count; } round_callers[1024];
+static unsigned long round_calls, round_lost;
+
+static void round_count(unsigned long caller)
+{
+	unsigned long slot = (caller * 2654435761u) >> 22, k;
+
+	round_calls++;
+	for (k = 0; k < 1024; k++, slot = (slot + 1) & 1023)
+	{
+		if (round_callers[slot].caller == caller)
+		{
+			round_callers[slot].count++;
+			return;
+		}
+		if (!round_callers[slot].caller)
+		{
+			round_callers[slot].caller = caller;
+			round_callers[slot].count = 1;
+			return;
+		}
+	}
+	round_lost++;
+}
+
+void oxbox_round_dump(void)
+{
+	char line[600];
+	int used, n, k;
+
+	used = snprintf(line, sizeof(line), "round: %lu calls in 10 s (%lu not counted); by caller:", round_calls, round_lost);
+	for (n = 0; n < 24; n++)
+	{
+		int best = -1;
+
+		for (k = 0; k < 1024; k++)
+			if (round_callers[k].count && (best < 0 || round_callers[k].count > round_callers[best].count))
+				best = k;
+		if (best < 0)
+			break;
+		if (used < (int)sizeof(line) - 24)
+			used += snprintf(line + used, sizeof(line) - used, " %lx:%lu", round_callers[best].caller, round_callers[best].count);
+		round_callers[best].count = 0;
+	}
+	platform_log("%s", line);
+	for (k = 0; k < 1024; k++)
+		round_callers[k].caller = round_callers[k].count = 0;
+	round_calls = round_lost = 0;
+}
+#define COUNTED round_count((unsigned long)__builtin_return_address(0)),
+#else
+#define COUNTED
+#endif
+
+double rint(double x) { return COUNTED whole(x, 0); }
+float rintf(float x) { return COUNTED (float)whole(x, 0); }
+double floor(double x) { return COUNTED whole(x, -1); }
+double ceil(double x) { return COUNTED whole(x, 1); }
+double trunc(double x) { return COUNTED whole(x, 2); }
+float floorf(float x) { return COUNTED (float)whole(x, -1); }
+float ceilf(float x) { return COUNTED (float)whole(x, 1); }
+float truncf(float x) { return COUNTED (float)whole(x, 2); }
 
 /* (halo_math.h's fmod is halo_fmod, whose own fallback calls this one) */
 #undef fmod

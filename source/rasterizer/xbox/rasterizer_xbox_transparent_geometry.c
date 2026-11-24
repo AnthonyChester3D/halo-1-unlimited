@@ -1960,8 +1960,8 @@ void rasterizer_transparent_geometry_group_draw(
 								short frame_count = (short)bitmap_group->bitmaps.count;
 								short function_index = frame_count == 8 ? 3 : 0;
 								short counter_limit = shader_transparent_generic->generic.numeric_counter_limit;
-								short counter_value = PIN(fast_ftol(floor(counter_limit*
-									group->animation->values[function_index] + 0.5f)), 0, counter_limit);
+								short counter_value = PIN(real_floor_to_long(counter_limit*
+									group->animation->values[function_index] + 0.5f), 0, counter_limit);
 								short digit_index;
 
 								for (digit_index = 0;
@@ -2479,8 +2479,8 @@ void rasterizer_transparent_geometry_group_draw(
 								{
 									short function_index = frame_count == 8 ? 3 : 0;
 									short counter_limit = shader_transparent_chicago->chicago.numeric_counter_limit;
-									short counter_value = PIN(fast_ftol(floor(counter_limit*
-										group->animation->values[function_index] + 0.5f)), 0, counter_limit);
+									short counter_value = PIN(real_floor_to_long(counter_limit*
+										group->animation->values[function_index] + 0.5f), 0, counter_limit);
 									short digit_index;
 
 									for (digit_index = 0;

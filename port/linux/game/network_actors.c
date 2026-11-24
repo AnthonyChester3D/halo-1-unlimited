@@ -367,18 +367,18 @@ static void actor_state_from_unit(
 	}
 	state->animation_state = (byte)actor->control.animation_state;
 	state->aiming_speed = (byte)actor->control.aiming_speed;
-	state->primary_trigger = (byte)(long)floor(PIN(actor->control.primary_trigger, 0.0f, 1.0f) * 255.0f + 0.5f);
+	state->primary_trigger = (byte)real_floor_to_long(PIN(actor->control.primary_trigger, 0.0f, 1.0f) * 255.0f + 0.5f);
 	state->control_flags = actor->control.control_flags;
 	/* for a burst the AI holds the trigger for (unit_persistent_control),
 	send the flags and trigger the unit's update produced this tick */
 	if (unit->unit.persistent_control_timer > 0)
 	{
 		state->control_flags = (word)(unit->unit.control_flags & (FLAG(NUMBER_OF_UNIT_CONTROL_FLAGS) - 1));
-		state->primary_trigger = (byte)(long)floor(PIN(unit->unit.primary_trigger, 0.0f, 1.0f) * 255.0f + 0.5f);
+		state->primary_trigger = (byte)real_floor_to_long(PIN(unit->unit.primary_trigger, 0.0f, 1.0f) * 255.0f + 0.5f);
 	}
-	state->throttle[0] = (signed char)(long)floor(PIN(actor->control.throttle.i, -1.0f, 1.0f) * 127.0f + 0.5f);
-	state->throttle[1] = (signed char)(long)floor(PIN(actor->control.throttle.j, -1.0f, 1.0f) * 127.0f + 0.5f);
-	state->throttle[2] = (signed char)(long)floor(PIN(actor->control.throttle.k, -1.0f, 1.0f) * 127.0f + 0.5f);
+	state->throttle[0] = (signed char)real_floor_to_long(PIN(actor->control.throttle.i, -1.0f, 1.0f) * 127.0f + 0.5f);
+	state->throttle[1] = (signed char)real_floor_to_long(PIN(actor->control.throttle.j, -1.0f, 1.0f) * 127.0f + 0.5f);
+	state->throttle[2] = (signed char)real_floor_to_long(PIN(actor->control.throttle.k, -1.0f, 1.0f) * 127.0f + 0.5f);
 	angles_pack(&actor->control.facing_vector, state->facing);
 	angles_pack(&actor->control.aiming_vector, state->aiming);
 	angles_pack(&actor->control.looking_vector, state->looking);
@@ -423,7 +423,7 @@ static void actor_state_from_unit(
 		TEST_FLAG(unit->unit.flags, _unit_active_camouflaged_bit));
 	SET_FLAG(state->flags, _distributed_actor_super_camouflaged_bit,
 		TEST_FLAG(unit->unit.flags, _unit_super_camouflaged_bit));
-	state->active_camouflage = (byte)(long)floor(camouflage * 255.0f + 0.5f);
+	state->active_camouflage = (byte)real_floor_to_long(camouflage * 255.0f + 0.5f);
 	state->team = unit->object.owner_team_index >= 0 && unit->object.owner_team_index < NO_TEAM ?
 		(byte)unit->object.owner_team_index : NO_TEAM;
 	state->position = unit->object.position;

@@ -840,10 +840,10 @@ pixel32 real_a_rgb_color_to_pixel32(
 			color->blue));
 
 	result = (pixel32)(
-		((long)__builtin_rint((double)color->blue * scale) & 0xff) |
-		(((long)__builtin_rint((double)color->green * scale) & 0xff) << 8) |
-		(((long)__builtin_rint((double)color->red * scale) & 0xff) << 16) |
-		((long)__builtin_rint((double)alpha * scale) << 24));
+		(rint_to_long((double)color->blue * scale) & 0xff) |
+		((rint_to_long((double)color->green * scale) & 0xff) << 8) |
+		((rint_to_long((double)color->red * scale) & 0xff) << 16) |
+		(rint_to_long((double)alpha * scale) << 24));
 
 	return result;
 }
@@ -2139,8 +2139,8 @@ void decal_new_from_collision(
 
 								texcoord.x = PIN((sprite_bounds.x1 - sprite_bounds.x0) * decal_vertex->texcoord.x + sprite_bounds.x0, 0.0f, 1.0f);
 								texcoord.y = PIN((sprite_bounds.y1 - sprite_bounds.y0) * decal_vertex->texcoord.y + sprite_bounds.y0, 0.0f, 1.0f);
-								u = fast_ftol((real)floor(PIN(texcoord.x * 32768.0f, 0.0f, 32767.0f) + 0.5f));
-								v = fast_ftol((real)floor(PIN(texcoord.y * 32768.0f, 0.0f, 32767.0f) + 0.5f));
+								u = real_floor_to_long(PIN(texcoord.x * 32768.0f, 0.0f, 32767.0f) + 0.5f);
+								v = real_floor_to_long(PIN(texcoord.y * 32768.0f, 0.0f, 32767.0f) + 0.5f);
 
 								match_assert("c:\\halo\\SOURCE\\effects\\decals.c", 2696,
 									(u&0x8000)==0 && (v&0x8000)==0);

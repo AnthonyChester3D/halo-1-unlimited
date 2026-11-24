@@ -1759,7 +1759,7 @@ static void distributed_inventory_from_unit(
 
 				/* (so written that one not a number is none) */
 				age = age > 1.0f ? 1.0f : age >= 0.0f ? age : 0.0f;
-				inventory->age[weapon_slot] = (word)(long)floor(age * AGE_SCALE + 0.5f);
+				inventory->age[weapon_slot] = (word)real_floor_to_long(age * AGE_SCALE + 0.5f);
 			}
 		}
 	}
@@ -3172,7 +3172,7 @@ static boolean distributed_client_own_settled(
 		round_trip = (real)DEFAULT_OWN_ROUND_TRIP_TICKS;
 	if (round_trip > (real)MAXIMUM_OWN_ROUND_TRIP_TICKS)
 		round_trip = (real)MAXIMUM_OWN_ROUND_TRIP_TICKS;
-	return game_time_get() - time > (long)ceil(round_trip) + INVENTORY_INTERVAL_TICKS + OWN_INVENTORY_MARGIN_TICKS;
+	return game_time_get() - time > real_ceil_to_long(round_trip) + INVENTORY_INTERVAL_TICKS + OWN_INVENTORY_MARGIN_TICKS;
 }
 
 /* whether the weapon the host has in a slot is here (none always is) */

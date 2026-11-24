@@ -977,22 +977,22 @@ long _rasterizer_widget_submit_occlusion_test(
 			projected_axes.i = MAX(1.0f, projected_axes.i);
 			projected_axes.j = MAX(1.0f, projected_axes.j);
 
-			x0 = (short)fast_ftol((real)floor(PIN(
+			x0 = (short)real_floor_to_long(PIN(
 				projected_center.x - projected_axes.i,
 				-32767.0f,
-				32767.0f)));
-			y0 = (short)fast_ftol((real)floor(PIN(
+				32767.0f));
+			y0 = (short)real_floor_to_long(PIN(
 				projected_center.y - projected_axes.j,
 				-32767.0f,
-				32767.0f)));
-			x1 = (short)fast_ftol((real)floor(PIN(
+				32767.0f));
+			x1 = (short)real_floor_to_long(PIN(
 				projected_center.x + projected_axes.i,
 				-32767.0f,
-				32767.0f)));
-			y1 = (short)fast_ftol((real)floor(PIN(
+				32767.0f));
+			y1 = (short)real_floor_to_long(PIN(
 				projected_center.y + projected_axes.j,
 				-32767.0f,
-				32767.0f)));
+				32767.0f));
 
 			pixel_count = MAX(0, (x1 - x0) * (y1 - y0));
 			if (pixel_count > 0)

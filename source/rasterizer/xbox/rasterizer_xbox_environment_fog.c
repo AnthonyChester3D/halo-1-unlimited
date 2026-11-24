@@ -1089,7 +1089,7 @@ void _rasterizer_environment_fog_screen_begin(
 				long offset;
 
 				window->base_z -= screen->zoom_multiplier / layer_spacing * matrix.position.z;
-				offset = fast_ftol((real)floor(window->base_z));
+				offset = real_floor_to_long(window->base_z);
 				if (offset > 0)
 				{
 					real u = real_local_random();
@@ -1162,7 +1162,7 @@ void _rasterizer_environment_fog_screen_begin(
 					real animation_time = (real)PIN(t - floor(t), 0.0, 1.0);
 
 					animation_times[layer] = animation_time;
-					animation_index = (short)(fast_ftol((real)floor(t)) % bitmap_group->bitmaps.count);
+					animation_index = (short)(real_floor_to_long(t) % bitmap_group->bitmaps.count);
 					if (animation_index < 0)
 					{
 						if (!reported_bad_animation_index)

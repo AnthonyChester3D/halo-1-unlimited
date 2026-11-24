@@ -6,10 +6,11 @@ chip).
 
 LOG: its "profile N s:" lines (each window's most taken addresses only); WINDOW picks windows by their N.
 profile.bin (v1.183's sampler, oxbox_perf.c sampler_save): every window's whole table of 16-byte buckets; --from/--to
-(session seconds at the windows' ends) add up the windows in that range, else each window is shown alone."""
+(session seconds at the windows' ends) add up the windows in that range, else each window is shown alone; --part N
+keeps the Nth run of windows (the session's clock starts again at each map load, so a part is about a map)."""
 import os, re, struct, subprocess, sys, bisect, collections
 
-args, opts = [], {'--from': None, '--to': None, '--top': '24'}
+args, opts = [], {'--from': None, '--to': None, '--top': '24', '--part': None}
 it = iter(sys.argv[1:])
 for a in it:
     if a in opts: opts[a] = next(it)
@@ -71,6 +72,15 @@ else:
         if m:
             windows.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(6)),
                             int(m.group(5)), 0, 0, [(int(a, 16), int(c)) for a, c in re.findall(r' ([0-9a-f]+):(\d+)', m.group(7))]))
+
+
+if opts['--part'] is not None:
+    parts, last = [[]], None
+    for w in windows:
+        if last is not None and w[0] < last:
+            parts.append([])
+        parts[-1].append(w); last = w[0]
+    windows = parts[int(opts['--part']) - 1] if int(opts['--part']) <= len(parts) else []
 
 
 def show(title, ws):

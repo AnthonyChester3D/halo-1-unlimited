@@ -483,10 +483,10 @@ boolean build_structure_lens_flares(
 
 					if (lens_flare_spacing != 0.f)
 					{
-						grid_bounds.x0 = (short)fast_ftol((real)ceil(PIN(bounds.x0 / lens_flare_spacing, -1000.f, 1000.f)));
-						grid_bounds.y0 = (short)fast_ftol((real)ceil(PIN(bounds.y0 / lens_flare_spacing, -1000.f, 1000.f)));
-						grid_bounds.x1 = (short)fast_ftol((real)floor(PIN(bounds.x1 / lens_flare_spacing, -1000.f, 1000.f)));
-						grid_bounds.y1 = (short)fast_ftol((real)floor(PIN(bounds.y1 / lens_flare_spacing, -1000.f, 1000.f)));
+						grid_bounds.x0 = (short)real_ceil_to_long(PIN(bounds.x0 / lens_flare_spacing, -1000.f, 1000.f));
+						grid_bounds.y0 = (short)real_ceil_to_long(PIN(bounds.y0 / lens_flare_spacing, -1000.f, 1000.f));
+						grid_bounds.x1 = (short)real_floor_to_long(PIN(bounds.x1 / lens_flare_spacing, -1000.f, 1000.f));
+						grid_bounds.y1 = (short)real_floor_to_long(PIN(bounds.y1 / lens_flare_spacing, -1000.f, 1000.f));
 					}
 					else
 					{
@@ -538,9 +538,9 @@ boolean build_structure_lens_flares(
 												marker_index,
 												struct structure_lens_flare_marker);
 											marker->position = position;
-											marker->direction[0] = (char)fast_ftol((real)floor(plane.n.i * 127.5f));
-											marker->direction[1] = (char)fast_ftol((real)floor(plane.n.j * 127.5f));
-											marker->direction[2] = (char)fast_ftol((real)floor(plane.n.k * 127.5f));
+											marker->direction[0] = (char)real_floor_to_long(plane.n.i * 127.5f);
+											marker->direction[1] = (char)real_floor_to_long(plane.n.j * 127.5f);
+											marker->direction[2] = (char)real_floor_to_long(plane.n.k * 127.5f);
 											marker->lens_flare_index = (byte)lens_flare_index;
 										}
 										else

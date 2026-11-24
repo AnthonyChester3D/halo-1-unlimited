@@ -991,7 +991,7 @@ word distributed_vitality_pack(
 {
 	value *= VITALITY_SCALE;
 	value = value > 65535.0f ? 65535.0f : value < 0.0f ? 0.0f : value;
-	return (word)(long)floor(value + 0.5f);
+	return (word)real_floor_to_long(value + 0.5f);
 }
 
 real distributed_vitality_unpack(
@@ -1006,7 +1006,7 @@ short distributed_angle_pack(
 	real turns = angle / (2.0f * _pi);
 
 	turns -= (real)floor(turns);
-	return (short)(word)((long)floor(turns * 65536.0f + 0.5f) & 0xFFFF);
+	return (short)(word)(real_floor_to_long(turns * 65536.0f + 0.5f) & 0xFFFF);
 }
 
 real distributed_angle_unpack(
@@ -1928,7 +1928,7 @@ static void distributed_state_from_player(
 		SET_FLAG(state->unit_flags, _distributed_unit_super_camouflaged_bit,
 			TEST_FLAG(unit->unit.flags, _unit_super_camouflaged_bit));
 		camouflage = camouflage > 1.0f ? 1.0f : camouflage < 0.0f ? 0.0f : camouflage;
-		state->active_camouflage = (byte)(long)floor(camouflage * 255.0f + 0.5f);
+		state->active_camouflage = (byte)real_floor_to_long(camouflage * 255.0f + 0.5f);
 		/* (the host) a client's player where the client had them: at which of
 		its ticks (with the ticks run since) */
 		if (game_connection() == _game_connection_network_server && player_index < MAXIMUM_TRACKED_PLAYERS &&
@@ -2892,7 +2892,7 @@ static void distributed_handle_unit_state(
 		if (same)
 			*disagreement = 0;
 		else if (!local || ++*disagreement > MAX(SEAT_DISAGREEMENT_TICKS,
-			(short)ceil(distributed_own_round_trip) + SEAT_DISAGREEMENT_SLACK_TICKS))
+			(short)real_ceil_to_long(distributed_own_round_trip) + SEAT_DISAGREEMENT_SLACK_TICKS))
 		{
 			network_objects_set_seat(unit_index, state->vehicle_index, state->seat_index);
 			*disagreement = 0;
@@ -3175,9 +3175,9 @@ static boolean distributed_relayed_action_from(
 	}
 	relayed->yaw = distributed_angle_pack(action->desired_facing.yaw);
 	relayed->pitch = distributed_angle_pack(action->desired_facing.pitch);
-	relayed->throttle_i = (signed char)(long)floor(throttle_i * 127.0f + 0.5f);
-	relayed->throttle_j = (signed char)(long)floor(throttle_j * 127.0f + 0.5f);
-	relayed->primary_trigger = (byte)(long)floor(trigger * 255.0f + 0.5f);
+	relayed->throttle_i = (signed char)real_floor_to_long(throttle_i * 127.0f + 0.5f);
+	relayed->throttle_j = (signed char)real_floor_to_long(throttle_j * 127.0f + 0.5f);
+	relayed->primary_trigger = (byte)real_floor_to_long(trigger * 255.0f + 0.5f);
 	return changed;
 }
 

@@ -580,10 +580,10 @@ static void breakable_surface_effect(
 
 					if (particle_effect->density!=0.0f)
 					{
-						bounds.x0 = (short)fast_ftol(ceil(PIN(surface_bounds.x0 / particle_effect->density, -1000.f, 1000.f)));
-						bounds.y0 = (short)fast_ftol(ceil(PIN(surface_bounds.y0 / particle_effect->density, -1000.f, 1000.f)));
-						bounds.x1 = (short)fast_ftol(floor(PIN(surface_bounds.x1 / particle_effect->density, -1000.f, 1000.f)));
-						bounds.y1 = (short)fast_ftol(floor(PIN(surface_bounds.y1 / particle_effect->density, -1000.f, 1000.f)));
+						bounds.x0 = (short)real_ceil_to_long(PIN(surface_bounds.x0 / particle_effect->density, -1000.f, 1000.f));
+						bounds.y0 = (short)real_ceil_to_long(PIN(surface_bounds.y0 / particle_effect->density, -1000.f, 1000.f));
+						bounds.x1 = (short)real_floor_to_long(PIN(surface_bounds.x1 / particle_effect->density, -1000.f, 1000.f));
+						bounds.y1 = (short)real_floor_to_long(PIN(surface_bounds.y1 / particle_effect->density, -1000.f, 1000.f));
 					}
 					else
 					{
