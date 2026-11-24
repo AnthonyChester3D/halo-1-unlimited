@@ -486,8 +486,8 @@ static void report_hardware(unsigned long total_kb)
 		/* (an emulator's clock is its own: xemu says about 900 MHz) */
 		platform_log("hardware: CPU %lu MHz (%s family %lu model %lu stepping %lu%s%s); RAM %lu MB; GPU %lu MHz "
 			"(NVPLL %08lx)", mhz, vendor, family, model, stepping,
-			family == 6 && model == 8 ? ", Coppermine: the stock CPU's kind" : family == 6 && model == 11 ?
-			", Tualatin: an upgraded CPU" : "", cache, (total_kb + 1023) / 1024, gpu, nvpll);
+			family == 6 && model == 8 ? ", Coppermine (stock)" : family == 6 && model == 11 ?
+			", Tualatin (upgraded)" : "", cache, (total_kb + 1023) / 1024, gpu, nvpll);
 	}
 }
 
