@@ -22,7 +22,8 @@ much is kept, how much that packs to, then the packed bytes. A settings file's p
 #define MOST_BUNDLE (6u * 1024u * 1024u)
 #define MOST_KEPT (3u * 1024u * 1024u)   /* (a file's last part, at most) */
 #define MOST_FILES 48
-#define MOST_PERF_FILES 24
+#define MOST_PERF_FILES 16      /* (the sweeps' files) */
+#define MOST_PERF_LOGS 4        /* (the newest of the rest: perf_log = 1's, one a map) */
 
 static char const alphabet[] = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -174,19 +175,42 @@ int logs_send(char const *url, char const *install, char const *own_log, unsigne
 			pick_in(install, top[i], i < 2 ? MOST_KEPT : 256u * 1024u);
 		pick_in(install, "perf\\sweep_hangs.txt", 512u * 1024u);
 		pick_in(install, "debug.txt", 1024u * 1024u);
+		/* perf's files: the sweeps' (sweep_*), and the newest MOST_PERF_LOGS of the rest (installer 74: perf_log = 1
+		writes one a map played, which piled up) */
 		text_print(pattern, sizeof(pattern), "%s\\perf\\*", install);
 		find = FindFirstFileA(pattern, &found);
 		if (find != INVALID_HANDLE_VALUE)
 		{
+			static struct { char name[64]; FILETIME time; } logs[MOST_PERF_LOGS];
+			int count = 0, k;
 			do
 			{
 				char name[64];
 				if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !_stricmp(found.cFileName, "sweep_hangs.txt"))
 					continue;
 				text_print(name, sizeof(name), "perf\\%s", found.cFileName);
-				pick_in(install, name, 1024u * 1024u);
-			} while (++perf < MOST_PERF_FILES && FindNextFileA(find, &found));
+				if (!_strnicmp(found.cFileName, "sweep", 5))
+				{
+					if (perf++ < MOST_PERF_FILES)
+						pick_in(install, name, 1024u * 1024u);
+					continue;
+				}
+				/* (kept newest first: the oldest kept gives way) */
+				for (k = count < MOST_PERF_LOGS ? count++ : MOST_PERF_LOGS;
+					k > 0 && CompareFileTime(&logs[k - 1].time, &found.ftLastWriteTime) < 0; k--)
+				{
+					if (k < MOST_PERF_LOGS)
+						logs[k] = logs[k - 1];
+				}
+				if (k < MOST_PERF_LOGS)
+				{
+					text_print(logs[k].name, sizeof(logs[k].name), "%s", name);
+					logs[k].time = found.ftLastWriteTime;
+				}
+			} while (FindNextFileA(find, &found));
 			FindClose(find);
+			for (k = 0; k < count; k++)
+				pick_in(install, logs[k].name, 1024u * 1024u);
 		}
 	}
 	for (i = 0; i < pick_count; i++)

@@ -57,7 +57,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 73
+#define INSTALLER_VERSION 74
 #endif
 __attribute__((used)) static struct
 {
@@ -5720,8 +5720,9 @@ static void send_logs(struct halo *h)
 	}
 	text_print(text, sizeof(text), "logs: sent, code %s (%d files, %lu KB)", code, files, kilobytes);
 	log_file(text);
+	/* (installer 74: no file count or size on the screen, Llama: they only raise questions; the log keeps them) */
 	text_print(text, sizeof(text), "Your code is %.4s-%.4s\n\nTell the Halo 1 Unlimited developers this code, and they'll "
-		"find your logs with it.\n\n(%d files, %lu KB)", code, code + 4, files, kilobytes);
+		"find your logs with it.", code, code + 4);
 	page("Your logs were sent", text);
 }
 
