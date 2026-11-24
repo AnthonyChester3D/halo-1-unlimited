@@ -562,6 +562,15 @@ static void structure_render_pass(
 			&structure_bsp->lightmaps,
 			lightmap_index,
 			struct structure_lightmap);
+		/* port (v1.188): a lightmap with no materials has no surfaces to draw. Bungie's BSPs always had one; a BSP cut
+		down from a level (HMP's Boxfight rooms keep c20's lightmaps, the materials of those not in the room gone)
+		has empty ones, and the last material below was element -1 of an empty block, asked in each of the four
+		passes every frame (retail would read before the block). The port's answer (empty data) skipped it already;
+		now it's skipped without the lookup */
+		if (lightmap->materials.count <= 0)
+		{
+			continue;
+		}
 		last_material = TAG_BLOCK_GET_ELEMENT(
 			&lightmap->materials,
 			lightmap->materials.count - 1,
