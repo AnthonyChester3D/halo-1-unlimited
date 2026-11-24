@@ -149,13 +149,14 @@ void xgpu_static_range_remove(const void *start, int indices);
 #if defined(HALO_XBOX_TARGET)
 #include "oxbox_perf.h" /* (a map load's steps timed for the perf log, v1.178) */
 
+#else
+#define OXBOX_PERF_LOAD(step)
+#endif
+
 #if defined(HALO_XBOX_TARGET)
 static void tag_loaded_forget(void);                   /* (tag_loaded's answers kept, v1.185: below) */
 #else
 #define tag_loaded_forget()
-#endif
-#else
-#define OXBOX_PERF_LOAD(step)
 #endif
 
 /* (Halo Universal's folder maps and map sharing: port/linux/game/hmp_maps.c, hmp_share.c; in the native builds
