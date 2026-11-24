@@ -423,6 +423,9 @@ void oxbox_internet_play_release(void)
 static void internet_play_start(void)
 {
 	static int started;
+#if defined(OXBOX_LAB_NO_NET)
+	return;                             /* (lab builds only: no internet play's threads either) */
+#endif
 
 	if (started)
 		return;

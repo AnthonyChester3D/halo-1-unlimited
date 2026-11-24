@@ -258,6 +258,10 @@ void oxbox_lwip_release(void)
 
 void oxbox_lwip_start(void)
 {
+#if defined(OXBOX_LAB_NO_NET)
+	/* (lab builds only: the network stack never starts, for measuring what its threads cost a frame) */
+	return;
+#endif
 	if (stack_state)
 		return;
 	stack_state = 1;
