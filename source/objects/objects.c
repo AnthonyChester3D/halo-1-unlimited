@@ -4780,6 +4780,27 @@ void objects_update(
 									"%lu dead moving (%lu); ground weapons: %lu at rest (%lu), %lu moving (%lu)",
 									counts[0] / ticks_seen, each[0], counts[1] / ticks_seen, each[1], counts[2] / ticks_seen, each[2],
 									counts[3] / ticks_seen, each[3], counts[4] / ticks_seen, each[4]);
+								{
+									extern unsigned long long limp_cycles[8];
+									extern unsigned long limp_calls[8];
+									extern unsigned long limp_features[3];
+									unsigned long relaxations = limp_calls[5] ? limp_calls[5] : 1;
+									int l;
+									unsigned long per[6];
+
+									/* (kcycles a relaxation, calls a relaxation) */
+									for (l = 0; l < 6; l++)
+										per[l] = (unsigned long)(limp_cycles[l] / relaxations / 1000);
+									platform_log("corpses: a relaxation (%lu a tick): %lu kcycles: features %lu (%lu spheres, %lu cylinders, "
+										"%lu prisms), %lu sphere tests %lu, %lu rays %lu (%lu hit), %lu point moves %lu, orientations %lu",
+										limp_calls[5] / ticks_seen, per[5], per[0], limp_features[0] / relaxations,
+										limp_features[1] / relaxations, limp_features[2] / relaxations, limp_calls[1] / relaxations, per[1],
+										limp_calls[2] / relaxations, per[2], limp_calls[6] / relaxations, limp_calls[3] / relaxations, per[3],
+										per[4]);
+									csmemset(limp_cycles, 0, sizeof(limp_cycles));
+									csmemset(limp_calls, 0, sizeof(limp_calls));
+									csmemset(limp_features, 0, sizeof(limp_features));
+								}
 								platform_log("corpses: bodies at rest a tick: %lu settled (%lu), %lu limp body relaxing (%lu), "
 									"%lu limp body not started (%lu)", counts[1] / ticks_seen, each[1], counts[5] / ticks_seen, each[5],
 									counts[6] / ticks_seen, each[6]);

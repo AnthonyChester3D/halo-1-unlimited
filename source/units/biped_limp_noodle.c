@@ -44,6 +44,23 @@ symbols in this file:
 #include "units/biped_limp_noodle.h"
 #include "units/bipeds.h"
 
+#if defined(OXBOX_CORPSE_COUNT)
+/* lab: what a limp body's relaxation spends its time on (objects.c logs it with the corpses: lines):
+0 features gathered, 1 sphere tests, 2 ray tests, 3 point moves, 4 orientations, 5 the whole relaxation; 6 ray hits;
+limp_features: spheres, cylinders, prisms gathered */
+unsigned long long limp_cycles[8];
+unsigned long limp_calls[8];
+unsigned long limp_features[3];
+#define LIMP_TIME(kind, expression) ({ unsigned long long limp_t0_ = __builtin_ia32_rdtsc(); \
+	__typeof__(expression) limp_r_ = (expression); limp_cycles[kind] += __builtin_ia32_rdtsc() - limp_t0_; \
+	limp_calls[kind]++; limp_r_; })
+#define collision_get_features_in_sphere(...) LIMP_TIME(0, (collision_get_features_in_sphere)(__VA_ARGS__))
+#define collision_test_sphere(...) LIMP_TIME(1, (collision_test_sphere)(__VA_ARGS__))
+#define collision_test_vector(...) ({ boolean limp_hit_ = LIMP_TIME(2, (collision_test_vector)(__VA_ARGS__)); \
+	if (limp_hit_) limp_calls[6]++; limp_hit_; })
+#define collision_move_point(...) LIMP_TIME(3, (collision_move_point)(__VA_ARGS__))
+#endif
+
 /* ---------- constants */
 
 enum
@@ -720,6 +737,10 @@ boolean biped_limp_noodle_relax_nodes_onto_environment(
 	if (!relaxation_complete)
 	{
 		long node_index;
+#if defined(OXBOX_CORPSE_COUNT)
+		unsigned long long whole_t0 = __builtin_ia32_rdtsc();
+		unsigned long long turn_t0;
+#endif
 
 		for (node_index = 0; node_index < animation_graph->nodes.count; node_index++)
 		{
@@ -728,11 +749,23 @@ boolean biped_limp_noodle_relax_nodes_onto_environment(
 		}
 
 		biped_limp_noodle_move_relax_and_constrain_positions(biped_index, node_matrices);
+#if defined(OXBOX_CORPSE_COUNT)
+		turn_t0 = __builtin_ia32_rdtsc();
+		limp_features[0] += features.count[0];
+		limp_features[1] += features.count[1];
+		limp_features[2] += features.count[2];
+#endif
 		biped_limp_noodle_adjust_orientations(
 			biped_index,
 			node_matrices,
 			animation_graph->nodes.count,
 			last_positions);
+#if defined(OXBOX_CORPSE_COUNT)
+		limp_cycles[4] += __builtin_ia32_rdtsc() - turn_t0;
+		limp_calls[4]++;
+		limp_cycles[5] += __builtin_ia32_rdtsc() - whole_t0;
+		limp_calls[5]++;
+#endif
 
 		if (biped->biped.limp_body_current_relaxation_iterations < CHAR_MAX)
 			biped->biped.limp_body_current_relaxation_iterations++;
