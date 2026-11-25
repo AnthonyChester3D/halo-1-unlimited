@@ -515,6 +515,7 @@ int oxbox_setting_perf_sweep = 0;   /* (the perf sweep: oxbox_perf.c, played by 
 int oxbox_setting_far_players = 1;   /* (v1.195: a network client's far players: network_distributed.c) */
 int oxbox_setting_resting_corpses = 1;   /* (v1.195: corpses at rest left alone: objects.c objects_update) */
 int oxbox_setting_resting_weapons = 1;   /* (v1.196: idle weapons lying still left alone: objects.c objects_update) */
+int oxbox_setting_resting_objects = 1;   /* (v1.200: parked vehicles, still equipment and scenery: objects.c objects_update) */
 extern unsigned char display_framerate;   /* (main.c's, a boolean) */
 
 /* a whole file written beside the logs (the XBE's folder, else T:); FALSE when neither could be written */
@@ -755,6 +756,8 @@ static void read_settings(const char *path)
 			oxbox_setting_resting_corpses = value != 0;
 		else if (same_text(name, "resting_weapons"))
 			oxbox_setting_resting_weapons = value != 0;
+		else if (same_text(name, "resting_objects"))
+			oxbox_setting_resting_objects = value != 0;
 		else if (same_text(name, "log_pools"))
 		{
 			extern int oxbox_setting_log_pools;   /* (oxbox_diagnostics.c) */

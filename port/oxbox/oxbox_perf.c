@@ -2534,9 +2534,9 @@ static char const sweep_fields[] =
 	"particles_peak,effects_peak,level_triangles,texture_read_kb,texture_waits,free_kb_min,limits,sweep_version";
 
 /* v1.199: the sweep version, every row's last column (none in the tables before: 0). Raised by a build that changes how
-fast maps run (v1.199: 1, after v1.195-198's multiplayer savings): the maps measured at an older one that weren't
-perfect are measured again, the slowest first (sweep_next) */
-#define SWEEP_VERSION 1
+fast maps run (v1.199: 1, after v1.195-198's multiplayer savings; v1.200: 2, resting vehicles, equipment, scenery and
+off lights): the maps measured at an older one that weren't perfect are measured again, the slowest first (sweep_next) */
+#define SWEEP_VERSION 2
 #define SWEEP_PRIORITY "sweep_priority.txt"     /* (perf\: maps measured first, a key a line) */
 
 struct sweep_done

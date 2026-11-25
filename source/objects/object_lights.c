@@ -1930,6 +1930,30 @@ void lights_render_specular(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.200): whether an object's own light (an attachment: a flashlight, a vehicle's or a weapon's light) is off,
+its function exactly 0, and already in the map, for objects.c object_connect_lights, which then leaves it where it is
+rather than taking it out and putting it back every tick (each a cluster search for its sphere: a player's flashlight
+cost 45-60 K cycles a tick in xemu). Drawn, an off light gives nothing (render: its color times its function's value,
+the same value); it goes back in the map, at its marker, the first tick it's on again. */
+boolean light_attached_off(
+	long light_index)
+{
+	struct light_datum *light = light_get(light_index);
+	real intensity;
+
+	if (light->parent_light_index != NONE || light->object_index == NONE || light->function_index == NONE ||
+		TEST_FLAG(light->flags, _point_light_port_glow_bit) ||
+		!TEST_FLAG(light->flags, _point_light_connects_to_map_bit) ||
+		!TEST_FLAG(light->flags, _point_light_connected_to_map_bit))
+	{
+		return FALSE;
+	}
+	object_get_function_value(light->object_index, light->function_index, &intensity);
+	return intensity == 0.0f;
+}
+#endif
+
 void light_reconnect_to_map(
 	long light_index)
 {
