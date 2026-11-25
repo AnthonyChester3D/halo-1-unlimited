@@ -56,6 +56,9 @@ OBJECTS.C
 #include "sound/game_sound.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
+#if defined(OXBOX_CORPSE_COUNT)
+#include "units/bipeds.h"   /* (lab: limp body phase) */
+#endif
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: objects_update's and object_update's steps timed for the developers' perf log (test build 33,
 oxbox_perf.h), when opence.ini loads it */
@@ -4530,7 +4533,7 @@ void objects_garbage_collection(
 
 #if defined(OXBOX_CORPSE_COUNT)
 unsigned long weapon_idle_reasons[12];   /* lab: why resting weapons weren't idle */
-unsigned long corpse_still_reasons[8];   /* lab: why dead bodies weren't still (0: they were) */
+unsigned long corpse_still_reasons[9];   /* lab: why dead bodies weren't still (0: they were) */
 unsigned long corpse_child_types[16];   /* lab: the types of what's attached to dead bodies */
 #endif
 
@@ -4659,7 +4662,7 @@ void objects_update(
 					boolean unit_corpse_still(long unit_index);   /* (units.c: v1.196, its death animation over) */
 
 #if defined(OXBOX_CORPSE_COUNT)
-					extern unsigned long corpse_still_reasons[8];
+					extern unsigned long corpse_still_reasons[9];
 					extern int unit_corpse_still_reason;
 #endif
 					if (unit_corpse_still(object_index))
@@ -4672,7 +4675,7 @@ void objects_update(
 						}
 					}
 #if defined(OXBOX_CORPSE_COUNT)
-					if (unit_corpse_still_reason >= 0 && unit_corpse_still_reason < 8 &&
+					if (unit_corpse_still_reason >= 0 && unit_corpse_still_reason < 9 &&
 						TEST_FLAG(object_get(object_index)->object.damage_flags, _object_dead_bit))
 					{
 						corpse_still_reasons[unit_corpse_still_reason]++;
@@ -4737,14 +4740,26 @@ void objects_update(
 					/* lab (v1.195): what live and dead bipeds' and ground weapons' updates cost (logged every 300 ticks) */
 					if (object_header->type == _object_type_biped || object_header->type == _object_type_weapon)
 					{
-						static unsigned long long cycles[5];
-						static unsigned long counts[5];
+						static unsigned long long cycles[7];
+						static unsigned long counts[7];
 						static long ticks_seen, last_tick = NONE;
 						struct object_datum *counted = object_get(object_index);
 						int kind = object_header->type == _object_type_weapon ?
 							(TEST_FLAG(counted->object.flags, _object_at_rest_bit) ? 3 : 4) :
 							!TEST_FLAG(counted->object.damage_flags, _object_dead_bit) ? 0 :
-							TEST_FLAG(counted->object.flags, _object_at_rest_bit) ? 1 : 2;
+							!TEST_FLAG(counted->object.flags, _object_at_rest_bit) ? 2 : 1;
+
+						/* (a body at rest: limp body relaxing 5, limp body not started 6, settled 1) */
+						if (kind == 1)
+						{
+							struct biped_datum *dead_biped = biped_get(object_index);
+
+							if (!TEST_FLAG(dead_biped->biped.flags, _biped_limp_body_physics_active_bit))
+								kind = 6;
+							else if (dead_biped->biped.limp_body_current_relaxation_iterations <
+								dead_biped->biped.limp_body_max_relaxation_iterations)
+								kind = 5;
+						}
 						unsigned long long before = __builtin_ia32_rdtsc();
 
 						object_update(object_index);
@@ -4757,14 +4772,17 @@ void objects_update(
 							{
 								void platform_log(char const *format, ...);
 								int k;
-								unsigned long each[5];
+								unsigned long each[7];
 
-								for (k = 0; k < 5; k++)
+								for (k = 0; k < 7; k++)
 									each[k] = counts[k] ? (unsigned long)(cycles[k] / counts[k] / 1000) : 0;
 								platform_log("corpses: a tick's bipeds: %lu alive (%lu kcycles each), %lu dead at rest (%lu), "
 									"%lu dead moving (%lu); ground weapons: %lu at rest (%lu), %lu moving (%lu)",
 									counts[0] / ticks_seen, each[0], counts[1] / ticks_seen, each[1], counts[2] / ticks_seen, each[2],
 									counts[3] / ticks_seen, each[3], counts[4] / ticks_seen, each[4]);
+								platform_log("corpses: bodies at rest a tick: %lu settled (%lu), %lu limp body relaxing (%lu), "
+									"%lu limp body not started (%lu)", counts[1] / ticks_seen, each[1], counts[5] / ticks_seen, each[5],
+									counts[6] / ticks_seen, each[6]);
 								{
 									extern unsigned long weapon_idle_reasons[12];
 
@@ -4780,10 +4798,11 @@ void objects_update(
 									csmemset(weapon_idle_reasons, 0, sizeof(weapon_idle_reasons));
 								}
 								platform_log("corpses: dead bodies a tick: %lu still; not still: at rest %lu, attached %lu, no death time %lu, "
-									"settling %lu, animation %lu, not on its last frame %lu", corpse_still_reasons[0] / ticks_seen,
+									"settling %lu, animation %lu, not on its last frame %lu, limp body %lu", corpse_still_reasons[0] / ticks_seen,
 									corpse_still_reasons[2] / ticks_seen, corpse_still_reasons[3] / ticks_seen,
 									corpse_still_reasons[4] / ticks_seen, corpse_still_reasons[5] / ticks_seen,
-									corpse_still_reasons[6] / ticks_seen, corpse_still_reasons[7] / ticks_seen);
+									corpse_still_reasons[6] / ticks_seen, corpse_still_reasons[7] / ticks_seen,
+									corpse_still_reasons[8] / ticks_seen);
 								csmemset(corpse_still_reasons, 0, sizeof(corpse_still_reasons));
 								platform_log("corpses: attached to dead bodies a tick, by type: biped %lu vehicle %lu weapon %lu "
 									"equipment %lu garbage %lu projectile %lu scenery %lu machine %lu control %lu light %lu "

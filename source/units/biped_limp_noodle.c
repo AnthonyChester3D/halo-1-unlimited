@@ -781,3 +781,31 @@ static boolean biped_limp_noodle_nodes_valid(
 
 	return valid;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.197): TRUE when a dead biped has nothing left to settle: it doesn't use limp body physics, or its
+relaxation onto the ground is over (units.c unit_corpse_still: a body left alone before that froze mid-relaxation,
+v1.196: its death animation ends, the limp body starts at rest, and relaxing takes
+biped_limp_noodle_get_max_relaxation_iterations ticks). One whose limp body hasn't started yet isn't settled. */
+boolean biped_limp_body_settled(
+	long biped_index)
+{
+	extern boolean debug_biped_limp_body_disable;
+	struct biped_datum *biped = biped_get(biped_index);
+	struct biped_definition *definition = biped_definition_get(biped->definition_index);
+
+	if (debug_biped_limp_body_disable ||
+		!TEST_FLAG(definition->biped.flags, _biped_uses_limp_body_physics_bit))
+	{
+		return TRUE;
+	}
+	if (!TEST_FLAG(biped->biped.flags, _biped_limp_body_physics_active_bit))
+		return FALSE;
+	if (biped->biped.limp_body_current_relaxation_iterations >= biped->biped.limp_body_max_relaxation_iterations)
+		return TRUE;
+
+	return !biped_limp_noodle_nodes_valid(
+		biped_index,
+		animation_graph_definition_get(definition->object.animation_graph.index));
+}
+#endif
