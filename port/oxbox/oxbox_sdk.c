@@ -969,6 +969,13 @@ static struct
 	unsigned long asked;               /* (when last asked: 0 none yet) */
 } oxbox_masters;
 
+/* (v1.191) the masters asked again at the next frame, not up to 30 s later: X on ONLINE PLAY's games list
+(hmp_online_refresh) */
+void oxbox_masters_refresh(void)
+{
+	oxbox_masters.asked = 0;
+}
+
 static void oxbox_masters_frame(int menus)
 {
 	int oxbox_masters_start(int network_version);

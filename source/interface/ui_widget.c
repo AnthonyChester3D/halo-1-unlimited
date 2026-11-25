@@ -7952,6 +7952,27 @@ static void widget_instance_process_one_event_recursive(
 			}
 		}
 	}
+#if defined(HALO_XBOX_TARGET) && defined(OXBOX_NET_P2P)
+	/* oxbox (v1.191): X on ONLINE PLAY's games list asks for its games again (port/linux/game/hmp_online.c) */
+	if (event->type == _event_type_button && event->data.button.value == 1 &&
+		event->data.button.index == _gamepad_analog_button_x)
+	{
+		char const *name = tag_get_name(widget->definition_tag_index);
+		char const *leaf = name ? strrchr(name, '\\') : NULL;
+
+		if (leaf && !csstrcmp(leaf + 1, "server_list_screen"))
+		{
+			extern boolean hmp_online_refresh(void);
+
+			if (hmp_online_refresh())
+			{
+				ui_play_audio_feedback_sound(1);
+				*return_widget_deleted = FALSE;
+				return;
+			}
+		}
+	}
+#endif
 #if defined(HALO_XBOX_TARGET)
 	/* oxbox: the map list's own buttons (Halo Universal's browser: X / White sort, Y favorite, Black hide, LT / RT
 	groups; port/linux/game/hmp_browse.c) */

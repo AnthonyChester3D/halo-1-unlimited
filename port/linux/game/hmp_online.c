@@ -691,6 +691,21 @@ void hmp_online_browse_idle(void)
 	}
 }
 
+/* (v1.191, Llama) X on the games list: ONLINE PLAY's asked for again at once, from the brokers (p2p_lobby_refresh)
+and the master servers (oxbox_masters_refresh); TRUE if it was ONLINE PLAY's (the LAN's list keeps itself up to date) */
+boolean hmp_online_refresh(void)
+{
+	void p2p_lobby_refresh(void);
+	void oxbox_masters_refresh(void);
+
+	if (!online.mode || !online.browsing)
+		return FALSE;
+	p2p_lobby_refresh();
+	oxbox_masters_refresh();
+	hmp_log("online: the games list asked for again (X)");
+	return TRUE;
+}
+
 int hmp_online_list_shown(void)
 {
 	return online.shown_at && system_milliseconds() - online.shown_at < 3000;

@@ -2093,6 +2093,7 @@ wchar_t *hmp_string(long tag_index, short index)
 		return menu ? (k & 1 ? menu->card_text[k >> 1] : menu->card_name[k >> 1]) : NULL;
 	}
 	if (index >= HMP_COOP_STRING_BASE && index < HMP_COOP_STRING_BASE + 12) return coop_string(index - HMP_COOP_STRING_BASE);
+	if (index == HMP_LOBBY_READY_STRING) return (wchar_t *)L"Game ready in:";
 	if (index >= 0x7000) return NULL;
 	i = index - (index >= HMP_DESCRIPTION_BASE ? HMP_DESCRIPTION_BASE : index >= HMP_WRAPPED_NAME_BASE ? HMP_WRAPPED_NAME_BASE : HMP_NAME_BASE);
 	if (!(info = info_get(i))) return NULL;

@@ -54,6 +54,8 @@ enum
 	HMP_CAMPAIGN_STRING_BASE = 0x7300, /* the campaign picker's three cards' names and texts (hmp_maps.c: 0x7300-0x7305) */
 	HMP_COOP_STRING_BASE = 0x7310,  /* the games list's co-op game: Halo's 10 levels' names on one line (and their
 	                                   pictures, sp_levels'), then "Campaign" and "Co-op" (hmp_maps_coop_level) */
+	HMP_LOBBY_READY_STRING = 0x7320, /* the lobby's countdown label while this console downloads the map: "Game ready
+	                                    in:" (v1.191: hmp_share.c's time left beside it) */
 	HMP_UNKNOWN_PICTURE = 13,       /* the frame Halo itself shows for an unknown map */
 	HMP_STOCK_LEVELS = 13,
 };

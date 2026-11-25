@@ -604,7 +604,7 @@ static void status(const char *a, int pct, const char *b) {
     g_status[n] = 0;
     g_status_on = 1;
 }
-/* "53%, 1:20 left" (eta in seconds; 0 = not known yet, left out) */
+/* "53%, 1:20" (eta in seconds; 0 = not known yet, left out) */
 static char *pct_eta(char *buf, int pct, u32 eta) {
     char *o = buf;
     pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
@@ -613,7 +613,6 @@ static char *pct_eta(char *buf, int pct, u32 eta) {
         if (eta > 5999) eta = 5999;
         *o++ = ','; *o++ = ' '; o = put_u(o, eta / 60); *o++ = ':';
         *o++ = (char)('0' + eta % 60 / 10); *o++ = (char)('0' + eta % 10);
-        o = scpy(o, " left");
     }
     *o = 0;
     return buf;
@@ -629,6 +628,14 @@ static void rate_upd(u32 *rate, u32 *t, u32 *last, u32 count, u32 now) {
     *t = now; *last = count;
 }
 boolean hmp_share_status_active(void) { return g_status_on != 0; }
+/* (v1.191) the time left of this console's download, for the lobby's "Game ready in:" (ui_widget_game_data_input_functions.c):
+   seconds (0: not known yet), or -1 when no download is going (none updated in the last 2 seconds) */
+static long g_dl_eta = -1;
+static u32 g_dl_eta_time;
+long hmp_share_download_eta(void) {
+    if (g_dl_eta < 0 || GetTickCount() - g_dl_eta_time > 2000) return -1;
+    return g_dl_eta;
+}
 wchar_t *hmp_share_status_text(void) { return (wchar_t *)g_status; }
 
 /* ================================================================ worker ================ */
@@ -2138,11 +2145,15 @@ static void cl_recv(u32 now) {
             rate_upd(&g_cl.rate, &g_cl.rate_t, &g_cl.rate_done, done, now);
             cl_title();
             status(g_cl.upgrade ? "Getting the small copy " : g_title[0] ? g_title_a : "Downloading map ", pct, 0);
-            if (g_cl.upgrade) L_start("Getting the small copy: ");
-            else if (g_cl.fetch[0]) L_start("Downloading shared file: ");
+            /* (v1.191, Llama: the line said "Downloading Cliffhanger 32%, 0:44 left", which rarely fit and jumped
+               about: now only what's downloading; the percentage is by each Xbox, and the time left takes the
+               countdown's place, "Game ready in: 0:44" (hmp_share_download_eta)) */
+            if (g_cl.upgrade) L_start("Getting the small copy");
+            else if (g_cl.fetch[0]) L_start("Downloading a shared file");
             else if (g_title[0]) { L_start("Downloading "); L_a(g_title_a); }
-            else L_start("Downloading map: ");
-            L_pct(pct, g_cl.rate ? (g_cl.total - done) / g_cl.rate + 1 : 0);
+            else L_start("Downloading the map");
+            g_dl_eta = g_cl.rate ? (long)((g_cl.total - done) / g_cl.rate + 1) : 0;
+            g_dl_eta_time = now;
         }
         return;
     }
