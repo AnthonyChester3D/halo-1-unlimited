@@ -1069,8 +1069,8 @@ static boolean crossplay_settings_to_xbox(struct network_game *game)
 	if (machine_count < 0 || machine_count > HALO_PORT_MAXIMUM_NETWORK_MACHINES ||
 		player_count < 0 || player_count > HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 	{
-		network_event("crossplay experiment: the PC game has %d machines and %d players: more than the Xbox's 16",
-			machine_count, player_count);
+		network_event("crossplay experiment: the PC game has %d machines and %d players: more than the Xbox's %d",
+			machine_count, player_count, HALO_PORT_MAXIMUM_NETWORK_PLAYERS);
 		return FALSE;
 	}
 	for (index = 0; index < player_count; index++)
@@ -1081,8 +1081,8 @@ static boolean crossplay_settings_to_xbox(struct network_game *game)
 		if (as_player->machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES ||
 			as_player->player_list_index >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
 		{
-			network_event("crossplay experiment: a PC player's machine or list index (%d, %d) is past the Xbox's 16",
-				as_player->machine_index, as_player->player_list_index);
+			network_event("crossplay experiment: a PC player's machine or list index (%d, %d) is past the Xbox's %d",
+				as_player->machine_index, as_player->player_list_index, HALO_PORT_MAXIMUM_NETWORK_PLAYERS);
 			return FALSE;
 		}
 	}

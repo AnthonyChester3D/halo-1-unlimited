@@ -19,12 +19,25 @@ a finishing place in 7 bits.
 /* ---------- session limits */
 
 #if defined(HALO_XBOX_TARGET)
-/* oxbox: the Xbox's 16 (its games' own layout: a PC game's 128 are made 16 when it joins one) */
-#define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 16
-#define HALO_PORT_MAXIMUM_NETWORK_MACHINES 16
+/* oxbox (v1.193, Llama 2026-11-25): an Xbox JOINS games of up to 32 players on up to 32 machines (dedicated and PC
+servers' game nights); it HOSTS at most 16 (HALO_PORT_MAXIMUM_HOSTED_PLAYERS: a host runs every player's physics and
+sends to every console). The game record, the update queues and the clients' tables hold 32 (a PC game's 128 are made
+32 when it joins one) */
+#define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 32
+#define HALO_PORT_MAXIMUM_NETWORK_MACHINES 32
+#define HALO_PORT_MAXIMUM_HOSTED_PLAYERS 16
+/* (the scoreboard's and the postgame table's rows: a bigger game's first 16 by its ranking) */
+#define HALO_PORT_MAXIMUM_SHOWN_PLAYERS 16
 #else
 #define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 128
 #define HALO_PORT_MAXIMUM_NETWORK_MACHINES 128
+#endif
+/* the most players a game this machine hosts may have (the record holds HALO_PORT_MAXIMUM_NETWORK_PLAYERS) */
+#if !defined(HALO_PORT_MAXIMUM_HOSTED_PLAYERS)
+#define HALO_PORT_MAXIMUM_HOSTED_PLAYERS HALO_PORT_MAXIMUM_NETWORK_PLAYERS
+#endif
+#if !defined(HALO_PORT_MAXIMUM_SHOWN_PLAYERS)
+#define HALO_PORT_MAXIMUM_SHOWN_PLAYERS HALO_PORT_MAXIMUM_NETWORK_PLAYERS
 #endif
 
 /* a host polls its listening socket and one socket per machine; the Xbox's
@@ -73,10 +86,10 @@ in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the Xboxes' own games' version: 32 since the distributed messages carry OpenCE's checkpoint epoch (their
+/* oxbox: the Xboxes' own games' version: 33 since the game record holds 32 players on 32 machines (v1.193); 32 since the distributed messages carry OpenCE's checkpoint epoch (their
 header 12 bytes: its version 42) and the join request its version; 31 since the game settings record carries OpenCE's
 gametypes (its options 0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
-#define HALO_PORT_NETWORK_VERSION 32
+#define HALO_PORT_NETWORK_VERSION 33
 #else
 /* (OpenCE's version 44: the distributed header's checkpoint epoch (42), the join request's version (42), the record's
 MCC identity (42), unit states' scripted pose (42) and deck (43) parts) */

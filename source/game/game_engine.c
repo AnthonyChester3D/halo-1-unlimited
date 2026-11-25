@@ -2906,7 +2906,8 @@ void game_engine_post_rasterize_post_game(
 	{
 		extern void hmp_browse_postgame_title_line(void);
 
-		entry_count = select_players_to_display(_postgame_statistic_ranking, NONE, entries, MULTIPLAYER_MAXIMUM_PLAYERS);
+		/* (oxbox v1.193: a 32-player game's first 16 by ranking: 16 rows fit, halo_port_limits.h) */
+		entry_count = select_players_to_display(_postgame_statistic_ranking, NONE, entries, HALO_PORT_MAXIMUM_SHOWN_PLAYERS);
 		postgame_player_count = entry_count;
 		hmp_browse_postgame_title_line();
 		draw_string_set_color(&winner_color);

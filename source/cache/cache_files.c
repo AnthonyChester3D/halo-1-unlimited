@@ -749,7 +749,10 @@ static long tag_loaded_kept_count;
 static void tag_loaded_forget(
 	void)
 {
+	extern void tag_block_bad_sites_forget(void);
 	short k;
+
+	tag_block_bad_sites_forget();                     /* (v1.190: bad element sites said again a map) */
 
 	for (k = 0; k < TAG_LOADED_KEPT; k++)
 	{

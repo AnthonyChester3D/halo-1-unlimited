@@ -1244,7 +1244,10 @@ static short structure_visibility_build_surfaces_traverse_clusters(
 				? planes_intersect_rectangle(&subcluster->world_bounds, bounding_surface_count, bounding_surfaces)
 				: _intersection_out;
 
-			if (plane_intersection)
+			/* port (v1.191): and only a subcluster with surfaces: a BSP cut down from a level (HMP's Boxfight rooms) has
+			subclusters whose surfaces are all gone, and their list's element 0 was asked of an empty block (the loop
+			below took nothing from it) */
+			if (plane_intersection && subcluster->surface_indices.count > 0)
 			{
 				long *surface_index_buffer = TAG_BLOCK_GET_ELEMENT(&subcluster->surface_indices, 0, long);
 				long surface_list_index;

@@ -613,6 +613,31 @@ static void set_textbox_to_build_number(
 	struct widget_instance *widget);
 static void server_list_menu_update(
 	struct widget_instance *widget);
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.191): while this console downloads the lobby's map, the countdown line says "Game ready in:" and the
+download's time left (hmp_share.c; Llama: the game's own countdown means little while a map is still coming, and
+map sharing's "Downloading X 32%, 0:44 left" rarely fit beside it). Not known yet: "-:--" */
+static void oxbox_lobby_download_countdown(
+	struct widget_instance *status_text,
+	struct widget_instance *countdown_text)
+{
+	extern long hmp_share_download_eta(void);
+	long eta = hmp_share_download_eta();
+
+	if (eta < 0 || !countdown_text->parameters.text_box.text)
+		return;
+	status_text->visible = TRUE;
+	status_text->parameters.text_box.string_list_index = 0x7320;   /* (hmp.h's HMP_LOBBY_READY_STRING) */
+	countdown_text->visible = TRUE;
+	if (eta == 0)
+		ustrncpy(countdown_text->parameters.text_box.text, L"-:--", 15);
+	else if (eta < 3600)
+		usnprintf(countdown_text->parameters.text_box.text, 15, L"%ld:%02ld", eta / 60, eta % 60);
+	else
+		usnprintf(countdown_text->parameters.text_box.text, 15, L"%ld:%02ld:%02ld", eta / 3600, eta / 60 % 60, eta % 60);
+}
+#endif
+
 static void network_pregame_status_screen_update(
 	struct widget_instance *widget);
 static void splitscreen_pregame_status_screen_update(
@@ -1529,6 +1554,9 @@ static void network_pregame_status_screen_update(
 				status_text->visible = FALSE;
 				countdown_text->visible = FALSE;
 			}
+#if defined(HALO_XBOX_TARGET)
+			oxbox_lobby_download_countdown(status_text, countdown_text);
+#endif
 			countdown_text->parameters.text_box.text[15] = 0;
 		}
 
@@ -1950,6 +1978,9 @@ static void splitscreen_pregame_status_screen_update(
 				status_text->visible = FALSE;
 				countdown_text->visible = FALSE;
 			}
+#if defined(HALO_XBOX_TARGET)
+			oxbox_lobby_download_countdown(status_text, countdown_text);
+#endif
 			countdown_text->parameters.text_box.text[15] = 0;
 		}
 
@@ -4633,6 +4664,14 @@ void oxbox_games_ping_select(
 	oxbox_games_ping.panel = panel;
 	oxbox_games_ping.anchor = anchor;
 	oxbox_games_ping.above = above;
+#if defined(OXBOX_NET_P2P)
+	/* (v1.192: a game listed online, highlighted, has its host reached so it can be pinged: hmp_online.c) */
+	{
+		extern void hmp_online_peek(void const *server);
+
+		hmp_online_peek(server);
+	}
+#endif
 	oxbox_games_ping.ping = network_game_client_ping_game(server);
 	oxbox_games_ping.pinged = server && oxbox_games_ping.ping >= 0;
 }

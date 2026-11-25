@@ -838,8 +838,11 @@ boolean item_update(
 					collision.plane.n.k > 0.7071f &&
 					-dot_product3d(&collision.plane.n, &new_velocity) < 0.05f;
 
-				/* oxbox (v1.185): or stuck bouncing (above) */
+				/* oxbox (v1.185): or stuck bouncing (above); v1.191: not on a network game's client, whose items are the
+				host's (a PC host without this rule kept one bouncing, and the client laid it to rest 34 times on
+				Damnation only for the host's word to wake it again) */
 				if (!rest && rest_surface && collision.plane.n.k > 0.f &&
+					game_connection() != _game_connection_network_client &&
 					item_stuck_bouncing(item_index, &collision.point))
 				{
 					rest = TRUE;

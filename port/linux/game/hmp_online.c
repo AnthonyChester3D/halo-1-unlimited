@@ -78,6 +78,10 @@ enum
 	BUTTON_STICK_DOWN = 17,
 	/* milliseconds: how long a host is reached for (p2p.c's JOIN_TIMEOUT) */
 	JOIN_TIMEOUT = 90000,
+	/* (v1.192) milliseconds a row listed online is highlighted before its host is reached for its ping
+	(hmp_online_peek), and how long that reach is given */
+	PEEK_DWELL = 700,
+	PEEK_TIMEOUT = 20000,
 	/* our texts (hmp.h's HMP_ONLINE_STRING_BASE on) */
 	_string_online_item = HMP_ONLINE_STRING_BASE,
 	_string_online_description,
@@ -284,6 +288,14 @@ static struct
 	unsigned long join_time;
 	/* the A is due: the games list's next empty event is made it (hmp_online_event) */
 	boolean join_due;
+	/* (v1.192) the highlighted row listed online (its host) and since when; a host reached for its ping alone (no
+	join), and since when (hmp_online_peek) */
+	unsigned char seen_identifier[6];
+	boolean seen;
+	unsigned long seen_since;
+	unsigned char peek_identifier[6];
+	boolean peeking;
+	unsigned long peek_time;
 } online;
 
 /* ---------- private code */
@@ -655,7 +667,7 @@ int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind
 	extern boolean hmp_links_listed(char const *map);
 
 	/* (or a Custom Edition or MCC map this Xbox has a port of, linked: hmp_links.c) */
-	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= 16 &&
+	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= HALO_PORT_MAXIMUM_NETWORK_PLAYERS &&
 		(oxbox_online_stock_map(map) || hmp_links_listed(map));
 }
 
@@ -689,6 +701,21 @@ void hmp_online_browse_idle(void)
 		p2p_lobby_browse(FALSE);
 		online.browsing = FALSE;
 	}
+}
+
+/* (v1.191, Llama) X on the games list: ONLINE PLAY's asked for again at once, from the brokers (p2p_lobby_refresh)
+and the master servers (oxbox_masters_refresh); TRUE if it was ONLINE PLAY's (the LAN's list keeps itself up to date) */
+boolean hmp_online_refresh(void)
+{
+	void p2p_lobby_refresh(void);
+	void oxbox_masters_refresh(void);
+
+	if (!online.mode || !online.browsing)
+		return FALSE;
+	p2p_lobby_refresh();
+	oxbox_masters_refresh();
+	hmp_log("online: the games list asked for again (X)");
+	return TRUE;
 }
 
 int hmp_online_list_shown(void)
@@ -856,6 +883,28 @@ int oxbox_online_add_rows(void **displayed, int count, int maximum, void const *
 				online.joining = FALSE;
 			}
 		}
+		/* (v1.192) a host reached for its ping: its own row followed while it's still the one highlighted (no join);
+		not reached in PEEK_TIMEOUT, left quietly (not marked failed: no one asked to join it) */
+		if (online.peeking && !online.joining)
+		{
+			for (index = 0; index < count; index++)
+			{
+				struct online_row const *row = (struct online_row const *)displayed[index];
+
+				if (row->valid && !memcmp(row->identifier, online.peek_identifier, sizeof(online.peek_identifier)))
+				{
+					if (online.seen && !memcmp(online.seen_identifier, online.peek_identifier, sizeof(online.peek_identifier)))
+						reached = index;
+					online.peeking = FALSE;
+					break;
+				}
+			}
+			if (online.peeking && system_milliseconds() - online.peek_time > PEEK_TIMEOUT)
+			{
+				platform_log("online: a host reached for its ping wasn't (in %d s)", PEEK_TIMEOUT / 1000);
+				online.peeking = FALSE;
+			}
+		}
 		kept = listed_rows(count, displayed);
 		for (index = 0; index < kept && all_count < MAXIMUM_ROWS; index++)
 			all[all_count++] = &online_listed->rows[index];
@@ -1005,6 +1054,47 @@ void hmp_online_text_drawn(struct widget_instance *widget, rectangle2d const *bo
 	draw_bitmap_in_rect(bitmap, &icon, &picture, NULL, (a8 > 255 ? 255 : a8) << 24 | 0xffffff, NULL, TRUE);
 }
 
+/* (v1.192, Llama) the games list's highlighted row, each update (the details panel's: oxbox_games_ping_select): a
+row listed online, highlighted PEEK_DWELL, has its host reached as an A would (p2p_join_invite) but not joined, so its
+own row comes and the details' ping with it (only a reached host's game can be pinged: a listing has no address). One
+at a time (internet play reaches one host at a time); not a host reached already, being reached, or that failed */
+void hmp_online_peek(void const *server)
+{
+	struct online_row const *row = (struct online_row const *)server;
+	struct p2p_listing const *game;
+	unsigned long now = system_milliseconds();
+	unsigned long address;
+
+	if (!online.mode || !online_listed || !row || row < online_listed->rows || row >= online_listed->rows + MAXIMUM_LISTED)
+	{
+		online.seen = FALSE;
+		return;
+	}
+	game = &online_listed->games[row - online_listed->rows];
+	if (memcmp(game->identifier, row->identifier, sizeof(row->identifier)))
+		return;
+	if (!online.seen || memcmp(online.seen_identifier, row->identifier, sizeof(online.seen_identifier)))
+	{
+		memcpy(online.seen_identifier, row->identifier, sizeof(online.seen_identifier));
+		online.seen = TRUE;
+		online.seen_since = now;
+		return;
+	}
+	if (now - online.seen_since < PEEK_DWELL || online.joining || game->failed || !game->invite[0] ||
+		(online.peeking && !memcmp(online.peek_identifier, row->identifier, sizeof(online.peek_identifier))) ||
+		p2p_peer_reached(row->identifier, &address))
+	{
+		return;
+	}
+	if (p2p_join_invite(game->invite))
+	{
+		memcpy(online.peek_identifier, row->identifier, sizeof(online.peek_identifier));
+		online.peeking = TRUE;
+		online.peek_time = now;
+		platform_log("online: reaching \"%s\" for its ping (%s)", game->name, game->map);
+	}
+}
+
 /* A on a row: an online game's host is reached (TRUE: the row was an online game's, handled here) */
 boolean oxbox_online_row_join(void const *server)
 {
@@ -1022,6 +1112,7 @@ boolean oxbox_online_row_join(void const *server)
 	{
 		memcpy(online.identifier, row->identifier, sizeof(online.identifier));
 		online.joining = TRUE;
+		online.peeking = FALSE;
 		online.time = system_milliseconds();
 		platform_log("online: reaching \"%s\" (%s, %d of %d players)%s", game->name, game->map,
 			game->player_count, game->maximum_player_count,

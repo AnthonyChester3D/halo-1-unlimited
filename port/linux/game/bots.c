@@ -200,11 +200,14 @@ static short bots_suggested_players(
 			bots_globals.suggested_players = folder_map_suggested_players(map);
 		}
 #endif
-		if (bots_globals.suggested_players <= 0 || bots_globals.suggested_players > HALO_PORT_MAXIMUM_NETWORK_PLAYERS)
+		if (bots_globals.suggested_players <= 0 || bots_globals.suggested_players > HALO_PORT_MAXIMUM_HOSTED_PLAYERS)
 			bots_globals.suggested_players = BOTS_SUGGESTED_DEFAULT;
 	}
 	return bots_globals.suggested_players;
 }
+
+/* (v1.193) the most bots this machine hosts: one seat under its most players (an Xbox's 16: 15) */
+#define BOTS_MOST MIN(NETWORK_BOT_MAXIMUM_COUNT, HALO_PORT_MAXIMUM_HOSTED_PLAYERS - 1)
 
 /* how many bots the host wants, with this many people in the game */
 #if defined(HALO_XBOX_TARGET)
@@ -237,16 +240,16 @@ static short bots_wanted(
 		wanted = (short)(bots_suggested_players() - people);
 		break;
 	case _bots_mode_max:
-		wanted = (short)(HALO_PORT_MAXIMUM_NETWORK_PLAYERS - people);
+		wanted = (short)(HALO_PORT_MAXIMUM_HOSTED_PLAYERS - people);
 		break;
 	case _bots_mode_custom:
 		wanted = bots_globals.custom_count;
 		break;
 	}
-	if (wanted > HALO_PORT_MAXIMUM_NETWORK_PLAYERS - people)
-		wanted = (short)(HALO_PORT_MAXIMUM_NETWORK_PLAYERS - people);
-	if (wanted > NETWORK_BOT_MAXIMUM_COUNT)
-		wanted = NETWORK_BOT_MAXIMUM_COUNT;
+	if (wanted > HALO_PORT_MAXIMUM_HOSTED_PLAYERS - people)
+		wanted = (short)(HALO_PORT_MAXIMUM_HOSTED_PLAYERS - people);
+	if (wanted > BOTS_MOST)
+		wanted = BOTS_MOST;
 	if (wanted < 0)
 		wanted = 0;
 	return wanted;
@@ -7249,7 +7252,7 @@ void bots_showcase(
 			saved_difficulty = bots_globals.difficulty;
 		}
 		bots_globals.mode = _bots_mode_custom;
-		bots_globals.custom_count = count > NETWORK_BOT_MAXIMUM_COUNT ? NETWORK_BOT_MAXIMUM_COUNT : count;
+		bots_globals.custom_count = count > BOTS_MOST ? BOTS_MOST : count;
 		bots_globals.difficulty = _bots_difficulty_normal;
 	}
 	else if (saved)
@@ -7464,7 +7467,7 @@ boolean bots_lobby_button(
 	{
 		short count = (short)(bots_globals.custom_count + (button == _gamepad_analog_button_right_trigger ? 1 : -1));
 
-		if (count < 0 || count > NETWORK_BOT_MAXIMUM_COUNT)
+		if (count < 0 || count > BOTS_MOST)
 		{
 			ui_play_audio_feedback_sound(4);
 			return TRUE;

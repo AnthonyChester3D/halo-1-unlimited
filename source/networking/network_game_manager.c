@@ -701,8 +701,9 @@ void network_game_invalidate(
 
 	csmemset(game->players, NONE, sizeof(game->players));
 	game->minimum_players = 2;
-	/* (port: 128 in the native builds, halo_port_limits.h) */
-	game->maximum_players = NETWORK_GAME_PLAYER_SLOTS;
+	/* (port: 128 in the native builds; oxbox: 16 of the Xbox record's 32, halo_port_limits.h; a joined game's record
+	says its own) */
+	game->maximum_players = HALO_PORT_MAXIMUM_HOSTED_PLAYERS;
 	game->local_data.game_objects_loaded = FALSE;
 
 	return;

@@ -132,7 +132,9 @@ extern unsigned long network_game_bot_machines;
 /* the host's bot mode + 1 in a field the Xbox game left unused (0: off, or
 a host without bots), for the lobby's label on every machine */
 #define NETWORK_GAME_BOT_MODE(game) ((game)->__unknown426)
-#define NETWORK_BOT_MAXIMUM_COUNT 15
+/* (oxbox v1.193: 31, so every machine knows a 32-player server's bots; a host's own bots stay under its most
+players, bots.c BOTS_MOST: 15 on an Xbox) */
+#define NETWORK_BOT_MAXIMUM_COUNT 31
 boolean network_player_is_bot(
 	struct network_player const *player);
 boolean network_player_is_present(
