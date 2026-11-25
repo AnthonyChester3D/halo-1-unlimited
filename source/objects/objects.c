@@ -4811,6 +4811,17 @@ void objects_update(
 									csmemset(limp_calls, 0, sizeof(limp_calls));
 									csmemset(limp_features, 0, sizeof(limp_features));
 								}
+								{
+									extern unsigned long long collision_lab[10];
+
+									platform_log("corpses: the whole game's vector tests a tick: %lu calls, %lu kcycles, of which the "
+										"object loops %lu kcycles; %lu objects visited a call, %lu of a type tested",
+										(unsigned long)(collision_lab[0] / ticks_seen), (unsigned long)(collision_lab[1] / ticks_seen / 1000),
+										(unsigned long)(collision_lab[2] / ticks_seen / 1000),
+										(unsigned long)(collision_lab[0] ? collision_lab[3] / collision_lab[0] : 0),
+										(unsigned long)(collision_lab[0] ? collision_lab[4] / collision_lab[0] : 0));
+									csmemset(collision_lab, 0, sizeof(collision_lab));
+								}
 								platform_log("corpses: bodies at rest a tick: %lu settled (%lu), %lu limp body relaxing (%lu), "
 									"%lu limp body not started (%lu)", counts[1] / ticks_seen, each[1], counts[5] / ticks_seen, each[5],
 									counts[6] / ticks_seen, each[6]);

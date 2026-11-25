@@ -475,12 +475,37 @@ collision:
 	return TRUE;
 }
 
+#if defined(OXBOX_CORPSE_COUNT)
+/* lab: the whole game's vector tests: calls, cycles, cycles in the object loop, objects visited, objects whose type the
+flags test; the features gathered: calls, cycles, cycles in its object loop, objects visited */
+unsigned long long collision_lab[10];
+#endif
+
 boolean collision_test_vector(
 	unsigned long flags,
 	real_point3d const *point,
 	real_vector3d const *vector,
 	long ignore_object_index,
 	struct collision_result *collision)
+#if defined(OXBOX_CORPSE_COUNT)
+{
+	boolean collision_test_vector_counted(unsigned long, real_point3d const *, real_vector3d const *, long,
+		struct collision_result *);
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean result = collision_test_vector_counted(flags, point, vector, ignore_object_index, collision);
+
+	collision_lab[1] += __builtin_ia32_rdtsc() - t0;
+	collision_lab[0]++;
+	return result;
+}
+
+boolean collision_test_vector_counted(
+	unsigned long flags,
+	real_point3d const *point,
+	real_vector3d const *vector,
+	long ignore_object_index,
+	struct collision_result *collision)
+#endif
 {
 	boolean hit = FALSE;
 #if defined(OXBOX_CALL_COUNT)
@@ -652,6 +677,9 @@ boolean collision_test_vector(
 
 			collision_log_usage(_collision_function_vector_objects);
 			collision_log_start_time(&collision_usage_times.vector_objects);
+#if defined(OXBOX_CORPSE_COUNT)
+			unsigned long long objects_t0 = __builtin_ia32_rdtsc();
+#endif
 			if (!(flags & _collision_test_objects_all_types_flags))
 			{
 				flags |= _collision_test_objects_all_types_flags;
@@ -674,6 +702,11 @@ boolean collision_test_vector(
 						object_index != NONE;
 						object_index = cluster_get_next_collideable_object(&reference_index))
 					{
+#if defined(OXBOX_CORPSE_COUNT)
+						collision_lab[3]++;
+						if (TEST_FLAG(flags, object_get(object_index)->object.type + _collision_test_objects_first_type_bit))
+							collision_lab[4]++;
+#endif
 						if (object_mark_function(object_index) &&
 							object_test_vector(
 								object_index,
@@ -691,6 +724,9 @@ boolean collision_test_vector(
 			}
 			object_marker_end();
 			structure_cluster_marker_end();
+#if defined(OXBOX_CORPSE_COUNT)
+			collision_lab[2] += __builtin_ia32_rdtsc() - objects_t0;
+#endif
 			collision_log_end_time(
 				_collision_function_vector_objects,
 				collision_usage_times.vector_objects.QuadPart);
