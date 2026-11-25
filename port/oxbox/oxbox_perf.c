@@ -3050,6 +3050,44 @@ static void sweep_origin(
 
 /* the map at index in the sweep's order: the folder maps, then Halo's multiplayer maps, then its campaign's levels
 (the ones this Xbox has) */
+/* v1.199: a folder map left out of the sweep: a file named "nosweep" (or nosweep.txt) in its folder or a folder above it,
+up to the maps folder (a pack's: maps\\<pack>\\nosweep). Said once a folder */
+static boolean sweep_map_excluded(
+	long index)
+{
+	static char said[200];
+	char path[200], file[216], *slash;
+
+	if (!hmp_maps_map_path(index, NONE, path, sizeof(path)))
+		return FALSE;
+	while ((slash = strrchr(path, '\\')) != NULL)
+	{
+		char const *name;
+
+		*slash = 0;
+		name = strrchr(path, '\\');
+		name = name ? name + 1 : path;
+		if (!csstrcasecmp(name, "maps") || strchr(name, ':'))
+			break;
+		_snprintf(file, sizeof(file), "%s\\nosweep", path);
+		file[sizeof(file) - 1] = 0;
+		if (GetFileAttributesA(file) == (DWORD)-1)
+		{
+			_snprintf(file, sizeof(file), "%s\\nosweep.txt", path);
+			file[sizeof(file) - 1] = 0;
+			if (GetFileAttributesA(file) == (DWORD)-1)
+				continue;
+		}
+		if (strcmp(said, path))
+		{
+			strcpy(said, path);
+			platform_log("perf sweep: the maps in %s are left out (its nosweep file)", path);
+		}
+		return TRUE;
+	}
+	return FALSE;
+}
+
 static boolean sweep_map_key(
 	long index,
 	char *key,
@@ -3061,6 +3099,8 @@ static boolean sweep_map_key(
 	*solo = FALSE;
 	if (index < folder_maps)
 	{
+		if (sweep_map_excluded(index))
+			return FALSE;
 		name = hmp_maps_key(index);
 		*solo = name && custom_edition_maps_level_campaign(name);
 	}

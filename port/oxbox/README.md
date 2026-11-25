@@ -84,7 +84,8 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     `perf\sweep_priority.txt` (a key a line) not yet measured at this sweep version; maps never measured (new maps
     and new map versions); maps measured at an older sweep version that weren't perfect, the slowest first
     (`perf_sweep_redo = 1`: the perfect ones too). No pass numbers or lists to manage: drop maps in, leave
-    `perf_sweep = 1` on. The first boot brings the old pass tables (`sweep_p<N>.csv`) in once. A run cut short with
+    `perf_sweep = 1` on; a file named `nosweep` (or `nosweep.txt`) in a pack's folder leaves its maps out. The first
+    boot brings the old pass tables (`sweep_p<N>.csv`) in once. A run cut short with
     the console switched off is measured again (cut short twice, it's written `crashed`); the report shows each map's
     latest measurement and its slowest run at the sweep version before.
   - Scaling runs (`perf_sweep_scaling`, on): a map whose slowest run averaged under 29 fps with the graphics chip
