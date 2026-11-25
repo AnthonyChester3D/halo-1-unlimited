@@ -19,14 +19,16 @@ a finishing place in 7 bits.
 /* ---------- session limits */
 
 /* oxbox: the most players of a game an Xbox joins, on every build: the Xbox's own record's size, and what a dedicated
-server's game may have for the Xboxes to list it as theirs (network_server_manager.c oxbox_server_xbox_joinable) */
-#define HALO_PORT_XBOX_JOINED_PLAYERS 32
+server's game may have for the Xboxes to list it as theirs (network_server_manager.c oxbox_server_xbox_joinable). 16:
+v1.193 tried 32, and an Xbox client of a 32-player game spent over 33 ms a tick on the other players' bodies (Anxiety
+~38 ms, the catch-up spiral: 1 fps); 24 waits for cheaper far players (Llama, 2026-11-25) */
+#define HALO_PORT_XBOX_JOINED_PLAYERS 16
 
 #if defined(HALO_XBOX_TARGET)
-/* oxbox (v1.193, Llama 2026-11-25): an Xbox JOINS games of up to 32 players on up to 32 machines (dedicated and PC
-servers' game nights); it HOSTS at most 16 (HALO_PORT_MAXIMUM_HOSTED_PLAYERS: a host runs every player's physics and
-sends to every console). The game record, the update queues and the clients' tables hold 32 (a PC game's 128 are made
-32 when it joins one) */
+/* oxbox: an Xbox JOINS games of up to HALO_PORT_XBOX_JOINED_PLAYERS players on as many machines (v1.193 tried 32 for
+dedicated and PC servers' game nights); it HOSTS at most 16 (HALO_PORT_MAXIMUM_HOSTED_PLAYERS: a host runs every
+player's physics and sends to every console). The game record, the update queues and the clients' tables hold that many
+(a PC game's 128 are made that many when it joins one) */
 #define HALO_PORT_MAXIMUM_NETWORK_PLAYERS HALO_PORT_XBOX_JOINED_PLAYERS
 #define HALO_PORT_MAXIMUM_NETWORK_MACHINES HALO_PORT_XBOX_JOINED_PLAYERS
 #define HALO_PORT_MAXIMUM_HOSTED_PLAYERS 16
@@ -90,10 +92,11 @@ in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
 #if defined(OXBOX_CROSSPLAY)
-/* oxbox: the Xboxes' own games' version: 33 since the game record holds 32 players on 32 machines (v1.193); 32 since the distributed messages carry OpenCE's checkpoint epoch (their
+/* oxbox: the Xboxes' own games' version: 34 since the game record is back to 16 players on 16 machines (v1.194); 33
+since it held 32 (v1.193); 32 since the distributed messages carry OpenCE's checkpoint epoch (their
 header 12 bytes: its version 42) and the join request its version; 31 since the game settings record carries OpenCE's
 gametypes (its options 0x2C bytes, not 0x1C); 30 since the join request took OpenCE's version 40's pass (29 before) */
-#define HALO_PORT_NETWORK_VERSION 33
+#define HALO_PORT_NETWORK_VERSION 34
 #else
 /* (OpenCE's version 44: the distributed header's checkpoint epoch (42), the join request's version (42), the record's
 MCC identity (42), unit states' scripted pose (42) and deck (43) parts) */
