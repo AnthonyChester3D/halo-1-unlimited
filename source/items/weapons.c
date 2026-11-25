@@ -3506,19 +3506,15 @@ int weapon_resting_idle_reason;
 #define NOT_IDLE(why) return FALSE;
 #endif
 
-boolean weapon_resting_idle(
+/* (what's the same for a weapon lying still and one a still body holds: nothing in it running) */
+static boolean weapon_idle_inside(
 	long weapon_index)
 {
 	struct weapon_datum *weapon = weapon_get(weapon_index);
 	struct weapon_definition *definition = weapon_definition_get(weapon->definition_index);
 	short index;
 
-	if (!TEST_FLAG(weapon->object.flags, _object_at_rest_bit))
-		NOT_IDLE(1)
-	/* (resting on an object, it follows it: item_update; the game type's placed weapons rest on neither) */
-	if (TEST_FLAG(weapon->item.flags, _item_on_object_bit))
-		NOT_IDLE(2)
-	if (weapon->object.parent_object_index != NONE || weapon->object.first_child_object_index != NONE)
+	if (weapon->object.first_child_object_index != NONE)
 		NOT_IDLE(3)
 	if (TEST_FLAG(weapon->weapon.flags, _weapon_runtime_game_engine_active_bit) ||
 		TEST_FLAG(definition->weapon.flags, _weapon_detonates_when_dropped_bit))
@@ -3551,6 +3547,30 @@ boolean weapon_resting_idle(
 	weapon_resting_idle_reason = 0;
 #endif
 	return TRUE;
+}
+
+boolean weapon_resting_idle(
+	long weapon_index)
+{
+	struct weapon_datum *weapon = weapon_get(weapon_index);
+
+	if (!TEST_FLAG(weapon->object.flags, _object_at_rest_bit))
+		NOT_IDLE(1)
+	/* (resting on an object, it follows it: item_update; the game type's placed weapons rest on neither) */
+	if (TEST_FLAG(weapon->item.flags, _item_on_object_bit))
+		NOT_IDLE(2)
+	if (weapon->object.parent_object_index != NONE)
+		NOT_IDLE(3)
+	return weapon_idle_inside(weapon_index);
+}
+
+/* oxbox (v1.196): whether a weapon a still dead body holds is idle (units.c unit_corpse_still: the body, and so the
+weapon it holds, then isn't updated; a client's dead players' weapons can stay in their hands until the host's drop
+reaches it) */
+boolean weapon_held_idle(
+	long weapon_index)
+{
+	return weapon_idle_inside(weapon_index);
 }
 #undef NOT_IDLE
 #endif

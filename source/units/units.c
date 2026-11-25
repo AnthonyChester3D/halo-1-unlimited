@@ -12626,3 +12626,76 @@ void unit_oxbox_weapon_diagnostic(
 	}
 }
 #endif
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.196): whether a dead unit lies still for good, nothing in its update changing any more (objects.c
+objects_update leaves it alone in multiplayer): dead, at rest, nothing attached (a stuck grenade is its child, updated
+in its update; an idle weapon it still holds doesn't count, weapons.c weapon_held_idle), and either dead
+CORPSE_STILL_LONGEST_TICKS, or dead past Halo's own settling time
+(CORPSE_STILL_SETTLING_TICKS, effects.c's CORPSE_SETTLING_TIME) with its death animation on its last frame (v1.195 waited
+5 s for every body: in a 24-player game the bodies under 5 s old were 7-9 a tick, each costing about a live player) */
+enum
+{
+	CORPSE_STILL_SETTLING_TICKS = 30,
+	CORPSE_STILL_LONGEST_TICKS = 5 * TICKS_PER_SECOND
+};
+
+#if defined(OXBOX_CORPSE_COUNT)
+/* lab: why the last dead unit wasn't still (0: it was) */
+int unit_corpse_still_reason;
+#define NOT_STILL(why) { unit_corpse_still_reason = (why); return FALSE; }
+#define STILL(why) { unit_corpse_still_reason = 0; return TRUE; }
+#else
+#define NOT_STILL(why) return FALSE;
+#define STILL(why) return TRUE;
+#endif
+
+boolean unit_corpse_still(
+	long unit_index)
+{
+	struct unit_datum *unit = unit_get(unit_index);
+	struct unit_definition *definition;
+	struct animation_graph *animation_graph;
+	struct animation *animation;
+	long dead_for;
+
+	if (!TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+		NOT_STILL(1)
+	if (!TEST_FLAG(unit->object.flags, _object_at_rest_bit))
+		NOT_STILL(2)
+	/* (anything attached but idle weapons: a stuck grenade, ...) */
+	{
+		boolean weapon_held_idle(long weapon_index);
+		long child = unit->object.first_child_object_index;
+
+		while (child != NONE)
+		{
+			struct object_datum *child_object = object_get(child);
+
+			if (child_object->object.type != _object_type_weapon || !weapon_held_idle(child))
+				NOT_STILL(3)
+			child = child_object->object.next_object_index;
+		}
+	}
+	if (unit->unit.time_of_death == NONE)
+		NOT_STILL(4)
+	dead_for = game_time_get() - unit->unit.time_of_death;
+	if (dead_for > CORPSE_STILL_LONGEST_TICKS)
+		STILL(0)
+	if (dead_for <= CORPSE_STILL_SETTLING_TICKS)
+		NOT_STILL(5)
+	/* (its animation over: on its last frame) */
+	definition = unit_definition_get(unit->definition_index);
+	if (definition->object.animation_graph.index == NONE || unit->object.animation.state.index == NONE)
+		STILL(0)
+	animation_graph = animation_graph_definition_get(definition->object.animation_graph.index);
+	if (unit->object.animation.state.index < 0 || unit->object.animation.state.index >= animation_graph->animations.count)
+		NOT_STILL(6)
+	animation = TAG_BLOCK_GET_ELEMENT(&animation_graph->animations, unit->object.animation.state.index, struct animation);
+	if (unit->object.animation.state.frame_index < animation->frame_count - 1)
+		NOT_STILL(7)
+	STILL(0)
+}
+#undef NOT_STILL
+#undef STILL
+#endif

@@ -4530,12 +4530,8 @@ void objects_garbage_collection(
 
 #if defined(OXBOX_CORPSE_COUNT)
 unsigned long weapon_idle_reasons[12];   /* lab: why resting weapons weren't idle */
-#endif
-
-#if defined(HALO_XBOX_TARGET)
-/* oxbox (v1.195): how long a body lies dead before it may be left alone at rest (5 s: past every death animation;
-Halo's own corpse settling time is 1 s, effects.c CORPSE_SETTLING_TIME) */
-enum { RESTING_CORPSE_TICKS = 5 * TICKS_PER_SECOND };
+unsigned long corpse_still_reasons[8];   /* lab: why dead bodies weren't still (0: they were) */
+unsigned long corpse_child_types[16];   /* lab: the types of what's attached to dead bodies */
 #endif
 
 void objects_update(
@@ -4653,28 +4649,50 @@ void objects_update(
 				/* oxbox (v1.195): a corpse at rest isn't updated. A multiplayer game keeps up to 50 dead bodies (and
 				dropped weapons) per 16 players before it collects them (active_garbage_limit), and each was updated every
 				tick like a live player (animation, damage, functions, lights): 45 to 62 of them cost a 24-player client
-				more than all its live players (xemu, Blood Gulch). Once a body has lain still a while (RESTING_CORPSE_TICKS
-				after its death, its death animation over) with nothing attached to it (a stuck grenade is its child, updated
+				more than all its live players (xemu, Blood Gulch). Once a body has lain still (units.c unit_corpse_still: its
+				death animation over, or 5 s) with nothing attached to it (a stuck grenade is its child, updated
 				in its update), nothing changes but the garbage count, kept here. A push wakes it (physics clears the at-rest
 				bit) and the host's moving it places it at once (object_set_position computes its nodes). opence.ini
 				resting_corpses = 0: every tick, as before. */
 				if (!skip_update && resting_corpses && object_header->type == _object_type_biped)
 				{
-					struct unit_datum *corpse = unit_get(object_index);
+					boolean unit_corpse_still(long unit_index);   /* (units.c: v1.196, its death animation over) */
 
-					if (TEST_FLAG(corpse->object.damage_flags, _object_dead_bit) &&
-						TEST_FLAG(corpse->object.flags, _object_at_rest_bit) &&
-						corpse->object.first_child_object_index == NONE &&
-						corpse->unit.time_of_death != NONE &&
-						game_time_get() - corpse->unit.time_of_death > RESTING_CORPSE_TICKS)
+#if defined(OXBOX_CORPSE_COUNT)
+					extern unsigned long corpse_still_reasons[8];
+					extern int unit_corpse_still_reason;
+#endif
+					if (unit_corpse_still(object_index))
 					{
 						skip_update = TRUE;
 						if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
-							TEST_FLAG(corpse->object.flags, _object_garbage_bit))
+							TEST_FLAG(object_get(object_index)->object.flags, _object_garbage_bit))
 						{
 							++object_globals->active_garbage_object_count;
 						}
 					}
+#if defined(OXBOX_CORPSE_COUNT)
+					if (unit_corpse_still_reason >= 0 && unit_corpse_still_reason < 8 &&
+						TEST_FLAG(object_get(object_index)->object.damage_flags, _object_dead_bit))
+					{
+						corpse_still_reasons[unit_corpse_still_reason]++;
+						/* (what's attached: each child's type, its next siblings too) */
+						if (unit_corpse_still_reason == 3)
+						{
+							extern unsigned long corpse_child_types[16];
+							long child = object_get(object_index)->object.first_child_object_index;
+							int guard = 0;
+
+							while (child != NONE && guard++ < 8)
+							{
+								struct object_datum *child_object = object_get(child);
+
+								corpse_child_types[child_object->object.type & 15]++;
+								child = child_object->object.next_object_index;
+							}
+						}
+					}
+#endif
 				}
 				/* oxbox (v1.196): an idle weapon lying still on the level isn't updated either (weapons.c
 				weapon_resting_idle: nothing in its update changes). A 24-player game had 60-75 of them a tick, as much
@@ -4761,6 +4779,21 @@ void objects_update(
 										weapon_idle_reasons[11] / ticks_seen);
 									csmemset(weapon_idle_reasons, 0, sizeof(weapon_idle_reasons));
 								}
+								platform_log("corpses: dead bodies a tick: %lu still; not still: at rest %lu, attached %lu, no death time %lu, "
+									"settling %lu, animation %lu, not on its last frame %lu", corpse_still_reasons[0] / ticks_seen,
+									corpse_still_reasons[2] / ticks_seen, corpse_still_reasons[3] / ticks_seen,
+									corpse_still_reasons[4] / ticks_seen, corpse_still_reasons[5] / ticks_seen,
+									corpse_still_reasons[6] / ticks_seen, corpse_still_reasons[7] / ticks_seen);
+								csmemset(corpse_still_reasons, 0, sizeof(corpse_still_reasons));
+								platform_log("corpses: attached to dead bodies a tick, by type: biped %lu vehicle %lu weapon %lu "
+									"equipment %lu garbage %lu projectile %lu scenery %lu machine %lu control %lu light %lu "
+									"placeholder %lu sound %lu", corpse_child_types[0] / ticks_seen, corpse_child_types[1] / ticks_seen,
+									corpse_child_types[2] / ticks_seen, corpse_child_types[3] / ticks_seen,
+									corpse_child_types[4] / ticks_seen, corpse_child_types[5] / ticks_seen,
+									corpse_child_types[6] / ticks_seen, corpse_child_types[7] / ticks_seen,
+									corpse_child_types[8] / ticks_seen, corpse_child_types[9] / ticks_seen,
+									corpse_child_types[10] / ticks_seen, corpse_child_types[11] / ticks_seen);
+								csmemset(corpse_child_types, 0, sizeof(corpse_child_types));
 								csmemset(cycles, 0, sizeof(cycles));
 								csmemset(counts, 0, sizeof(counts));
 								ticks_seen = 0;
