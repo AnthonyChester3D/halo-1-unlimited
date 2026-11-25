@@ -4947,7 +4947,7 @@ every sixth tick when none of them can see them (distributed_host_send above: ne
 third, fourth; aimed near, at least every second; through a scope, every tick); on the ticks between, the host's word
 on them doesn't change. A client now updates another player's unit only on the ticks the host would send it, the
 same rules from its own players' places (objects.c objects_update): one far away moves in steps, one out of sight
-isn't seen. Its own players' units, anyone near or aimed at, and every unit while none of its players is alive (a
+isn't seen; one firing or throwing a grenade updates every tick. Its own players' units, anyone near or aimed at, and every unit while none of its players is alive (a
 dead player's camera can be anywhere) update every tick. opence.ini far_players = 0: every tick, as before. Returns
 a bit for each player (absolute index, the first 32) whose unit skips this tick's update. */
 unsigned long network_distributed_far_players_skipped(
@@ -5019,6 +5019,13 @@ unsigned long network_distributed_far_players_skipped(
 		unit_index = player ? distributed_living_unit(player) : NONE;
 		if (unit_index == NONE)
 			continue;
+		/* (firing or throwing: every tick, so its shots, their tracers and their sounds come as often as they do here
+		too; the damage is the host's either way) */
+		if (unit_get(unit_index)->unit.control_flags & (FLAG(_unit_control_weapon_primary_trigger_bit) |
+			FLAG(_unit_control_weapon_secondary_trigger_bit) | FLAG(_unit_control_throw_grenade_bit)))
+		{
+			continue;
+		}
 		object_get_origin(unit_index, &origin);
 		to = distributed_object_cluster(unit_index);
 		for (index = 0; index < viewer_count; index++)
