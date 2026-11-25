@@ -657,7 +657,7 @@ static char const *const stock_maps[] =
 
 /* whether a PC build's game (version 40 or 41) is one this Xbox can join, so the games list shows it (a listing's or
 an advertisement's): on one of the Xbox's stock levels (by its name, or its path's last part: not a Custom Edition map,
-nor one of the PC's own levels), for at most 16 players, playing no OpenCE gametype (the game's kind: its mode and
+nor one of the PC's own levels), for at most 32 players (HALO_PORT_XBOX_JOINED_PLAYERS), playing no OpenCE gametype (the game's kind: its mode and
 Hardcore, 0 for none) */
 int oxbox_online_stock_map(char const *map);
 
@@ -667,7 +667,7 @@ int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind
 	extern boolean hmp_links_listed(char const *map);
 
 	/* (or a Custom Edition or MCC map this Xbox has a port of, linked: hmp_links.c) */
-	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= HALO_PORT_MAXIMUM_NETWORK_PLAYERS &&
+	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= HALO_PORT_XBOX_JOINED_PLAYERS &&
 		(oxbox_online_stock_map(map) || hmp_links_listed(map));
 }
 

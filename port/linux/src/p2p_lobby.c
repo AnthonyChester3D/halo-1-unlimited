@@ -760,7 +760,7 @@ void p2p_lobby_slot_heard(const char *hash_text, const unsigned char *payload, i
 which list there and not with the brokers since network version 39), taken as a PC game's slot is: queued, its
 signature checked by p2p.c's thread, kept while it's heard again (each list asked again in 30 seconds, GAME_EXPIRY 90).
 Only one this Xbox can join is queued (the queue holds 16 and a master lists dozens): the PC builds' version, no
-password, and oxbox_online_pc_game_listed's (a stock map or a linked one, at most 16 players, a gametype it plays).
+password, and oxbox_online_pc_game_listed's (a stock map or a linked one, at most 32 players, a gametype it plays).
 Any thread: 1 if queued */
 int p2p_lobby_master_heard(const unsigned char *payload, int size)
 {
@@ -1000,7 +1000,7 @@ static void update_browsing(void)
 #if defined(OXBOX_CROSSPLAY)
 		/* oxbox: only a game this Xbox can join is kept (the rest would be in the way: "we can't use it, don't show
 		it"): none with a password (it has no way to give one), and of the PC builds' games one an Xbox hosts, or one
-		on a stock map for at most 16 players playing no OpenCE gametype (port/linux/game/hmp_online.c); not checked
+		on a stock map for at most 32 players playing no OpenCE gametype (port/linux/game/hmp_online.c); not checked
 		further, the rest are dropped here, before their signatures are */
 		if (!(listing.flags & _listing_closed))
 		{

@@ -18,13 +18,17 @@ a finishing place in 7 bits.
 
 /* ---------- session limits */
 
+/* oxbox: the most players of a game an Xbox joins, on every build: the Xbox's own record's size, and what a dedicated
+server's game may have for the Xboxes to list it as theirs (network_server_manager.c oxbox_server_xbox_joinable) */
+#define HALO_PORT_XBOX_JOINED_PLAYERS 32
+
 #if defined(HALO_XBOX_TARGET)
 /* oxbox (v1.193, Llama 2026-11-25): an Xbox JOINS games of up to 32 players on up to 32 machines (dedicated and PC
 servers' game nights); it HOSTS at most 16 (HALO_PORT_MAXIMUM_HOSTED_PLAYERS: a host runs every player's physics and
 sends to every console). The game record, the update queues and the clients' tables hold 32 (a PC game's 128 are made
 32 when it joins one) */
-#define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 32
-#define HALO_PORT_MAXIMUM_NETWORK_MACHINES 32
+#define HALO_PORT_MAXIMUM_NETWORK_PLAYERS HALO_PORT_XBOX_JOINED_PLAYERS
+#define HALO_PORT_MAXIMUM_NETWORK_MACHINES HALO_PORT_XBOX_JOINED_PLAYERS
 #define HALO_PORT_MAXIMUM_HOSTED_PLAYERS 16
 /* (the scoreboard's and the postgame table's rows: a bigger game's first 16 by its ranking) */
 #define HALO_PORT_MAXIMUM_SHOWN_PLAYERS 16
