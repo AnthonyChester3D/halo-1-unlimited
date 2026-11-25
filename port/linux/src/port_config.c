@@ -978,7 +978,7 @@ static const struct config_setting config_settings[] =
 	{ "server.bots", _config_string, "\"off\"", "HALO_SERVER_BOTS", _environment_value, _platform_server,
 		"Halo 1 Unlimited's bots in the games: \"off\", \"suggested\" (made up to\n"
 		"the map's suggested players), \"max\" (up to server.max_players), or a\n"
-		"number of bots (1 to 15). They join once a person is in, give a person\n"
+		"number of bots (1 to 31). They join once a person is in, give a person\n"
 		"who joins their place, and leave when nobody is left. Each is a player\n"
 		"of a machine of its own, so PCs see them as well as Xboxes." },
 	{ "server.bots_difficulty", _config_string, "\"normal\"", "HALO_SERVER_BOTS_DIFFICULTY", _environment_value,
