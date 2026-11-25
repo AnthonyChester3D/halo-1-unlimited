@@ -423,6 +423,37 @@ void device_preprocess_node_orientations(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.203): whether a device would stay as it is in device_update: its power and position where their groups
+are, not moving, no delay counting, no move to place (objects.c's resting rules: controls, machines with
+device_machines.c machine_resting_idle). A switch thrown or a door opened changes its group's value: then it's
+updated again */
+boolean device_resting_idle(
+	long device_index)
+{
+	struct device_datum *device = device_get(device_index);
+
+	if (TEST_FLAG(device->device.flags, _device_position_changed_bit) || device->device.power_velocity != 0.0f ||
+		device->device.position_velocity != 0.0f || device->device.delay_ticks != 0)
+	{
+		return FALSE;
+	}
+	if (device->device.power_group_index != NONE &&
+		((struct device_group_datum *)datum_get(device_groups_data, device->device.power_group_index))->actual_value !=
+		device->device.power)
+	{
+		return FALSE;
+	}
+	if (device->device.position_group_index != NONE &&
+		((struct device_group_datum *)datum_get(device_groups_data, device->device.position_group_index))->actual_value !=
+		device->device.position)
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+#endif
+
 boolean device_update(
 	long device_index)
 {

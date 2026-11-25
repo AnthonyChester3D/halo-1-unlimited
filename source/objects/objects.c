@@ -4637,17 +4637,43 @@ static boolean object_resting_idle(
 		return object->object.first_child_object_index == NONE && item_resting_still(object_index) &&
 			object_damage_idle(object);
 	}
+	case _object_type_machine:
+	case _object_type_control:
+	{
+		/* (v1.203: devices.c device_resting_idle, device_machines.c machine_resting_idle: doors shut, switches
+		unthrown) */
+		boolean machine_resting_idle(long machine_index);
+		boolean device_resting_idle(long device_index);
+
+		return object->object.first_child_object_index == NONE &&
+			(type == _object_type_machine ? machine_resting_idle(object_index) : device_resting_idle(object_index)) &&
+			object_damage_idle(object);
+	}
 	case _object_type_scenery:
 	{
-		struct object_definition const *definition = object_definition_get(object->definition_index);
-
 		return object->object.first_child_object_index == NONE &&
 			!TEST_FLAG(scenery_get(object_index)->flags, 0) &&
 			(object->object.flags & (FLAG(_object_animates_automatically_bit) | FLAG(_object_dynamic_lighting_recompute_bit))) == 0 &&
-			definition->object.functions.count == 0 && object_damage_idle(object);
+			object_damage_idle(object);
 	}
 	}
 	return FALSE;
+}
+
+/* (v1.203) what a resting object's update still does when it has functions: its function values and colours worked
+out again, which can change with time alone (a powerup's pulse: an MCC pack's camouflage changed every tick; a
+door's or panel's lights), so nothing it draws freezes */
+static void object_resting_functions(
+	long object_index)
+{
+	struct object_definition const *definition = object_definition_get(object_get(object_index)->definition_index);
+
+	if (definition->object.functions.count || definition->object.change_colors.count)
+	{
+		object_type_export_function_values(object_index);
+		object_compute_function_values(object_index);
+		object_compute_change_colors(object_index);
+	}
 }
 
 /* (v1.200: idle this many updates in a row first: a vehicle's or a grenade's first updates after it's placed still set
@@ -4661,8 +4687,11 @@ static boolean object_resting_settled(
 {
 	struct object_datum *object;
 
-	if (type != _object_type_vehicle && type != _object_type_equipment && type != _object_type_scenery)
+	if (type != _object_type_vehicle && type != _object_type_equipment && type != _object_type_scenery &&
+		type != _object_type_machine && type != _object_type_control)
+	{
 		return FALSE;
+	}
 	object = object_get(object_index);
 	if (!object_resting_idle(object_index, type))
 	{
@@ -4723,6 +4752,14 @@ static void rest_check_update(
 		object_update(object_index);
 		return;
 	}
+	/* (what the skip still does, first: then the whole update should change nothing more) */
+	if (type == _object_type_machine)
+	{
+		void machine_resting_update(long machine_index);
+
+		machine_resting_update(object_index);
+	}
+	object_resting_functions(object_index);
 	parts[part_count++] = object_index;
 	for (child = object_get(object_index)->object.first_child_object_index; child != NONE && part_count < 9;
 		child = object_get(child)->object.next_object_index)
@@ -5010,6 +5047,7 @@ void objects_update(
 
 						weapon_idle_reasons[0]++;
 #endif
+						object_resting_functions(object_index);   /* (v1.203: a glow that pulses keeps pulsing) */
 						skip_update = TRUE;
 						if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
 							TEST_FLAG(object_get(object_index)->object.flags, _object_garbage_bit))
@@ -5037,6 +5075,14 @@ void objects_update(
 				resting_objects = 0: every tick, as before. */
 				if (!skip_update && resting_objects && object_resting_settled(object_index, object_header->type))
 				{
+					/* (v1.203: a resting machine still looks for someone to open for, if it's an automatic door) */
+					if (object_header->type == _object_type_machine)
+					{
+						void machine_resting_update(long machine_index);
+
+						machine_resting_update(object_index);
+					}
+					object_resting_functions(object_index);
 					skip_update = TRUE;
 					if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
 						TEST_FLAG(object_get(object_index)->object.flags, _object_garbage_bit))

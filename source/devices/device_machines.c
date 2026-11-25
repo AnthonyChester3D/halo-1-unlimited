@@ -181,48 +181,22 @@ void machine_try_to_open_with_damage(
 	return;
 }
 
-boolean machine_update(
-	long machine_index)
+/* an automatic door's look, every 4th tick, for a biped close enough to open it for (machine_update's, moved here
+whole in v1.203: a resting machine, objects.c objects_update, still runs this alone) */
+static void machine_automatic_door_update(
+	long machine_index,
+	struct machine_datum *machine,
+	struct machine_definition *definition)
 {
 	boolean activate;
-	struct machine_definition *definition;
 	long *object_index;
-	real_point3d *node_position;
-	long *elevator_object_index;
 	short object_count;
 	real_vector3d elevator_offset;
-	real_point3d new_position;
 	long object_indices[16];
-	long elevator_object_indices[2048];
-	struct machine_datum *machine = machine_get(machine_index);
 #if defined(OXBOX_ENGINE_COUNT)
 	extern unsigned long long machine_lab[4];
 	unsigned long long machine_t0 = __builtin_ia32_rdtsc();
-
-	machine_lab[0]++;
 #endif
-
-	definition = machine_definition_get(machine->definition_index);
-	if (definition->machine.type == _machine_type_platform)
-	{
-		machine->device.position +=
-			(1.0f - machine->device.power) * definition->device.runtime_maximum_depowered_position_velocity +
-			machine->device.power * definition->device.runtime_maximum_powered_position_velocity;
-		if (machine->device.position >= 1.0f)
-		{
-			machine->device.position -= 1.0f;
-		}
-		machine->device.position_velocity = 0.0f;
-		machine->device.flags |= FLAG(_device_position_changed_bit);
-		if (machine->device.position_group_index != NONE)
-		{
-			struct device_group_datum *group = (struct device_group_datum *)datum_get(
-				device_groups_data,
-				machine->device.position_group_index);
-
-			group->actual_value = machine->device.position;
-		}
-	}
 
 	if (!TEST_FLAG(machine->machine.flags, _machine_does_not_operate_automatically_bit) &&
 		definition->machine.type == _machine_type_door &&
@@ -296,6 +270,52 @@ boolean machine_update(
 			machine->machine.door_open_ticks = -3;
 		}
 	}
+
+}
+
+boolean machine_update(
+	long machine_index)
+{
+	struct machine_definition *definition;
+	real_point3d *node_position;
+	long *elevator_object_index;
+	short object_count;
+	real_vector3d elevator_offset;
+	real_point3d new_position;
+	long elevator_object_indices[2048];
+	struct machine_datum *machine = machine_get(machine_index);
+#if defined(OXBOX_ENGINE_COUNT)
+	extern unsigned long long machine_lab[4];
+	unsigned long long machine_t0 = __builtin_ia32_rdtsc();
+
+	machine_lab[0]++;
+#endif
+
+	definition = machine_definition_get(machine->definition_index);
+	if (definition->machine.type == _machine_type_platform)
+	{
+		machine->device.position +=
+			(1.0f - machine->device.power) * definition->device.runtime_maximum_depowered_position_velocity +
+			machine->device.power * definition->device.runtime_maximum_powered_position_velocity;
+		if (machine->device.position >= 1.0f)
+		{
+			machine->device.position -= 1.0f;
+		}
+		machine->device.position_velocity = 0.0f;
+		machine->device.flags |= FLAG(_device_position_changed_bit);
+		if (machine->device.position_group_index != NONE)
+		{
+			struct device_group_datum *group = (struct device_group_datum *)datum_get(
+				device_groups_data,
+				machine->device.position_group_index);
+
+			group->actual_value = machine->device.position;
+		}
+	}
+
+	/* oxbox (v1.203): an automatic door's look for someone to open for, every 4th tick (machine_automatic_door_update,
+	which objects.c's resting machines still run) */
+	machine_automatic_door_update(machine_index, machine, definition);
 
 	if (definition->machine.type == _machine_type_door)
 	{
@@ -378,6 +398,38 @@ boolean machine_update(
 
 	return TRUE;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.203): whether a machine would stay as it is in its update (objects.c objects_update's resting machines):
+not a platform (always turning), a door shut with no open count running, and the device idle (devices.c
+device_resting_idle). Precipice in xemu: 49 machines a tick at ~73 K cycles each, bones and lights worked out again
+for doors that never moved */
+boolean machine_resting_idle(
+	long machine_index)
+{
+	boolean device_resting_idle(long device_index);
+	struct machine_datum *machine = machine_get(machine_index);
+	struct machine_definition *definition = machine_definition_get(machine->definition_index);
+
+	if (definition->machine.type == _machine_type_platform)
+		return FALSE;
+	if (definition->machine.type == _machine_type_door &&
+		(machine->device.position == 1.0f || machine->machine.door_open_ticks != 0))
+	{
+		return FALSE;
+	}
+	return device_resting_idle(machine_index);
+}
+
+/* ... and what a resting machine still does each tick: an automatic door's look for someone to open for */
+void machine_resting_update(
+	long machine_index)
+{
+	struct machine_datum *machine = machine_get(machine_index);
+
+	machine_automatic_door_update(machine_index, machine, machine_definition_get(machine->definition_index));
+}
+#endif
 
 #if defined(OXBOX_CROSSPLAY)
 /* port: sample the floor around its node recomputation, rather than carrying
