@@ -4528,6 +4528,12 @@ void objects_garbage_collection(
 }
 
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.195): how long a body lies dead before it may be left alone at rest (5 s: past every death animation;
+Halo's own corpse settling time is 1 s, effects.c CORPSE_SETTLING_TIME) */
+enum { RESTING_CORPSE_TICKS = 5 * TICKS_PER_SECOND };
+#endif
+
 void objects_update(
 	void)
 {
@@ -4540,6 +4546,10 @@ void objects_update(
 	struct object_header_datum *object_header;
 
 	boolean dont_update_object = ((game_time_get()&1)!=0) && game_players_are_double_speed();
+#if defined(HALO_XBOX_TARGET)
+	unsigned long far_players_skipped;   /* (oxbox v1.195: below) */
+	boolean resting_corpses;
+#endif
 
 	profile_enter(section);
 
@@ -4597,6 +4607,20 @@ void objects_update(
 	}
 	OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_activation)
 
+#if defined(HALO_XBOX_TARGET)
+	{
+		/* oxbox (v1.195): a network client's far players, updated on the ticks the host sends them
+		(network_distributed.c) */
+		unsigned long network_distributed_far_players_skipped(void);
+
+		extern int oxbox_setting_resting_corpses;   /* (port/oxbox/oxbox_entry.c) */
+
+		far_players_skipped = network_distributed_far_players_skipped();
+		/* oxbox (v1.195): corpses at rest, below; in multiplayer (the campaign's are reanimated by the Flood, and feign
+		death gets back up) */
+		resting_corpses = oxbox_setting_resting_corpses && game_engine_running() && !network_coop_active();
+	}
+#endif
 	object_header = (struct object_header_datum *)object_header_data->data;
 	for (i = 0; i<object_header_data->count; ++object_header)
 	{
@@ -4606,14 +4630,86 @@ void objects_update(
 				!TEST_FLAG(object_header->flags, _object_header_being_created_bit))
 			{
 				long object_index = DATUM_INDEX_NEW(i, object_header->identifier);
+				boolean skip_update = FALSE;
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 416, object_get(object_index)->object.parent_object_index==NONE);
 				match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 417, object_get(object_index)->object.next_object_index==NONE);
-			
-				if (!dont_update_object ||
+
+#if defined(HALO_XBOX_TARGET)
+				if (far_players_skipped && TEST_FLAG(_object_mask_unit, object_header->type))
+				{
+					long player_index = unit_get(object_index)->unit.player_index;
+					long absolute = player_index != NONE ? DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) : NONE;
+
+					skip_update = absolute >= 0 && absolute < 32 && (far_players_skipped & (1UL << absolute)) != 0;
+				}
+				/* oxbox (v1.195): a corpse at rest isn't updated. A multiplayer game keeps up to 50 dead bodies (and
+				dropped weapons) per 16 players before it collects them (active_garbage_limit), and each was updated every
+				tick like a live player (animation, damage, functions, lights): 45 to 62 of them cost a 24-player client
+				more than all its live players (xemu, Blood Gulch). Once a body has lain still a while (RESTING_CORPSE_TICKS
+				after its death, its death animation over) with nothing attached to it (a stuck grenade is its child, updated
+				in its update), nothing changes but the garbage count, kept here. A push wakes it (physics clears the at-rest
+				bit) and the host's moving it places it at once (object_set_position computes its nodes). opence.ini
+				resting_corpses = 0: every tick, as before. */
+				if (!skip_update && resting_corpses && object_header->type == _object_type_biped)
+				{
+					struct unit_datum *corpse = unit_get(object_index);
+
+					if (TEST_FLAG(corpse->object.damage_flags, _object_dead_bit) &&
+						TEST_FLAG(corpse->object.flags, _object_at_rest_bit) &&
+						corpse->object.first_child_object_index == NONE &&
+						corpse->unit.time_of_death != NONE &&
+						game_time_get() - corpse->unit.time_of_death > RESTING_CORPSE_TICKS)
+					{
+						skip_update = TRUE;
+						if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
+							TEST_FLAG(corpse->object.flags, _object_garbage_bit))
+						{
+							++object_globals->active_garbage_object_count;
+						}
+					}
+				}
+#endif
+				if (!skip_update &&
+					(!dont_update_object ||
 					TEST_FLAG(_object_mask_unit, object_header->type) &&
-					unit_get(object_index)->unit.player_index!=NONE)
+					unit_get(object_index)->unit.player_index!=NONE))
 				{
 					OXBOX_PERF_OBJECT(i)
+#if defined(OXBOX_CORPSE_COUNT)
+					/* lab (v1.195): what live and dead bipeds' updates cost (logged every 300 ticks) */
+					if (object_header->type == _object_type_biped)
+					{
+						static unsigned long long cycles[3];
+						static unsigned long counts[3];
+						static long ticks_seen, last_tick = NONE;
+						struct object_datum *counted = object_get(object_index);
+						int kind = !TEST_FLAG(counted->object.damage_flags, _object_dead_bit) ? 0 :
+							TEST_FLAG(counted->object.flags, _object_at_rest_bit) ? 1 : 2;
+						unsigned long long before = __builtin_ia32_rdtsc();
+
+						object_update(object_index);
+						cycles[kind] += __builtin_ia32_rdtsc() - before;
+						counts[kind]++;
+						if (game_time_get() != last_tick)
+						{
+							last_tick = game_time_get();
+							if (++ticks_seen >= 300)
+							{
+								void platform_log(char const *format, ...);
+
+								platform_log("corpses: a tick's bipeds: %lu alive (%lu kcycles each), %lu dead at rest (%lu), "
+									"%lu dead moving (%lu)",
+									counts[0] / ticks_seen, counts[0] ? (unsigned long)(cycles[0] / counts[0] / 1000) : 0,
+									counts[1] / ticks_seen, counts[1] ? (unsigned long)(cycles[1] / counts[1] / 1000) : 0,
+									counts[2] / ticks_seen, counts[2] ? (unsigned long)(cycles[2] / counts[2] / 1000) : 0);
+								csmemset(cycles, 0, sizeof(cycles));
+								csmemset(counts, 0, sizeof(counts));
+								ticks_seen = 0;
+							}
+						}
+					}
+					else
+#endif
 					object_update(object_index);
 				}
 			}

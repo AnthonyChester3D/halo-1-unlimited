@@ -21,8 +21,11 @@ a finishing place in 7 bits.
 /* oxbox: the most players of a game an Xbox joins, on every build: the Xbox's own record's size, and what a dedicated
 server's game may have for the Xboxes to list it as theirs (network_server_manager.c oxbox_server_xbox_joinable). 16:
 v1.193 tried 32, and an Xbox client of a 32-player game spent over 33 ms a tick on the other players' bodies (Anxiety
-~38 ms, the catch-up spiral: 1 fps); 24 waits for cheaper far players (Llama, 2026-11-25) */
+~38 ms, the catch-up spiral: 1 fps); 24 waits for cheaper far players (Llama, 2026-11-25). A lab build may set
+another with -DHALO_PORT_XBOX_JOINED_PLAYERS=N (its Xboxes play only with each other) */
+#if !defined(HALO_PORT_XBOX_JOINED_PLAYERS)
 #define HALO_PORT_XBOX_JOINED_PLAYERS 16
+#endif
 
 #if defined(HALO_XBOX_TARGET)
 /* oxbox: an Xbox JOINS games of up to HALO_PORT_XBOX_JOINED_PLAYERS players on as many machines (v1.193 tried 32 for

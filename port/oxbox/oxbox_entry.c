@@ -512,6 +512,8 @@ int oxbox_setting_audio_effects = 1;
 int oxbox_setting_bot_log = 0;
 static int oxbox_setting_perf_log = 0;
 int oxbox_setting_perf_sweep = 0;   /* (the perf sweep: oxbox_perf.c, played by showcase.c) */
+int oxbox_setting_far_players = 1;   /* (v1.195: a network client's far players: network_distributed.c) */
+int oxbox_setting_resting_corpses = 1;   /* (v1.195: corpses at rest left alone: objects.c objects_update) */
 extern unsigned char display_framerate;   /* (main.c's, a boolean) */
 
 /* a whole file written beside the logs (the XBE's folder, else T:); FALSE when neither could be written */
@@ -746,6 +748,10 @@ static void read_settings(const char *path)
 			oxbox_setting_perf_log = value != 0;
 		else if (same_text(name, "perf_sweep"))
 			oxbox_setting_perf_sweep = value != 0;
+		else if (same_text(name, "far_players"))
+			oxbox_setting_far_players = value != 0;
+		else if (same_text(name, "resting_corpses"))
+			oxbox_setting_resting_corpses = value != 0;
 		else if (same_text(name, "log_pools"))
 		{
 			extern int oxbox_setting_log_pools;   /* (oxbox_diagnostics.c) */
