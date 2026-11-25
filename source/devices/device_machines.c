@@ -195,6 +195,12 @@ boolean machine_update(
 	long object_indices[16];
 	long elevator_object_indices[2048];
 	struct machine_datum *machine = machine_get(machine_index);
+#if defined(OXBOX_ENGINE_COUNT)
+	extern unsigned long long machine_lab[4];
+	unsigned long long machine_t0 = __builtin_ia32_rdtsc();
+
+	machine_lab[0]++;
+#endif
 
 	definition = machine_definition_get(machine->definition_index);
 	if (definition->machine.type == _machine_type_platform)
@@ -225,6 +231,9 @@ boolean machine_update(
 		real automatic_activation_radius;
 
 		activate = FALSE;
+#if defined(OXBOX_ENGINE_COUNT)
+		machine_lab[2]++;
+#endif
 		automatic_activation_radius = definition->device.automatic_activation_radius < _real_epsilon
 			? machine->object.bounding_sphere_radius
 			: definition->device.automatic_activation_radius;
@@ -275,6 +284,9 @@ boolean machine_update(
 			while (--remaining_object_count);
 		}
 
+#if defined(OXBOX_ENGINE_COUNT)
+		machine_lab[3] += __builtin_ia32_rdtsc() - machine_t0;
+#endif
 		if (activate)
 		{
 			if (machine->device.position_group_index != NONE)
@@ -360,6 +372,9 @@ boolean machine_update(
 		object_translate(machine_index, &machine->object.position, NULL);
 		machine->device.flags &= ~FLAG(_device_position_changed_bit);
 	}
+#if defined(OXBOX_ENGINE_COUNT)
+	machine_lab[1] += __builtin_ia32_rdtsc() - machine_t0;
+#endif
 
 	return TRUE;
 }

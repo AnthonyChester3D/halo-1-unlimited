@@ -46,10 +46,16 @@ symbols in this file:
 
 /* ---------- prototypes */
 
-void rasterizer_error(
+void (rasterizer_error)(
 	long error_result,
 	char const *format,
 	...);
+#if defined(HALO_XBOX_TARGET) && !defined(rasterizer_error)
+/* oxbox: a failure's report names the function and line, not the call as text (151 calls' texts, 17.7 KB of the
+resident image, for a report that comes only when the graphics chip refuses to make a buffer or texture) */
+#define rasterizer_error(error_result, ...) (rasterizer_error)((error_result), "%s, line %d", __func__, __LINE__)
+#endif
+
 
 /* ---------- globals */
 

@@ -4465,6 +4465,16 @@ void game_engine_game_ending(
 	return;
 }
 
+/* port (v1.202): the map's teleporter entrances (game_engine_update_teleporter) */
+enum { MAXIMUM_TELEPORTER_SOURCES = 64 };
+static struct
+{
+	boolean known;
+	boolean too_many;                   /* (more than the list holds: every flag looked at, as before) */
+	short count;
+	short indices[MAXIMUM_TELEPORTER_SOURCES];
+} teleporter_sources;
+
 void game_engine_game_starting(
 	void)
 {
@@ -4474,6 +4484,7 @@ void game_engine_game_starting(
 			game_engine->game_starting();
 
 		game_engine_build_lighting();
+		teleporter_sources.known = FALSE;   /* (port, v1.202: a new game's map) */
 	}
 
 	return;
@@ -4596,6 +4607,97 @@ void game_engine_nonplayer_post_rasterize(
 	return;
 }
 
+/* port (v1.202): the map's teleporter entrances, listed once a game (game_engine_game_starting forgets them; a map's
+flags never change), so each player's check each tick looks at those alone, not at every netgame flag (16 players on
+Blood Gulch: up to 140 K cycles a tick in xemu). The same answer: the first, by index, within 0.5 of the player */
+
+static long teleporter_source_near(
+	real_point3d const *position)
+{
+	struct scenario *scenario = global_scenario_get();
+	long flag_index;
+	short k;
+
+	if (!teleporter_sources.known)
+	{
+		teleporter_sources.known = TRUE;
+		teleporter_sources.too_many = FALSE;
+		teleporter_sources.count = 0;
+		for (flag_index = 0; flag_index < scenario->netgame_flags.count; flag_index++)
+		{
+			if (TAG_BLOCK_GET_ELEMENT(&scenario->netgame_flags, flag_index, struct scenario_netgame_flag)->type !=
+				_netgame_flag_teleporter_source)
+			{
+				continue;
+			}
+			if (teleporter_sources.count == MAXIMUM_TELEPORTER_SOURCES || flag_index > SHRT_MAX)
+			{
+				teleporter_sources.too_many = TRUE;
+				break;
+			}
+			teleporter_sources.indices[teleporter_sources.count++] = (short)flag_index;
+		}
+#if defined(OXBOX_ENGINE_COUNT)
+		/* (lab: the list against every flag's look, at each entrance, 0.4 off it and 0.6 off it) */
+		{
+			void platform_log(char const *format, ...);
+			long checks = 0, agree = 0, hits = 0;
+			short n;
+
+			for (n = 0; n < teleporter_sources.count && !teleporter_sources.too_many; n++)
+			{
+				struct scenario_netgame_flag *flag = TAG_BLOCK_GET_ELEMENT(&scenario->netgame_flags,
+					teleporter_sources.indices[n], struct scenario_netgame_flag);
+				real offsets[3] = { 0.0f, 0.4f, 0.6f };
+				short o;
+
+				for (o = 0; o < 3; o++)
+				{
+					real_point3d at = flag->position;
+					long old_index = NONE, new_index;
+					short k;
+
+					at.x += offsets[o];
+					find_netgame_flags(&at, 0.5f, 0.0f, _netgame_flag_teleporter_source, NONE, 1, &old_index);
+					new_index = NONE;
+					for (k = 0; k < teleporter_sources.count; k++)
+					{
+						struct scenario_netgame_flag *other = TAG_BLOCK_GET_ELEMENT(&scenario->netgame_flags,
+							teleporter_sources.indices[k], struct scenario_netgame_flag);
+
+						if (!(distance_squared3d(&other->position, &at) > 0.5f * 0.5f))
+						{
+							new_index = teleporter_sources.indices[k];
+							break;
+						}
+					}
+					checks++;
+					agree += old_index == new_index;
+					hits += new_index != NONE;
+				}
+			}
+			platform_log("engine: teleporter entrances %d (of %ld flags): %ld checks, %ld agree, %ld found one",
+				teleporter_sources.count, scenario->netgame_flags.count, checks, agree, hits);
+		}
+#endif
+	}
+	if (teleporter_sources.too_many)
+	{
+		flag_index = NONE;
+		find_netgame_flags(position, 0.5f, 0.0f, _netgame_flag_teleporter_source, NONE, 1, &flag_index);
+		return flag_index;
+	}
+	for (k = 0; k < teleporter_sources.count; k++)
+	{
+		struct scenario_netgame_flag *flag = TAG_BLOCK_GET_ELEMENT(&scenario->netgame_flags,
+			teleporter_sources.indices[k], struct scenario_netgame_flag);
+
+		if (!(distance_squared3d(&flag->position, position) > 0.5f * 0.5f))
+			return teleporter_sources.indices[k];
+	}
+	return NONE;
+}
+
 static void game_engine_update_teleporter(
 	long player_index)
 {
@@ -4632,15 +4734,7 @@ static void game_engine_update_teleporter(
 			player->teleporter_index = NONE;
 	}
 
-	source_flag_index = NONE;
-	find_netgame_flags(
-		&unit->object.position,
-		0.5f,
-		0.0f,
-		_netgame_flag_teleporter_source,
-		NONE,
-		1,
-		&source_flag_index);
+	source_flag_index = teleporter_source_near(&unit->object.position);
 	if (source_flag_index == NONE ||
 		source_flag_index == player->teleporter_index)
 	{
@@ -5024,16 +5118,67 @@ static void game_engine_update_vehicle_respawn(
 	}
 }
 
+#if defined(OXBOX_ENGINE_COUNT)
+/* lab: game_engine_update's parts, the spawn choice (players.c) and machines (device_machines.c), logged every 300
+ticks: cycles a tick */
+unsigned long long engine_lab[12];
+unsigned long long spawn_lab[4];      /* (players.c: calls, cycles, locations, locations of the game type) */
+unsigned long long machine_lab[4];    /* (device_machines.c: updates, cycles, door searches, their cycles) */
+#define ENGINE_LAB(k) { unsigned long long engine_lab_now = __builtin_ia32_rdtsc(); engine_lab[k] += engine_lab_now - engine_lab_t; \
+	engine_lab_t = engine_lab_now; }
+
+static void engine_lab_log(
+	void)
+{
+	static long ticks;
+
+	if (++ticks >= 300)
+	{
+		void platform_log(char const *format, ...);
+
+		platform_log("engine: a tick, kcycles: sound %lu, purge %lu, weapons %lu, item spawn %lu, vehicle respawn %lu, "
+			"players' no shield/invisible %lu, teleporters %lu, game type per player %lu, game type %lu, the rest %lu",
+			(unsigned long)(engine_lab[0] / ticks / 1000), (unsigned long)(engine_lab[1] / ticks / 1000),
+			(unsigned long)(engine_lab[2] / ticks / 1000), (unsigned long)(engine_lab[3] / ticks / 1000),
+			(unsigned long)(engine_lab[4] / ticks / 1000), (unsigned long)(engine_lab[5] / ticks / 1000),
+			(unsigned long)(engine_lab[6] / ticks / 1000), (unsigned long)(engine_lab[7] / ticks / 1000),
+			(unsigned long)(engine_lab[8] / ticks / 1000), (unsigned long)(engine_lab[9] / ticks / 1000));
+		platform_log("engine: spawn choices %lu in %ld ticks, %lu kcycles each, %lu locations (%lu of the game type) each",
+			(unsigned long)spawn_lab[0], ticks, (unsigned long)(spawn_lab[0] ? spawn_lab[1] / spawn_lab[0] / 1000 : 0),
+			(unsigned long)(spawn_lab[0] ? spawn_lab[2] / spawn_lab[0] : 0), (unsigned long)(spawn_lab[0] ? spawn_lab[3] / spawn_lab[0] : 0));
+		platform_log("engine: machines %lu a tick, %lu kcycles each; door searches %lu a tick, %lu kcycles each",
+			(unsigned long)(machine_lab[0] / ticks), (unsigned long)(machine_lab[0] ? machine_lab[1] / machine_lab[0] / 1000 : 0),
+			(unsigned long)(machine_lab[2] / ticks), (unsigned long)(machine_lab[2] ? machine_lab[3] / machine_lab[2] / 1000 : 0));
+		csmemset(engine_lab, 0, sizeof(engine_lab));
+		csmemset(spawn_lab, 0, sizeof(spawn_lab));
+		csmemset(machine_lab, 0, sizeof(machine_lab));
+		ticks = 0;
+	}
+}
+#else
+#define ENGINE_LAB(k)
+#endif
+
 void game_engine_update(
 	void)
 {
+#if defined(OXBOX_ENGINE_COUNT)
+	unsigned long long engine_lab_t = __builtin_ia32_rdtsc();
+
+	engine_lab_log();
+#endif
 	if (game_engine)
 	{
 		game_engine_update_multiplayer_sound();
+		ENGINE_LAB(0)
 		game_engine_update_purge();
+		ENGINE_LAB(1)
 		game_engine_update_weapons();
+		ENGINE_LAB(2)
 		game_engine_update_item_spawn();
+		ENGINE_LAB(3)
 		game_engine_update_vehicle_respawn();
+		ENGINE_LAB(4)
 #if defined(OXBOX_STUCK_ITEM_TEST)
 		{
 			extern void oxbox_stuck_item_test(void);
@@ -5048,20 +5193,25 @@ void game_engine_update(
 			data_iterator_new(&player_iterator, player_data);
 			while (data_iterator_next(&player_iterator))
 			{
+				ENGINE_LAB(9)
 				game_engine_update_player_no_shield(player_iterator.datum_index);
 				game_engine_update_player_always_invis(player_iterator.datum_index);
+				ENGINE_LAB(5)
 				game_engine_update_teleporter(player_iterator.datum_index);
+				ENGINE_LAB(6)
 
 				/* (on a client of the distributed netcode each game type
 				skips what the host decides, whose scores, flags, balls and
 				hills it has: game_engine_read_network_state) */
 				if (game_engine->player_update_each_tick)
 					game_engine->player_update_each_tick(player_iterator.datum_index);
+				ENGINE_LAB(7)
 			}
 		}
 
 		if (game_engine->update)
 			game_engine->update();
+		ENGINE_LAB(8)
 
 		switch (game_engine_globals.postgame_state)
 		{
@@ -7714,6 +7864,7 @@ static boolean game_engine_map_supports(
 void game_engine_initialize_for_new_map(
 	void)
 {
+	teleporter_sources.known = FALSE;   /* (port, v1.202: listed again from this map's flags) */
 	/* port: a gametype the map hasn't (the map browser stops this when the map's info.txt says so: hmp_browse.c):
 	Slayer instead of a crash, on every machine alike (each decides from the same map). Its own options zeroed
 	(Slayer's defaults); teams and the rest of the gametype as chosen */
@@ -7902,13 +8053,22 @@ real game_engine_get_starting_location_rating(
 	long player_index,
 	struct player_starting_location const *starting_location)
 {
+	real rating;
+
 	if (!match_game_type(game_engine_get_type(), 4, starting_location->game_types))
 		return 0.0f;
 
+	/* port (v1.202): rated first, and the search for a vehicle parked on the spot (a BSP walk to the spot's place and
+	an object search: most of a spot's cost) only for a spot that rates above none: the same answer, as both are
+	pure and either makes it none. Blood Gulch's 71 spots, of which ~15 rate: a respawn's choice ~570 K cycles in
+	xemu before */
+	rating = default_starting_location_rate_function(player_index, starting_location);
+	if (rating == 0.0f)
+		return 0.0f;
 	if (nearby_vehicle(player_index, starting_location))
 		return 0.0f;
 
-	return default_starting_location_rate_function(player_index, starting_location);
+	return rating;
 }
 
 /* port: the gametype's vehicles of each team (game_variant_options) */
