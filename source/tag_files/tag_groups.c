@@ -31,6 +31,18 @@ enum
 /* port: (tag_empty_data) */
 static unsigned long tag_empty_data_bytes[TAG_EMPTY_DATA_SIZE / sizeof(unsigned long)];
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.190): the code sites that asked for a block element that isn't there, said once a map
+(tag_block_get_element_with_size; forgotten when a map's tags load: cache_files.c tag_loaded_forget) */
+static unsigned long tag_block_bad_sites[64];
+
+void tag_block_bad_sites_forget(
+	void)
+{
+	csmemset(tag_block_bad_sites, 0, sizeof(tag_block_bad_sites));
+}
+#endif
+
 /* ---------- private code */
 
 /* port: an index past what it indexes, logged once */
@@ -173,7 +185,7 @@ void *tag_block_get_element_with_size(
 		debug.txt's single line couldn't place). Lab builds also count them (OXBOX_CALL_COUNT) */
 		{
 			extern void platform_log(char const *format, ...);
-			static unsigned long said[64];
+			unsigned long *said = tag_block_bad_sites;
 			unsigned long caller = (unsigned long)__builtin_return_address(0);
 			int k;
 
