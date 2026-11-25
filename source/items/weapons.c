@@ -3490,3 +3490,67 @@ boolean weapon_update(
 
 	return TRUE;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.196): whether a weapon lying still is idle, nothing in its update changing from one tick to the next
+(objects.c objects_update leaves it alone in multiplayer): at rest, not on an object (one resting on an object follows
+it, item_update), nothing attached, not the game type's (a flag, a ball), not one that detonates when dropped, no
+light, no heat or overcharge to bleed off, its state, its triggers and its magazines all idle with no timers running
+and no charging effect. Picking it up, a push or a nearby blast change one of these, or wake it
+(the at-rest bit), and it's updated again. */
+#if defined(OXBOX_CORPSE_COUNT)
+/* lab: why the last weapon wasn't idle (0: it was) */
+int weapon_resting_idle_reason;
+#define NOT_IDLE(why) { weapon_resting_idle_reason = (why); return FALSE; }
+#else
+#define NOT_IDLE(why) return FALSE;
+#endif
+
+boolean weapon_resting_idle(
+	long weapon_index)
+{
+	struct weapon_datum *weapon = weapon_get(weapon_index);
+	struct weapon_definition *definition = weapon_definition_get(weapon->definition_index);
+	short index;
+
+	if (!TEST_FLAG(weapon->object.flags, _object_at_rest_bit))
+		NOT_IDLE(1)
+	/* (resting on an object, it follows it: item_update; the game type's placed weapons rest on neither) */
+	if (TEST_FLAG(weapon->item.flags, _item_on_object_bit))
+		NOT_IDLE(2)
+	if (weapon->object.parent_object_index != NONE || weapon->object.first_child_object_index != NONE)
+		NOT_IDLE(3)
+	if (TEST_FLAG(weapon->weapon.flags, _weapon_runtime_game_engine_active_bit) ||
+		TEST_FLAG(definition->weapon.flags, _weapon_detonates_when_dropped_bit))
+	{
+		NOT_IDLE(4)
+	}
+	if (weapon->weapon.state != _weapon_state_idle || weapon->weapon.state_timer != 0)
+		NOT_IDLE(5)
+	if (weapon->weapon.heat > 0.0f || weapon->weapon.overcharged > 0.0f)
+		NOT_IDLE(6)
+	/* (a dropped weapon's light fades in 24 ticks; what it tracked only matters held: the first update after a pickup
+	drops a tracked object that's gone) */
+	if (weapon->weapon.integrated_light_power > 0.0f)
+		NOT_IDLE(7)
+	for (index = 0; index < definition->weapon.triggers.count && index < 2; index++)
+	{
+		if (weapon->weapon.triggers[index].state != _trigger_idle)
+			NOT_IDLE(8)
+		if (weapon->weapon.triggers[index].state_timer != 0)
+			NOT_IDLE(9)
+		if (weapon->weapon.triggers[index].charging_effect_index != NONE)
+			NOT_IDLE(10)
+	}
+	for (index = 0; index < definition->weapon.magazines.count && index < 2; index++)
+	{
+		if (weapon->weapon.magazines[index].state != _magazine_idle || weapon->weapon.magazines[index].state_timer != 0)
+			NOT_IDLE(11)
+	}
+#if defined(OXBOX_CORPSE_COUNT)
+	weapon_resting_idle_reason = 0;
+#endif
+	return TRUE;
+}
+#undef NOT_IDLE
+#endif

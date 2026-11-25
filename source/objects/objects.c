@@ -4528,6 +4528,10 @@ void objects_garbage_collection(
 }
 
 
+#if defined(OXBOX_CORPSE_COUNT)
+unsigned long weapon_idle_reasons[12];   /* lab: why resting weapons weren't idle */
+#endif
+
 #if defined(HALO_XBOX_TARGET)
 /* oxbox (v1.195): how long a body lies dead before it may be left alone at rest (5 s: past every death animation;
 Halo's own corpse settling time is 1 s, effects.c CORPSE_SETTLING_TIME) */
@@ -4549,6 +4553,7 @@ void objects_update(
 #if defined(HALO_XBOX_TARGET)
 	unsigned long far_players_skipped;   /* (oxbox v1.195: below) */
 	boolean resting_corpses;
+	boolean resting_weapons;
 #endif
 
 	profile_enter(section);
@@ -4614,11 +4619,14 @@ void objects_update(
 		unsigned long network_distributed_far_players_skipped(void);
 
 		extern int oxbox_setting_resting_corpses;   /* (port/oxbox/oxbox_entry.c) */
+		extern int oxbox_setting_resting_weapons;
 
 		far_players_skipped = network_distributed_far_players_skipped();
 		/* oxbox (v1.195): corpses at rest, below; in multiplayer (the campaign's are reanimated by the Flood, and feign
 		death gets back up) */
 		resting_corpses = oxbox_setting_resting_corpses && game_engine_running() && !network_coop_active();
+		/* (v1.196: idle weapons lying still, below; in multiplayer as well) */
+		resting_weapons = oxbox_setting_resting_weapons && game_engine_running() && !network_coop_active();
 	}
 #endif
 	object_header = (struct object_header_datum *)object_header_data->data;
@@ -4668,6 +4676,38 @@ void objects_update(
 						}
 					}
 				}
+				/* oxbox (v1.196): an idle weapon lying still on the level isn't updated either (weapons.c
+				weapon_resting_idle: nothing in its update changes). A 24-player game had 60-75 of them a tick, as much
+				work as the bodies still updated (xemu, Blood Gulch). opence.ini resting_weapons = 0: every tick. */
+				if (!skip_update && resting_weapons && object_header->type == _object_type_weapon)
+				{
+					boolean weapon_resting_idle(long weapon_index);
+
+					if (weapon_resting_idle(object_index))
+					{
+#if defined(OXBOX_CORPSE_COUNT)
+						extern unsigned long weapon_idle_reasons[12];
+
+						weapon_idle_reasons[0]++;
+#endif
+						skip_update = TRUE;
+						if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
+							TEST_FLAG(object_get(object_index)->object.flags, _object_garbage_bit))
+						{
+							++object_globals->active_garbage_object_count;
+						}
+					}
+#if defined(OXBOX_CORPSE_COUNT)
+					else
+					{
+						extern unsigned long weapon_idle_reasons[12];
+						extern int weapon_resting_idle_reason;
+
+						if (weapon_resting_idle_reason > 0 && weapon_resting_idle_reason < 12)
+							weapon_idle_reasons[weapon_resting_idle_reason]++;
+					}
+#endif
+				}
 #endif
 				if (!skip_update &&
 					(!dont_update_object ||
@@ -4676,14 +4716,16 @@ void objects_update(
 				{
 					OXBOX_PERF_OBJECT(i)
 #if defined(OXBOX_CORPSE_COUNT)
-					/* lab (v1.195): what live and dead bipeds' updates cost (logged every 300 ticks) */
-					if (object_header->type == _object_type_biped)
+					/* lab (v1.195): what live and dead bipeds' and ground weapons' updates cost (logged every 300 ticks) */
+					if (object_header->type == _object_type_biped || object_header->type == _object_type_weapon)
 					{
-						static unsigned long long cycles[3];
-						static unsigned long counts[3];
+						static unsigned long long cycles[5];
+						static unsigned long counts[5];
 						static long ticks_seen, last_tick = NONE;
 						struct object_datum *counted = object_get(object_index);
-						int kind = !TEST_FLAG(counted->object.damage_flags, _object_dead_bit) ? 0 :
+						int kind = object_header->type == _object_type_weapon ?
+							(TEST_FLAG(counted->object.flags, _object_at_rest_bit) ? 3 : 4) :
+							!TEST_FLAG(counted->object.damage_flags, _object_dead_bit) ? 0 :
 							TEST_FLAG(counted->object.flags, _object_at_rest_bit) ? 1 : 2;
 						unsigned long long before = __builtin_ia32_rdtsc();
 
@@ -4696,12 +4738,29 @@ void objects_update(
 							if (++ticks_seen >= 300)
 							{
 								void platform_log(char const *format, ...);
+								int k;
+								unsigned long each[5];
 
+								for (k = 0; k < 5; k++)
+									each[k] = counts[k] ? (unsigned long)(cycles[k] / counts[k] / 1000) : 0;
 								platform_log("corpses: a tick's bipeds: %lu alive (%lu kcycles each), %lu dead at rest (%lu), "
-									"%lu dead moving (%lu)",
-									counts[0] / ticks_seen, counts[0] ? (unsigned long)(cycles[0] / counts[0] / 1000) : 0,
-									counts[1] / ticks_seen, counts[1] ? (unsigned long)(cycles[1] / counts[1] / 1000) : 0,
-									counts[2] / ticks_seen, counts[2] ? (unsigned long)(cycles[2] / counts[2] / 1000) : 0);
+									"%lu dead moving (%lu); ground weapons: %lu at rest (%lu), %lu moving (%lu)",
+									counts[0] / ticks_seen, each[0], counts[1] / ticks_seen, each[1], counts[2] / ticks_seen, each[2],
+									counts[3] / ticks_seen, each[3], counts[4] / ticks_seen, each[4]);
+								{
+									extern unsigned long weapon_idle_reasons[12];
+
+									platform_log("corpses: resting weapons a tick: %lu idle; not idle: rest %lu, on an object %lu, "
+										"attached %lu, engine %lu, state %lu, heat %lu, light %lu, trigger state %lu, trigger timer %lu, "
+										"charging %lu, magazine %lu", weapon_idle_reasons[0] / ticks_seen,
+										weapon_idle_reasons[1] / ticks_seen, weapon_idle_reasons[2] / ticks_seen,
+										weapon_idle_reasons[3] / ticks_seen, weapon_idle_reasons[4] / ticks_seen,
+										weapon_idle_reasons[5] / ticks_seen, weapon_idle_reasons[6] / ticks_seen,
+										weapon_idle_reasons[7] / ticks_seen, weapon_idle_reasons[8] / ticks_seen,
+										weapon_idle_reasons[9] / ticks_seen, weapon_idle_reasons[10] / ticks_seen,
+										weapon_idle_reasons[11] / ticks_seen);
+									csmemset(weapon_idle_reasons, 0, sizeof(weapon_idle_reasons));
+								}
 								csmemset(cycles, 0, sizeof(cycles));
 								csmemset(counts, 0, sizeof(counts));
 								ticks_seen = 0;
