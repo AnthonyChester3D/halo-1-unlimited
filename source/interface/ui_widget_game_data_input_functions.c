@@ -4664,6 +4664,14 @@ void oxbox_games_ping_select(
 	oxbox_games_ping.panel = panel;
 	oxbox_games_ping.anchor = anchor;
 	oxbox_games_ping.above = above;
+#if defined(OXBOX_NET_P2P)
+	/* (v1.192: a game listed online, highlighted, has its host reached so it can be pinged: hmp_online.c) */
+	{
+		extern void hmp_online_peek(void const *server);
+
+		hmp_online_peek(server);
+	}
+#endif
 	oxbox_games_ping.ping = network_game_client_ping_game(server);
 	oxbox_games_ping.pinged = server && oxbox_games_ping.ping >= 0;
 }
