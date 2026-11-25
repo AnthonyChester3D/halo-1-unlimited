@@ -476,12 +476,37 @@ collision:
 	return TRUE;
 }
 
+#if defined(OXBOX_CORPSE_COUNT)
+/* lab: the whole game's vector tests: calls, cycles, cycles in the object loop, objects visited, objects whose type the
+flags test; the features gathered: calls, cycles, cycles in its object loop, objects visited */
+unsigned long long collision_lab[10];
+#endif
+
 boolean collision_test_vector(
 	unsigned long flags,
 	real_point3d const *point,
 	real_vector3d const *vector,
 	long ignore_object_index,
 	struct collision_result *collision)
+#if defined(OXBOX_CORPSE_COUNT)
+{
+	boolean collision_test_vector_counted(unsigned long, real_point3d const *, real_vector3d const *, long,
+		struct collision_result *);
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean result = collision_test_vector_counted(flags, point, vector, ignore_object_index, collision);
+
+	collision_lab[1] += __builtin_ia32_rdtsc() - t0;
+	collision_lab[0]++;
+	return result;
+}
+
+boolean collision_test_vector_counted(
+	unsigned long flags,
+	real_point3d const *point,
+	real_vector3d const *vector,
+	long ignore_object_index,
+	struct collision_result *collision)
+#endif
 {
 	boolean hit = FALSE;
 #if defined(OXBOX_CALL_COUNT)
@@ -653,6 +678,9 @@ boolean collision_test_vector(
 
 			collision_log_usage(_collision_function_vector_objects);
 			collision_log_start_time(&collision_usage_times.vector_objects);
+#if defined(OXBOX_CORPSE_COUNT)
+			unsigned long long objects_t0 = __builtin_ia32_rdtsc();
+#endif
 			if (!(flags & _collision_test_objects_all_types_flags))
 			{
 				flags |= _collision_test_objects_all_types_flags;
@@ -675,6 +703,11 @@ boolean collision_test_vector(
 						object_index != NONE;
 						object_index = cluster_get_next_collideable_object(&reference_index))
 					{
+#if defined(OXBOX_CORPSE_COUNT)
+						collision_lab[3]++;
+						if (TEST_FLAG(flags, object_get(object_index)->object.type + _collision_test_objects_first_type_bit))
+							collision_lab[4]++;
+#endif
 						/* port: (the ones the vector misses passed over on a
 						packed copy of their bounding spheres, before they
 						are marked, which reads them: object_bounds_cache.c) */
@@ -696,6 +729,9 @@ boolean collision_test_vector(
 			}
 			object_marker_end();
 			structure_cluster_marker_end();
+#if defined(OXBOX_CORPSE_COUNT)
+			collision_lab[2] += __builtin_ia32_rdtsc() - objects_t0;
+#endif
 			collision_log_end_time(
 				_collision_function_vector_objects,
 				collision_usage_times.vector_objects.QuadPart);
@@ -996,6 +1032,84 @@ boolean collision_get_features_in_sphere(
 		features->count[_collision_feature_cylinder] != 0 ||
 		features->count[_collision_feature_prism] != 0;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.198): the objects a vector test with these flags could hit while the vector stays inside the sphere:
+those in the clusters of the sphere's leaves (the vector's leaves are among them), visible, of a type the flags test,
+not the ignored one, whose bounding sphere comes within the sphere (collision_test_vector's object loop tests a
+vector only against objects whose bounding sphere it reaches: object_test_vector; an object's children only through
+it). NONE when they don't fit, or the sphere touches more leaves than a test result holds: test every vector in full.
+Lets a caller with many short vectors in one place (a limp body relaxing: biped_limp_noodle.c) skip the cluster's
+whole object list for each when nothing near could be hit. */
+short collision_objects_in_sphere(
+	unsigned long flags,
+	real_point3d const *center,
+	real radius,
+	long ignore_object_index,
+	long *object_indices,
+	short maximum_count)
+{
+	struct collision_bsp_test_sphere_result result;
+	short count = 0;
+	long leaf_reference_index;
+
+	if (!TEST_FLAG(flags, _collision_test_objects_bit) || debug_collision_skip_objects)
+		return 0;
+	if (!(flags & _collision_test_objects_all_types_flags))
+		flags |= _collision_test_objects_all_types_flags;
+
+	collision_bsp_test_sphere(
+		global_collision_bsp_get(),
+		MAXIMUM_BREAKABLE_SURFACES_PER_MAP,
+		breakable_surface_flags_get(),
+		center,
+		radius,
+		&result);
+	if (result.leaf_count >= (long)NUMBEROF(result.leaf_indices))
+		return NONE;
+
+	structure_cluster_marker_begin();
+	object_marker_begin();
+	for (leaf_reference_index = 0; leaf_reference_index < result.leaf_count && count != NONE; leaf_reference_index++)
+	{
+		long cluster_index = collision_cluster_index_from_leaf(result.leaf_indices[leaf_reference_index]);
+
+		if (structure_cluster_mark(cluster_index))
+		{
+			long reference_index;
+			long object_index;
+
+			for (object_index = cluster_get_first_collideable_object(&reference_index, cluster_index);
+				object_index != NONE;
+				object_index = cluster_get_next_collideable_object(&reference_index))
+			{
+				if (object_mark_function(object_index))
+				{
+					struct object_datum const *object = object_get(object_index);
+					real reach = radius + object->object.bounding_sphere_radius + 0.0625f;
+
+					if (object_index != ignore_object_index &&
+						!TEST_FLAG(object->object.flags, _object_invisible_bit) &&
+						TEST_FLAG(flags, object->object.type + _collision_test_objects_first_type_bit) &&
+						distance_squared3d(center, &object->object.bounding_sphere_center) < reach * reach)
+					{
+						if (count >= maximum_count)
+						{
+							count = NONE;
+							break;
+						}
+						object_indices[count++] = object_index;
+					}
+				}
+			}
+		}
+	}
+	object_marker_end();
+	structure_cluster_marker_end();
+
+	return count;
+}
+#endif
 
 boolean collision_fix_pill(
 	unsigned long flags,

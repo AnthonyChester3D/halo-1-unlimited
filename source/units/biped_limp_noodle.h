@@ -32,6 +32,11 @@ void validate_real_vector3d_axes3(
 boolean biped_limp_noodle_relax_nodes_onto_environment(
 	long biped_index);
 
+#if defined(HALO_XBOX_TARGET)
+boolean biped_limp_body_settled(
+	long biped_index);
+#endif
+
 /* ---------- globals */
 
 /* ---------- public code */

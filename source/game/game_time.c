@@ -137,12 +137,19 @@ void game_time_initialize(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+static void client_overload_reset(void);
+#endif
+
 void game_time_initialize_for_new_map(
 	void)
 {
 	match_assert("c:\\halo\\SOURCE\\game\\game_time.c", 131, game_time_globals && !game_time_globals->initialized);
 	memset(game_time_globals, 0, sizeof(*game_time_globals));
 	game_time_globals->initialized = TRUE;
+#if defined(HALO_XBOX_TARGET)
+	client_overload_reset();
+#endif
 
 	return;
 }
@@ -196,6 +203,68 @@ long game_time_get(
 
 #if defined(HALO_XBOX_TARGET)
 enum { SOLO_HOST_MAXIMUM_TICKS = 2 };
+
+/* oxbox (v1.195): a client whose ticks cost more than a frame's time (a big game's players' bodies, a heavy map's
+fight: v1.193's 32 players, ~38 ms a tick on Anxiety) asked for more ticks each frame, every frame longer than the
+last, until each ran the 30 a client allows (1 to 2.6 s a frame: 1 fps). One that wanted CLIENT_OVERLOADED_TICKS or
+more in each of CLIENT_OVERLOADED_FRAMES frames in a row runs at most CLIENT_OVERLOADED_MAXIMUM_TICKS a frame, its
+leftover time dropped, until a frame wants fewer: it falls behind the host, whose next update (once a second at
+least) moves its clock up to the host's when it's a second behind (network_client_manager.c), and the host's state
+places everyone again. A hitch (one long frame) still catches up in full. */
+enum
+{
+	CLIENT_OVERLOADED_TICKS = 4,
+	CLIENT_OVERLOADED_FRAMES = 3,
+	CLIENT_OVERLOADED_MAXIMUM_TICKS = 3
+};
+
+static struct
+{
+	short frames;          /* frames in a row that wanted CLIENT_OVERLOADED_TICKS or more */
+	unsigned long since;   /* (when it started being held back, for its log line) */
+	long dropped;          /* ticks dropped while held back */
+} client_overload;
+
+/* (each map starts with a clean slate) */
+static void client_overload_reset(
+	void)
+{
+	csmemset(&client_overload, 0, sizeof(client_overload));
+}
+
+/* a client's frame wanted this many ticks */
+static void client_overload_note(
+	long wanted)
+{
+	void platform_log(char const *format, ...);
+	unsigned long system_milliseconds(void);
+
+	if (wanted >= CLIENT_OVERLOADED_TICKS)
+	{
+		if (client_overload.frames < CLIENT_OVERLOADED_FRAMES)
+		{
+			if (++client_overload.frames == CLIENT_OVERLOADED_FRAMES)
+			{
+				client_overload.since = system_milliseconds();
+				client_overload.dropped = 0;
+				platform_log("ticks: this client's ticks cost more than a frame (%ld wanted): at most %d a frame "
+					"until they don't, the host's clock taken when it's a second ahead", wanted,
+					(int)CLIENT_OVERLOADED_MAXIMUM_TICKS);
+			}
+		}
+		else
+			client_overload.dropped += wanted - CLIENT_OVERLOADED_MAXIMUM_TICKS;
+	}
+	else
+	{
+		if (client_overload.frames >= CLIENT_OVERLOADED_FRAMES)
+		{
+			platform_log("ticks: this client keeps up again after %lu ms held back (%ld ticks dropped)",
+				system_milliseconds() - client_overload.since, client_overload.dropped);
+		}
+		client_overload.frames = 0;
+	}
+}
 #endif
 
 short game_time_get_elapsed(
@@ -454,6 +523,14 @@ void game_time_update(
 				}
 #endif
 			case _game_connection_network_client:
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox (v1.195): held back while its ticks cost more than a frame (client_overload_note) */
+				if (client_overload.frames >= CLIENT_OVERLOADED_FRAMES)
+				{
+					connection = CLIENT_OVERLOADED_MAXIMUM_TICKS;
+					break;
+				}
+#endif
 				/* (the distributed netcode: every machine ticks on its own
 				clock, and the host waits for nobody) */
 				connection = TICKS_PER_SECOND;
@@ -472,6 +549,11 @@ void game_time_update(
 			ticks_elapsed_real = (real)floor(game_time*ticks_per_second);
 			ticks_elapsed = (long)(ticks_elapsed_real <= (real)SOME_LARGE_NUMBER_OF_TICKS ?
 				ticks_elapsed_real : (real)SOME_LARGE_NUMBER_OF_TICKS);
+#if defined(HALO_XBOX_TARGET)
+			/* (a client waiting for the host's first update runs no tick: not counted) */
+			if (game_connection() == _game_connection_network_client && !game_time_held())
+				client_overload_note(ticks_elapsed);
+#endif
 			if (ticks_elapsed > connection)
 			{
 				ticks_elapsed = connection;

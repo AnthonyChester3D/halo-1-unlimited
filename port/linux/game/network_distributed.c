@@ -5765,3 +5765,141 @@ void network_distributed_handle_stream_message(
 	network_distributed_handle_message(machine_index, message, size);
 	distributed_handling_stream_message = FALSE;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.195): a client's far players. A client drives every other player's unit with the input the host relays
+and updates it every tick, which in a big game is most of a tick's time (v1.193's 32 players: 34 biped updates a tick,
+25 of 31 ms in xemu). The host sends a client each player less often the further from its own players they are, and
+every sixth tick when none of them can see them (distributed_host_send above: near, every tick; then every second,
+third, fourth; aimed near, at least every second; through a scope, every tick); on the ticks between, the host's word
+on them doesn't change. A client now updates another player's unit only on the ticks the host would send it, the
+same rules from its own players' places (objects.c objects_update): one far away moves in steps, one out of sight
+isn't seen; one firing or throwing a grenade updates every tick. Its own players' units, anyone near or aimed at, and every unit while none of its players is alive (a
+dead player's camera can be anywhere) update every tick. opence.ini far_players = 0: every tick, as before. Returns
+a bit for each player (absolute index, the first 32) whose unit skips this tick's update. */
+unsigned long network_distributed_far_players_skipped(
+	void)
+{
+	extern int oxbox_setting_far_players;   /* (port/oxbox/oxbox_entry.c) */
+	struct structure_bsp *structure_bsp;
+	short cluster_count;
+	real_point3d viewers[MAXIMUM_LOCAL_PLAYERS];
+	unsigned long *viewer_pvs[MAXIMUM_LOCAL_PLAYERS];
+	real_vector3d viewer_aims[MAXIMUM_LOCAL_PLAYERS];
+	boolean viewer_scoped[MAXIMUM_LOCAL_PLAYERS];
+	unsigned long local = 0;
+	unsigned long skipped = 0;
+	short viewer_count = 0;
+	short index;
+	short player_index;
+	long now;
+
+	if (!oxbox_setting_far_players || game_connection() != _game_connection_network_client)
+		return 0;
+	structure_bsp = global_structure_bsp_get();
+	cluster_count = structure_bsp ? (short)structure_bsp->clusters.count : 0;
+	now = game_time_get();
+	for (index = 0; index < MAXIMUM_LOCAL_PLAYERS; index++)
+	{
+		long player_datum_index = local_player_get_player_index(index);
+		struct player_datum *player;
+		long unit_index;
+		short absolute;
+		short cluster;
+
+		if (player_datum_index == NONE)
+			continue;
+		absolute = (short)DATUM_INDEX_TO_ABSOLUTE_INDEX(player_datum_index);
+		if (absolute < 0 || absolute >= MAXIMUM_TRACKED_PLAYERS)
+			continue;
+		if (absolute < 32)
+			local |= 1UL << absolute;
+		player = distributed_player(absolute);
+		unit_index = player ? distributed_living_unit(player) : NONE;
+		if (unit_index == NONE)
+			continue;
+		cluster = distributed_object_cluster(unit_index);
+		object_get_origin(unit_index, &viewers[viewer_count]);
+		viewer_pvs[viewer_count] = structure_bsp && cluster >= 0 && cluster < cluster_count ?
+			structure_bsp_get_cluster_pvs(structure_bsp, cluster) : NULL;
+		viewer_aims[viewer_count] = unit_get(unit_index)->unit.aiming_vector;
+		/* (NONE unzoomed) */
+		viewer_scoped[viewer_count++] = (signed char)unit_get(unit_index)->unit.current_zoom_level >= 0;
+	}
+	if (!viewer_count)
+		return 0;
+	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS && player_index < 32; player_index++)
+	{
+		struct player_datum *player;
+		real distances_squared[MAXIMUM_LOCAL_PLAYERS];
+		boolean sees[MAXIMUM_LOCAL_PLAYERS];
+		real_point3d origin;
+		real nearest = -1.0f;
+		boolean visible = FALSE;
+		long unit_index;
+		short to;
+		short period;
+
+		if (local & (1UL << player_index))
+			continue;
+		player = distributed_player(player_index);
+		unit_index = player ? distributed_living_unit(player) : NONE;
+		if (unit_index == NONE)
+			continue;
+		/* (firing or throwing: every tick, so its shots, their tracers and their sounds come as often as they do here
+		too; the damage is the host's either way) */
+		if (unit_get(unit_index)->unit.control_flags & (FLAG(_unit_control_weapon_primary_trigger_bit) |
+			FLAG(_unit_control_weapon_secondary_trigger_bit) | FLAG(_unit_control_throw_grenade_bit)))
+		{
+			continue;
+		}
+		object_get_origin(unit_index, &origin);
+		to = distributed_object_cluster(unit_index);
+		for (index = 0; index < viewer_count; index++)
+		{
+			real dx = origin.x - viewers[index].x;
+			real dy = origin.y - viewers[index].y;
+			real dz = origin.z - viewers[index].z;
+
+			distances_squared[index] = dx * dx + dy * dy + dz * dz;
+			if (nearest < 0.0f || distances_squared[index] < nearest)
+				nearest = distances_squared[index];
+			/* (outside the map's clusters: in sight, to be safe) */
+			sees[index] = !viewer_pvs[index] || to < 0 || to >= cluster_count ||
+				BIT_VECTOR_TEST_FLAG(viewer_pvs[index], to);
+			visible |= sees[index];
+		}
+		period = !visible ? HIDDEN_PLAYER_PERIOD_TICKS :
+			nearest < NEAR_PLAYER_DISTANCE * NEAR_PLAYER_DISTANCE ? 1 :
+			nearest < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE ? 2 :
+			nearest < FAR_PLAYER_DISTANCE * FAR_PLAYER_DISTANCE ? 3 : 4;
+		if (period > 1 && (now + player_index) % period != 0)
+		{
+			/* (aimed near: as the host sends it) */
+			for (index = 0; index < viewer_count && period > 1; index++)
+			{
+				real along;
+
+				if (!sees[index])
+					continue;
+				along = (origin.x - viewers[index].x) * viewer_aims[index].i +
+					(origin.y - viewers[index].y) * viewer_aims[index].j +
+					(origin.z - viewers[index].z) * viewer_aims[index].k;
+				if (along > 0.0f && viewer_scoped[index] &&
+					along * along >= SCOPED_AT_COSINE * SCOPED_AT_COSINE * distances_squared[index])
+				{
+					period = 1;
+				}
+				else if (along > 0.0f &&
+					along * along >= AIMED_AT_COSINE * AIMED_AT_COSINE * distances_squared[index])
+				{
+					period = MIN(period, 2);
+				}
+			}
+			if (period > 1 && (now + player_index) % period != 0)
+				skipped |= 1UL << player_index;
+		}
+	}
+	return skipped;
+}
+#endif

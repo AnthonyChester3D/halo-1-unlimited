@@ -44,6 +44,26 @@ symbols in this file:
 #include "units/biped_limp_noodle.h"
 #include "units/bipeds.h"
 
+#if defined(OXBOX_CORPSE_COUNT)
+/* lab: what a limp body's relaxation spends its time on (objects.c logs it with the corpses: lines):
+0 features gathered, 1 sphere tests, 2 ray tests, 3 point moves, 4 orientations, 5 the whole relaxation; 6 ray hits;
+limp_features: spheres, cylinders, prisms gathered */
+unsigned long long limp_cycles[8];
+unsigned long limp_calls[8];
+unsigned long limp_features[3];
+#define LIMP_TIME(kind, expression) ({ unsigned long long limp_t0_ = __builtin_ia32_rdtsc(); \
+	__typeof__(expression) limp_r_ = (expression); limp_cycles[kind] += __builtin_ia32_rdtsc() - limp_t0_; \
+	limp_calls[kind]++; limp_r_; })
+#define collision_get_features_in_sphere(...) LIMP_TIME(0, (collision_get_features_in_sphere)(__VA_ARGS__))
+#define collision_test_sphere(...) LIMP_TIME(1, (collision_test_sphere)(__VA_ARGS__))
+#define collision_test_vector(...) ({ boolean limp_hit_ = LIMP_TIME(2, (collision_test_vector)(__VA_ARGS__)); \
+	if (limp_hit_) limp_calls[6]++; limp_hit_; })
+#define collision_move_point(...) LIMP_TIME(3, (collision_move_point)(__VA_ARGS__))
+#define LIMP_GATHER(expression) LIMP_TIME(7, expression)
+#else
+#define LIMP_GATHER(expression) (expression)
+#endif
+
 /* ---------- constants */
 
 enum
@@ -261,6 +281,141 @@ static boolean biped_limp_noodle_valid_joint_rotation(
 	return moved;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.198): a relaxing limp body's rays (one along each bone, 4 passes a tick) each went through the cluster's
+whole object list (collision_test_vector), while it can only hit scenery and machines and almost never does: ~30
+kcycles a ray, 70% of a draping body's cost (xemu, 24-player Blood Gulch: every body, weapon and player in the
+cluster visited 72 times a tick). Once a tick the objects it could hit near the body are gathered
+(collisions.c collision_objects_in_sphere); a ray inside that sphere that reaches none of their bounding spheres (the
+same test the object loop makes first: fast_vector_intersects_sphere) is tested against the level alone, which gives
+the same result: the object loop would have hit nothing. Any other ray is tested in full. */
+enum
+{
+	DRAPE_NEAR_OBJECTS = 32
+};
+
+static struct
+{
+	short count;   /* NONE: every ray tested in full */
+	real radius;
+	real_point3d center;
+	long objects[DRAPE_NEAR_OBJECTS];
+} drape_near = { NONE };
+
+#if defined(OXBOX_CORPSE_COUNT)
+unsigned long drape_lab[12];   /* lab: rays in full / level only / outside; mismatches; up/level/down rays and hits; gathers NONE */
+#endif
+
+static void drape_near_gather(
+	long biped_index,
+	unsigned long flags)
+{
+	struct object_datum const *object = object_get(biped_index);
+
+	drape_near.center = object->object.bounding_sphere_center;
+	drape_near.radius = object->object.bounding_sphere_radius + 0.5f;
+	drape_near.count = LIMP_GATHER(collision_objects_in_sphere(
+		flags,
+		&drape_near.center,
+		drape_near.radius,
+		biped_index,
+		drape_near.objects,
+		DRAPE_NEAR_OBJECTS));
+#if defined(OXBOX_CORPSE_COUNT)
+	if (drape_near.count == NONE)
+		drape_lab[11]++;
+#endif
+}
+
+static boolean drape_test_vector(
+	unsigned long flags,
+	real_point3d const *point,
+	real_vector3d const *vector,
+	long ignore_object_index,
+	struct collision_result *collision)
+{
+	boolean level_only = FALSE;
+	boolean hit;
+
+	if (drape_near.count != NONE)
+	{
+		real inside = drape_near.radius - 0.0625f;
+		real_point3d end;
+
+		add_vectors3d((real_vector3d const *)point, vector, (real_vector3d *)&end);
+		if (distance_squared3d(point, &drape_near.center) < inside * inside &&
+			distance_squared3d(&end, &drape_near.center) < inside * inside)
+		{
+			short near_index;
+
+			level_only = TRUE;
+			for (near_index = 0; near_index < drape_near.count; near_index++)
+			{
+				struct object_datum const *near_object = object_get(drape_near.objects[near_index]);
+
+				if (fast_vector_intersects_sphere(
+					point,
+					vector,
+					&near_object->object.bounding_sphere_center,
+					near_object->object.bounding_sphere_radius))
+				{
+					level_only = FALSE;
+					break;
+				}
+			}
+		}
+#if defined(OXBOX_CORPSE_COUNT)
+		else
+		{
+			drape_lab[2]++;
+		}
+#endif
+	}
+
+	hit = collision_test_vector(
+		level_only ? flags & ~FLAG(_collision_test_objects_bit) : flags,
+		point,
+		vector,
+		ignore_object_index,
+		collision);
+#if defined(OXBOX_CORPSE_COUNT)
+	drape_lab[level_only ? 1 : 0]++;
+	{
+		real length = magnitude3d(vector);
+		int way = length > 0.f && vector->k > 0.7f * length ? 0 : length > 0.f && vector->k < -0.7f * length ? 2 : 1;
+
+		drape_lab[4 + way]++;
+		if (hit)
+			drape_lab[7 + way]++;
+	}
+#if defined(OXBOX_DRAPE_CHECK)
+	/* (lab: the full test as well: a level-only ray must give the same answer) */
+	if (level_only)
+	{
+		struct collision_result full;
+		boolean full_hit = (collision_test_vector)(flags, point, vector, ignore_object_index, &full);
+
+		if (full_hit != hit ||
+			full.type != collision->type ||
+			full.t != collision->t ||
+			full.point.x != collision->point.x || full.point.y != collision->point.y || full.point.z != collision->point.z ||
+			full.location.leaf_index != collision->location.leaf_index ||
+			full.location.cluster_index != collision->location.cluster_index ||
+			full.start_location.leaf_index != collision->start_location.leaf_index ||
+			hit && (full.plane.n.i != collision->plane.n.i || full.plane.n.j != collision->plane.n.j ||
+				full.plane.n.k != collision->plane.n.k || full.plane.d != collision->plane.d ||
+				full.surface_index != collision->surface_index))
+		{
+			drape_lab[3]++;
+		}
+	}
+#endif
+#endif
+
+	return hit;
+}
+#endif
+
 static void biped_limp_noodle_move_relax_and_constrain_positions(
 	long biped_index,
 	real_matrix4x3 *node_matrices)
@@ -315,6 +470,12 @@ static void biped_limp_noodle_move_relax_and_constrain_positions(
 		collision_radius,
 		biped_index,
 		&features);
+#if defined(HALO_XBOX_TARGET)
+	drape_near_gather(
+		biped_index,
+		_collision_test_for_bipeds_dead_flags |
+			FLAG(_collision_test_ignore_invisible_surfaces_bit));
+#endif
 	csmemset(moved_node_flags, 0, sizeof(moved_node_flags));
 
 	for (iteration = 0; iteration < 4; iteration++)
@@ -384,7 +545,11 @@ static void biped_limp_noodle_move_relax_and_constrain_positions(
 					point_from_line3d(parent_position, &segment, -0.015f, &ray_origin);
 					scale_vector3d(&segment, 1.03f, &segment);
 
+#if defined(HALO_XBOX_TARGET)
+					if (drape_test_vector(
+#else
 					if (collision_test_vector(
+#endif
 						_collision_test_for_bipeds_dead_flags |
 							FLAG(_collision_test_ignore_invisible_surfaces_bit),
 						&ray_origin,
@@ -553,6 +718,9 @@ next_node:
 	}
 
 collision_user_end:
+#if defined(HALO_XBOX_TARGET)
+	drape_near.count = NONE;
+#endif
 	match_assert(
 		"c:\\halo\\SOURCE\\units\\biped_limp_noodle.c",
 		530,
@@ -743,6 +911,10 @@ boolean biped_limp_noodle_relax_nodes_onto_environment(
 			}
 			limp_matrices = padded_matrices;
 		}
+#if defined(OXBOX_CORPSE_COUNT)
+		unsigned long long whole_t0 = __builtin_ia32_rdtsc();
+		unsigned long long turn_t0;
+#endif
 
 		for (node_index = 0; node_index < animation_graph->nodes.count; node_index++)
 		{
@@ -751,6 +923,12 @@ boolean biped_limp_noodle_relax_nodes_onto_environment(
 		}
 
 		biped_limp_noodle_move_relax_and_constrain_positions(biped_index, limp_matrices);
+#if defined(OXBOX_CORPSE_COUNT)
+		turn_t0 = __builtin_ia32_rdtsc();
+		limp_features[0] += features.count[0];
+		limp_features[1] += features.count[1];
+		limp_features[2] += features.count[2];
+#endif
 		biped_limp_noodle_adjust_orientations(
 			biped_index,
 			limp_matrices,
@@ -758,6 +936,12 @@ boolean biped_limp_noodle_relax_nodes_onto_environment(
 			last_positions);
 		if (limp_matrices != node_matrices)
 			csmemcpy(node_matrices, padded_matrices, matrix_count * sizeof(real_matrix4x3));
+#if defined(OXBOX_CORPSE_COUNT)
+		limp_cycles[4] += __builtin_ia32_rdtsc() - turn_t0;
+		limp_calls[4]++;
+		limp_cycles[5] += __builtin_ia32_rdtsc() - whole_t0;
+		limp_calls[5]++;
+#endif
 
 		if (biped->biped.limp_body_current_relaxation_iterations < CHAR_MAX)
 			biped->biped.limp_body_current_relaxation_iterations++;
@@ -809,3 +993,31 @@ static boolean biped_limp_noodle_nodes_valid(
 
 	return valid;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.197): TRUE when a dead biped has nothing left to settle: it doesn't use limp body physics, or its
+relaxation onto the ground is over (units.c unit_corpse_still: a body left alone before that froze mid-relaxation,
+v1.196: its death animation ends, the limp body starts at rest, and relaxing takes
+biped_limp_noodle_get_max_relaxation_iterations ticks). One whose limp body hasn't started yet isn't settled. */
+boolean biped_limp_body_settled(
+	long biped_index)
+{
+	extern boolean debug_biped_limp_body_disable;
+	struct biped_datum *biped = biped_get(biped_index);
+	struct biped_definition *definition = biped_definition_get(biped->definition_index);
+
+	if (debug_biped_limp_body_disable ||
+		!TEST_FLAG(definition->biped.flags, _biped_uses_limp_body_physics_bit))
+	{
+		return TRUE;
+	}
+	if (!TEST_FLAG(biped->biped.flags, _biped_limp_body_physics_active_bit))
+		return FALSE;
+	if (biped->biped.limp_body_current_relaxation_iterations >= biped->biped.limp_body_max_relaxation_iterations)
+		return TRUE;
+
+	return !biped_limp_noodle_nodes_valid(
+		biped_index,
+		animation_graph_definition_get(definition->object.animation_graph.index));
+}
+#endif

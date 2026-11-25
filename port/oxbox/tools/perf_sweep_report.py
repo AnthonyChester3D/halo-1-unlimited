@@ -23,7 +23,13 @@
 # it: fill-limited), and whether the map reaches the "perfect" line at that scale.
 #
 # Several files (from several Xboxes, or older copies) are read together; a map's newest version counts, and its
-# newest row for each run. The thresholds below are the starting ones: change them here, or with --perfect, --little
+# newest row for each run.
+#
+# v1.199, the master table: perf\sweep.csv is the one table (no pass), its rows' last column the build's sweep version
+# (raised by a build that changes how fast maps run: the Xbox then measures the slow maps again). A map's latest
+# measurement is its rows at the highest sweep version; the report shows it, and what its slowest run was at the
+# version before ("was"), so a build's gain shows without a second table. The pass tables before v1.199 (sweep_p4.csv
+# and so on) went into it once, on the Xbox, at sweep version 0. The thresholds below are the starting ones: change them here, or with --perfect, --little
 # and --lot (the average frame rate of the map's slowest run), and the report changes without testing again.
 import argparse
 import csv
@@ -55,31 +61,61 @@ def number(row, name, default=None):
 
 
 def read_rows(paths):
+    """every row, as a dict by its table's header (a table may hold more than one: sweep.csv kept from before v1.199
+    has the old header, and its new rows one column more: sweep_version); sweep_version an int, 0 when there's none"""
     rows = []
     for path in paths:
         with open(path, encoding='utf-8', errors='replace', newline='') as f:
             lines = [line for line in f if line.strip() and not line.startswith('#')]
-        for row in csv.DictReader(io.StringIO(''.join(lines))):
+        header = None
+        for fields in csv.reader(io.StringIO(''.join(lines))):
+            if fields and fields[0] == 'status':
+                header = fields
+                continue
+            if not header:
+                continue
+            row = dict(zip(header, fields))
+            if 'sweep_version' not in header and len(fields) > len(header):
+                row['sweep_version'] = fields[len(header)]
             if row.get('status') and row.get('key') and row.get('run', '').isdigit():
                 row['run'] = int(row['run'])
+                try:
+                    row['sweep_version'] = int(row.get('sweep_version') or 0)
+                except ValueError:
+                    row['sweep_version'] = 0
                 rows.append(row)
     return rows
 
 
-def maps_from(rows):
-    """key -> (its newest identity's runs: run -> newest row)"""
+def newer(row, than):
+    """a higher sweep version, else the later row"""
+    return (row['sweep_version'], row['utc']) >= (than['sweep_version'], than['utc'])
+
+
+def maps_from(rows, before=False):
+    """key -> (its newest identity's runs at its highest sweep version: run -> newest row); before: the runs at the
+    sweep version below that one instead (the measurement before: empty when there's none)"""
     newest_identity = {}
     for row in rows:
         key = row['key'].lower()
         if key not in newest_identity or row['utc'] >= newest_identity[key][1]:
             newest_identity[key] = (row['identity'], row['utc'])
+    versions = {}
+    for row in rows:
+        key = row['key'].lower()
+        if row['identity'] == newest_identity[key][0]:
+            versions.setdefault(key, set()).add(row['sweep_version'])
     maps = {}
     for row in rows:
         key = row['key'].lower()
         if row['identity'] != newest_identity[key][0]:
             continue
+        ordered = sorted(versions[key], reverse=True)
+        want = ordered[1] if before and len(ordered) > 1 else None if before else ordered[0]
+        if want is None or row['sweep_version'] != want:
+            continue
         runs = maps.setdefault(key, {})
-        if row['run'] not in runs or row['utc'] >= runs[row['run']]['utc']:
+        if row['run'] not in runs or newer(row, runs[row['run']]):
             runs[row['run']] = row
     return maps
 
@@ -157,10 +193,15 @@ def judge(runs, perfect, little, lot):
     return 'never', slowest
 
 
-def summary_rows(maps, perfect, little, lot):
+def summary_rows(maps, perfect, little, lot, before=None):
     out = []
     for key, runs in maps.items():
         group, slowest = judge(runs, perfect, little, lot)
+        was = ''
+        if before and key in before:
+            _, old = judge(before[key], perfect, little, lot)
+            if old and old.get('avg_fps'):
+                was = '%s fps on %s' % (old['avg_fps'], old['build'])
         any_row = next(iter(runs.values()))
         info = max(runs.values(), key=lambda row: row['utc'])
         encounters = max((number(row, 'encounters', 0) or 0) for row in runs.values())
@@ -184,6 +225,8 @@ def summary_rows(maps, perfect, little, lot):
             'cause': cause(slowest),
             'limits': ' '.join(sorted({row['limits'] for row in runs.values() if row.get('limits')})),
             'build': info['build'],
+            'sweep_version': str(info['sweep_version']),
+            'was': was,
         }
         fps85, fps70, share, verdict = scaling(runs, slowest, perfect)
         line.update({'fps_85': fps85, 'fps_70': fps70, 'fill_share': '%.2f' % share if share is not None else '',
@@ -222,6 +265,8 @@ def text_report(lines, args):
                 print('      %s' % runs)
             if m['cause']:
                 print('      slowest: %s' % m['cause'])
+            if m['was']:
+                print('      before (sweep version below): slowest run %s' % m['was'])
             if m['scaling']:
                 print('      scaling: %s%s' % (m['scaling'], ' (share %s)' % m['fill_share'] if m['fill_share'] else ''))
             if m['limits']:
@@ -502,11 +547,12 @@ def main():
             return 0
     if not args.files:
         parser.error('give the perf\\sweep CSV files to read')
-    maps = maps_from(read_rows(args.files))
+    rows = read_rows(args.files)
+    maps = maps_from(rows)
     if args.library:
         library_verdicts(maps, args)
         return 0
-    lines = summary_rows(maps, args.perfect, args.little, args.lot)
+    lines = summary_rows(maps, args.perfect, args.little, args.lot, maps_from(rows, before=True))
     text_report(lines, args)
     if args.write_list:
         write_list(maps, args.write_list, args)
