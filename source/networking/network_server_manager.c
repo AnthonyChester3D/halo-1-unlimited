@@ -1922,6 +1922,29 @@ static void network_game_server_port_bots(
 		network_event("network_game_server_port_bots() failed to send updated game settings to clients");
 }
 
+/* port: the players a listing counts (the server browser's, the masters', Discord's): people, not bots. OpenCE's lists
+don't show games filled by bots, so a game of one person and 8 bots lists 1 player. A person joining a full game takes
+a bot's place (port/linux/game/bots.c), so a game listed with room has it. */
+static short network_game_server_people_count(
+	struct network_game_server const *server)
+{
+	short count = 0;
+	long index;
+
+	for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
+	{
+		struct network_player const *player = &server->game.players[index];
+
+		if (network_player_is_valid(player) && !network_player_is_bot(player) &&
+			!bots_machine_is_bot(player->machine_index))
+		{
+			count++;
+		}
+	}
+
+	return count;
+}
+
 boolean network_game_server_idle(
 	struct network_game_server *server)
 {
@@ -1941,8 +1964,8 @@ boolean network_game_server_idle(
 	/* port: the bots of a local game (port/linux/game/bots.c) */
 	network_game_server_port_bots(server);
 	/* (what Discord shows of a game hosted for internet play, and the
-	server browser's listing) */
-	p2p_set_game_player_counts(server->game.player_count, server->game.maximum_players);
+	server browser's listing: people only, network_game_server_people_count) */
+	p2p_set_game_player_counts(network_game_server_people_count(server), server->game.maximum_players);
 	network_game_server_list(server);
 
 	if (network_game_server_game_is_valid(server))
