@@ -166,6 +166,26 @@ void *tag_block_get_element_with_size(
 	past the block */
 	if (index < 0 || index >= block->count || !block->address)
 	{
+#if defined(OXBOX_CALL_COUNT)
+		/* (lab: each code site asking for an element that isn't there, counted, and said once with the block's kind) */
+		{
+			extern void oxbox_count_add(int kind, unsigned long caller, unsigned long amount);
+			extern void platform_log(char const *format, ...);
+			static unsigned long said[64];
+			unsigned long caller = (unsigned long)__builtin_return_address(0);
+			int k;
+
+			oxbox_count_add(6, caller, 1);
+			for (k = 0; k < 64 && said[k] && said[k] != caller; k++)
+				;
+			if (k < 64 && !said[k])
+			{
+				said[k] = caller;
+				platform_log("bad element: %lx asks #%ld of %s (%ld elements, %ld bytes each)", caller, index,
+					block->definition ? block->definition->name : "<no definition>", block->count, element_size);
+			}
+		}
+#endif
 		tag_index_error("block element", index, block->count);
 		return element_size <= TAG_EMPTY_DATA_SIZE ? tag_empty_data_sized(element_size) : NULL;
 	}

@@ -582,9 +582,15 @@ enum
 {
 	STUCK_ITEMS = 16,
 	STUCK_ITEM_TICKS = 3 * 30,
+	STUCK_ITEM_QUICK_TICKS = 15,
 	STUCK_ITEM_GAP_TICKS = 30
 };
 #define STUCK_ITEM_RADIUS 0.25f
+/* (v1.188: one that hasn't strayed STUCK_ITEM_QUICK_RADIUS in STUCK_ITEM_QUICK_TICKS (half a second) rests then: a
+slide down a slope steeper than 45 degrees (all the rule sees: flatter ones rest by Bungie's) gains at least ~0.0025
+world units a tick each tick, frictionless, so it leaves that radius in ~9 ticks; one stuck in a crease stays in it.
+Llama: stuck ones "typically not moving at all ... spinning violently, loudly" for the 3 s) */
+#define STUCK_ITEM_QUICK_RADIUS 0.1f
 
 void platform_log(char const *format, ...);
 
@@ -594,6 +600,7 @@ static struct stuck_item
 	long first_time;
 	long last_time;
 	real_point3d anchor;
+	real spread;                  /* (the farthest it has been from anchor, squared) */
 } stuck_items[STUCK_ITEMS];
 
 static boolean item_stuck_bouncing(
@@ -621,13 +628,26 @@ static boolean item_stuck_bouncing(
 		stuck_items[slot].item_index = item_index;
 		stuck_items[slot].first_time = now;
 		stuck_items[slot].anchor = *point;
+		stuck_items[slot].spread = 0.f;
+	}
+	else
+	{
+		real d2 = distance_squared3d(&stuck_items[slot].anchor, point);
+
+		if (d2 > stuck_items[slot].spread)
+			stuck_items[slot].spread = d2;
 	}
 	stuck_items[slot].last_time = now;
-	if (now - stuck_items[slot].first_time < STUCK_ITEM_TICKS)
+	if (now - stuck_items[slot].first_time < STUCK_ITEM_TICKS &&
+		(now - stuck_items[slot].first_time < STUCK_ITEM_QUICK_TICKS ||
+			stuck_items[slot].spread > STUCK_ITEM_QUICK_RADIUS * STUCK_ITEM_QUICK_RADIUS))
+	{
 		return FALSE;
+	}
 	stuck_items[slot].item_index = 0;
 	/* (said in every build: rare, and where it happens says which maps have such creases) */
-	platform_log("items: one stuck bouncing at (%.1f %.1f %.1f) laid to rest", point->x, point->y, point->z);
+	platform_log("items: one stuck bouncing at (%.1f %.1f %.1f) laid to rest after %ld ticks", point->x, point->y,
+		point->z, now - stuck_items[slot].first_time);
 #if defined(OXBOX_STUCK_ITEM_RULE_OFF)
 	return FALSE;
 #else
