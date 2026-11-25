@@ -144,6 +144,15 @@ boolean collision_test_vector(
 	real_vector3d const *vector,
 	long ignore_object_index,
 	struct collision_result *collision);
+#if defined(HALO_XBOX_TARGET)
+short collision_objects_in_sphere(
+	unsigned long flags,
+	real_point3d const *center,
+	real radius,
+	long ignore_object_index,
+	long *object_indices,
+	short maximum_count);
+#endif
 boolean collision_fix_pill(
 	unsigned long flags,
 	real_point3d const *old_position,

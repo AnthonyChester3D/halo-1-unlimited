@@ -4792,11 +4792,21 @@ void objects_update(
 									for (l = 0; l < 6; l++)
 										per[l] = (unsigned long)(limp_cycles[l] / relaxations / 1000);
 									platform_log("corpses: a relaxation (%lu a tick): %lu kcycles: features %lu (%lu spheres, %lu cylinders, "
-										"%lu prisms), %lu sphere tests %lu, %lu rays %lu (%lu hit), %lu point moves %lu, orientations %lu",
+										"%lu prisms), %lu sphere tests %lu, %lu rays %lu (%lu hit), %lu point moves %lu, orientations %lu, "
+										"nearby objects gathered %lu",
 										limp_calls[5] / ticks_seen, per[5], per[0], limp_features[0] / relaxations,
 										limp_features[1] / relaxations, limp_features[2] / relaxations, limp_calls[1] / relaxations, per[1],
 										limp_calls[2] / relaxations, per[2], limp_calls[6] / relaxations, limp_calls[3] / relaxations, per[3],
-										per[4]);
+										per[4], (unsigned long)(limp_cycles[7] / relaxations / 1000));
+									{
+										extern unsigned long drape_lab[12];
+
+										platform_log("corpses: draping rays: %lu in full, %lu level only, %lu outside the gather, "
+											"%lu DIFFERENT; up %lu (%lu hit), level %lu (%lu hit), down %lu (%lu hit); gathers too big %lu",
+											drape_lab[0], drape_lab[1], drape_lab[2], drape_lab[3], drape_lab[4], drape_lab[7], drape_lab[5],
+											drape_lab[8], drape_lab[6], drape_lab[9], drape_lab[11]);
+										csmemset(drape_lab, 0, sizeof(drape_lab));
+									}
 									csmemset(limp_cycles, 0, sizeof(limp_cycles));
 									csmemset(limp_calls, 0, sizeof(limp_calls));
 									csmemset(limp_features, 0, sizeof(limp_features));
