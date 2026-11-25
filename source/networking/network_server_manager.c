@@ -1728,8 +1728,9 @@ int oxbox_server_xbox_hosted = 0;
 
 /* oxbox: whether this dedicated server's game is one Halo 1 Unlimited's Xboxes join: a dedicated server (which plays
 their bots, folder maps and map sharing: a full featured server) on a stock map or a folder map (not a Custom Edition
-map, which no Xbox loads), for at most 16 players, playing a gametype the Xbox has. Its game is then told for an
-Xbox's (OXBOX_ADVERTISED_XBOX_FLAG, the listing's "OX"): the Xboxes list it, with the Xbox beside it */
+map, which no Xbox loads), for at most 32 players (HALO_PORT_XBOX_JOINED_PLAYERS; 16 before v1.193), playing a
+gametype the Xbox has. Its game is then told for an Xbox's (OXBOX_ADVERTISED_XBOX_FLAG, the listing's "OX"): the Xboxes
+list it, with the Xbox beside it */
 boolean oxbox_server_xbox_joinable(
 	void)
 {
@@ -1745,7 +1746,7 @@ boolean oxbox_server_xbox_joinable(
 
 		/* (a Custom Edition map linked to an Xbox map is played on that: port/linux/game/linked_maps.c) */
 		joinable = game->map.name[0] && (!custom_edition_level_name(game->map.name) || linked_map_active()) &&
-			game->maximum_players <= 16 &&
+			game->maximum_players <= HALO_PORT_XBOX_JOINED_PLAYERS &&
 			(game_modes_kind(&game->variant, &game->variant_options) & 0x7F) < 4;
 	}
 	oxbox_server_xbox_hosted = joinable;
