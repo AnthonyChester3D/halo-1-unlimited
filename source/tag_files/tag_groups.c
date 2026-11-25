@@ -166,22 +166,30 @@ void *tag_block_get_element_with_size(
 	past the block */
 	if (index < 0 || index >= block->count || !block->address)
 	{
-#if defined(OXBOX_CALL_COUNT)
-		/* (lab: each code site asking for an element that isn't there, counted, and said once with the block's kind) */
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox (v1.189): each code site asking for an element that isn't there, said once (oxbox_log.txt) with the
+		index, the block's element count and size: the address names the code (build's oxbox.elf), which tells what
+		a map's data lacks (v1.188's T4d Flood Room: element #0 of an empty block, ~11 a second in combat, which
+		debug.txt's single line couldn't place). Lab builds also count them (OXBOX_CALL_COUNT) */
 		{
-			extern void oxbox_count_add(int kind, unsigned long caller, unsigned long amount);
 			extern void platform_log(char const *format, ...);
 			static unsigned long said[64];
 			unsigned long caller = (unsigned long)__builtin_return_address(0);
 			int k;
 
-			oxbox_count_add(6, caller, 1);
+#if defined(OXBOX_CALL_COUNT)
+			{
+				extern void oxbox_count_add(int kind, unsigned long caller, unsigned long amount);
+
+				oxbox_count_add(6, caller, 1);
+			}
+#endif
 			for (k = 0; k < 64 && said[k] && said[k] != caller; k++)
 				;
 			if (k < 64 && !said[k])
 			{
 				said[k] = caller;
-				platform_log("bad element: %lx asks #%ld of %s (%ld elements, %ld bytes each)", caller, index,
+				platform_log("tags: %lx asked for element #%ld of %s (%ld elements, %ld bytes each)", caller, index,
 					block->definition ? block->definition->name : "<no definition>", block->count, element_size);
 			}
 		}
