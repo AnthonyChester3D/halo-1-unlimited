@@ -199,9 +199,16 @@ def summary_rows(maps, perfect, little, lot, before=None):
         group, slowest = judge(runs, perfect, little, lot)
         was = ''
         if before and key in before:
-            _, old = judge(before[key], perfect, little, lot)
-            if old and old.get('avg_fps'):
-                was = '%s fps on %s' % (old['avg_fps'], old['build'])
+            # (the same run as the slowest one now: a map that passes its 4-bot run on a newer build runs its full-bot
+            # one, which the older build skipped, so the two slowest runs needn't be the same run)
+            same = before[key].get(slowest['run']) if slowest else None
+            if same and same.get('avg_fps'):
+                was = 'run %s %s fps on %s' % (same['run'], same['avg_fps'], same['build'])
+            else:
+                _, old = judge(before[key], perfect, little, lot)
+                if old and old.get('avg_fps'):
+                    was = 'run %s not measured then (its slowest: run %s %s fps on %s)' % (
+                        slowest['run'] if slowest else '?', old['run'], old['avg_fps'], old['build'])
         any_row = next(iter(runs.values()))
         info = max(runs.values(), key=lambda row: row['utc'])
         encounters = max((number(row, 'encounters', 0) or 0) for row in runs.values())
@@ -266,7 +273,7 @@ def text_report(lines, args):
             if m['cause']:
                 print('      slowest: %s' % m['cause'])
             if m['was']:
-                print('      before (sweep version below): slowest run %s' % m['was'])
+                print('      before (sweep version below): %s' % m['was'])
             if m['scaling']:
                 print('      scaling: %s%s' % (m['scaling'], ' (share %s)' % m['fill_share'] if m['fill_share'] else ''))
             if m['limits']:
