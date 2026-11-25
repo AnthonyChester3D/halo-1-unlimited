@@ -1777,13 +1777,16 @@ static void showcase_preview_start(
 	showcase.map_next = 0;
 	strcpy(showcase_maps[0], showcase.preview_key);
 	showcase.preview_key[0] = 0;
+	/* (v1.199: a preview before the next map is picked: the perf sweep's next run took a preview's place, its run
+	marked under way, and the press that ended it, a preview's, didn't tell the sweep: the next boot wrote it crashed) */
+	showcase.preview = TRUE;
 	if (!showcase_next_map())
 	{
 		platform_log("showcase: the preview's showcase.txt couldn't be read");
+		showcase.preview = FALSE;
 		showcase_set_state(_showcase_off);
 		return;
 	}
-	showcase.preview = TRUE;
 	showcase.user_ended = FALSE;
 	showcase.chain = FALSE;
 	showcase.input_time = event_manager_time_of_last_event();

@@ -2371,6 +2371,16 @@ sharing's: the .map's size and its header's checksum; a stock map's never change
 goes in perf\sweep_now.txt, deleted after its row is written; one still there at the next boot is a run that never
 ended (the Xbox crashed or hung there), written as "crashed", and the map's later runs skipped.
 
+v1.199, the master table: without a pass (perf_sweep_pass, res_scale) perf\sweep.csv is the one table, every row's
+last column its build's sweep version (SWEEP_VERSION, raised by a build that changes how fast maps run). A map's latest
+measurement is its rows at the highest sweep version (version 0, the tables before: the newest build's). The runs go:
+perf\sweep_priority.txt's maps (a key a line) not measured at this version; maps with a run never measured (new maps,
+new map versions); maps measured at an older version that weren't perfect (the slowest run under SWEEP_SCALE_BELOW_FPS),
+the slowest first, those that crashed, hung or didn't load last; with perf_sweep_redo = 1 every other map measured at an
+older version. The first boot brings the pass tables (sweep_p<1-99>.csv) in once (sweep_import). A run cut short
+without a crash's or the watchdog's mark (the console switched off) isn't counted but measured again; cut short twice,
+it's written crashed.
+
 v1.132: a folder map the map browser says has a problem (hmp_maps_problem: its header's quick check, or it failed to
 load on this Xbox before) isn't loaded: its row is "bad_map", the reason in its limits column. And a watchdog: the
 perf log's writer thread (sweep_watch) restarts H1U (a quick reboot into this XBE, as the updater is started) when a
@@ -2521,14 +2531,23 @@ static char const sweep_fields[] =
 	"status,key,identity,run,bots,build,utc,name,path,origin,file_kb,map_kb,type,bsps,encounters,seconds,frames,"
 	"avg_fps,low1_fps,worst_ms,under30_pct,under25_pct,under20_pct,under15_pct,under10_s,longest_under10_s,tick_ms,"
 	"draw_ms,present_ms,vsync_ms,gpu_busy_pct,top1,top1_ms,top2,top2_ms,top3,top3_ms,objects_peak,actors_peak,"
-	"particles_peak,effects_peak,level_triangles,texture_read_kb,texture_waits,free_kb_min,limits";
+	"particles_peak,effects_peak,level_triangles,texture_read_kb,texture_waits,free_kb_min,limits,sweep_version";
+
+/* v1.199: the sweep version, every row's last column (none in the tables before: 0). Raised by a build that changes how
+fast maps run (v1.199: 1, after v1.195-198's multiplayer savings): the maps measured at an older one that weren't
+perfect are measured again, the slowest first (sweep_next) */
+#define SWEEP_VERSION 1
+#define SWEEP_PRIORITY "sweep_priority.txt"     /* (perf\: maps measured first, a key a line) */
 
 struct sweep_done
 {
 	unsigned long key_hash, identity;
-	unsigned char runs;                         /* (a bit a run with a row; SWEEP_RUNS_ROUGH, SWEEP_RUNS_BROKEN) */
+	unsigned char runs;                         /* (a bit a run with a row, at any sweep version) */
 	unsigned char slow_run;                     /* its slowest normal run (0-3), 0xff none yet */
 	unsigned char slow_fps4, slow_gpu;          /* (that run's frame rate, in quarters of a frame a second; its busy %) */
+	/* v1.199: its latest measurement: the highest sweep version (version 0, the tables before: the newest build's
+	rows), its runs (a bit each; SWEEP_RUNS_ROUGH, SWEEP_RUNS_BROKEN), and the slowest run above is that one's */
+	unsigned char version, build, latest;
 };
 
 static struct
@@ -2585,7 +2604,28 @@ static struct
 	long pass;                                  /* (opence.ini perf_sweep_pass, 1-99: a pass of its own; 0 the normal one) */
 	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
 	long runs_this_boot;                        /* (rows written since this boot: the sweep complete box's text) */
+	/* v1.199, the master table (perf\sweep.csv, no pass): which maps come next (sweep_next) */
+	long phase;                                 /* (SWEEP_PHASE_...) */
+	long step;                                  /* (the phase's: its priority line, map index or place in the order) */
+	long order_count;                           /* (the stale slow maps, slowest first: sweep_order) */
+	boolean redo_all;                           /* (opence.ini perf_sweep_redo = 1: the perfect maps measured again too) */
+	boolean imported;                           /* (sweep.csv says the pass tables were brought in) */
+	unsigned long again_hash;                   /* (a run cut short last boot, the console switched off: its key's hash, */
+	long again_run;                             /* and run, -1 none: if it's cut short again, it crashed) */
 } sweep;
+
+enum
+{
+	SWEEP_PHASE_PRIORITY,                       /* perf\sweep_priority.txt's maps, not measured at this sweep version */
+	SWEEP_PHASE_NEW,                            /* maps never measured (or a run missing), new versions too */
+	SWEEP_PHASE_SLOW,                           /* measured at an older sweep version, not perfect: slowest first */
+	SWEEP_PHASE_REST,                           /* measured at an older sweep version (perf_sweep_redo = 1 only) */
+	SWEEP_PHASE_DONE
+};
+
+/* (the stale slow maps' indices, slowest first, and their frame rates in quarters while sorting) */
+static short sweep_order[SWEEP_MAXIMUM_MAPS];
+static unsigned char sweep_order_fps4[SWEEP_MAXIMUM_MAPS];
 
 /* the watchdog (sweep_watch, on the writer thread): on while a run is under way or coming back from one */
 static volatile long sweep_watching;
@@ -2647,6 +2687,7 @@ static struct sweep_done *sweep_find(
 	sweep.done[sweep.done_count].runs = 0;
 	sweep.done[sweep.done_count].slow_run = 0xff;
 	sweep.done[sweep.done_count].slow_fps4 = sweep.done[sweep.done_count].slow_gpu = 0;
+	sweep.done[sweep.done_count].version = sweep.done[sweep.done_count].build = sweep.done[sweep.done_count].latest = 0;
 	return &sweep.done[sweep.done_count++];
 }
 
@@ -2705,7 +2746,7 @@ static void sweep_note(
 	if (run <= 3)
 	{
 		if (!measured && strcmp(status, "skipped"))
-			done->runs |= SWEEP_RUNS_BROKEN;
+			done->latest |= SWEEP_RUNS_BROKEN;
 		else if (measured && fps > 0.0 && (done->slow_run == 0xff || fps4 < done->slow_fps4))
 		{
 			done->slow_run = (unsigned char)run;
@@ -2715,8 +2756,38 @@ static void sweep_note(
 	}
 	else if (run == 4 && !strcmp(status, "ok") && fps4 < SWEEP_SCALE_BELOW_FPS * 4)
 	{
-		done->runs |= SWEEP_RUNS_ROUGH;
+		done->latest |= SWEEP_RUNS_ROUGH;
 	}
+}
+
+/* v1.199: a row for the map: its run measured, and its results the latest when it's of the map's newest measurement
+(the highest sweep version; within version 0, the tables before it, the newest build's: v1.<100 + build>) */
+static void sweep_take(
+	struct sweep_done *done,
+	long run,
+	char const *status,
+	double fps,
+	long gpu,
+	unsigned char version,
+	unsigned char build)
+{
+	if (!done || run < 0 || run >= SWEEP_RUNS)
+		return;
+	done->runs |= (unsigned char)(1 << run);
+	if (!done->latest || version > done->version || (version == done->version && !version && build > done->build))
+	{
+		done->version = version;
+		done->build = build;
+		done->latest = 0;
+		done->slow_run = 0xff;
+		done->slow_fps4 = done->slow_gpu = 0;
+	}
+	else if (version < done->version || (!version && build < done->build))
+	{
+		return;
+	}
+	done->latest |= (unsigned char)(1 << run);
+	sweep_note(done, run, status, fps, gpu);
 }
 
 /* the scaling runs the map wants now (runs 4 and 5's bits), once its normal runs all have rows */
@@ -2725,12 +2796,13 @@ static unsigned char sweep_extra(
 {
 	unsigned char extra;
 
-	if (!done || !sweep.scaling || sweep.scale || sweep.pass || (done->runs & sweep.needed_base) != sweep.needed_base ||
-		(done->runs & SWEEP_RUNS_BROKEN) || done->slow_run == 0xff ||
+	if (!done || !sweep.scaling || sweep.scale || sweep.pass || done->version != SWEEP_VERSION ||
+		(done->latest & sweep.needed_base) != sweep.needed_base ||
+		(done->latest & SWEEP_RUNS_BROKEN) || done->slow_run == 0xff ||
 		done->slow_fps4 >= SWEEP_SCALE_BELOW_FPS * 4 || done->slow_gpu < SWEEP_SCALE_GPU)
 		return 0;
 	extra = 1 << 4;
-	if ((done->runs & (1 << 4)) && (done->runs & SWEEP_RUNS_ROUGH))
+	if ((done->latest & (1 << 4)) && (done->latest & SWEEP_RUNS_ROUGH))
 		extra |= 1 << 5;
 	return extra;
 }
@@ -2743,6 +2815,8 @@ static void sweep_read_line(
 	double fps = 0.0;
 	struct sweep_done *done;
 
+	if (!strncmp(line, "# imported", 10))
+		sweep.imported = TRUE;
 	if (line[0] == '#' || !strncmp(line, "status,", 7))
 		return;
 	sweep_field(line, &at, status, sizeof(status));
@@ -2774,17 +2848,29 @@ static void sweep_read_line(
 	done = sweep_find(sweep_hash(key), strtoul(identity, NULL, 16), TRUE);
 	if (!done)
 		return;
-	done->runs |= (unsigned char)(1 << (run[0] - '0'));
-	/* (its avg_fps, the 18th column, and gpu_busy_pct, the 31st) */
-	for (k = 4; k <= 30; k++)
+	/* (its build, the 6th column, avg_fps the 18th, gpu_busy_pct the 31st, and v1.199's sweep_version the last: none
+	in the tables before) */
 	{
-		sweep_field(line, &at, field, sizeof(field));
-		if (k == 17)
-			fps = atof(field);
-		else if (k == 30)
-			gpu = strtol(field, NULL, 10);
+		long version_column = 0, build = 0, version = 0;
+		char const *f;
+
+		for (f = sweep_fields; *f; f++)
+			version_column += *f == ',';
+		for (k = 4; k <= version_column && line[at]; k++)
+		{
+			sweep_field(line, &at, field, sizeof(field));
+			if (k == 5 && !strncmp(field, "v1.", 3))
+				build = strtol(field + 3, NULL, 10) - 100;
+			else if (k == 17)
+				fps = atof(field);
+			else if (k == 30)
+				gpu = strtol(field, NULL, 10);
+			else if (k == version_column)
+				version = strtol(field, NULL, 10);
+		}
+		sweep_take(done, run[0] - '0', status, fps, gpu, (unsigned char)(version < 0 ? 0 : version > 255 ? 255 : version),
+			(unsigned char)(build < 0 ? 0 : build > 255 ? 255 : build));
 	}
-	sweep_note(done, run[0] - '0', status, fps, gpu);
 }
 
 /* perf\sweep.csv's rows: the runs done */
@@ -2889,7 +2975,7 @@ static void sweep_append(
 }
 
 static void sweep_marker(
-	long set)                                   /* (0 deleted, 1 written, 2 written as hung: the watchdog's) */
+	long set)                                   /* (0 deleted, 1 written, 2 written as hung: the watchdog's, 3 as crashed) */
 {
 	char path[64];
 
@@ -2902,8 +2988,10 @@ static void sweep_marker(
 
 		if (file == INVALID_HANDLE_VALUE)
 			return;
+		/* (v1.199: "again", the run the last boot's was cut short in, tried again) */
 		_snprintf(text, sizeof(text), "%s\t%ld\t%08lx%s\r\n", sweep.key, sweep.run, sweep.identity,
-			set == 2 ? "\thung" : "");
+			set == 2 ? "\thung" : set == 3 ? "\tcrashed" :
+			sweep_hash(sweep.key) == sweep.again_hash && sweep.run == sweep.again_run ? "\tagain" : "");
 		text[sizeof(text) - 1] = 0;
 		WriteFile(file, text, (unsigned long)strlen(text), &put, NULL);
 		CloseHandle(file);
@@ -3197,7 +3285,9 @@ static void sweep_row(
 	}
 	else
 	{
-		put_text(&line, ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,");
+		/* (the 30 measured columns, seconds to free_kb_min, empty: before v1.199 one comma too many, a skipped row a
+		column longer than its table) */
+		put_text(&line, ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,");
 	}
 	text[0] = 0;
 	if (sweep.problem)
@@ -3212,19 +3302,16 @@ static void sweep_row(
 			strcat(text, bots_oxbox_short == 2 ? (text[0] ? ";bots without waypoints" : "bots without waypoints") :
 				(text[0] ? ";bots missing waypoints" : "bots missing waypoints"));
 	}
-	sweep_put_text(&line, text);
+	sweep_put_text(&line, text); put_comma(&line);
+	put_unsigned(&line, SWEEP_VERSION);
 	line.text[line.length++] = '\r';
 	line.text[line.length++] = '\n';
 	sweep_append(line.text, line.length);
-	{
-		struct sweep_done *done = sweep_find(sweep_hash(sweep.key), sweep.identity, TRUE);
-
-		if (done)
-			done->runs |= (unsigned char)(1 << sweep.run);
-		sweep.have |= (unsigned char)(1 << sweep.run);
-		sweep_note(done, sweep.run, status, sweep.frames && seconds > 0.0 ? sweep.frames / seconds : 0.0,
-			sweep.gpu_samples ? (long)((sweep.gpu_busy * 100 + sweep.gpu_samples / 2) / sweep.gpu_samples) : 0);
-	}
+	sweep.have |= (unsigned char)(1 << sweep.run);
+	sweep_take(sweep_find(sweep_hash(sweep.key), sweep.identity, TRUE), sweep.run, status,
+		sweep.frames && seconds > 0.0 ? sweep.frames / seconds : 0.0,
+		sweep.gpu_samples ? (long)((sweep.gpu_busy * 100 + sweep.gpu_samples / 2) / sweep.gpu_samples) : 0,
+		SWEEP_VERSION, (unsigned char)(OXBOX_BUILD_NUMBER - 100));
 }
 
 /* the run's bots (run 0, 1 or 2) */
@@ -3504,6 +3591,174 @@ static void sweep_spot_key(
 	sweep.key[SWEEP_KEY_LENGTH - 1] = 0;
 }
 
+/* v1.199: a map's runs that count as done now: in a pass of its own any row; in the master table its rows at this sweep
+version, or (while looking for the maps never measured) at any when it has none at this one */
+static unsigned char sweep_have(
+	struct sweep_done const *done)
+{
+	if (!done)
+		return 0;
+	if (sweep.scale || sweep.pass)
+		return done->runs & SWEEP_RUNS_MASK;
+	/* (one being measured again at this version finishes it: its old rows don't count then) */
+	if (done->version == SWEEP_VERSION)
+		return done->latest & SWEEP_RUNS_MASK;
+	return sweep.phase == SWEEP_PHASE_NEW ? done->runs & SWEEP_RUNS_MASK : 0;
+}
+
+/* v1.199: a key's map index (sweep_map_key's): a folder map's (+Pack/Map, the map browser's; +Library/X is +X), a
+stock level's; NONE when it isn't here */
+static long sweep_map_index(
+	char const *key)
+{
+	long folder_maps = hmp_maps_count(), index;
+
+	if (key[0] == '+')
+		return hmp_maps_find(key);
+	for (index = 0; index < SWEEP_STOCK_MULTIPLAYER; index++)
+	{
+		char const *name = hmp_maps_stock_level(index);
+
+		if (name && !csstrcasecmp(name, key))
+			return folder_maps + index;
+	}
+	for (index = 0; index < SWEEP_STOCK_SOLO; index++)
+		if (!csstrcasecmp(sweep_solo_levels[index], key))
+			return folder_maps + SWEEP_STOCK_MULTIPLAYER + index;
+	return NONE;
+}
+
+/* v1.199: perf\sweep_priority.txt's want'th map (from 0: a key a line, as sweep.csv's key column; blank lines and
+"#" ones skipped): FALSE past its last, or without the file. Read for each (no memory kept) */
+static boolean sweep_priority_line(
+	long want,
+	char *key,
+	long size)
+{
+	char path[64], buffer[1024];
+	long length = 0, seen = 0;
+	unsigned long got, k;
+	boolean more = TRUE, found = FALSE;
+	HANDLE file;
+
+	sweep_path(path, sizeof(path), SWEEP_PRIORITY);
+	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return FALSE;
+	while (more && !found)
+	{
+		more = ReadFile(file, buffer, sizeof(buffer), &got, NULL) && got;
+		if (!more)
+		{
+			buffer[0] = '\n';
+			got = 1;
+		}
+		for (k = 0; k < got && !found; k++)
+		{
+			if (buffer[k] == '\n' || buffer[k] == '\r')
+			{
+				while (length && key[length - 1] == ' ')
+					length--;
+				key[length] = 0;
+				if (length && key[0] != '#' && seen++ == want)
+					found = TRUE;
+				length = 0;
+			}
+			else if (length < size - 1 && (length || buffer[k] != ' '))
+			{
+				key[length++] = buffer[k];
+			}
+		}
+	}
+	CloseHandle(file);
+	return found;
+}
+
+/* v1.199: the maps measured at an older sweep version and not perfect (their slowest normal run under
+SWEEP_SCALE_BELOW_FPS), slowest first; those whose last measurement crashed, hung or didn't load at the end */
+static void sweep_order_build(
+	void)
+{
+	long index;
+
+	sweep.order_count = 0;
+	for (index = 0; index < sweep.map_count; index++)
+	{
+		char key[SWEEP_KEY_LENGTH];
+		boolean solo;
+		struct sweep_done const *done;
+		unsigned char fps4;
+		long at;
+
+		if (!sweep_map_key(index, key, &solo))
+			continue;
+		done = sweep_find(sweep_hash(key), key[0] == '+' ? sweep_identity(key) : 1, FALSE);
+		if (!done || !done->latest || done->version >= SWEEP_VERSION)
+			continue;
+		if (done->latest & SWEEP_RUNS_BROKEN)
+			fps4 = 0xff;
+		else if (done->slow_run != 0xff && done->slow_fps4 < SWEEP_SCALE_BELOW_FPS * 4)
+			fps4 = done->slow_fps4;
+		else
+			continue;
+		for (at = sweep.order_count; at > 0 && sweep_order_fps4[at - 1] > fps4; at--)
+		{
+			sweep_order[at] = sweep_order[at - 1];
+			sweep_order_fps4[at] = sweep_order_fps4[at - 1];
+		}
+		sweep_order[at] = (short)index;
+		sweep_order_fps4[at] = fps4;
+		sweep.order_count++;
+	}
+	platform_log("perf sweep: %ld maps measured at an older sweep version weren't perfect: measured again, the slowest "
+		"first", sweep.order_count);
+}
+
+/* v1.199: the phase's map at sweep.step: its index; NONE to pass over (a priority line's map that isn't here); -2 at
+the phase's end */
+static long sweep_step_map(
+	void)
+{
+	switch (sweep.phase)
+	{
+	case SWEEP_PHASE_PRIORITY:
+	{
+		char key[SWEEP_KEY_LENGTH + 8];
+		long index;
+
+		if (!sweep_priority_line(sweep.step, key, sizeof(key)))
+			return -2;
+		index = sweep_map_index(key);
+		if (index == NONE)
+			platform_log("perf sweep: %s (perf\\%s) isn't on this Xbox", key, SWEEP_PRIORITY);
+		return index;
+	}
+	case SWEEP_PHASE_NEW:
+	case SWEEP_PHASE_REST:
+		return sweep.step < sweep.map_count ? sweep.step : -2;
+	case SWEEP_PHASE_SLOW:
+		return sweep.step < sweep.order_count ? sweep_order[sweep.step] : -2;
+	}
+	return -2;
+}
+
+static void sweep_phase_next(
+	void)
+{
+	sweep.step = 0;
+	sweep.map_ready = FALSE;
+	if (sweep.scale || sweep.pass)
+	{
+		sweep.phase = SWEEP_PHASE_DONE;
+		return;
+	}
+	sweep.phase++;
+	if (sweep.phase == SWEEP_PHASE_SLOW)
+		sweep_order_build();
+	if (sweep.phase == SWEEP_PHASE_REST && !sweep.redo_all)
+		sweep.phase = SWEEP_PHASE_DONE;
+}
+
 static boolean sweep_map_ready(
 	void)
 {
@@ -3542,8 +3797,107 @@ static boolean sweep_map_ready(
 		sweep.needed = sweep.needed_base = (unsigned char)(sweep.full_bots > 4 ? 7 : 3);
 	}
 	done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
-	sweep.have = done ? done->runs & SWEEP_RUNS_MASK : 0;
+	sweep.have = sweep_have(done);
 	return TRUE;
+}
+
+/* v1.199: once, the pass tables' rows (perf\\sweep_p<1-99>.csv: before v1.199 most sweeps went in a pass of their own)
+brought into the master table, perf\\sweep.csv, so the maps measured there aren't measured again (at an older sweep
+version: 0); a spot's rows and the res_scale passes stay out (other questions). A table whose columns aren't these is
+left out. Its last line, "# imported ...", says it's done */
+static void sweep_import(
+	void)
+{
+	char out[4096], path[64], name[24], buffer[2048], line[1024], note[200], field[SWEEP_KEY_LENGTH + 16];
+	long legacy = (long)strlen(sweep_fields) - (long)strlen(",sweep_version"), pass, total = 0;
+	long note_length;
+	HANDLE file;
+
+	strcpy(note, "# imported (v1.199) from");
+	note_length = (long)strlen(note);
+	for (pass = 1; pass <= 99; pass++)
+	{
+		long length = 0, out_length = 0, rows = 0, at;
+		unsigned long got, k;
+		boolean header = FALSE, more = TRUE, too_long = FALSE;
+
+		_snprintf(name, sizeof(name), "sweep_p%ld.csv", pass);
+		name[sizeof(name) - 1] = 0;
+		sweep_path(path, sizeof(path), name);
+		file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (file == INVALID_HANDLE_VALUE)
+			continue;
+		while (more)
+		{
+			more = ReadFile(file, buffer, sizeof(buffer), &got, NULL) && got;
+			if (!more)
+			{
+				buffer[0] = '\n';
+				got = 1;
+			}
+			for (k = 0; k < got; k++)
+			{
+				if (buffer[k] != '\n' && buffer[k] != '\r')
+				{
+					if (length < (long)sizeof(line) - 1)
+						line[length++] = buffer[k];
+					else
+						too_long = TRUE;
+					continue;
+				}
+				line[length] = 0;
+				if (!length || too_long)
+				{
+					length = 0;
+					too_long = FALSE;
+					continue;
+				}
+				if (!strncmp(line, "status,", 7))
+				{
+					header = !strncmp(line, sweep_fields, legacy) &&
+						(!line[legacy] || !strcmp(line + legacy, ",sweep_version"));
+				}
+				else if (line[0] != '#' && header)
+				{
+					/* (its key, the second column: a spot's is "<map> spot <n>") */
+					at = 0;
+					sweep_field(line, &at, field, sizeof(field));
+					sweep_field(line, &at, field, sizeof(field));
+					if (!strstr(field, " spot "))
+					{
+						if (out_length + length + 2 > (long)sizeof(out))
+						{
+							sweep_append(out, out_length);
+							out_length = 0;
+						}
+						memcpy(out + out_length, line, length);
+						out_length += length;
+						out[out_length++] = '\r';
+						out[out_length++] = '\n';
+						rows++;
+					}
+				}
+				length = 0;
+			}
+		}
+		CloseHandle(file);
+		if (out_length)
+			sweep_append(out, out_length);
+		total += rows;
+		platform_log("perf sweep: %s: %ld rows brought into sweep.csv%s", name, rows,
+			header ? "" : " (its columns aren't this build's: left out)");
+		if (note_length + 32 < (long)sizeof(note))
+		{
+			_snprintf(note + note_length, sizeof(note) - note_length, " %s (%ld)", name, rows);
+			note[sizeof(note) - 1] = 0;
+			note_length = (long)strlen(note);
+		}
+	}
+	if (!total)
+		strcat(note, " none");
+	strcat(note, "\r\n");
+	sweep_append(note, (long)strlen(note));
+	sweep.imported = TRUE;
 }
 
 /* once, at the first run: the rows so far, and a run the last boot never ended */
@@ -3616,9 +3970,20 @@ static void sweep_initialize(
 		}
 	}
 	sweep_read_results();
+	/* (v1.199: the master table brings in the pass tables once) */
+	if (!sweep.scale && !sweep.pass && !sweep.imported)
+	{
+		sweep_import();
+		sweep.done_count = 0;
+		sweep_read_results();
+	}
+	sweep.phase = sweep.scale || sweep.pass ? SWEEP_PHASE_NEW : SWEEP_PHASE_PRIORITY;
+	sweep.step = 0;
+	sweep.again_hash = 0;
+	sweep.again_run = NONE;
 	sweep.map_count = hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER + SWEEP_STOCK_SOLO;
-	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\%s; %ld maps here%s%s%s", sweep.done_count,
-		sweep.drive, sweep.results, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER,
+	platform_log("perf sweep: %ld maps' versions have rows in %c:\\perf\\%s; %ld maps here; sweep version %d%s%s%s",
+		sweep.done_count, sweep.drive, sweep.results, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER, SWEEP_VERSION,
 		sweep.scale || sweep.pass ? " (a pass of its own: only perf\\" : "", sweep.scale || sweep.pass ? sweep.list : "",
 		sweep.scale || sweep.pass ? "'s maps, when it's there)" : "");
 	/* (a run the last boot started and never wrote: the Xbox crashed or hung in it) */
@@ -3655,7 +4020,18 @@ static void sweep_initialize(
 			sweep.run = strtol(tab + 1, NULL, 10);
 			sweep.identity = strtoul(tab2 + 1, &end, 16);
 			hung = end && !strncmp(end, "\thung", 5);
-			if (sweep.run >= 0 && sweep.run < SWEEP_RUNS)
+			/* (v1.199: a crash's restart marks it "crashed" (sweep_fatal), the watchdog's "hung"; a marker with neither
+			is a run the console was switched off or reset in: not counted, and measured again; cut short a second
+			time, "again", it's written "crashed" (a freeze nothing caught)) */
+			if (sweep.run >= 0 && sweep.run < SWEEP_RUNS && end && !hung && strncmp(end, "\tcrashed", 8) &&
+				strncmp(end, "\tagain", 6))
+			{
+				sweep.again_hash = sweep_hash(sweep.key);
+				sweep.again_run = sweep.run;
+				platform_log("perf sweep: %s run %ld was cut short (the console switched off or reset): measured again",
+					sweep.key, sweep.run);
+			}
+			else if (sweep.run >= 0 && sweep.run < SWEEP_RUNS)
 			{
 				short players = sweep.map_key[0] == '+' || hmp_browse_stock_title(sweep.map_key) ? hmp_browse_suggested_players(sweep.map_key) : 0;
 
@@ -3796,6 +4172,9 @@ static void sweep_fatal(
 	if (!sweep.on || !sweep.initialized || sweep.halted)
 		return;
 	sweep_watching = 0;
+	/* (v1.199: so the next boot writes it "crashed": a run cut short without this was the console switched off) */
+	if (sweep.active)
+		sweep_marker(3);
 	platform_log("perf sweep: the game stopped (%s) in %s run %ld: restarting H1U", why, sweep.key, sweep.run);
 	oxbox_log_flush();
 	sweep_save_log(!strcmp(why, "crash") ? ", crashed" : ", halted");
@@ -3813,12 +4192,24 @@ static long sweep_next(
 	sweep.active = sweep.measuring = sweep.over = FALSE;
 	if (sweep.halted)
 		return _oxbox_sweep_none;
-	for (; sweep.cursor < sweep.map_count; sweep.cursor++, sweep.map_ready = FALSE)
+	/* (v1.199: the master table's phases; a pass of its own has only SWEEP_PHASE_NEW's walk over every map) */
+	for (; sweep.phase < SWEEP_PHASE_DONE; sweep.step++, sweep.map_ready = FALSE)
 	{
 		long run;
 
 		if (!sweep.map_ready)
 		{
+			long index = sweep_step_map();
+
+			if (index == -2)
+			{
+				sweep_phase_next();
+				sweep.step--;   /* (the loop's step++ brings it to 0) */
+				continue;
+			}
+			if (index == NONE)
+				continue;
+			sweep.cursor = index;
 			if (!sweep_map_ready())
 				continue;
 			sweep.map_ready = TRUE;
@@ -3837,7 +4228,7 @@ static long sweep_next(
 			sweep.spot++;
 			sweep_spot_key();
 			done = sweep_find(sweep_hash(sweep.key), sweep.identity, FALSE);
-			sweep.have = done ? done->runs & SWEEP_RUNS_MASK : 0;
+			sweep.have = sweep_have(done);
 		}
 		if (run == SWEEP_RUNS)
 			continue;
@@ -3877,12 +4268,12 @@ static long sweep_next(
 	}
 	sweep_watch_off();
 	sweep.halted = TRUE;
-	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\%s)",
-		sweep.drive, sweep.results);
+	platform_log("perf sweep: every map is done (port/oxbox/tools/perf_sweep_report.py reads %c:\\perf\\%s; sweep version %d)",
+		sweep.drive, sweep.results, SWEEP_VERSION);
 	/* (v1.174: an error box at the main menu says so, till A: whoever left the sweep running sees it's done) */
 	display_error_text_deferred(sweep.runs_this_boot ?
-		L"Sweeps complete.\r\nEvery map in this pass\r\nhas been measured.\r\nSend the Logs folder." :
-		L"Sweeps complete.\r\nEvery map in this pass\r\nwas measured before:\r\nnothing left to do.", NONE);
+		L"Sweeps complete.\r\nEvery map has been\r\nmeasured.\r\nSend logs." :
+		L"Sweeps complete.\r\nEvery map was\r\nmeasured before:\r\nnothing left to do.", NONE);
 	return _oxbox_sweep_none;
 }
 
@@ -5064,6 +5455,8 @@ static void read_settings(
 			sweep.scaling = value != 0;
 		else if (!strcmp(name, "perf_sweep_pass"))
 			sweep.pass = value >= 1 && value <= 99 ? value : 0;
+		else if (!strcmp(name, "perf_sweep_redo"))
+			sweep.redo_all = value != 0;
 		else if (!strcmp(name, "perf_sweep_seconds") && value >= 10)
 			sweep.seconds = value > 600 ? 600 : value;
 	}

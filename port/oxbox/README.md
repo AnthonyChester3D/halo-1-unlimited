@@ -79,6 +79,14 @@ Halo, with OpenCE's netcode underneath it and the map features of the Halo Unive
     `perf_sweep_detail = 1` also keeps each run's per-second CSV. On a PC,
     `python3 port/oxbox/tools/perf_sweep_report.py sweep.csv [--summary maps.csv] [--html report.html]` sorts the
     maps into perfect, a little work, a lot of work and probably never (plus crashed or didn't load).
+  - The master table (v1.199): `perf\sweep.csv` holds every measurement, each row with the build's sweep version
+    (`SWEEP_VERSION` in `oxbox_perf.c`, raised by a build that changes how fast maps run). The sweep goes: maps in
+    `perf\sweep_priority.txt` (a key a line) not yet measured at this sweep version; maps never measured (new maps
+    and new map versions); maps measured at an older sweep version that weren't perfect, the slowest first
+    (`perf_sweep_redo = 1`: the perfect ones too). No pass numbers or lists to manage: drop maps in, leave
+    `perf_sweep = 1` on. The first boot brings the old pass tables (`sweep_p<N>.csv`) in once. A run cut short with
+    the console switched off is measured again (cut short twice, it's written `crashed`); the report shows each map's
+    latest measurement and its slowest run at the sweep version before.
   - Scaling runs (`perf_sweep_scaling`, on): a map whose slowest run averaged under 29 fps with the graphics chip
     busy half the time or more plays that run again with the 3D view drawn at 85% (run 4), and at 70% (run 5) when
     that's still under 29; the scale is put back after each. The report shows each map's fps at each scale, how much
