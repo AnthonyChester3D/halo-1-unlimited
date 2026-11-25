@@ -2539,6 +2539,12 @@ off lights): the maps measured at an older one that weren't perfect are measured
 #define SWEEP_VERSION 2
 #define SWEEP_PRIORITY "sweep_priority.txt"     /* (perf\: maps measured first, a key a line) */
 
+/* v1.201: perf_sweep_lod = 1 with perf_sweep_pass N: the pass's maps (perf\sweep_list_p<N>.txt) measured with widescreen
+models' level of detail size (opence.ini lod_widescreen, render_objects.c) at each of these, one after the other, round r
+in perf\sweep_p<N+r>.csv (its first line says the view), all in one boot; perf_sweep_report.py --compare sets two side by
+side */
+static long const sweep_lod_values[] = { 50, 75, 100 };
+
 struct sweep_done
 {
 	unsigned long key_hash, identity;
@@ -2602,6 +2608,9 @@ static struct
 	__int64 back_since, back_seen;              /* (Back held since then, last seen down: 3 seconds stop it till the next boot) */
 	long scale;                                 /* (opence.ini res_scale, 1-99: a scaled pass; 0 the normal one) */
 	long pass;                                  /* (opence.ini perf_sweep_pass, 1-99: a pass of its own; 0 the normal one) */
+	long lod_rounds;                            /* (v1.201 perf_sweep_lod: the pass played again at each SWEEP_LOD_VALUES) */
+	long base_pass;                             /* (... the first round's pass; each round the next number) */
+	long base_lod;                              /* (... opence.ini's lod_widescreen, put back after) */
 	char results[24], marker[24];               /* (its files in perf\: sweep.csv, sweep_now.txt; sweep_r70.csv...) */
 	long runs_this_boot;                        /* (rows written since this boot: the sweep complete box's text) */
 	/* v1.199, the master table (perf\sweep.csv, no pass): which maps come next (sweep_next) */
@@ -2960,10 +2969,14 @@ static void sweep_append(
 	}
 	if (!GetFileSize(file, NULL))
 	{
-		char head[96];
+		char head[160];
+		extern int oxbox_widescreen(void);
+		extern int oxbox_setting_lod_widescreen;
 
-		_snprintf(head, sizeof(head), "# Halo 1 Unlimited perf sweep v1 (port/oxbox/oxbox_perf.c), res_scale %ld\r\n",
-			sweep.scale ? sweep.scale : 100L);
+		/* (v1.201: and the view the table's rows were measured in) */
+		_snprintf(head, sizeof(head), "# Halo 1 Unlimited perf sweep v1 (port/oxbox/oxbox_perf.c), res_scale %ld, "
+			"widescreen %d, lod_widescreen %d\r\n", sweep.scale ? sweep.scale : 100L, oxbox_widescreen() ? 1 : 0,
+			oxbox_setting_lod_widescreen);
 		head[sizeof(head) - 1] = 0;
 		WriteFile(file, head, (unsigned long)strlen(head), &put, NULL);
 		WriteFile(file, sweep_fields, sizeof(sweep_fields) - 1, &put, NULL);
@@ -3975,6 +3988,18 @@ static void sweep_initialize(
 		{
 			_snprintf(sweep.results, sizeof(sweep.results), "sweep_p%ld.csv", sweep.pass);
 			_snprintf(sweep.marker, sizeof(sweep.marker), "sweep_now_p%ld.txt", sweep.pass);
+			/* (v1.201: a level-of-detail round, its value set for the whole round) */
+			if (sweep.lod_rounds)
+			{
+				extern int oxbox_setting_lod_widescreen;
+
+				if (!sweep.base_pass)
+				{
+					sweep.base_pass = sweep.pass;
+					sweep.base_lod = oxbox_setting_lod_widescreen;
+				}
+				oxbox_setting_lod_widescreen = (int)sweep_lod_values[sweep.pass - sweep.base_pass];
+			}
 		}
 		else
 		{
@@ -3988,7 +4013,7 @@ static void sweep_initialize(
 	{
 		char name[24];
 
-		_snprintf(name, sizeof(name), "sweep_list_p%ld.txt", sweep.pass);
+		_snprintf(name, sizeof(name), "sweep_list_p%ld.txt", sweep.base_pass ? sweep.base_pass : sweep.pass);
 		name[sizeof(name) - 1] = 0;
 		sweep_path(path, sizeof(path), name);
 		if (GetFileAttributesA(path) != (DWORD)-1)
@@ -4026,6 +4051,14 @@ static void sweep_initialize(
 		sweep.done_count, sweep.drive, sweep.results, hmp_maps_count() + SWEEP_STOCK_MULTIPLAYER, SWEEP_VERSION,
 		sweep.scale || sweep.pass ? " (a pass of its own: only perf\\" : "", sweep.scale || sweep.pass ? sweep.list : "",
 		sweep.scale || sweep.pass ? "'s maps, when it's there)" : "");
+	{
+		extern int oxbox_widescreen(void);
+		extern int oxbox_setting_lod_widescreen;
+
+		platform_log("perf sweep: the view: %s; widescreen models' detail chosen at %d%% of their size%s",
+			oxbox_widescreen() ? "widescreen" : "4:3", oxbox_setting_lod_widescreen,
+			sweep.base_pass ? " (perf_sweep_lod: this round's)" : "");
+	}
 	/* (a run the last boot started and never wrote: the Xbox crashed or hung in it) */
 	sweep_path(path, sizeof(path), sweep.marker);
 	file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -4305,6 +4338,23 @@ static long sweep_next(
 			sweep.key, sweep.name, sweep.solo ? "campaign" : "multiplayer", run, (int)sweep.bots,
 			run == 4 ? ", drawn at 85% (its slowest run was under 29 fps)" : run == 5 ? ", drawn at 70% (still under 29 at 85%)" : "");
 		return sweep.solo ? _oxbox_sweep_solo : _oxbox_sweep_multiplayer;
+	}
+	/* (v1.201: the next level-of-detail round, its own table: sweep_initialize again on the next pass number) */
+	if (sweep.base_pass && sweep.pass - sweep.base_pass + 1 < (long)NUMBEROF(sweep_lod_values))
+	{
+		platform_log("perf sweep: level-of-detail round %ld (%ld%%) is done (%c:\\perf\\%s); the next: %ld%%",
+			sweep.pass - sweep.base_pass + 1, sweep_lod_values[sweep.pass - sweep.base_pass], sweep.drive, sweep.results,
+			sweep_lod_values[sweep.pass - sweep.base_pass + 1]);
+		sweep.pass++;
+		sweep.initialized = FALSE;
+		sweep.done_count = 0;
+		return sweep_next(key, size, bots);
+	}
+	if (sweep.base_pass)
+	{
+		extern int oxbox_setting_lod_widescreen;
+
+		oxbox_setting_lod_widescreen = (int)sweep.base_lod;
 	}
 	sweep_watch_off();
 	sweep.halted = TRUE;
@@ -5495,6 +5545,8 @@ static void read_settings(
 			sweep.scaling = value != 0;
 		else if (!strcmp(name, "perf_sweep_pass"))
 			sweep.pass = value >= 1 && value <= 99 ? value : 0;
+		else if (!strcmp(name, "perf_sweep_lod"))
+			sweep.lod_rounds = value != 0;
 		else if (!strcmp(name, "perf_sweep_redo"))
 			sweep.redo_all = value != 0;
 		else if (!strcmp(name, "perf_sweep_seconds") && value >= 10)

@@ -486,13 +486,15 @@ static real object_get_level_of_detail_pixels(
 	it, and the levels of detail changed as the camera turned. Only the level of detail uses this: visibility
 	still culls with the frustum. One square root an object drawn.
 	Halo Universal's widescreen: models change to their lower levels of detail at half the distance, for the wider
-	view's cost. */
+	view's cost. v1.201: opence.ini lod_widescreen, the percent of its size a model counts as (50, the default: half;
+	100: as in 4:3), for the perf sweep's comparison (perf_sweep_lod) */
 	{
 		extern int oxbox_widescreen(void);
+		extern int oxbox_setting_lod_widescreen;   /* (port/oxbox/oxbox_entry.c) */
 		real distance = distance3d(&render.camera.position, &center);
 		real pixels = (render.frustum.projection_world_to_screen.j / MAX(distance, 0.1f)) * radius * 2.0f;
 
-		return oxbox_widescreen() ? 0.5f * pixels : pixels;
+		return oxbox_widescreen() ? pixels * ((real)oxbox_setting_lod_widescreen / 100.0f) : pixels;
 	}
 #else
 	return render_frustum_sphere_diameter_in_pixels(&render.frustum, &center, radius);

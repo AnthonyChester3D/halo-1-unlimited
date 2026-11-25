@@ -370,9 +370,11 @@ def compare_builds(base_maps, other_paths, args):
             bf, of = number(brow, 'avg_fps', 0), number(orow, 'avg_fps', 0)
             bt, ot = number(brow, 'tick_ms', 0), number(orow, 'tick_ms', 0)
             bd, od = number(brow, 'draw_ms', 0), number(orow, 'draw_ms', 0)
-            changes.append((bf, of, bt, ot, bd, od))
-            lines.append('      %s: %.1f -> %.1f fps; game ticks %.2f -> %.2f ms a frame (%+.0f%%), drawing %.2f -> %.2f ms' % (
-                RUN_NAMES[run], bf, of, bt, ot, 100.0 * (ot - bt) / bt if bt else 0.0, bd, od))
+            bg, og = number(brow, 'gpu_busy_pct', 0), number(orow, 'gpu_busy_pct', 0)
+            changes.append((bf, of, bt, ot, bd, od, bg, og))
+            lines.append('      %s: %.1f -> %.1f fps; game ticks %.2f -> %.2f ms a frame (%+.0f%%), drawing %.2f -> %.2f ms, '
+                         'graphics chip busy %.0f -> %.0f%%' % (
+                RUN_NAMES[run], bf, of, bt, ot, 100.0 * (ot - bt) / bt if bt else 0.0, bd, od, bg, og))
         if lines:
             print('  %s' % name)
             print('\n'.join(lines))
@@ -385,6 +387,7 @@ def compare_builds(base_maps, other_paths, args):
                   100.0 * (sum(c[3] for c in changes) - sum(c[2] for c in changes)) / max(sum(c[2] for c in changes), 1e-9),
                   sum(c[4] for c in changes) / n, sum(c[5] for c in changes) / n,
                   100.0 * (sum(c[5] for c in changes) - sum(c[4] for c in changes)) / max(sum(c[4] for c in changes), 1e-9)))
+        print('graphics chip busy %.0f%% -> %.0f%% on average' % (sum(c[6] for c in changes) / n, sum(c[7] for c in changes) / n))
     return 0
 
 

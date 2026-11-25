@@ -516,6 +516,7 @@ int oxbox_setting_far_players = 1;   /* (v1.195: a network client's far players:
 int oxbox_setting_resting_corpses = 1;   /* (v1.195: corpses at rest left alone: objects.c objects_update) */
 int oxbox_setting_resting_weapons = 1;   /* (v1.196: idle weapons lying still left alone: objects.c objects_update) */
 int oxbox_setting_resting_objects = 1;   /* (v1.200: parked vehicles, still equipment and scenery: objects.c objects_update) */
+int oxbox_setting_lod_widescreen = 50;   /* (v1.201: widescreen models' level of detail size, percent: render_objects.c) */
 extern unsigned char display_framerate;   /* (main.c's, a boolean) */
 
 /* a whole file written beside the logs (the XBE's folder, else T:); FALSE when neither could be written */
@@ -758,6 +759,8 @@ static void read_settings(const char *path)
 			oxbox_setting_resting_weapons = value != 0;
 		else if (same_text(name, "resting_objects"))
 			oxbox_setting_resting_objects = value != 0;
+		else if (same_text(name, "lod_widescreen"))
+			oxbox_setting_lod_widescreen = value < 10 ? 10 : value > 100 ? 100 : value;
 		else if (same_text(name, "log_pools"))
 		{
 			extern int oxbox_setting_log_pools;   /* (oxbox_diagnostics.c) */
