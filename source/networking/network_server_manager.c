@@ -4833,7 +4833,7 @@ static void network_game_server_port_settings_apply(
 	if (network_game_server_port_settings.maximum_players > 0)
 	{
 		server->game.maximum_players = (byte)PIN(network_game_server_port_settings.maximum_players, 2,
-			MAXIMUM_NETWORK_PLAYER_COUNT);
+			HALO_PORT_MAXIMUM_HOSTED_PLAYERS);
 	}
 }
 
@@ -5010,7 +5010,8 @@ static boolean network_game_server_setup_game_from_playlist(
 		map_share_level_name_choose(server->game.map.name, sizeof(server->game.map.name));
 		server->game.map.version = (long)cache_files_map_version(server->game.map.name);
 		server->game.minimum_players = 2;
-		server->game.maximum_players = MAXIMUM_NETWORK_PLAYER_COUNT;
+		/* (oxbox: an Xbox hosts 16 of the record's 32, halo_port_limits.h) */
+		server->game.maximum_players = HALO_PORT_MAXIMUM_HOSTED_PLAYERS;
 		network_game_server_port_settings_apply(server);
 		network_game_server_variant_options(&server->game.variant, &server->game.variant_options);
 

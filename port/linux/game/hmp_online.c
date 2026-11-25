@@ -667,7 +667,7 @@ int oxbox_online_pc_game_listed(char const *map, long maximum_players, long kind
 	extern boolean hmp_links_listed(char const *map);
 
 	/* (or a Custom Edition or MCC map this Xbox has a port of, linked: hmp_links.c) */
-	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= 16 &&
+	return map && (kind & 0x7F) < 4 /* (game_engine.h NUMBER_OF_GAME_MODES) */ && maximum_players <= HALO_PORT_MAXIMUM_NETWORK_PLAYERS &&
 		(oxbox_online_stock_map(map) || hmp_links_listed(map));
 }
 
