@@ -12630,7 +12630,8 @@ void unit_oxbox_weapon_diagnostic(
 #if defined(HALO_XBOX_TARGET)
 /* oxbox (v1.196): whether a dead unit lies still for good, nothing in its update changing any more (objects.c
 objects_update leaves it alone in multiplayer): dead, at rest, nothing attached (a stuck grenade is its child, updated
-in its update; an idle weapon it still holds doesn't count, weapons.c weapon_held_idle), and either dead
+in its update; an idle weapon it still holds doesn't count, weapons.c weapon_held_idle), not playing dead (feign
+death: its countdown to getting up runs in its update), and either dead
 CORPSE_STILL_LONGEST_TICKS, or dead past Halo's own settling time
 (CORPSE_STILL_SETTLING_TICKS, effects.c's CORPSE_SETTLING_TIME) with its death animation on its last frame (v1.195 waited
 5 s for every body: in a 24-player game the bodies under 5 s old were 7-9 a tick, each costing about a live player) */
@@ -12678,6 +12679,9 @@ boolean unit_corpse_still(
 		}
 	}
 	if (unit->unit.time_of_death == NONE)
+		NOT_STILL(4)
+	/* (playing dead: its countdown to getting up runs in its update, while it's at rest) */
+	if (unit->unit.feign_death_timer > 0)
 		NOT_STILL(4)
 	dead_for = game_time_get() - unit->unit.time_of_death;
 	if (dead_for > CORPSE_STILL_LONGEST_TICKS)
