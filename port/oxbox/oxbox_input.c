@@ -138,6 +138,27 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		if (t - last_memory_report >= 10000)
 		{
 			MEMORYSTATUS memory;
+#if defined(OXBOX_MEM128_PROBE)
+			/* (lab: the first 64 MB's free contiguous memory now: blocks taken largest first, 256 KB steps, then given back) */
+			{
+				LPVOID WINAPI retail_XPhysicalAlloc(SIZE_T size, ULONG_PTR address, ULONG_PTR alignment, DWORD protect);
+				void WINAPI XPhysicalFree(LPVOID address);
+				void *blocks[24];
+				unsigned long sizes[24], total = 0, size = 16u << 20;
+				int count = 0, k;
+
+				while (count < 24 && size >= (256u << 10))
+				{
+					blocks[count] = retail_XPhysicalAlloc(size, 0x03FFFFFF, 0, PAGE_READWRITE);
+					if (blocks[count]) { sizes[count] = size; total += size; count++; }
+					else size -= 256u << 10;
+				}
+				platform_log("mem128 low: %lu KB free in the first 64 MB, largest block %lu KB (%d blocks)", total >> 10,
+					count ? sizes[0] >> 10 : 0, count);
+				for (k = 0; k < count; k++)
+					XPhysicalFree(blocks[k]);
+			}
+#endif
 			last_memory_report = t;
 			GlobalMemoryStatus(&memory);
 			/* (test build 24: and the textures and sounds read into their caches in those 10 seconds: many textures read
