@@ -1012,6 +1012,52 @@ short cache_file_read(
 	{
 		size = (size | (CACHE_FILE_SECTOR_SIZE - 1)) + 1;
 	}
+#if defined(OXBOX_READ_CACHE_SIM)
+	/* (lab: what a 48 MB read cache in a 128 MB console's top RAM would serve: each read's (file, offset, size) kept
+	in a first-in first-out table up to that much; a read already in it a hit. Logged every 10 s and for the session) */
+	{
+		enum { SIM_ENTRIES = 8192, SIM_BUDGET = 48 << 20 };
+		static struct { unsigned long key, offset, size; } *sim;
+		static long sim_head, sim_count, sim_bytes;
+		static unsigned long reads, read_kb, hits, hit_kb, total_reads, total_kb, total_hits, total_hit_kb, last;
+		unsigned long key = (unsigned long)shared * 0x10000u + (unsigned long)cache_file_globals.open_map_file_index;
+		unsigned long now = GetTickCount();
+		long k, found = 0;
+
+		if (!sim)
+			sim = malloc(SIM_ENTRIES * sizeof(*sim));
+		for (k = 0; sim && k < sim_count && !found; k++)
+		{
+			long at = (sim_head - 1 - k + SIM_ENTRIES) % SIM_ENTRIES;
+
+			found = sim[at].key == key && sim[at].offset == (unsigned long)offset && sim[at].size == (unsigned long)size;
+		}
+		reads++; read_kb += size >> 10;
+		if (found) { hits++; hit_kb += size >> 10; }
+		else if (sim)
+		{
+			while (sim_count && (sim_count == SIM_ENTRIES || sim_bytes + size > SIM_BUDGET))
+			{
+				long oldest = (sim_head - sim_count + SIM_ENTRIES) % SIM_ENTRIES;
+
+				sim_bytes -= (long)sim[oldest].size;
+				sim_count--;
+			}
+			sim[sim_head].key = key; sim[sim_head].offset = (unsigned long)offset; sim[sim_head].size = (unsigned long)size;
+			sim_head = (sim_head + 1) % SIM_ENTRIES; sim_count++; sim_bytes += size;
+		}
+		if (now - last >= 10000)
+		{
+			void platform_log(char const *format, ...);
+
+			total_reads += reads; total_kb += read_kb; total_hits += hits; total_hit_kb += hit_kb;
+			platform_log("read cache sim: %lu reads (%lu KB), %lu would be in RAM (%lu KB); session %lu (%lu KB), %lu (%lu KB); "
+				"%ld KB held", reads, read_kb, hits, hit_kb, total_reads, total_kb, total_hits, total_hit_kb, sim_bytes >> 10);
+			reads = read_kb = hits = hit_kb = 0;
+			last = now;
+		}
+	}
+#endif
 	*completion_flag_reference = FALSE;
 	memset(
 		&request->overlapped,
