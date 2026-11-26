@@ -1399,9 +1399,14 @@ static void update_peers(void)
 		}
 		else if (elapsed(peer->offered_time, PUNCH_TIMEOUT))
 		{
+#if defined(HALO_XBOX_TARGET)
+			/* (oxbox: shorter, as the PC's settings named below aren't the Xbox's: the resident image is tight) */
+			drop_peer(peer, "could not connect (both networks' NATs may be too strict for a direct connection)");
+#else
 			drop_peer(peer, "could not connect (both networks' NATs may be too strict for a direct "
 				"connection; forwarding network.tunnel_port on one router helps, as UPnP does where the "
 				"router allows it: network.allow_upnp)");
+#endif
 		}
 		else if (elapsed(peer->sent_time, PUNCH_INTERVAL))
 		{
