@@ -193,19 +193,35 @@ void physical_memory_allocate(
 #endif
 		if (status.dwTotalPhys >= 100UL << 20)
 		{
+			/* (the bigger caches only from the top 64 MB: MmAllocateContiguousMemoryEx's lowest address. A Cerbios
+			128 MB console (v1.206, Llama's friend's logs) gave contiguous blocks only below 64 MB: the 36 MB cache
+			took the last of it, the graphics device was refused 480p (out of memory) and the sound cache had none,
+			and the game never reached its menu. No room up there: a 64 MB console's sizes, below; the rest of the
+			RAM still serves the heap) */
+			void *oxbox_kernel_export(unsigned long ordinal);
+			void *(__stdcall *contiguous)(unsigned long size, unsigned long lowest, unsigned long highest,
+				unsigned long alignment, unsigned long protect) = (void *(__stdcall *)(unsigned long, unsigned long,
+				unsigned long, unsigned long, unsigned long))oxbox_kernel_export(166); /* MmAllocateContiguousMemoryEx */
 			long size;
 
-			for (size = 0x3C00000; size >= 0x2000000 && !physical_memory_map_globals.texture_cache_base_address;
-				size -= 0x400000)
+			for (size = 0x3C00000; contiguous && size >= 0x2000000 &&
+				!physical_memory_map_globals.texture_cache_base_address; size -= 0x400000)
 			{
 				physical_memory_map_globals.texture_cache_base_address =
-					XPhysicalAlloc(size, -1, 0, PAGE_READWRITE | PAGE_WRITECOMBINE);
+					contiguous(size, 0x4000000, 0xFFFFFFFF, 0x1000, PAGE_READWRITE | PAGE_WRITECOMBINE);
 				if (physical_memory_map_globals.texture_cache_base_address)
 					physical_memory_texture_cache_size = size;
 			}
-			physical_memory_map_globals.sound_cache_base_address = XPhysicalAlloc(0x800000, -1, 0, PAGE_READWRITE);
+			if (contiguous)
+			{
+				physical_memory_map_globals.sound_cache_base_address =
+					contiguous(0x800000, 0x4000000, 0xFFFFFFFF, 0x1000, PAGE_READWRITE);
+			}
 			if (physical_memory_map_globals.sound_cache_base_address)
 				physical_memory_sound_cache_size = 0x800000;
+			platform_log("memory: the top 64 MB: texture cache %p, sound cache %p",
+				physical_memory_map_globals.texture_cache_base_address,
+				physical_memory_map_globals.sound_cache_base_address);
 		}
 		if (!physical_memory_map_globals.texture_cache_base_address)
 		{
