@@ -57,7 +57,7 @@ into the next program's memory) */
 #define TITLE "Halo 1 Unlimited installer"
 /* the installer's version: a package carrying a higher one can update it (tools/mkpackage.py reads it from the mark) */
 #ifndef INSTALLER_VERSION
-#define INSTALLER_VERSION 75
+#define INSTALLER_VERSION 76
 #endif
 __attribute__((used)) static struct
 {
@@ -4514,15 +4514,25 @@ static unsigned long long own_need(struct halo const *source, int campaign)
 		(source->retail ? 2ull * source->retail->build_size : 16ull << 20) + (16ull << 20);
 }
 
-/* where on drive it goes: <drive>:\Games\Halo 1 Unlimited (or <drive>:\Halo 1 Unlimited without a Games folder); a
-folder of that name that isn't Halo 1 Unlimited's: "Halo 1 Unlimited 2", and so on */
-static void own_folder_on(char drive, char *out, int size)
+/* where on drive it goes: <drive>:\Games\Halo 1 Unlimited when the drive has a Games folder; else beside the Halo it's
+built from, in the same folders on this drive (Llama, 2026-11-26: a Halo in F:\HaloCE\Halo1Retail -> F:\HaloCE\Halo 1
+Unlimited, on G: G:\HaloCE\Halo 1 Unlimited; a Halo in a root folder, F:\Halo -> F:\Halo 1 Unlimited); a folder of
+that name that isn't Halo 1 Unlimited's: "Halo 1 Unlimited 2", and so on */
+static void own_folder_on(char drive, char const *source, char *out, int size)
 {
-	char base[64], mark[260], xbe[260];
+	char base[200], mark[260], xbe[260];
+	char const *slash;
 	int n;
 	text_print(base, sizeof(base), "%c:\\Games", drive);
 	if (GetFileAttributesA(base) == INVALID_FILE_ATTRIBUTES)
-		text_print(base, sizeof(base), "%c:", drive);
+	{
+		/* (the folders the Halo is in, below its drive, its own name left off: "F:\HaloCE\Halo1Retail" -> "\HaloCE") */
+		slash = source && source[0] && source[1] == ':' ? strrchr(source, '\\') : NULL;
+		if (slash && slash > source + 2)
+			text_print(base, sizeof(base), "%c:%.*s", drive, (int)(slash - (source + 2)), source + 2);
+		else
+			text_print(base, sizeof(base), "%c:", drive);
+	}
 	for (n = 1; n < 10; n++)
 	{
 		if (n == 1)
@@ -4548,6 +4558,15 @@ static int own_install(struct halo *source, char const *folder, int campaign)
 	text_print(path, sizeof(path), "%s\\" BUILDING_MARK, folder);
 	if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES)
 		delete_tree(folder, 0);
+	/* (the folders above it too, when they aren't there: own_folder_on's G:\HaloCE for a Halo in F:\HaloCE\...) */
+	for (i = 3; folder[i]; i++)
+	{
+		if (folder[i] == '\\')
+		{
+			text_print(to, sizeof(to), "%.*s", i, folder);
+			CreateDirectoryA(to, NULL);
+		}
+	}
 	CreateDirectoryA(folder, NULL);
 	text_print(to, sizeof(to), "%s\\maps", folder);
 	CreateDirectoryA(to, NULL);
@@ -4825,7 +4844,7 @@ static int player_install_flow(void)
 		{
 			static char summary[300];
 			unsigned long long need = campaign ? with : without;
-			own_folder_on(drives[drive], folder, sizeof(folder));
+			own_folder_on(drives[drive], choice[k]->path, folder, sizeof(folder));
 			text_print(go[0].text, sizeof(go[0].text), "Start install (about 6 minutes, needs %s)", space_text(need));
 			text_print(summary, sizeof(summary), "Installs Halo 1 Unlimited to %s. It will use %s.", folder,
 				space_text(need));
@@ -4844,7 +4863,7 @@ static int player_install_flow(void)
 			break;
 		}
 	}
-	own_folder_on(drives[drive], folder, sizeof(folder));
+	own_folder_on(drives[drive], choice[k]->path, folder, sizeof(folder));
 	task_begin("Installing Halo 1 Unlimited", "Building Halo 1 Unlimited from your Halo...");
 	failed = own_install(choice[k], folder, campaign);
 	task_end();
