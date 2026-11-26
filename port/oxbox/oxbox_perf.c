@@ -2659,6 +2659,11 @@ static volatile long sweep_watching;
 static volatile __int64 sweep_watch_deadline;
 
 static void sweep_spot_end(void);
+#if defined(OXBOX_DENSE_PERF)
+/* (the dense profile's note of the sweep's run: profile.bin's windows say which run they were in) */
+static volatile long sampler_run = -1, sampler_bots, sampler_measuring;
+static char sampler_key[48];
+#endif
 
 static void sweep_watch_on(
 	long seconds)
@@ -3478,6 +3483,9 @@ static void sweep_finish(
 	boolean passed = !strcmp(status, "ok");
 	long run;
 
+#if defined(OXBOX_DENSE_PERF)
+	sampler_measuring = 0;
+#endif
 	sweep_row(status);
 	sweep_spot_end();
 	if (sweep.frames)
@@ -4516,6 +4524,12 @@ static boolean sweep_frame(
 		}
 		sweep.free_kb_min = free_kb(NULL);
 		sweep.measuring = TRUE;
+#if defined(OXBOX_DENSE_PERF)
+		strncpy(sampler_key, sweep.key, sizeof(sampler_key) - 1);
+		sampler_run = sweep.run;
+		sampler_bots = sweep.bots;
+		sampler_measuring = 1;
+#endif
 	}
 	return FALSE;
 }
@@ -4967,7 +4981,9 @@ v1.186: windows of 2,500 samples (~5 s on the console: a10's hangar shot is ~15 
 and every window's whole table also goes to perf\profile.bin: its header (SAMPLER_FIELDS words: 'OXPF', version 1,
 window, session ms at its end, samples, waiting, ready, other, no frame found, table full, buckets taken once) then
 each bucket taken twice or more as 6 bytes: its address (4) and count (2); tools/perf_profile.py reads it) */
-enum { SAMPLER_FIELDS = 12 };
+enum { SAMPLER_FIELDS = 16, SAMPLER_KEY = 48 };
+/* (v2: four more words, the sweep's run then (its index, -1 none; its bots; 1 while it measures; the boot's own id), and
+the run's key in 48 bytes; the file is added to across boots, not made anew: a day's sweep keeps every boot's) */
 static struct { unsigned long address, count; } sampler_table[SAMPLER_SLOTS];
 static unsigned long sampler_samples, sampler_waiting, sampler_ready, sampler_other, sampler_no_frame, sampler_full,
 	sampler_windows;
@@ -5031,8 +5047,10 @@ static void sampler_save(
 			memcpy(folder, paths[k], 7);
 			folder[7] = 0;
 			CreateDirectoryA(folder, NULL);
-			sampler_file = CreateFileA(paths[k], GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+			sampler_file = CreateFileA(paths[k], GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS,
 				FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+			if (sampler_file != INVALID_HANDLE_VALUE)
+				SetFilePointer(sampler_file, 0, NULL, FILE_END);
 		}
 	}
 	if (sampler_file == INVALID_HANDLE_VALUE)
@@ -5045,7 +5063,7 @@ static void sampler_save(
 			entries++;
 	}
 	header[0] = 0x4650584f;
-	header[1] = 1;
+	header[1] = 2;
 	header[2] = sampler_windows;
 	header[3] = session_ms;
 	header[4] = sampler_samples;
@@ -5056,7 +5074,12 @@ static void sampler_save(
 	header[9] = sampler_full;
 	header[10] = singles;
 	header[11] = entries;
+	header[12] = (unsigned long)sampler_run;
+	header[13] = (unsigned long)sampler_bots;
+	header[14] = (unsigned long)sampler_measuring;
+	header[15] = (unsigned long)perf.session_start;
 	sampler_write(header, sizeof(header));
+	sampler_write((void *)sampler_key, SAMPLER_KEY);
 	for (k = 0; k < SAMPLER_SLOTS; k++)
 	{
 		unsigned long count = sampler_table[k].count;
