@@ -2672,6 +2672,48 @@ void object_compute_node_matrices(
 			object_type_preprocess_node_orientations(object_index, node_orientations);
 		}
 
+#if defined(OXBOX_TPOSE_CHECK)
+		/* lab: a live biped whose nodes came out mostly as the model's own (a T-pose) or identity, before the blend:
+		what it was playing */
+		if (object->object.type == _object_type_biped && !TEST_FLAG(object->object.damage_flags, _object_dead_bit) && model_node_count >= 10 &&
+			unit_get(object_index)->unit.player_index != NONE)
+		{
+			static long told;
+			short k, as_model = 0, as_identity = 0;
+			struct model_node const *model_nodes = TAG_BLOCK_GET_ELEMENT(&model->nodes, 0, struct model_node);
+
+			for (k = 1; k < model_node_count; k++)
+			{
+				real_quaternion const *q = &node_orientations[k].rotation;
+
+				as_model += !memcmp(q, &model_nodes[k].default_rotation, sizeof(*q));
+				as_identity += q->v.i == 0.0f && q->v.j == 0.0f && q->v.k == 0.0f;
+			}
+			if ((as_model * 4 >= (model_node_count - 1) * 3 || as_identity * 4 >= (model_node_count - 1) * 3) && told < 40)
+			{
+				void platform_log(char const *format, ...);
+				struct unit_datum *unit = unit_get(object_index);
+				struct animation_graph *graph = object->object.animation.animation_graph_index != NONE ?
+					animation_graph_definition_get(object->object.animation.animation_graph_index) : NULL;
+				short base = object->object.animation.state.index;
+				short soft = unit->unit.animation.soft_ping_animation.index;
+
+				told++;
+				platform_log("tpose: %s at tick %ld: %d of %d nodes as the model's, %d identity; unit state %d, base "
+					"animation %d '%s' frame %d of %d, soft ping %d '%s', blend %d/%d",
+					tag_get_name(object->definition_index), game_time_get(), as_model, model_node_count - 1, as_identity,
+					(int)unit->unit.animation.state, base,
+					graph && VALID_INDEX(base, graph->animations.count) ?
+						TAG_BLOCK_GET_ELEMENT(&graph->animations, base, struct animation)->name : "-",
+					object->object.animation.state.frame_index,
+					graph && VALID_INDEX(base, graph->animations.count) ?
+						TAG_BLOCK_GET_ELEMENT(&graph->animations, base, struct animation)->frame_count : 0,
+					soft, graph && VALID_INDEX(soft, graph->animations.count) ?
+						TAG_BLOCK_GET_ELEMENT(&graph->animations, soft, struct animation)->name : "-",
+					object->object.animation.interpolation_frame_index, object->object.animation.interpolation_frame_count);
+			}
+		}
+#endif
 		if (object->object.animation.interpolation_frame_count>0)
 		{
 			match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 2777, !TEST_FLAG(_object_mask_cannot_interpolate, object->object.type));
