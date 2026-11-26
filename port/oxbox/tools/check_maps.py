@@ -176,7 +176,8 @@ def check_map(path, pool):
                 b = at(u32(tags, g + 100)) + j * 48
                 w, h, typ, fmt, offset, size = (s16(tags, b + 4), s16(tags, b + 6), s16(tags, b + 10), s16(tags, b + 12),
                                                 u32(tags, b + 24), u32(tags, b + 28))
-                if fmt not in (14, 15, 16) or typ != 0 or w < 32 or h < 32: continue
+                # (small ones (masks, decals, illumination) are speckled by design: Corverie's Longest's 32x32s)
+                if fmt not in (14, 15, 16) or typ != 0 or w < 64 or h < 64: continue
                 data = data_at(offset, size, m, pack)
                 if not data: continue
                 result['dxt'] += 1
@@ -191,7 +192,7 @@ def main():
     if csv_path in args: args.remove(csv_path)
     verbose = '--verbose' in sys.argv
     pool = stock_pool(args[0])
-    maps = sorted(p for p in glob.glob(os.path.join(args[1], '**', '*.map'), recursive=True))
+    maps = sorted(p for p in glob.glob(os.path.join(args[1], '**', '*.map'), recursive=True) if os.path.isfile(p))
     out = open(csv_path, 'w') if csv_path else None
     if out: out.write('map,sounds,bad_sounds,dxt_bitmaps,noisy_bitmaps,missing_pack,first_problem\n')
     listed = 0
