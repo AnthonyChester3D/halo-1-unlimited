@@ -4908,6 +4908,16 @@ static void network_game_server_cooperative_round(
 	main_set_multiplayer_map_name(server->game.map.name);
 	server->game.maximum_teams = 1;
 	network_game_server_cooperative_next_map[0] = 0;
+	/* port: every machine precaches the next level afresh, as network_game_server_change_map_name has them do: the
+	last level's marks stayed, so the host took a console without the next level for one that had it, started it at
+	once, and that console quit (Boxfight's rooms, Send logs Z8BX-XZPF; lab: flags 0b, "all precached 1" right after
+	the switch) */
+	{
+		long machine;
+
+		for (machine = 0; machine < MAXIMUM_NETWORK_MACHINE_COUNT; machine++)
+			SET_FLAG(server->client_machines[machine].flags, _network_client_machine_precached_bit, FALSE);
+	}
 }
 
 void network_game_server_port_set_cooperative(
