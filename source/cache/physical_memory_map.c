@@ -269,6 +269,53 @@ void physical_memory_allocate(
 			GlobalMemoryStatus(&status);
 			platform_log("mem128 probe: %ld pieces of 4 MB (%ld wholly above 64 MB), %lu KB free with them", count, high,
 				status.dwAvailPhys >> 10);
+			/* (the pages' own runs: physically contiguous stretches above 64 MB, the longest kept; and whether the kernel's
+			window for contiguous memory, 0x80000000 + physical, covers them: MmIsAddressValid (174) before any read) */
+			{
+				unsigned char (__stdcall *valid)(void *) = (unsigned char (__stdcall *)(void *))oxbox_kernel_export(174);
+				unsigned long run_start = 0, run_length = 0, best_start = 0, best_length = 0, previous = 0, runs4 = 0;
+				long piece, page;
+
+				for (piece = 0; piece < count; piece++)
+				{
+					for (page = 0; page < 1024; page++)
+					{
+						unsigned long here = physical((char *)pieces[piece] + page * 0x1000);
+
+						if (here >= 0x4000000 && run_length && here == previous + 0x1000)
+							run_length++;
+						else
+						{
+							if (run_length >= 1024)
+								runs4++;
+							if (run_length > best_length) { best_length = run_length; best_start = run_start; }
+							run_start = here;
+							run_length = here >= 0x4000000;
+						}
+						previous = here;
+					}
+				}
+				if (run_length >= 1024)
+					runs4++;
+				if (run_length > best_length) { best_length = run_length; best_start = run_start; }
+				platform_log("mem128 probe: longest contiguous run above 64 MB: %lu KB at %08lx; %lu runs of 4 MB or more",
+					best_length * 4, best_start, runs4);
+				for (piece = 0; piece < count; piece++)
+				{
+					unsigned long here = physical(pieces[piece]);
+					void *window = (void *)(0x80000000ul | here);
+
+					if (here < 0x4000000)
+						continue;
+					((volatile unsigned long *)pieces[piece])[0] = 0x5A17C0DEu ^ here;
+					if (!valid(window))
+						platform_log("mem128 probe: window %p (physical %08lx) isn't mapped", window, here);
+					else
+						platform_log("mem128 probe: window %p (physical %08lx) is mapped: it reads %s", window, here,
+							*(volatile unsigned long *)window == (0x5A17C0DEu ^ here) ? "the same" : "something else");
+					break;
+				}
+			}
 			for (k = 0; k < count; k++)
 			{
 				unsigned long size = 0;
