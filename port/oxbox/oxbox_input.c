@@ -21,6 +21,7 @@ void WINAPI retail_XInputClose(HANDLE device);
 static char virtual_pad;
 #define VIRTUAL_PAD ((HANDLE)&virtual_pad)
 static int virtual_pad_announced;
+static DWORD virtual_port; /* (0: port 1; lab builds may move it, OXBOX_INPUT_PORT_TEST) */
 
 struct scripted_press
 {
@@ -65,6 +66,14 @@ static void script_load(void)
 	while (press_count < 256 && fgets(line, sizeof(line), file))
 	{
 		hold = 0.25f;
+#if defined(OXBOX_INPUT_PORT_TEST)
+		/* (lab: a line "port N" puts the virtual pad in port N, 1-4, so xemu's own pad stays player 1) */
+		if (!strncmp(line, "port ", 5) && line[5] >= '1' && line[5] <= '4')
+		{
+			virtual_port = (DWORD)(line[5] - '1');
+			continue;
+		}
+#endif
 		if (sscanf(line, "%f %31s %f", &at, button, &hold) < 2)
 			continue;
 		for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
@@ -92,13 +101,13 @@ unsigned long oxbox_virtual_pad_insertions(void)
 	if (!script_loaded_with_file || virtual_pad_announced)
 		return 0;
 	virtual_pad_announced = 1;
-	platform_log("virtual gamepad plugged into port 1");
-	return 1;
+	platform_log("virtual gamepad plugged into port %lu", virtual_port + 1);
+	return 1ul << virtual_port;
 }
 
 HANDLE oxbox_virtual_pad_open(DWORD port)
 {
-	return script_loaded_with_file && port == 0 ? VIRTUAL_PAD : NULL;
+	return script_loaded_with_file && port == virtual_port ? VIRTUAL_PAD : NULL;
 }
 
 void WINAPI XInputClose(HANDLE device)
