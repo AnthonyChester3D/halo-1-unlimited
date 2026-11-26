@@ -2472,7 +2472,12 @@ static void game_engine_rasterize_scoreboard(
 
 		color.alpha = alpha;
 		color.red = color.green = color.blue = 0.6f;
+#if defined(HALO_XBOX_TARGET)
+		/* (the Xbox has no wheel or Page Up/Down: platform_scoreboard_scroll never moves it) */
+		usprintf(row_string, L"%ld-%ld of %ld", first, last, total);
+#else
 		usprintf(row_string, L"%ld-%ld of %ld   (Page Up / Page Down, mouse wheel)", first, last, total);
+#endif
 		scoreboard_draw_row(row_string, FALSE, &color, 2 + rows, top, left, FALSE);
 	}
 	/* port: the vote running, and how to pick a player */

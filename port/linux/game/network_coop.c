@@ -2731,6 +2731,20 @@ boolean network_coop_skip_vote_status(
 {
 	boolean offered = coop_host() ? skip_vote.offered : network_coop_skip_offered();
 
+#if defined(OXBOX_SKIP_VOTE_TEST)
+	/* (lab: any cutscene shows one vote of two, to see the drawing on one console) */
+	{
+		boolean cinematic_in_progress(void);
+
+		if (cinematic_in_progress())
+		{
+			*votes = 1;
+			*voters = 2;
+			*voted = TRUE;
+			return TRUE;
+		}
+	}
+#endif
 	if (!offered || skip_vote.voters <= 0)
 		return FALSE;
 	*votes = skip_vote.votes;
