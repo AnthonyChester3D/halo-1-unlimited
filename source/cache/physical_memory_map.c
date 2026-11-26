@@ -233,6 +233,50 @@ void physical_memory_allocate(
 			physical_memory_map_globals.sound_cache_base_address =
 				XPhysicalAlloc(physical_memory_sound_cache_size, -1, 0, PAGE_READWRITE);
 		}
+#if defined(OXBOX_MEM128_PROBE)
+		/* (lab: ordinary memory on a 128 MB console: VirtualAlloc 4 MB pieces till it fails, each piece's
+		physical address (MmGetPhysicalAddress, kernel 173) logged, then all freed) */
+		{
+			void *oxbox_kernel_export(unsigned long ordinal);
+			long (__stdcall *allocate)(void **, unsigned long, unsigned long *, unsigned long, unsigned long) =
+				(long (__stdcall *)(void **, unsigned long, unsigned long *, unsigned long, unsigned long))
+				oxbox_kernel_export(184); /* NtAllocateVirtualMemory */
+			long (__stdcall *release)(void **, unsigned long *, unsigned long) =
+				(long (__stdcall *)(void **, unsigned long *, unsigned long))oxbox_kernel_export(199); /* NtFreeVirtualMemory */
+			unsigned long (__stdcall *physical)(void *) = (unsigned long (__stdcall *)(void *))oxbox_kernel_export(173);
+			void *pieces[32];
+			long count = 0, k, high = 0;
+
+			while (count < 32)
+			{
+				unsigned long size = 0x400000;
+
+				pieces[count] = NULL;
+				if (allocate(&pieces[count], 0, &size, 0x3000 /* commit, reserve */, PAGE_READWRITE) < 0 || !pieces[count])
+					break;
+				{
+				unsigned long first, last;
+
+				((volatile char *)pieces[count])[0] = 1;
+				((volatile char *)pieces[count])[0x3FFFFF] = 1;
+				first = physical(pieces[count]);
+				last = physical((char *)pieces[count] + 0x3FF000);
+				high += first >= 0x4000000 && last >= 0x4000000;
+				platform_log("mem128 probe: piece %ld at %p: physical %08lx .. %08lx", count, pieces[count], first, last);
+				count++;
+				}
+			}
+			GlobalMemoryStatus(&status);
+			platform_log("mem128 probe: %ld pieces of 4 MB (%ld wholly above 64 MB), %lu KB free with them", count, high,
+				status.dwAvailPhys >> 10);
+			for (k = 0; k < count; k++)
+			{
+				unsigned long size = 0;
+
+				release(&pieces[k], &size, 0x8000 /* release */);
+			}
+		}
+#endif
 		GlobalMemoryStatus(&status);
 		platform_log("memory: %lu MB console: texture cache %ld KB, sound cache %ld KB, %lu KB free",
 			(status.dwTotalPhys + (1UL << 20) - 1) >> 20, physical_memory_texture_cache_size >> 10,
