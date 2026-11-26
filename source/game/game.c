@@ -754,6 +754,16 @@ boolean game_load(
 	if (scenario_load(options->map_name))
 	{
 		game_globals->map_loaded = TRUE;
+#if defined(HALO_XBOX_TARGET)
+		/* oxbox: a folder map that loaded is known to load, so map sharing may send it: a co-op level reached by a
+		switch (no lobby precache marked it) was refused to a console that rejoined for it */
+		if (options->map_name[0] == '+')
+		{
+			void hmp_maps_mark_good(char const *key);
+
+			hmp_maps_mark_good(options->map_name);
+		}
+#endif
 	}
 
 	return game_globals->map_loaded;

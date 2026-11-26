@@ -14133,6 +14133,50 @@ struct hs_function_definition *hs_function_get(
 	return hs_function_table.functions[function_index];
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: the levels the loaded scenario's scripts may switch to: each map_name call's string constant, once each, at
+most `most` (map prefetch: port/linux/game/hmp_share.c; Boxfight's bf_leave names its four next rooms) */
+long hs_map_name_targets(
+	char const **names,
+	long most)
+{
+	struct scenario *scenario = global_scenario_get();
+	char const *strings = (char const *)scenario->hs_string_constants.address;
+	long size = scenario->hs_string_constants.size, count = 0, k;
+	short map_name = NONE, function_index;
+	struct data_iterator iterator;
+	struct hs_syntax_node const *node;
+
+	if (!hs_syntax_data || !strings)
+		return 0;
+	for (function_index = 0; function_index < hs_function_table_count && map_name == NONE; function_index++)
+	{
+		if (!csstrcmp(hs_function_get(function_index)->name, "map_name"))
+			map_name = function_index;
+	}
+	data_iterator_new(&iterator, hs_syntax_data);
+	while (count < most && (node = (struct hs_syntax_node const *)data_iterator_next(&iterator)) != NULL)
+	{
+		struct hs_syntax_node const *name, *argument;
+		char const *text;
+
+		if ((node->flags & 3) || node->function_index != map_name || !(name = hs_syntax_try_get(node->data)) ||
+			!(argument = hs_syntax_try_get(name->next_node_index)) || (argument->flags & 5) != 1 ||
+			argument->string_offset < 0 || argument->string_offset >= size ||
+			!memchr(strings + argument->string_offset, 0, (size_t)(size - argument->string_offset)))
+		{
+			continue;
+		}
+		text = strings + argument->string_offset;
+		for (k = 0; k < count && csstrcmp(names[k], text); k++)
+			;
+		if (k == count)
+			names[count++] = text;
+	}
+	return count;
+}
+#endif
+
 short hs_find_script_by_name(
 	char const *name)
 {

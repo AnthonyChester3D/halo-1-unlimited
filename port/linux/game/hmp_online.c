@@ -217,6 +217,7 @@ struct widget_instance *ui_widget_load_by_name_or_tag(char const *name, long tag
 struct widget_instance *ui_widget_get_active_widget(short local_player_index);
 int oxbox_xbe_online_header_read(void *buffer, unsigned long size);   /* (oxbox_entry.c: the XBE's ONLINE GAMES) */
 void p2p_set_hosting_allowed(int allowed);
+void p2p_set_system_link_play(int on);
 struct widget_instance *ui_widget_port_launch(struct widget_instance *widget, long tag_index);
 long tag_loaded(long group_tag, char const *name);
 void *tag_get(long group_tag, long tag_index);
@@ -321,6 +322,8 @@ static void set_mode(boolean on)
 	/* (a game hosted now: joinable and listed from the internet in ONLINE PLAY alone) */
 	p2p_set_hosting_allowed(on);
 	p2p_set_hosting_public(on);
+	/* (and system link play keeps to the LAN: no linked peer sees or joins its games) */
+	p2p_set_system_link_play(!on);
 }
 
 /* an item made from model's definition (SYSTEM LINK PLAY's, by its index alone), put after after, a row lower, its text

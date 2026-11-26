@@ -493,7 +493,11 @@ void hmp_carry_coop_test(void)
 		platform_log("co-op test: every player's state set (grenades 2+console/1, body 0.5+0.1 x console): switching");
 		{
 			void main_set_map_name(char const *map_name);
-			main_set_map_name("levels\\a30\\a30");
+			char const *config_string(char const *key);
+			char const *to = config_string("debug.coop_test_switch");
+
+			/* (opence.ini debug.coop_test_switch: another map, a folder map the client lacks, say) */
+			main_set_map_name(to && to[0] ? to : "levels\\a30\\a30");
 		}
 		stage = 3;
 		since = 0;

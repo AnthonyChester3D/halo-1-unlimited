@@ -7990,9 +7990,17 @@ static boolean widget_takes_any_controller(
 {
 #if defined(HALO_XBOX_TARGET)
 	struct widget_instance const *root = widget;
+	char const *name, *leaf;
 
 	while (root->parent)
 		root = root->parent;
+	/* oxbox: the network lobby takes every controller: another one's A joins it as that controller's player
+	(netgame_join_player). Opened from H1U's screens (HOST CO-OP GAME, ONLINE PLAY's list) it was player 1's, and
+	its panes kept it to player 1's controller: player 2 couldn't join (Llama, 2026-11-26) */
+	name = tag_get_name(root->definition_tag_index);
+	leaf = name ? strrchr(name, '\\') : NULL;
+	if (leaf && !csstrcmp(leaf + 1, "connected_pregame_screen"))
+		return TRUE;
 	if (widget->local_player_index == 0 && widget_tree_has_other_players(root))
 		return FALSE;
 #endif

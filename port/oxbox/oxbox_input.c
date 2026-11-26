@@ -21,6 +21,7 @@ void WINAPI retail_XInputClose(HANDLE device);
 static char virtual_pad;
 #define VIRTUAL_PAD ((HANDLE)&virtual_pad)
 static int virtual_pad_announced;
+static DWORD virtual_port; /* (0: port 1; lab builds may move it, OXBOX_INPUT_PORT_TEST) */
 
 struct scripted_press
 {
@@ -65,6 +66,14 @@ static void script_load(void)
 	while (press_count < 256 && fgets(line, sizeof(line), file))
 	{
 		hold = 0.25f;
+#if defined(OXBOX_INPUT_PORT_TEST)
+		/* (lab: a line "port N" puts the virtual pad in port N, 1-4, so xemu's own pad stays player 1) */
+		if (!strncmp(line, "port ", 5) && line[5] >= '1' && line[5] <= '4')
+		{
+			virtual_port = (DWORD)(line[5] - '1');
+			continue;
+		}
+#endif
 		if (sscanf(line, "%f %31s %f", &at, button, &hold) < 2)
 			continue;
 		for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
@@ -92,13 +101,13 @@ unsigned long oxbox_virtual_pad_insertions(void)
 	if (!script_loaded_with_file || virtual_pad_announced)
 		return 0;
 	virtual_pad_announced = 1;
-	platform_log("virtual gamepad plugged into port 1");
-	return 1;
+	platform_log("virtual gamepad plugged into port %lu", virtual_port + 1);
+	return 1ul << virtual_port;
 }
 
 HANDLE oxbox_virtual_pad_open(DWORD port)
 {
-	return script_loaded_with_file && port == 0 ? VIRTUAL_PAD : NULL;
+	return script_loaded_with_file && port == virtual_port ? VIRTUAL_PAD : NULL;
 }
 
 void WINAPI XInputClose(HANDLE device)
@@ -129,6 +138,27 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		if (t - last_memory_report >= 10000)
 		{
 			MEMORYSTATUS memory;
+#if defined(OXBOX_MEM128_PROBE)
+			/* (lab: the first 64 MB's free contiguous memory now: blocks taken largest first, 256 KB steps, then given back) */
+			{
+				LPVOID WINAPI retail_XPhysicalAlloc(SIZE_T size, ULONG_PTR address, ULONG_PTR alignment, DWORD protect);
+				void WINAPI XPhysicalFree(LPVOID address);
+				void *blocks[24];
+				unsigned long sizes[24], total = 0, size = 16u << 20;
+				int count = 0, k;
+
+				while (count < 24 && size >= (256u << 10))
+				{
+					blocks[count] = retail_XPhysicalAlloc(size, 0x03FFFFFF, 0, PAGE_READWRITE);
+					if (blocks[count]) { sizes[count] = size; total += size; count++; }
+					else size -= 256u << 10;
+				}
+				platform_log("mem128 low: %lu KB free in the first 64 MB, largest block %lu KB (%d blocks)", total >> 10,
+					count ? sizes[0] >> 10 : 0, count);
+				for (k = 0; k < count; k++)
+					XPhysicalFree(blocks[k]);
+			}
+#endif
 			last_memory_report = t;
 			GlobalMemoryStatus(&memory);
 			/* (test build 24: and the textures and sounds read into their caches in those 10 seconds: many textures read

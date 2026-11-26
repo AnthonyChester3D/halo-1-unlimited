@@ -157,6 +157,9 @@ static u32 host_rtt(void) { return 0; }   /* (the client's own measure: its conn
 #define WHY_NOT_HOSTED 1                    /* REP_UNAVAILABLE's reason (in .streams, build 20): not the map the host has up now */
 #define WHY_CHECKING 2                      /* ...the host's own copy hasn't loaded on it yet (hmp_maps.c's map checks): it
                                                sends only a map it knows loads, so a broken one reaches nobody */
+#define WHY_NEXT 3                          /* ...an answer to "+?next": f[] names the folder maps the host's level's scripts may
+                                               switch to (map prefetch; an older host says WHY_NOT_HOSTED) */
+#define PREFETCH_FLAG 0x100                 /* the request's flags: fetched ahead, quietly (one connection, an 8 KB window) */
 #define NAME_LEN 44
 #define MAX_FILES 5                         /* the .map, info .txt, preview.bin, series.bin, showcase.txt */
 #define MAX_MAP_SIZE (96u << 20)
@@ -681,6 +684,7 @@ struct slot {
     volatile u32 t, sent;         /* last progress (worker), file bytes sent (worker) */
     u32 t0, addr, done_ms, token; /* start, client address, time to send everything, what its extra connections quote */
     int logged_done, want;        /* want: connections the client was asked to open */
+    int prefetch;                 /* a level the client fetches ahead: a small window, and it holds no one up */
     volatile int nst;             /* connections attached */
     struct hst st[MAXS];
     volatile u32 wait_max;        /* the longest wait for room on any of its connections (ms) */
@@ -851,8 +855,36 @@ static int conn_count(struct slot *c, const struct req *q) {
     /* (test build 24: all of them, whatever the ping. A lost packet stops a connection until XNet sends it again,
        ~1 s later; over the internet the others keep the download going meanwhile) */
     n = g_cfg_streams ? g_cfg_streams : !g_cfg_auto ? 1 : MAXS;
-    if (n > q->flags) n = q->flags;
+    if (n > (q->flags & 0xff)) n = q->flags & 0xff;
     return n ? (int)n : 1;
+}
+
+/* the host's level's next maps (map prefetch): the folder maps its scripts' map_name calls name, resolved as the switch
+   resolves them (hmp_maps_resolve), worked out once for the level */
+static struct { char map[32]; int count; char keys[MAX_FILES][32]; } g_next;
+static void next_maps(const char *host_map) {
+    long hs_map_name_targets(char const **names, long most);
+    char const *names[8], *loaded = cache_files_loaded_map_name();
+    char key[32];
+    long k, n;
+    int j;
+    if (!host_map || !ieq(g_next.map, host_map)) return;
+    memset(&g_next, 0, sizeof g_next);
+    scpy(g_next.map, host_map);
+    if (!game_in_progress() || !loaded || ieq(loaded, host_map)) { g_next.map[0] = 0; return; }   /* (its scripts loaded) */
+    n = hs_map_name_targets(names, 8);
+    for (k = 0; k < n && g_next.count < MAX_FILES; k++) {
+        if (!hmp_maps_resolve(names[k], host_map, key, sizeof key) || !ieq(key, host_map)) continue;
+        for (j = 0; j < g_next.count && ieq(g_next.keys[j], key); j++) ;
+        if (j == g_next.count) scpy(g_next.keys[g_next.count++], key);
+    }
+    if (g_next.count) lg("host: %s may switch to %d level%s: map sharing sends them ahead to consoles that ask", host_map,
+        g_next.count, g_next.count == 1 ? "" : "s");
+}
+static int next_map(const char *key) {
+    int j;
+    for (j = 0; j < g_next.count; j++) if (!ieq(g_next.keys[j], key)) return 1;
+    return 0;
 }
 
 /* a request from pending connection p: take a slot and answer */
@@ -861,7 +893,7 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
     struct hst *t = &c->st[0];
     const char *host_map = network_game_current_map_name();
     const char *why = "not the map being hosted";
-    int i, k, n = 0, kk = (int)(c - g_sl), sending = 0, shared = 0;
+    int i, k, n = 0, kk = (int)(c - g_sl), sending = 0, shared = 0, ahead;
     u32 size = 0, chk = 0, start = 0, total = 0;
     struct map_head m;
     memset(c, 0, sizeof *c);
@@ -873,10 +905,17 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
     q->key[31] = 0;
     q->shared[31] = 0;
     i = hmp_find_key(q->key);
+    next_maps(host_map);
+    ahead = q->key[0] == '+' && host_map && ieq(q->key, host_map) && next_map(q->key) && i >= 0;
     if (q->magic != REQ_MAGIC || q->version != VERSION) why = "different map sharing version";
-    else if (q->key[0] != '+' || !host_map || ieq(q->key, host_map) != 0) g_hrep.streams = WHY_NOT_HOSTED;   /* (changing maps: ask again) */
+    else if (!ieq(q->key, "+?next")) {                /* (map prefetch: the levels this one may switch to) */
+        g_hrep.streams = WHY_NEXT; g_hrep.nfiles = (u32)g_next.count;
+        for (k = 0; k < g_next.count; k++) scpy(g_hrep.f[k].name, g_next.keys[k]);
+        why = "it's the list of levels to fetch ahead";
+    }
+    else if (q->key[0] != '+' || !host_map || (ieq(q->key, host_map) != 0 && !ahead)) g_hrep.streams = WHY_NOT_HOSTED;   /* (changing maps: ask again) */
     else if (i < 0 || !hmp_map_path_c(i, -1, g_p1) || !map_head_read(g_p1, &m) || !map_shared_all_here(g_p1, &m)) why = "can't read its own copy";
-    else if (!hmp_maps_is_good(q->key)) g_hrep.streams = WHY_CHECKING;   /* (not yet loaded here: ask again) */
+    else if (!ahead && !hmp_maps_is_good(q->key)) g_hrep.streams = WHY_CHECKING;   /* (not yet loaded here: ask again) */
     else {
         size = m.size; chk = m.chk;
         g_hrep.map_size = size;
@@ -933,6 +972,8 @@ static void slot_request(struct slot *c, struct pend *p, u32 now) {
             c->total = total - start;
             c->coff = n == 1 ? start : 0;
             c->want = conn_count(c, q);
+            c->prefetch = ahead && (q->flags & PREFETCH_FLAG);
+            if (c->prefetch) c->want = 1;
             c->token = now ^ (c->addr * 2654435761u) ^ ((u32)kk << 24) ^ 0x5eed;
             g_hrep.streams = (u32)c->want; g_hrep.token = c->token;
         }
@@ -1053,6 +1094,7 @@ static int host_sending(void) {
 static u32 slot_target(struct slot *c, u32 now) {
     u32 kb, ping, most = WINDOW_MAX_KB * (u32)c->want, least;
     ping = c->ping;
+    if (c->prefetch) return WINDOW_KB;                /* (fetched ahead during a level: ~100 KB/s at an 80 ms ping) */
     if (!g_cfg_auto) return g_cfg_window * (u32)c->want;
     /* (test build 24: at least 8 KB a connection; while the host plays, at most WINDOW_GAME_MOST_KB) */
     least = WINDOW_LEAST_KB * (u32)c->want / MAXS;
@@ -1230,7 +1272,10 @@ static struct {
     u32 fetch_chk, fetch_len;     /* ... the version the map names */
     u32 fetched;                  /* ... its size, once here: counted with the map as a download */
     int upgrade;                  /* this console's copy is full size: asking for the host's small one, quietly */
+    int prefetch;                 /* map prefetch: 2 asking for the host's list ("+?next"), 1 fetching a level ahead */
 } g_cl = { .s = NO_SOCK, .xs = { NO_SOCK, NO_SOCK, NO_SOCK } };
+/* map prefetch (a co-op client, during a level): the levels the host says it may switch to, fetched one at a time */
+static struct { char map[32]; u32 since; int asked, count, next; char keys[MAX_FILES][32], missing[MAX_FILES]; } g_pf;
 static const char *dl_rel(void) { return g_cl.fetch[0] ? g_cl.fetch_rel : g_cl.key + 1; }
 /* not enough room for the host's map: say so on the lobby's map and countdown lines (and in the heartbeats, so the
    host and the others can show who). It stays like this until the map changes; nothing is downloaded. */
@@ -1378,6 +1423,10 @@ static void cl_give_up(u32 now, int failed, const char *why, int err) {
         if (why) lg("client: not getting the small copy of %s: %s (error %d); keeping this one", g_cl.key, why, err);
         g_cl.state = CL_OK; g_status_on = 0; return;
     }
+    if (g_cl.prefetch) {                              /* (fetched ahead: nothing is waiting for it; never leaves the game) */
+        if (why) lg("client: not fetching %s ahead: %s (error %d)", g_cl.key, why, err);
+        g_cl.state = CL_OK; return;
+    }
     if (why) lg("client: %s: %s (error %d)", failed ? "download failed" : "couldn't check the map with the host", why, err);
     if (failed) { g_cl.tries++; g_cl.misses = 0; } else g_cl.misses++;
     /* (a copy whose shared files aren't all here wouldn't load: hmp_share_map_version says none) */
@@ -1489,7 +1538,7 @@ static void cl_finish(u32 now) {
     lg("client: received %u bytes in %u ms (%u KB/s)", g_cl.got_now, ms, ms ? g_cl.got_now / ms : 0);
     /* (the shared file the copy being replaced draws on: it goes if that copy was the last to use it) */
     old_shared[0] = 0;
-    i = hmp_find_key(g_cl.key);
+    i = g_cl.prefetch ? -1 : hmp_find_key(g_cl.key);   /* (a level fetched ahead isn't here: no look, no list made again) */
     if (i >= 0 && hmp_root_c(i) == g_dl_root && hmp_map_path_c(i, g_dl_root, whole)) {
         struct map_head m;
         if (map_head_read(whole, &m)) scpy(old_shared, m.pack);
@@ -1518,9 +1567,15 @@ static void cl_finish(u32 now) {
     }
     g_shared_seen.t = 0;
     if (cache_files_forget_cached_map(g_cl.key)) lg("client: dropped the old build from Halo's map cache");
-    hmp_maps_scan();
-    if (had && !kept) hmp_maps_shared_release(old_shared, g_cl.key);
-    if (!hmp_use_root_c(hmp_find_key(g_cl.key), g_dl_root)) lg("client: the new copy isn't in the map list!");   /* (this one, whatever the clock says) */
+    /* (fetched ahead during a level: the map list is made again with the next lobby's, not with a level's memory) */
+    if (g_cl.prefetch) {
+        extern int hmp_maps_rescan_pending;
+        hmp_maps_rescan_pending = 1;
+    } else {
+        hmp_maps_scan();
+        if (had && !kept) hmp_maps_shared_release(old_shared, g_cl.key);
+        if (!hmp_use_root_c(hmp_find_key(g_cl.key), g_dl_root)) lg("client: the new copy isn't in the map list!");   /* (this one, whatever the clock says) */
+    }
     g_sess_key[0] = 0;
     lg("client: installed %s\\%s%s", k_root_name[g_dl_root], g_cl.key + 1, g_cl.upgrade ? " (the small copy, in place of the "
        "full-size one)" : had ? " (replacing the older copy)" : "");
@@ -1692,7 +1747,7 @@ static void cl_start(u32 now) {
     read_config();
     cl_tidy();
     g_cl.mismatch = 0;
-    if (!safe_key(g_cl.key + 1)) { cl_give_up(now, 0, "unusable folder name", 0); return; }
+    if (g_cl.prefetch != 2 && !safe_key(g_cl.key + 1)) { cl_give_up(now, 0, "unusable folder name", 0); return; }
     if (!g_host_addr) { cl_give_up(now, 0, "no host address", 0); return; }
     lg("client: checking %s with the host at %a (window up to %u KB)", g_cl.key, g_host_addr, rcv_window());
     g_cl.s = cl_socket(&e);
@@ -1714,14 +1769,14 @@ static void cl_connect(u32 now) {
     memset(&q, 0, sizeof q);
     q.magic = REQ_MAGIC; q.version = VERSION;
     scpy(q.key, g_cl.key);
-    q.flags = my_streams();
+    q.flags = g_cl.prefetch ? 1 | PREFETCH_FLAG : my_streams();
     q.machine = (u32)my_machine();
     q.shared_ok = (u32)g_cl.shared_ok;
     q.small = (u32)g_cl.upgrade;
     scpy(q.shared, g_cl.fetch);
     q.rtt = host_rtt();
     if (!q.rtt) q.rtt = g_cl.rtt;
-    i = hmp_find_key(g_cl.key);
+    i = g_cl.prefetch ? -1 : hmp_find_key(g_cl.key);
     if (i < 0 || !hmp_map_path_c(i, -1, g_p1) || !map_identity(g_p1, &q.have_size, &q.have_chk)) q.have_size = q.have_chk = 0;
     h = CreateFileA(tmp_file(g_p2, "resume.hmp", 0), GENERIC_READ, 1, 0, OPEN_EXISTING, 0, 0);
     if (h != INVALID_HANDLE) {                    /* a partial download of this map: offer to continue it */
@@ -1809,6 +1864,17 @@ static void cl_reply(u32 now) {
         return;
     }
     if (g_cl.rlen < (int)sizeof g_cl.r) return;
+    if (g_cl.prefetch && (g_cl.r.magic != REP_MAGIC || g_cl.r.status == REP_UNAVAILABLE || g_cl.r.status == REP_SAME)) {
+        u32 k;                                        /* (map prefetch: the list, or a level the host won't send ahead) */
+        if (g_cl.prefetch == 2 && g_cl.r.magic == REP_MAGIC && g_cl.r.streams == WHY_NEXT)
+            for (k = 0; k < g_cl.r.nfiles && k < MAX_FILES; k++) {
+                g_cl.r.f[k].name[31] = 0;
+                g_pf.missing[g_pf.count] = (char)(hmp_find_key(g_cl.r.f[k].name) < 0);   /* (looked up now: none later) */
+                scpy(g_pf.keys[g_pf.count++], g_cl.r.f[k].name);
+            }
+        if (g_cl.prefetch == 2) lg("client: the host's level may switch to %d level%s", g_pf.count, g_pf.count == 1 ? "" : "s");
+        cl_close(); g_cl.state = CL_OK; return;
+    }
     if (g_cl.r.magic == REP_MAGIC && g_cl.r.status == REP_SAME && hmp_find_key(g_cl.key) >= 0) {
         lg("client: same build as the host");
         cl_close(); rm_folder(tmp_dir(g_p1)); g_cl.state = CL_OK; g_status_on = 0; return;
@@ -1831,7 +1897,7 @@ static void cl_reply(u32 now) {
     if (g_cl.r.magic == REP_MAGIC && g_cl.r.status == REP_UNAVAILABLE) { cl_give_up(now, 0, "the host won't send this map", 0); return; }
     if ((g_cl.r.status != REP_SENDING && g_cl.r.status != REP_SHARED) || !cl_check_reply()) { cl_give_up(now, 0, "bad reply from the host", 0); return; }
     if (g_cl.upgrade && g_cl.r.status == REP_SENDING && !g_cl.shared_ok) { cl_give_up(now, 0, "the host's isn't small", 0); return; }
-    k = g_cl.fetch[0] ? -1 : hmp_find_key(g_cl.key);  /* (which copy to use and where this goes are settled before a shared file) */
+    k = g_cl.fetch[0] || g_cl.prefetch ? -1 : hmp_find_key(g_cl.key);  /* (which copy to use and where this goes are settled before a shared file) */
     if (k >= 0 && hmp_both_c(k)) {                      /* in both maps folders: maybe the other copy is the host's build */
         u32 sz, ck;
         int r2 = !hmp_root_c(k);
@@ -2358,7 +2424,7 @@ static void machines_tick(u32 now) {
         /* (sending, or all sent but not all received yet: the console hangs up once it has the map. Taken for done at
            the last byte sent, its held player was let in with seconds of the map still on the way, and the console,
            told to start, left the game with its download unfinished, v1.81) */
-        if ((c->state == 2 || c->state == 3) && !c->orphan && c->machine >= 0 && c->machine < 16) {
+        if ((c->state == 2 || c->state == 3) && !c->orphan && !c->prefetch && c->machine >= 0 && c->machine < 16) {
             g_machine_active[c->machine] = 1;
             g_machine_seen[c->machine] = now ? now : 1;
         }
@@ -2414,6 +2480,7 @@ boolean map_share_download_begin(char const *level_name, unsigned long version, 
     struct network_game_client *client = global_network_game_client_get();
     (void)message;
     if (!level_name || level_name[0] != '+' || slen(level_name) > 31 || global_network_game_server_get() || !client) return FALSE;
+    if (g_cl.prefetch) client_reset();               /* (a level fetched ahead: this download resumes it, at full speed) */
     if (g_cl.state && !g_cl.upgrade && !ieq(level_name, g_cl.key) && g_cl.state != CL_LEFT) return TRUE;   /* (already on it) */
     if (g_cl.state) client_reset();
     g_host_addr = host_address(client);
@@ -2525,6 +2592,32 @@ static void session_tick(int on) {
 
 /* every frame, menus and matches (main.c) */
 static char g_loaded_map[32];
+/* map prefetch: 20 s into a co-op level, the host's list of the levels it may switch to ("+?next": an older host
+   doesn't know it), then each one this console hasn't, one at a time, quietly; the switch's own download takes over
+   (map_share_download_begin) */
+boolean network_coop_active(void);
+static void prefetch_start(struct network_game_client *client, const char *key, int kind) {
+    if (g_cl.state) client_reset();
+    g_host_addr = host_address(client);
+    scpy(g_cl.key, key);
+    g_cl.prefetch = kind;
+    g_cl.state = CL_START;
+    maps_writable();
+    g_dl_root = g_writable ? 0 : 1;
+}
+static void prefetch_tick(struct network_game_client *client, const char *map, u32 now) {
+    if (ieq(g_pf.map, map)) { memset(&g_pf, 0, sizeof g_pf); scpy(g_pf.map, map); g_pf.since = now; }
+    if ((g_cl.state && g_cl.state != CL_OK) || now - g_pf.since < 20000) return;
+    if (!g_pf.asked) { g_pf.asked = 1; prefetch_start(client, "+?next", 2); return; }
+    while (g_pf.next < g_pf.count) {
+        const char *key = g_pf.keys[g_pf.next];
+        if (key[0] != '+' || !g_pf.missing[g_pf.next++]) continue;
+        lg("client: fetching %s ahead (the host's level may switch to it)", key);
+        prefetch_start(client, key, 1);
+        return;
+    }
+}
+
 void map_share_update(void) {
     u32 now = GetTickCount();
     struct network_game_server *server = global_network_game_server_get();
@@ -2558,11 +2651,14 @@ boot_held:
     if (server && map && map[0] == '+') host_tick(now);
     else if (g_lsock != NO_SOCK || host_sending()) host_stop();
     machines_tick(server ? now : 0);
-    /* a client: a download for a map the host has moved away from (or a game left) stops */
+    /* a client: a download for a map the host has moved away from (or a game left) stops; one fetched ahead goes on
+       while the level does */
     if (g_cl.state) {
-        if (!client || server || !map || ieq(map, g_cl.key)) client_reset();
+        int keep = g_cl.prefetch ? map && ieq(map, g_cl.key) && game_in_progress() : map && !ieq(map, g_cl.key);
+        if (!client || server || !keep) client_reset();
         else client_tick(now);
     }
+    if (client && !server && map && map[0] == '+' && game_in_progress() && network_coop_active()) prefetch_tick(client, map, now);
     /* (a full-size copy: the host's small one, asked for in the lobby; the game starting stops it, to go on in the next) */
     {
         int lobby = loaded && !ieq(loaded, "ui");     /* (the menus' map: the lobby, not a match) */

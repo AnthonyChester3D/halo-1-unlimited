@@ -1375,18 +1375,30 @@ long hmp_maps_visible_position(short card) { return card >= 0 && card < 3 ? hmp_
 "+X" are the same map, so a game's map is found either way) */
 #define LIBRARY_KEY "+Library/"
 
+/* a map was fetched ahead during a level (map prefetch, hmp_share.c): the list is made again when a map isn't found (the
+switch looking for the next level), not after each fetch (a scan reads every folder: seconds) */
+int hmp_maps_rescan_pending;
+
 long hmp_maps_find(char const *name)
 {
 	long i, n = sizeof(LIBRARY_KEY) - 1;
 	char other[48];
+	int pass;
 	if (!name || name[0] != '+') return NONE;
 	if (!hmp_maps_globals.scanned) hmp_maps_scan();
-	for (i = 0; i < hmp_maps_globals.map_count; i++) if (!ieq(MAP_KEY(i), name)) return i;
-	/* (not there: the other place's key, "+Library/X" for "+X" and the other way round) */
-	if (!_strnicmp(name, LIBRARY_KEY, n)) snprintf(other, sizeof(other), "+%s", name + n);
-	else if (!strchr(name, '/')) snprintf(other, sizeof(other), LIBRARY_KEY "%s", name + 1);
-	else return NONE;
-	for (i = 0; i < hmp_maps_globals.map_count; i++) if (!ieq(MAP_KEY(i), other)) return i;
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (i = 0; i < hmp_maps_globals.map_count; i++) if (!ieq(MAP_KEY(i), name)) return i;
+		/* (not there: the other place's key, "+Library/X" for "+X" and the other way round) */
+		other[0] = 0;
+		if (!_strnicmp(name, LIBRARY_KEY, n)) snprintf(other, sizeof(other), "+%s", name + n);
+		else if (!strchr(name, '/')) snprintf(other, sizeof(other), LIBRARY_KEY "%s", name + 1);
+		for (i = 0; other[0] && i < hmp_maps_globals.map_count; i++) if (!ieq(MAP_KEY(i), other)) return i;
+		/* (a map fetched ahead may be the one looked for: the list made again, once) */
+		if (pass || !hmp_maps_rescan_pending) break;
+		hmp_maps_rescan_pending = 0;
+		hmp_maps_scan();
+	}
 	return NONE;
 }
 

@@ -16,7 +16,12 @@ It also draws the line telling players about the vote to skip a cutscene
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
+#include "bitmaps/bitmap_group.h"
+#include "cache/texture_cache.h"
 #include "input/input.h"
+#include "interface/hud.h"
+#include "interface/hud_definitions.h"
+#include "interface/hud_draw.h"
 #include "interface/hud_messaging.h"
 #include "objects/objects.h"
 #include "rasterizer/rasterizer.h"
@@ -245,20 +250,59 @@ void coop_spectate_draw(
 	draw_bottom_text(text);
 }
 
+/* the cutscene skip vote: nothing until someone has voted (A during the cutscene), then in the bottom right
+corner the HUD's A button and "Skip 1/2" (Llama, 2026-11-26: was a white banner across the bottom, shown all
+cutscene, that named a keyboard key) */
 void coop_skip_vote_draw(
 	short local_player_index)
 {
-	short votes, voters;
+	short votes, voters, height;
 	boolean voted;
-	wchar_t text[96];
+	wchar_t text[16];
+	long font_index = hud_get_font_index();
+	real_argb_color color = *global_real_argb_white;
+	rectangle2d bounds, text_bounds, cursor_bounds;
+	struct font_header *font;
 
 	/* once, for the first local player */
-	if (local_player_index != local_player_get_next(NONE) || !network_coop_skip_vote_status(&votes, &voters, &voted))
+	if (local_player_index != local_player_get_next(NONE) || !network_coop_skip_vote_status(&votes, &voters, &voted) ||
+		votes <= 0 || font_index == NONE)
+	{
 		return;
-	if (voted)
-		usnprintf(text, NUMBEROF(text) - 1, L"VOTED TO SKIP   %d OF %d", votes, voters);
-	else
-		usnprintf(text, NUMBEROF(text) - 1, L"PRESS SPACE OR A TO VOTE TO SKIP   %d OF %d", votes, voters);
+	}
+	usnprintf(text, NUMBEROF(text) - 1, L"Skip %d/%d", votes, voters);
 	text[NUMBEROF(text) - 1] = 0;
-	draw_bottom_text(text);
+	font = font_definition_get(font_index);
+	height = (short)(font->ascending_height + font->descending_height);
+	bounds = render.camera.window_bounds;
+	bounds.x1 = (short)(bounds.x1 - 40);
+	bounds.y1 = (short)(bounds.y1 - 32);
+	bounds.y0 = (short)(bounds.y1 - height);
+	/* (draw mode: right justified) */
+	draw_string_set_draw_mode(font_index, NONE, 1, 0, &color);
+	draw_unicode_string_compute_bounds(&bounds, text, &text_bounds, &cursor_bounds);
+	rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, text);
+	/* the A button (the HUD messages' icon 0) just left of the words */
+	if (hud_globals && hud_globals->messaging.button_icons.count > 0)
+	{
+		struct icon_hud_element_definition const *icon = TAG_BLOCK_GET_ELEMENT(&hud_globals->messaging.button_icons, 0,
+			struct icon_hud_element_definition);
+		struct bitmap_data const *bitmap = NULL;
+		real_rectangle2d const *clip = NULL;
+
+		hud_retrieve_bitmap_and_bounding_rect(hud_globals->messaging.messaging_icons.index, icon->sequence_index, 0,
+			&bitmap, &clip);
+		if (bitmap && _texture_cache_bitmap_get_hardware_format((struct bitmap_data *)bitmap, FALSE, TRUE))
+		{
+			short width = (short)(clip ? (clip->x1 - clip->x0) * bitmap->width : bitmap->width);
+			short words = (short)(text_bounds.x1 - text_bounds.x0);
+			point2d point;
+
+			point.x = (short)(bounds.x1 - words - width - 12);
+			point.y = (short)(bounds.y1 - icon->offset.y);
+			/* (corner 2: bottom left) */
+			hud_draw_bitmap_direct(bitmap, 2, &point, clip, 1.0f, 0.0f,
+				TEST_FLAG(icon->flags, 1) ? icon->color : 0xFFFFFFFF, FALSE);
+		}
+	}
 }
