@@ -775,7 +775,13 @@ long tag_loaded(
 #if defined(HALO_XBOX_TARGET)
 	struct tag_loaded_kept *kept = NULL;
 	unsigned long length = 0;
+#endif
 
+	/* port (v1.205): no name, no tag. A map's empty references have no name (NULL), and v1.185's kept answers read it
+	before anything else (Precipice's vehicle HUD: a crash reading address 0) */
+	if (!name)
+		return NONE;
+#if defined(HALO_XBOX_TARGET)
 	if (cache_file_globals.tags_loaded && group_tag && name[0])
 	{
 		unsigned long hash = (unsigned long)group_tag * 2654435761u;

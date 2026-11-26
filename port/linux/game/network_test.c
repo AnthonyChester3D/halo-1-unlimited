@@ -1611,7 +1611,7 @@ void network_test_update(
 				struct game_variant variant;
 
 				/* (a level of its own path, else a multiplayer map's name) */
-				if (strchr(network_test.map_name, '\\'))
+				if (strchr(network_test.map_name, '\\') || network_test.map_name[0] == '+')   /* (a folder map's key too) */
 					snprintf(path, sizeof(path), "%s", network_test.map_name);
 				else
 					snprintf(path, sizeof(path), "levels\\test\\%s\\%s", network_test.map_name, network_test.map_name);

@@ -2507,6 +2507,50 @@ static void vehicle_rest_test_note(
 }
 #endif
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.200): whether a vehicle sits empty and still, for objects.c objects_update, which then leaves it alone
+(opence.ini resting_objects): alive, at rest (so its physics was skipped already), nobody in it, its controls settled,
+nothing running in it as a unit, its own weapons idle (items/weapons.c weapon_held_idle) and its damage idle
+(objects.c object_damage_idle). Its update then changed nothing in it but a timer for the units' turn at their
+illumination and its turret's last-held time (lab OXBOX_REST_CHECK: Blood Gulch's parked vehicles, xemu) */
+boolean vehicle_resting_idle(
+	long vehicle_index)
+{
+	boolean weapon_held_idle(long weapon_index);
+	boolean object_damage_idle(struct object_datum const *object);
+	struct vehicle_datum *vehicle = vehicle_datum_get(vehicle_index);
+	long child;
+
+	if (TEST_FLAG(vehicle->object.damage_flags, _object_dead_bit) ||
+		!TEST_FLAG(vehicle->object.flags, _object_at_rest_bit) ||
+		vehicle->object.parent_object_index != NONE ||
+		vehicle->unit.driver_object_index != NONE || vehicle->unit.gunner_object_index != NONE)
+	{
+		return FALSE;
+	}
+	if (vehicle->vehicle.stop_time != 0 || vehicle->vehicle.upending_ticks != 0 ||
+		vehicle->vehicle.speed != 0.0f || vehicle->vehicle.slide != 0.0f || vehicle->vehicle.turn != 0.0f ||
+		vehicle->unit.seat_power[0] != 0.0f || vehicle->unit.seat_power[1] != 0.0f)
+	{
+		return FALSE;
+	}
+	if (vehicle->unit.body_stun_ticks != 0 || vehicle->unit.persistent_control_timer != 0 ||
+		vehicle->unit.gunner_inactive_ticks != CHAR_MAX ||
+		vehicle->unit.weapon_drop_delay_ticks != 0 ||
+		(vehicle->unit.flags & (FLAG(_unit_active_camouflaged_bit) | FLAG(_unit_super_camouflaged_bit))) != 0 ||
+		!object_damage_idle((struct object_datum const *)vehicle))
+	{
+		return FALSE;
+	}
+	for (child = vehicle->object.first_child_object_index; child != NONE; child = object_get(child)->object.next_object_index)
+	{
+		if (object_get(child)->object.type != _object_type_weapon || !weapon_held_idle(child))
+			return FALSE;
+	}
+	return TRUE;
+}
+#endif
+
 boolean vehicle_update(
 	long vehicle_index)
 {

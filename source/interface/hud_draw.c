@@ -1437,6 +1437,12 @@ void hud_draw_static_element(
 
 	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
 
+	/* port (v1.205): an element with no bitmap draws nothing. A converted map's vehicle HUD (Precipice, all-vehicle
+	CTF) had one: its empty reference's name is NULL (as every empty reference's is in a map), and looking it up by
+	name read address 0 */
+	if (static_element->interface_bitmap.index == NONE)
+		return;
+
 	bitmap_group = bitmap_group_get(
 		verify_tag_reference(&static_element->interface_bitmap));
 	bitmap = bitmap_group_get_bitmap_from_sequence(
@@ -1889,6 +1895,10 @@ void hud_draw_meter(
 	struct bitmap_data *bitmap;
 
 	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
+
+	/* port (v1.205): a meter with no bitmap draws nothing (hud_draw_static_element) */
+	if (meter->meter_bitmap.index == NONE)
+		return;
 
 	bitmap_group = bitmap_group_get(
 		verify_tag_reference(&meter->meter_bitmap));

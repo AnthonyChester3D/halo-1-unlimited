@@ -130,6 +130,78 @@ static int __cdecl compare_rendered_particles(
 	return result;
 }
 
+#if defined(HALO_XBOX_TARGET)
+/* oxbox (v1.204): the visible particles put in groups (particle type, cluster, the first-person weapon's) by a radix
+sort of that key, in place of qsort and compare_rendered_particles' calls (0.6% of a console Blood Gulch game with
+bots): the same groups in the same order, as compare_rendered_particles orders them; within a group the order was
+qsort's arbitrary one and is now the particles' own (lab OXBOX_PARTICLE_SORT_CHECK compares the groups). FALSE: a
+cluster past what the key holds, for qsort */
+static unsigned long rendered_particle_key(
+	struct rendered_particle_datum const *particle)
+{
+	return (unsigned long)(unsigned short)(particle->definition_index + 0x8000) << 16 |
+		(unsigned long)(unsigned short)particle->cluster_index << 1 | (unsigned long)(particle->attached_to_first_person_weapon != 0);
+}
+
+static boolean rendered_particles_sort(
+	struct rendered_particle_datum *particles,
+	short count)
+{
+	struct rendered_particle_datum other[MAXIMUM_RENDERED_PARTICLES];   /* (8 KB of the main thread's stack, not resident) */
+	struct rendered_particle_datum *from = particles, *to = other;
+	unsigned long first;
+	short k;
+	short pass;
+
+	for (k = 0; k < count; k++)
+	{
+		if (particles[k].cluster_index < 0)
+			return FALSE;
+	}
+	first = rendered_particle_key(&particles[0]);
+	for (pass = 0; pass < 4; pass++)
+	{
+		long counts[256];
+		long total = 0;
+		short shift = (short)(pass * 8);
+		boolean all_same = TRUE;
+
+		for (k = 0; k < 256; k++)
+			counts[k] = 0;
+		for (k = 0; k < count; k++)
+		{
+			unsigned long key = rendered_particle_key(&from[k]);
+
+			counts[(key >> shift) & 0xFF]++;
+			all_same = all_same && ((key ^ first) >> shift & 0xFF) == 0;
+		}
+		if (all_same)
+			continue;
+		for (k = 0; k < 256; k++)
+		{
+			long n = counts[k];
+
+			counts[k] = total;
+			total += n;
+		}
+		for (k = 0; k < count; k++)
+			to[counts[(rendered_particle_key(&from[k]) >> shift) & 0xFF]++] = from[k];
+		{
+			struct rendered_particle_datum *swap = from;
+
+			from = to;
+			to = swap;
+		}
+	}
+	if (from != particles)
+	{
+		for (k = 0; k < count; k++)
+			particles[k] = from[k];
+	}
+	return TRUE;
+}
+#endif
+
 void render_particles(
 	void)
 {
@@ -204,11 +276,52 @@ void render_particles(
 		{
 			short group_count = 0;
 
+#if defined(HALO_XBOX_TARGET)
+#if defined(OXBOX_PARTICLE_SORT_CHECK)
+			{
+				/* lab: the radix sort's groups against qsort's, key for key, every frame */
+				static struct rendered_particle_datum copy[MAXIMUM_RENDERED_PARTICLES];
+				static unsigned long frames, differ;
+				short k;
+
+				for (k = 0; k < rendered_particle_count; k++)
+					copy[k] = rendered_particles[k];
+				qsort(copy, rendered_particle_count, sizeof(struct rendered_particle_datum), compare_rendered_particles);
+				if (rendered_particles_sort(rendered_particles, rendered_particle_count))
+				{
+					for (k = 0; k < rendered_particle_count; k++)
+					{
+						if (rendered_particle_key(&copy[k]) != rendered_particle_key(&rendered_particles[k]))
+						{
+							differ++;
+							break;
+						}
+					}
+				}
+				else
+				{
+					for (k = 0; k < rendered_particle_count; k++)
+						rendered_particles[k] = copy[k];
+				}
+				if (++frames % 100 == 0)
+				{
+					void platform_log(char const *format, ...);
+
+					platform_log("particles: sort check: %lu frames, %lu with a different group order; %d particles now",
+						frames, differ, rendered_particle_count);
+				}
+			}
+#else
+			if (!rendered_particles_sort(rendered_particles, rendered_particle_count))
+#endif
+#endif
+#if !defined(OXBOX_PARTICLE_SORT_CHECK)
 			qsort(
 				rendered_particles,
 				rendered_particle_count,
 				sizeof(struct rendered_particle_datum),
 				compare_rendered_particles);
+#endif
 
 			{
 				struct rendered_particle_datum *rendered_particle =

@@ -1278,6 +1278,15 @@ void rasterizer_set_model_skinning(
 		"c:\\halo\\SOURCE\\rasterizer\\xbox\\rasterizer_xbox.c",
 		2751,
 		skinning->node_matrix_count>0 && skinning->node_matrix_count<=MAXIMUM_NODES_PER_MODEL);
+#if defined(HALO_XBOX_TARGET)
+	/* port: an Xbox-format model names its nodes directly (no part palettes: custom_edition_part_palette is the
+	PC's): one of more nodes than the constants hold gets its first ones. Nothing was sent before, and such a
+	model was drawn with the last model's matrices (HMP's Canyon brute, 47 nodes, whose vertices name 0-34:
+	spikes to the player's hands and doors) */
+	short node_count = MIN(skinning->node_matrix_count, RASTERIZER_MAXIMUM_NODES_PER_MODEL - 1);
+#else
+	short node_count = skinning->node_matrix_count;
+
 	/* port: a model of more nodes than the constants hold is skinned a
 	part's own nodes at a time (rasterizer_model_part_skinning) */
 	if (skinning->node_matrix_count >= RASTERIZER_MAXIMUM_NODES_PER_MODEL)
@@ -1288,15 +1297,16 @@ void rasterizer_set_model_skinning(
 	}
 	many_node_matrices = NULL;
 	many_node_matrix_count = 0;
-	for (node_index = 0; node_index < skinning->node_matrix_count; node_index++)
+#endif
+	for (node_index = 0; node_index < node_count; node_index++)
 		node_matrix_constants(vsh_constants__nodematrices[node_index], &skinning->node_matrices[node_index]);
 	D3DDevice_SetVertexShaderConstant(
 		-36,
 		vsh_constants__nodematrices,
-		skinning->node_matrix_count * 3);
+		node_count * 3);
 	if (rasterizer_debug_options.statistics_mode)
 		rasterizer_frame_statistics.vertex_shader_skinning_constant_bytes +=
-			skinning->node_matrix_count * sizeof(vsh_constants__nodematrices[0]);
+			node_count * sizeof(vsh_constants__nodematrices[0]);
 	return;
 }
 

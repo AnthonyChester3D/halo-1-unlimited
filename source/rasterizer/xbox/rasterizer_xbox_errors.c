@@ -98,7 +98,7 @@ typedef long hresult;
 
 /* ---------- prototypes */
 
-void rasterizer_error(
+void (rasterizer_error)(
 	hresult error_result,
 	char const *format,
 	...);
@@ -112,7 +112,7 @@ hresult __stdcall D3DXGetErrorStringA(
 
 /* ---------- public code */
 
-void rasterizer_error(
+void (rasterizer_error)(
 	hresult error_result,
 	char const *format,
 	...)

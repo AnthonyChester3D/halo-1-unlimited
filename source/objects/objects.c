@@ -2808,6 +2808,48 @@ void object_compute_node_matrices(
 			object_type_preprocess_node_orientations(object_index, node_orientations);
 		}
 
+#if defined(OXBOX_TPOSE_CHECK)
+		/* lab: a live biped whose nodes came out mostly as the model's own (a T-pose) or identity, before the blend:
+		what it was playing */
+		if (object->object.type == _object_type_biped && !TEST_FLAG(object->object.damage_flags, _object_dead_bit) && model_node_count >= 10 &&
+			unit_get(object_index)->unit.player_index != NONE)
+		{
+			static long told;
+			short k, as_model = 0, as_identity = 0;
+			struct model_node const *model_nodes = TAG_BLOCK_GET_ELEMENT(&model->nodes, 0, struct model_node);
+
+			for (k = 1; k < model_node_count; k++)
+			{
+				real_quaternion const *q = &node_orientations[k].rotation;
+
+				as_model += !memcmp(q, &model_nodes[k].default_rotation, sizeof(*q));
+				as_identity += q->v.i == 0.0f && q->v.j == 0.0f && q->v.k == 0.0f;
+			}
+			if ((as_model * 4 >= (model_node_count - 1) * 3 || as_identity * 4 >= (model_node_count - 1) * 3) && told < 40)
+			{
+				void platform_log(char const *format, ...);
+				struct unit_datum *unit = unit_get(object_index);
+				struct animation_graph *graph = object->object.animation.animation_graph_index != NONE ?
+					animation_graph_definition_get(object->object.animation.animation_graph_index) : NULL;
+				short base = object->object.animation.state.index;
+				short soft = unit->unit.animation.soft_ping_animation.index;
+
+				told++;
+				platform_log("tpose: %s at tick %ld: %d of %d nodes as the model's, %d identity; unit state %d, base "
+					"animation %d '%s' frame %d of %d, soft ping %d '%s', blend %d/%d",
+					tag_get_name(object->definition_index), game_time_get(), as_model, model_node_count - 1, as_identity,
+					(int)unit->unit.animation.state, base,
+					graph && VALID_INDEX(base, graph->animations.count) ?
+						TAG_BLOCK_GET_ELEMENT(&graph->animations, base, struct animation)->name : "-",
+					object->object.animation.state.frame_index,
+					graph && VALID_INDEX(base, graph->animations.count) ?
+						TAG_BLOCK_GET_ELEMENT(&graph->animations, base, struct animation)->frame_count : 0,
+					soft, graph && VALID_INDEX(soft, graph->animations.count) ?
+						TAG_BLOCK_GET_ELEMENT(&graph->animations, soft, struct animation)->name : "-",
+					object->object.animation.interpolation_frame_index, object->object.animation.interpolation_frame_count);
+			}
+		}
+#endif
 		if (object->object.animation.interpolation_frame_count>0)
 		{
 			match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 2777, !TEST_FLAG(_object_mask_cannot_interpolate, object->object.type));
@@ -3565,6 +3607,17 @@ void object_set_position(
 {
 	struct object_datum *object = object_get(object_index);
 
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.200): moved, a resting object is updated again (objects_update's resting_objects: its lights and what's
+	attached to it follow in its update; a client's copy of a vehicle the host moves is kept at rest) */
+	if (object->object.type != _object_type_biped &&
+		((position && memcmp(position, &object->object.position, sizeof(*position))) ||
+		(forward && memcmp(forward, &object->object.forward, sizeof(*forward))) ||
+		(up && memcmp(up, &object->object.up, sizeof(*up)))))
+	{
+		object->object.idle_ticks = 0;
+	}
+#endif
 	object_disconnect_from_map(object_index);
 
 	if (position)
@@ -3611,6 +3664,11 @@ void object_translate(
 		new_position);
 
 	OXBOX_PERF_TRANSLATE_START()
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox (v1.200): moved (carried by an elevator, say), a resting object is updated again: object_set_position */
+	if (object->object.type != _object_type_biped && memcmp(new_position, &object->object.position, sizeof(*new_position)))
+		object->object.idle_ticks = 0;
+#endif
 	object_disconnect_from_map(object_index);
 	object->object.position = *new_position;
 	object_reconnect_to_map(object_index, new_location);
@@ -4009,6 +4067,23 @@ boolean object_force_inside_bsp(
 	return result;
 }
 
+#if defined(HALO_XBOX_TARGET)
+extern int oxbox_setting_resting_objects;   /* (port/oxbox/oxbox_entry.c, v1.200: object_connect_lights, objects_update) */
+#endif
+#if defined(OXBOX_TYPE_STEPS)
+/* lab: each object type's update by step (object_update's), its own time (children's in theirs), logged every 300 ticks
+by objects_update; and how many had their lights connected, were at rest, animated or kept their node matrices */
+unsigned long long type_step_cycles[NUMBER_OF_OBJECT_TYPES][8];
+unsigned long type_step_counts[NUMBER_OF_OBJECT_TYPES][6];
+static unsigned long long type_step_last;
+#define TYPE_STEP(step) { unsigned long long type_step_now = __builtin_ia32_rdtsc(); \
+	type_step_cycles[object->object.type][step] += type_step_now - type_step_last; type_step_last = type_step_now; }
+#define TYPE_STEP_RESTART() { type_step_last = __builtin_ia32_rdtsc(); }
+#else
+#define TYPE_STEP(step)
+#define TYPE_STEP_RESTART()
+#endif
+
 static boolean object_update(
 	long object_index)
 {
@@ -4022,6 +4097,16 @@ static boolean object_update(
 	boolean result = TRUE;
 	if (!TEST_FLAG(header->flags, _object_header_do_not_update_bit))
 	{
+#if defined(OXBOX_TYPE_STEPS)
+		type_step_counts[object->object.type][0]++;
+		if (TEST_FLAG(object->object.flags, _object_at_rest_bit))
+			type_step_counts[object->object.type][2]++;
+		if (TEST_FLAG(object->object.flags, _object_animates_automatically_bit))
+			type_step_counts[object->object.type][3]++;
+		if (TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
+			type_step_counts[object->object.type][4]++;
+		TYPE_STEP_RESTART()
+#endif
 		if (TEST_FLAG(object->object.flags, _object_garbage_bit))
 		{
 			++object_globals->active_garbage_object_count;
@@ -4043,14 +4128,17 @@ static boolean object_update(
 
 		object_type_update(object_index);
 		OXBOX_PERF_OBJECT_MARK_COUNTED(_oxbox_perf_object_type_update)
+		TYPE_STEP(0)
 		if (object_definition->object.collision_model.index!=NONE)
 		{
 			object_damage_update(object_index);
 		}
 		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_damage)
+		TYPE_STEP(1)
 
 		object_type_export_function_values(object_index);
 		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_export_functions)
+		TYPE_STEP(2)
 
 		if (!TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
 		{
@@ -4060,10 +4148,12 @@ static boolean object_update(
 				machine_move_elevator_riders(object_index, &elevator_position);
 		}
 		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_node_matrices)
+		TYPE_STEP(3)
 
 		object_compute_function_values(object_index);
 		object_compute_change_colors(object_index);
 		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_functions_colors)
+		TYPE_STEP(4)
 
 		if (
 			TEST_FLAG(object->object.flags, _object_dynamic_lighting_recompute_bit) &&
@@ -4074,8 +4164,12 @@ static boolean object_update(
 		)
 		{
 			object_connect_lights(object_index, TRUE, TRUE);
+#if defined(OXBOX_TYPE_STEPS)
+			type_step_counts[object->object.type][1]++;
+#endif
 		}
 		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_connect_lights)
+		TYPE_STEP(5)
 
 		// Update children (if we have any)
 		if (object->object.first_child_object_index!=NONE)
@@ -4083,6 +4177,7 @@ static boolean object_update(
 			OXBOX_PERF_OBJECT(_oxbox_perf_object_event_children_begin)
 			object_update(object->object.first_child_object_index);
 			OXBOX_PERF_OBJECT(_oxbox_perf_object_event_children_end)
+			TYPE_STEP_RESTART()
 		}
 
 		if (object->object.parent_object_index!=NONE)
@@ -4090,11 +4185,13 @@ static boolean object_update(
 			if (object->object.next_object_index!=NONE)
 			{
 				object_update(object->object.next_object_index);
+				TYPE_STEP_RESTART()
 			}
 		}
 
 		object_postprocess_node_matrices(object_index);
 		OXBOX_PERF_OBJECT_MARK(_oxbox_perf_object_postprocess)
+		TYPE_STEP(6)
 	}
 
 	return result;
@@ -4669,6 +4766,278 @@ unsigned long corpse_still_reasons[9];   /* lab: why dead bodies weren't still (
 unsigned long corpse_child_types[16];   /* lab: the types of what's attached to dead bodies */
 #endif
 
+#if defined(HALO_XBOX_TARGET)
+#include "objects/scenery.h"
+#include "items/items.h"
+/* oxbox (v1.200): nothing in an object's damage running: no shield charging or draining, no damage fading, no death
+pending (damage.c object_damage_update then changes nothing); damage done to it sets one of these */
+boolean object_damage_idle(
+	struct object_datum const *object)
+{
+	if ((object->object.damage_flags & (FLAG(_object_die_act_of_god_bit) | FLAG(_object_die_act_of_god_silent_bit) |
+		FLAG(_object_die_act_of_god_no_statistics_bit) | FLAG(_object_shield_charging_bit) |
+		FLAG(_object_shield_over_charging_bit))) != 0)
+	{
+		return FALSE;
+	}
+	if (object->object.maximum_shield_vitality > 0.0f && object->object.shield_vitality != 1.0f)
+		return FALSE;
+	return object->object.body_damage_decay_timer == NONE && object->object.shield_damage_decay_timer == NONE &&
+		object->object.shield_stun_ticks == 0;
+}
+
+/* oxbox (v1.200): whether a top-level object's update would change nothing (objects_update then leaves it out,
+opence.ini resting_objects): a vehicle sitting empty and still (vehicles.c vehicle_resting_idle), equipment lying at
+rest (a grenade, a powerup), scenery with no animation and no functions (most of a map's: a function can change with
+time). Nothing attached, no animation being blended in, damage idle. Lab OXBOX_REST_CHECK compares their memory
+before and after an update all the same. */
+static boolean object_resting_idle(
+	long object_index,
+	long type)
+{
+	boolean vehicle_resting_idle(long vehicle_index);
+	struct object_datum *object = object_get(object_index);
+
+	if (object->object.parent_object_index != NONE || object->object.animation.interpolation_frame_count != 0)
+		return FALSE;
+	switch (type)
+	{
+	case _object_type_vehicle:
+		return vehicle_resting_idle(object_index);
+	case _object_type_equipment:
+	{
+		boolean item_resting_still(long item_index);   /* (items.c: no spin left, not on glass) */
+
+		return object->object.first_child_object_index == NONE && item_resting_still(object_index) &&
+			object_damage_idle(object);
+	}
+	case _object_type_machine:
+	case _object_type_control:
+	{
+		/* (v1.203: devices.c device_resting_idle, device_machines.c machine_resting_idle: doors shut, switches
+		unthrown) */
+		boolean machine_resting_idle(long machine_index);
+		boolean device_resting_idle(long device_index);
+
+		return object->object.first_child_object_index == NONE &&
+			(type == _object_type_machine ? machine_resting_idle(object_index) : device_resting_idle(object_index)) &&
+			object_damage_idle(object);
+	}
+	case _object_type_scenery:
+	{
+		return object->object.first_child_object_index == NONE &&
+			!TEST_FLAG(scenery_get(object_index)->flags, 0) &&
+			(object->object.flags & (FLAG(_object_animates_automatically_bit) | FLAG(_object_dynamic_lighting_recompute_bit))) == 0 &&
+			object_damage_idle(object);
+	}
+	}
+	return FALSE;
+}
+
+/* (v1.203) what a resting object's update still does when it has functions: its function values and colours worked
+out again, which can change with time alone (a powerup's pulse: an MCC pack's camouflage changed every tick; a
+door's or panel's lights), so nothing it draws freezes */
+static void object_resting_functions(
+	long object_index)
+{
+	struct object_definition const *definition = object_definition_get(object_get(object_index)->definition_index);
+
+	if (definition->object.functions.count || definition->object.change_colors.count)
+	{
+		object_type_export_function_values(object_index);
+		object_compute_function_values(object_index);
+		object_compute_change_colors(object_index);
+	}
+}
+
+/* (v1.200: idle this many updates in a row first: a vehicle's or a grenade's first updates after it's placed still set
+things, its bounding sphere, a vehicle's gunner-idle count; object.idle_ticks counts them, only a dead biped's
+otherwise: game_engine_update_purge) */
+#define RESTING_OBJECT_SETTLE_TICKS 150
+
+static boolean object_resting_settled(
+	long object_index,
+	long type)
+{
+	struct object_datum *object;
+
+	if (type != _object_type_vehicle && type != _object_type_equipment && type != _object_type_scenery &&
+		type != _object_type_machine && type != _object_type_control)
+	{
+		return FALSE;
+	}
+	object = object_get(object_index);
+	if (!object_resting_idle(object_index, type))
+	{
+		object->object.idle_ticks = 0;
+		return FALSE;
+	}
+	if (object->object.idle_ticks < RESTING_OBJECT_SETTLE_TICKS)
+	{
+		object->object.idle_ticks++;
+		return FALSE;
+	}
+	return TRUE;
+}
+#endif
+
+#if defined(OXBOX_REST_CHECK)
+/* lab: the objects object_resting_idle would leave out still updated, their memory (and their children's) compared
+before and after: which words an update changes in them */
+
+static unsigned char rest_before[24576];
+static unsigned long rest_counts[NUMBER_OF_OBJECT_TYPES][3];   /* (candidates, changed, updates) */
+static struct { unsigned short offset; unsigned long count; } rest_words[NUMBER_OF_OBJECT_TYPES][32];
+static long rest_ticks, rest_last_tick = NONE;
+
+static void rest_word(
+	long type,
+	unsigned short offset)
+{
+	long k;
+
+	for (k = 0; k < 32 && rest_words[type][k].count; k++)
+	{
+		if (rest_words[type][k].offset == offset)
+		{
+			rest_words[type][k].count++;
+			return;
+		}
+	}
+	if (k < 32)
+	{
+		rest_words[type][k].offset = offset;
+		rest_words[type][k].count = 1;
+	}
+}
+
+static void rest_check_update(
+	long object_index,
+	long type)
+{
+	long parts[9];
+	long part_count = 0, part, child;
+	unsigned long used = 0;
+	boolean changed = FALSE;
+
+	rest_counts[type][2]++;
+	if (!object_resting_settled(object_index, type))
+	{
+		object_update(object_index);
+		return;
+	}
+	/* (what the skip still does, first: then the whole update should change nothing more) */
+	if (type == _object_type_machine)
+	{
+		void machine_resting_update(long machine_index);
+
+		machine_resting_update(object_index);
+	}
+	object_resting_functions(object_index);
+	parts[part_count++] = object_index;
+	for (child = object_get(object_index)->object.first_child_object_index; child != NONE && part_count < 9;
+		child = object_get(child)->object.next_object_index)
+	{
+		parts[part_count++] = child;
+	}
+	for (part = 0; part < part_count; part++)
+	{
+		struct object_header_datum *header = object_header_get(parts[part]);
+
+		if (used + header->data_size <= sizeof(rest_before))
+			memcpy(rest_before + used, header->datum, header->data_size);
+		used += header->data_size;
+	}
+	object_update(object_index);
+	if (used <= sizeof(rest_before))
+	{
+		used = 0;
+		for (part = 0; part < part_count; part++)
+		{
+			struct object_header_datum *header = object_header_get(parts[part]);
+			unsigned char const *after = (unsigned char const *)header->datum;
+			long offset;
+
+			for (offset = 0; offset + 4 <= header->data_size; offset += 4)
+			{
+				if (memcmp(rest_before + used + offset, after + offset, 4))
+				{
+					unsigned short word = (unsigned short)((part ? 0x8000 : 0) | offset);
+					static long told_ticks = NONE, told;
+
+					changed = TRUE;
+					rest_word(type, word);
+					/* (a vehicle's unit timer, animation frame and turret's last-held time are known: anything else is
+					named, a few a window) */
+					if (!(type == _object_type_vehicle && (word == 0x1bc || word == 0x80 || word == 0x81b4)))
+					{
+						if (told_ticks != rest_ticks / 300 * 0 + (game_time_get() / 300))
+						{
+							told_ticks = game_time_get() / 300;
+							told = 0;
+						}
+						if (told++ < 4)
+						{
+							void platform_log(char const *format, ...);
+							struct object_datum *whole = object_get(object_index);
+
+							platform_log("rest check: %s changed at %s+%x (%08lx -> %08lx), its flags %08lx", 
+								tag_get_name(whole->definition_index), part ? "child " : "", offset,
+								*(unsigned long const *)(rest_before + used + offset), *(unsigned long const *)(after + offset),
+								whole->object.flags);
+						}
+					}
+				}
+			}
+			used += header->data_size;
+		}
+	}
+	rest_counts[type][0]++;
+	rest_counts[type][1] += changed;
+}
+
+static void rest_check_log(
+	void)
+{
+	if (game_time_get() == rest_last_tick)
+		return;
+	rest_last_tick = game_time_get();
+	if (++rest_ticks >= 300)
+	{
+		void platform_log(char const *format, ...);
+		static char const *const names[NUMBER_OF_OBJECT_TYPES] = { "biped", "vehicle", "weapon", "equipment",
+			"garbage", "projectile", "scenery", "machine", "control", "light fixture", "placeholder", "sound scenery" };
+		long type;
+
+		for (type = 0; type < NUMBER_OF_OBJECT_TYPES; type++)
+		{
+			char text[400];
+			long k, length = 0;
+
+			if (!rest_counts[type][0])
+				continue;
+			for (k = 0; k < 32 && rest_words[type][k].count && length < (long)sizeof(text) - 24; k++)
+			{
+				char piece[32];
+				long n;
+
+				csprintf(piece, (char *)" %s%x:%lu", rest_words[type][k].offset & 0x8000 ? "c+" : "+",
+					rest_words[type][k].offset & 0x7FFF, rest_words[type][k].count);
+				for (n = 0; piece[n] && length < (long)sizeof(text) - 1; n++)
+					text[length++] = piece[n];
+			}
+			text[length] = 0;
+			platform_log("rest check: %s: %lu updated a tick, %lu would be skipped; %lu changed in %ld ticks; words:%s",
+				names[type], rest_counts[type][2] / rest_ticks, rest_counts[type][0] / rest_ticks,
+				rest_counts[type][1], rest_ticks, text);
+		}
+		csmemset(rest_counts, 0, sizeof(rest_counts));
+		csmemset(rest_words, 0, sizeof(rest_words));
+		rest_ticks = 0;
+	}
+}
+#endif
+
 void objects_update(
 	void)
 {
@@ -4685,6 +5054,7 @@ void objects_update(
 	unsigned long far_players_skipped;   /* (oxbox v1.195: below) */
 	boolean resting_corpses;
 	boolean resting_weapons;
+	boolean resting_objects;
 #endif
 
 	profile_enter(section);
@@ -4758,6 +5128,11 @@ void objects_update(
 		resting_corpses = oxbox_setting_resting_corpses && game_engine_running() && !network_coop_active();
 		/* (v1.196: idle weapons lying still, below; in multiplayer as well) */
 		resting_weapons = oxbox_setting_resting_weapons && game_engine_running() && !network_coop_active();
+		/* (v1.200: parked vehicles, equipment lying still, still scenery, below; the campaign's too) */
+		resting_objects = oxbox_setting_resting_objects;
+#if defined(OXBOX_REST_CHECK)
+		resting_objects = FALSE;   /* (lab: they're updated and compared instead: rest_check_update) */
+#endif
 	}
 #endif
 	object_header = (struct object_header_datum *)object_header_data->data;
@@ -4799,6 +5174,9 @@ void objects_update(
 #endif
 					if (unit_corpse_still(object_index))
 					{
+						/* (v1.200: biped_update counted a body's ticks lying still, and the game engine takes it away after
+						30 s of them: game_engine_update_purge; v1.195-199 left the bodies until the garbage limit) */
+						++object_get(object_index)->object.idle_ticks;
 						skip_update = TRUE;
 						if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
 							TEST_FLAG(object_get(object_index)->object.flags, _object_garbage_bit))
@@ -4843,6 +5221,7 @@ void objects_update(
 
 						weapon_idle_reasons[0]++;
 #endif
+						object_resting_functions(object_index);   /* (v1.203: a glow that pulses keeps pulsing) */
 						skip_update = TRUE;
 						if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
 							TEST_FLAG(object_get(object_index)->object.flags, _object_garbage_bit))
@@ -4860,6 +5239,30 @@ void objects_update(
 							weapon_idle_reasons[weapon_resting_idle_reason]++;
 					}
 #endif
+				}
+				/* oxbox (v1.200): a vehicle parked with nobody in it, equipment lying still, and scenery with no animation
+				and no functions (object_resting_idle): an update changed nothing in them (lab OXBOX_REST_CHECK), yet
+				each cost about as much as its moving kind: 8 parked vehicles 1.1 ms of a console tick on Blood Gulch
+				(their lights unhooked from the map and hooked back on, every node and the unit's controls worked out
+				again), each scenery piece 6 us, mostly its node matrices made again. Anything that wakes one sets what
+				the rule looks at: getting in, a push (the at-rest bit), damage, an animation or a parent. opence.ini
+				resting_objects = 0: every tick, as before. */
+				if (!skip_update && resting_objects && object_resting_settled(object_index, object_header->type))
+				{
+					/* (v1.203: a resting machine still looks for someone to open for, if it's an automatic door) */
+					if (object_header->type == _object_type_machine)
+					{
+						void machine_resting_update(long machine_index);
+
+						machine_resting_update(object_index);
+					}
+					object_resting_functions(object_index);
+					skip_update = TRUE;
+					if (!TEST_FLAG(object_header->flags, _object_header_do_not_update_bit) &&
+						TEST_FLAG(object_get(object_index)->object.flags, _object_garbage_bit))
+					{
+						++object_globals->active_garbage_object_count;
+					}
 				}
 #endif
 				if (!skip_update &&
@@ -4995,13 +5398,58 @@ void objects_update(
 					}
 					else
 #endif
+#if defined(OXBOX_REST_CHECK)
+					rest_check_update(object_index, object_header->type);
+#else
 					object_update(object_index);
+#endif
 				}
 			}
 		}
 		++i;
 	}
 	OXBOX_PERF_OBJECT(_oxbox_perf_object_event_loop_end)
+#if defined(OXBOX_REST_CHECK)
+	rest_check_log();
+#endif
+#if defined(OXBOX_TYPE_STEPS)
+	{
+		static long type_ticks;
+
+		if (++type_ticks >= 300)
+		{
+			void platform_log(char const *format, ...);
+			static char const *const names[NUMBER_OF_OBJECT_TYPES] = { "biped", "vehicle", "weapon", "equipment",
+				"garbage", "projectile", "scenery", "machine", "control", "light fixture", "placeholder", "sound scenery" };
+			long type, step;
+
+			for (type = 0; type < NUMBER_OF_OBJECT_TYPES; type++)
+			{
+				unsigned long n = type_step_counts[type][0];
+				unsigned long long all = 0;
+				unsigned long each[7];
+
+				if (!n)
+					continue;
+				for (step = 0; step < 7; step++)
+				{
+					all += type_step_cycles[type][step];
+					each[step] = (unsigned long)(type_step_cycles[type][step] / n);
+				}
+				platform_log("types: %s: %lu a tick, %lu cycles each (%lu us a tick): type update %lu, damage %lu, export %lu, "
+					"nodes %lu, functions %lu, lights %lu, postprocess %lu; lights connected %lu a tick, at rest %lu, "
+					"animated %lu, nodes kept %lu, off lights left %lu", names[type], n / type_ticks, (unsigned long)(all / n),
+					(unsigned long)(all / type_ticks / 733), each[0], each[1], each[2], each[3], each[4], each[5], each[6],
+					type_step_counts[type][1] / type_ticks, type_step_counts[type][2] / type_ticks,
+					type_step_counts[type][3] / type_ticks, type_step_counts[type][4] / type_ticks,
+					type_step_counts[type][5] / type_ticks);
+			}
+			csmemset(type_step_cycles, 0, sizeof(type_step_cycles));
+			csmemset(type_step_counts, 0, sizeof(type_step_counts));
+			type_ticks = 0;
+		}
+	}
+#endif
 
 	object_header = (struct object_header_datum *)object_header_data->data;
 	for (i = 0; i<object_header_data->count; ++object_header)
@@ -5067,6 +5515,19 @@ static void object_connect_lights(
 		{
 			if (!object->object.attachment_types[i] && object->object.attachment_indices[i]!=NONE)
 			{
+#if defined(HALO_XBOX_TARGET)
+				/* oxbox (v1.200): an off light stays in the map where it was (object_lights.c light_attached_off) */
+				boolean light_attached_off(long light_index);
+
+				if (disconnect && reconnect && oxbox_setting_resting_objects &&
+					light_attached_off(object->object.attachment_indices[i]))
+				{
+#if defined(OXBOX_TYPE_STEPS)
+					type_step_counts[object->object.type][5]++;   /* (lab: an off light left) */
+#endif
+					continue;
+				}
+#endif
 				if (disconnect)
 				{
 					light_disconnect_from_map(object->object.attachment_indices[i]);

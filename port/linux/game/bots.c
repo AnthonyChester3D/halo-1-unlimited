@@ -3310,8 +3310,8 @@ static void bots_report(
 			bots_route.sightings, bots_route.firing_ticks, bots_route.grenades, bots_route.melees, bots_route.pickups,
 			(double)bots_route.walk_cycles_maximum / 733000.0, (double)bots_route.search_cycles_maximum / 733000.0,
 			(double)bots_route.fight_cycles_maximum / 733000.0);
-		bots_log("bots 10s:moving: %ld jumps (%ld crouch-jumps), %ld got over, %ld crouched under; "
-			"hops finished straight: %ld up a ledge, %ld off one, %ld reached; %ld under a ramp; look-ahead %.2f ms a tick",
+		bots_log("bots 10s:moving: %ld jumps (%ld crouch), %ld over, %ld crouched; "
+			"straight hops: %ld up, %ld down, %ld done; %ld under ramps; look-ahead %.2f ms/tick",
 			bots_route.jumps, bots_route.crouch_jumps, bots_route.jumps_landed, bots_route.crouches,
 			bots_route.straight_up, bots_route.straight_down, bots_route.straight_done, bots_route.overhangs,
 			(double)bots_route.probe_cycles / 733000.0 / (double)bots_route.ticks);
@@ -3368,7 +3368,7 @@ static void bots_report(
 	}
 	/* (the Xbox's processor: 733 MHz) */
 	bots_log("bots 10s:%d walking, %ld searches (%ld failed), %ld arrivals (%ld by teleporter), %ld give-ups; "
-		"%d of %d waypoints visited this game; bots' time %.2f ms a tick (searches %.2f), at most %.2f ms",
+		"%d of %d waypoints seen; bots %.2f ms/tick (searches %.2f), most %.2f",
 		bots_route.walking, bots_route.searches, bots_route.searches_failed, bots_route.arrivals, bots_route.teleports,
 		bots_route.give_ups,
 		visited, bots_route.waypoint_count,

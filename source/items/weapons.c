@@ -3594,12 +3594,14 @@ static boolean weapon_idle_inside(
 boolean weapon_resting_idle(
 	long weapon_index)
 {
+	boolean item_resting_still(long item_index);
 	struct weapon_datum *weapon = weapon_get(weapon_index);
 
 	if (!TEST_FLAG(weapon->object.flags, _object_at_rest_bit))
 		NOT_IDLE(1)
-	/* (resting on an object, it follows it: item_update; the game type's placed weapons rest on neither) */
-	if (TEST_FLAG(weapon->item.flags, _item_on_object_bit))
+	/* (resting on an object, it follows it: item_update; the game type's placed weapons rest on neither. v1.200: and
+	no spin left, not on a breakable surface: items.c item_resting_still) */
+	if (!item_resting_still(weapon_index))
 		NOT_IDLE(2)
 	if (weapon->object.parent_object_index != NONE)
 		NOT_IDLE(3)

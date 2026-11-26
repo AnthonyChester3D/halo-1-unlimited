@@ -1322,6 +1322,13 @@ long find_best_starting_location_index(
 
 	best_starting_location_index = NONE;
 	best_starting_location_rating = 0.0f;
+#if defined(OXBOX_ENGINE_COUNT)
+	extern unsigned long long spawn_lab[4];
+	unsigned long long spawn_t0 = __builtin_ia32_rdtsc();
+
+	spawn_lab[0]++;
+	spawn_lab[2] += starting_location_count;
+#endif
 	for (starting_location_index = 0;
 		starting_location_index < starting_location_count;
 		starting_location_index++)
@@ -1330,6 +1337,9 @@ long find_best_starting_location_index(
 		starting_location_rating = game_engine_get_starting_location_rating(
 			player_index,
 			starting_location);
+#if defined(OXBOX_ENGINE_COUNT)
+		spawn_lab[3] += starting_location_rating > 0.0f;
+#endif
 		starting_location_rating *= (real)pow(
 			(double)real_random_range(0.0f, 1.0f),
 			0.5);
@@ -1340,6 +1350,9 @@ long find_best_starting_location_index(
 		}
 	}
 
+#if defined(OXBOX_ENGINE_COUNT)
+	spawn_lab[1] += __builtin_ia32_rdtsc() - spawn_t0;
+#endif
 	/* port: a multiplayer map played alone (New Game's MULTIPLAYER maps:
 	no game engine) has no starting location for no game type, every one
 	being for its game types: the player starts at any of them, not at none

@@ -291,6 +291,35 @@ void item_detonate(
 	return;
 }
 
+#if defined(HALO_XBOX_TARGET)
+static struct collision_surface const *item_rested_surface(struct item_datum const *item);
+
+/* oxbox (v1.200): whether an item lying still would stay as it is in its update (objects.c's resting rules: weapons,
+v1.196, and equipment, v1.200): at rest on its own (not on an object, which it follows), no spin left (an item comes to
+rest still turning, slowing by a tenth a tick for about half a minute), no detonation counting down, and not on a
+breakable surface (it falls when the surface breaks) or one gone */
+boolean item_resting_still(
+	long item_index)
+{
+	struct item_datum *item = item_get(item_index);
+
+	if (!TEST_FLAG(item->object.flags, _object_at_rest_bit) || TEST_FLAG(item->item.flags, _item_on_object_bit) ||
+		TEST_FLAG(item->item.flags, _item_has_nonzero_angular_velocity_bit) || item->item.detonation_ticks > 0)
+	{
+		return FALSE;
+	}
+	if (TEST_FLAG(item->item.flags, _item_on_structure_bit) && item_rested_surface_index(item) != NONE &&
+		item->item.bsp_index == global_structure_bsp_index_get())
+	{
+		struct collision_surface const *surface = item_rested_surface(item);
+
+		if (!surface || TEST_FLAG(surface->flags, _collision_surface_breakable_bit))
+			return FALSE;
+	}
+	return TRUE;
+}
+#endif
+
 /* ---------- private code */
 
 static long item_rested_surface_index(

@@ -178,8 +178,14 @@ void hs_print(
 	were never passed. A scenario script's print is the game's chatter,
 	which the Xbox never showed: on screen as config.toml's game.console_log
 	says; print typed at the console, always. */
+#if defined(HALO_XBOX_TARGET)
+	/* port: nothing on the Xbox, as on retail Xbox Halo: Bungie's campaign scripts print their own notes
+	("pilot: damn! airbrake failure!" in a30's intro) and some maps print every tick */
+	(void)message;
+#else
 	if (terminal_shows(terminal_command_running ? _terminal_message_serious : _terminal_message_chatter))
 		terminal_printf(global_real_argb_green, "%s", message);
+#endif
 
 	return;
 }
