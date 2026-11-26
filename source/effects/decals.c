@@ -2354,7 +2354,10 @@ static void decal_update(
 
 	match_assert("c:\\halo\\SOURCE\\effects\\decals.c", 307, decal->definition_index!=NONE);
 
+#if !defined(HALO_XBOX_TARGET)
 	decal_definition_get(decal->definition_index);
+#endif
+	/* (oxbox, v1.204: not looked up: nothing here reads it, and every decal, up to 2048, is updated each tick) */
 
 	decal->intensity = 255;
 
