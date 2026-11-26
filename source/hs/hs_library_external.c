@@ -176,7 +176,14 @@ void hs_print(
 	(0x4b8970 +0x0c pushes it as terminal_printf's format), so a '%' in it,
 	from a scenario script or typed at the console, read arguments that
 	were never passed */
+#if defined(HALO_XBOX_TARGET)
+	/* port: nothing on the Xbox, as on retail Xbox Halo: Bungie's campaign scripts print their own notes
+	("pilot: damn! airbrake failure!" in a30's intro) and some maps print every tick; PC Halo shows them
+	only in its developer mode */
+	(void)message;
+#else
 	terminal_printf(global_real_argb_green, "%s", message);
+#endif
 
 	return;
 }
