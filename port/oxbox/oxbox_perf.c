@@ -1305,11 +1305,28 @@ static long largest_free_pages(
 	unsigned long const *pfn;
 	unsigned long index, run = 0, longest = 0, free = 0;
 
+	static int mapped = -1;
+
 	if (total_pages == 16384)
 		pfn = (unsigned long const *)0x83FF0000;
 	else if (total_pages == 32768)
 		pfn = (unsigned long const *)0x87FE0000;
 	else
+		return 0;
+	/* (every page of it mapped, asked once (MmIsAddressValid, kernel 174): a 128 MB console whose kernel doesn't map its
+	top 64 MB in the contiguous window has none there (Cerbios: the perf log read 0x87FE0000 and crashed, xemu with
+	Llama's BIOS)) */
+	if (mapped < 0)
+	{
+		void *oxbox_kernel_export(unsigned long ordinal);
+		unsigned char (__stdcall *valid)(void const *) = (unsigned char (__stdcall *)(void const *))oxbox_kernel_export(174);
+		unsigned long page;
+
+		mapped = valid != NULL;
+		for (page = 0; mapped && page < total_pages * 4; page += 0x1000)
+			mapped = valid((char const *)pfn + page) != 0;
+	}
+	if (!mapped)
 		return 0;
 	for (index = 0; index < total_pages; index++)
 	{
