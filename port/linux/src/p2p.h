@@ -82,6 +82,7 @@ const char *p2p_take_clipboard_text(void);
 invite, Discord): the PC menus' Create Game > Internet (the default), not
 > LAN */
 void p2p_set_hosting_allowed(int allowed);
+void p2p_set_system_link_play(int on);
 /* the invite link of the game this machine hosts (empty, 0: none, or LAN
 only) */
 int p2p_invite_link(char *link, int size);

@@ -280,6 +280,7 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	int open, int in_progress, int has_teams) { }
 void p2p_set_game_player_counts(int count, int maximum) { }
 void p2p_set_hosting_allowed(int allowed) { }
+void p2p_set_system_link_play(int on) { }
 void p2p_set_hosting_password(const char *password) { }
 void p2p_set_hosting_public(int is_public) { }
 #endif

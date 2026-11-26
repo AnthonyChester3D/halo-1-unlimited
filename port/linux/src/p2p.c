@@ -410,6 +410,8 @@ static struct
 	int hosting_socket;
 	int hosting;
 	int hosting_lan_only;
+	/* the Xbox's SYSTEM LINK PLAY (p2p_set_system_link_play): no game traffic with peers at all, either way */
+	int system_link_play;
 	int has_token;
 	unsigned char token[P2P_TOKEN_SIZE];
 	/* whether the server browser's exit hook is set (lobby_quit) */
@@ -1671,8 +1673,7 @@ static void network_resumed(unsigned long stopped)
 		p2p.stun[index].attempts = 0;
 	}
 	p2p_signal_reconnect();
-	platform_log("Internet play: the game was stopped for %lu seconds; its public address is asked again and "
-		"the brokers reconnected", stopped / 1000);
+	platform_log("Internet play: paused %lu s: address and brokers renewed", stopped / 1000);
 }
 
 /* ---------- stand-ins for peers' ports */
@@ -1972,7 +1973,9 @@ int p2p_broadcast_targets(unsigned short port, unsigned long *addresses, unsigne
 	if (!p2p.running)
 		return 0;
 	pthread_mutex_lock(&p2p_lock);
-	for (index = 0; index < P2P_MAXIMUM_PEERS && count < maximum_count; index++)
+	/* (system link play: the game's broadcasts stay on the LAN. A console linked earlier, by an online game or an
+	invite, kept seeing and joining this one's system link games, Llama 2026-11-26) */
+	for (index = 0; index < P2P_MAXIMUM_PEERS && count < maximum_count && !p2p.system_link_play; index++)
 	{
 		struct proxy *proxy;
 
@@ -2004,7 +2007,7 @@ int p2p_send_datagram(unsigned short source_port, unsigned long address, unsigne
 	peer = find_peer_by_address(address);
 	if (!peer)
 		result = address_retired(address) ? -1 : 0;
-	else if (!peer->connected)
+	else if (!peer->connected || p2p.system_link_play)
 		result = -1;
 	else
 	{
@@ -2023,7 +2026,7 @@ int p2p_broadcast_datagram(unsigned short source_port, unsigned short port, cons
 	if (!p2p.running)
 		return 0;
 	pthread_mutex_lock(&p2p_lock);
-	for (index = 0; index < P2P_MAXIMUM_PEERS; index++)
+	for (index = 0; index < P2P_MAXIMUM_PEERS && !p2p.system_link_play; index++)
 	{
 		if (p2p.peers[index].used && p2p.peers[index].connected)
 		{
@@ -2206,8 +2209,8 @@ static void datagram_received(struct peer *peer, const unsigned char *inner, int
 	struct proxy *proxy;
 	struct sockaddr_in to;
 
-	/* only to the game */
-	if (size < 5 || !game_port_open(0, get_short(inner + 3)))
+	/* only to the game, and not in system link play (p2p_set_system_link_play) */
+	if (size < 5 || p2p.system_link_play || !game_port_open(0, get_short(inner + 3)))
 		return;
 	proxy = find_proxy((int)(peer - p2p.peers), get_short(inner + 1), 1);
 	if (!proxy)
@@ -2405,8 +2408,8 @@ static void stream_opened(struct stream *stream, const unsigned char *data, int 
 		return;
 	stream->remote_port = get_short(data + 2);
 	/* only to where the game listens: nothing else here is the peer's to
-	reach */
-	if (game_port_open(1, get_short(data)))
+	reach; nothing at all in system link play */
+	if (!p2p.system_link_play && game_port_open(1, get_short(data)))
 	{
 		stream->socket = open_socket(SOCK_STREAM, p2p.local_address, 0, &stream->local_port);
 		if (stream->socket >= 0)
@@ -2760,8 +2763,7 @@ static int join_invite(const char *text)
 	int parsed = parse_invite(text, hash, token);
 
 	if (parsed < 0)
-		platform_log("Internet play: that invite is from an older version of the game, which this one "
-			"cannot join");
+		platform_log("Internet play: that invite is from an older version");
 	if (parsed <= 0)
 		return parsed;
 	p2p_identifier_from_hash(hash, host);
@@ -2926,8 +2928,7 @@ void p2p_new_invite_if_listed(void)
 	if (!p2p.has_token || !p2p.token_listed)
 		return;
 	make_invite();
-	platform_log("Internet play: a new invite, so that the one listed lets no one in (private, or a new password): %s",
-		p2p.invite);
+	platform_log("Internet play: a new invite (the old one lets no one in): %s", p2p.invite);
 	if (p2p.hosting)
 	{
 		p2p_signal_host(p2p.token);
@@ -3093,6 +3094,15 @@ void p2p_set_hosting_allowed(int allowed)
 {
 	pthread_mutex_lock(&p2p_lock);
 	p2p.hosting_lan_only = !allowed;
+	pthread_mutex_unlock(&p2p_lock);
+}
+
+/* the Xbox's mode (hmp_online.c set_mode): in system link play, linked peers (an online game's or an invite's, kept
+for the session) neither see this console's games nor reach the game, nor it theirs */
+void p2p_set_system_link_play(int on)
+{
+	pthread_mutex_lock(&p2p_lock);
+	p2p.system_link_play = on;
 	pthread_mutex_unlock(&p2p_lock);
 }
 
@@ -3558,8 +3568,7 @@ static void *p2p_thread(void *unused)
 					p2p.stun[index].attempts = 0;
 				}
 				p2p_signal_reconnect();
-				platform_log("Internet play: the network is back; its public address is asked again and the "
-					"brokers reconnected");
+				platform_log("Internet play: network back: address and brokers renewed");
 			}
 		}
 #endif
