@@ -4519,6 +4519,8 @@ static void sweep_ended(
 	{
 		platform_log("perf sweep: a press interrupted %s run %ld (not counted): the sweep goes on after 2 minutes without a "
 			"press (hold Back 3 seconds at the main menu to stop it until the next boot)", sweep.key, sweep.run);
+		/* (the run's watchdog off: the player plays on, maybe for long; the next run sets it again) */
+		sweep_watch_off();
 		sweep_marker(0);
 		sweep_spot_end();
 		sweep.active = sweep.measuring = FALSE;
