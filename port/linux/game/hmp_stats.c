@@ -312,9 +312,10 @@ static void load(void)
 /* the file's text, for the background thread to write */
 static void format(void)
 {
-	static char const head[] = "# Halo Universal play stats (one line per map): plays = matches started on this Xbox, last = last "
-		"played, first = first seen, fav = favorite (Y), hide = hidden (hold Black), order = when last played (higher = more "
-		"recent), dl = downloaded by map sharing (MB)\r\n";
+	/* (shortened in v1.212 for the resident image's room: plays = matches started here, last = last played, first =
+	first seen, fav = favorite (Y), hide = hidden (Black), order = when last played, dl = MB map sharing downloaded) */
+	static char const head[] = "# play stats a map: plays, last, first, fav (Y), hide (Black), order (higher = newer), "
+		"dl (MB downloaded)\r\n";
 	unsigned long need = sizeof(head) + 40;
 	char *o;
 	long i;

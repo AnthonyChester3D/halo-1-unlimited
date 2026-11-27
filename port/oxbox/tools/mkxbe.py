@@ -177,6 +177,21 @@ if menu_end > menu_start:
     add_section(d, 'OXMENU', 5, menu_start, menu_end - menu_start, menu_raw, len(menub))
     struct.pack_into('<I', d, 0x10c, menu_start + menu_size - base)   # size of image
     nsec += 1
+# a 128 MB console's RAM cache (port/oxbox/oxbox_ram.c: link.ld's .oxram and .oxram.bss), likewise its own section,
+# OXRAM, right after OXMENU, loaded only on a console with 100 MB or more (oxbox_sdk.c oxbox_ram_load)
+ram_start, ram_load_end, ram_end = sym['__oxram_start'], sym['__oxram_load_end'], sym['__oxram_end']
+ram_size = 0
+if ram_end > ram_start:
+    subprocess.run(['llvm-objcopy', '-O', 'binary', '--only-section=.oxram', elf, os.path.join(os.path.dirname(elf), 'oxbox_ram.bin')], check=True)
+    ramb = open(os.path.join(os.path.dirname(elf), 'oxbox_ram.bin'), 'rb').read()
+    assert len(ramb) == ram_load_end - ram_start, (hex(len(ramb)), hex(ram_load_end - ram_start))
+    assert menu_size and ram_start == menu_start + menu_size and not ram_start & 0xFFF, (hex(ram_start), hex(menu_start + menu_size))
+    ram_raw = len(d)
+    d += ramb + bytes((-len(ramb)) % 0x1000)
+    ram_size = ((ram_end + 0xFFF) & ~0xFFF) - ram_start
+    add_section(d, 'OXRAM', 5, ram_start, ram_end - ram_start, ram_raw, len(ramb))
+    struct.pack_into('<I', d, 0x10c, ram_start + ram_size - base)   # size of image
+    nsec += 1
 
 # mainXapiStartup: call main(0, 0, 0) -> call oxbox_entry(0, 0, 0)
 site = 0x15cb1

@@ -437,6 +437,38 @@ static boolean shared_slot_kept(short map_file_index);
 static void shared_lookup_forget(void);
 /* the shared files the open map draws on: its pack's, the stock one's (docs/shared_maps.md). A packed one is in a cache
 file; one stored unpacked is read where it is, on its own handle, and has no cache file (NONE) */
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a 128 MB console's RAM cache (port/oxbox/oxbox_ram.c, its section OXRAM loaded only there): NULL elsewhere.
+Kind 1: a stock tag pool frame (source the pool's size, offset its index); 2: a read (source the map's or shared file's
+identity, offset and size the read's) */
+boolean (*oxbox_ram_get)(unsigned long kind, unsigned long source, unsigned long offset, unsigned long size, void *out);
+void (*oxbox_ram_put)(unsigned long kind, unsigned long source, unsigned long offset, unsigned long size,
+	void const *data);
+void *(*oxbox_ram_bounce_take)(unsigned long size);
+void (*oxbox_ram_bounce_give)(void *bounce);
+/* (a request's notes, beside it: the retail request is 0x20 bytes. What it reads (0: not kept), and where it goes when
+it was read into a bounce buffer: the texture cache is write-combined, slow to read back. OXRAM's, MAXIMUM_SIMULTANEOUS_
+CACHE_REQUESTS of them) */
+struct cache_ram_request
+{
+	unsigned long source;
+	void *dest;
+} *oxbox_ram_requests;
+static unsigned long shared_open_identity[2];   /* (its key's hash, its length: cache_files_shared_open) */
+static unsigned long open_map_identity;         /* (its header's hash: cache_file_open) */
+static unsigned long cache_ram_forgets;         /* (maps replaced this boot: cache_files_forget_cached_map) */
+
+static unsigned long cache_ram_identity(
+	char const *text,
+	unsigned long length)
+{
+	unsigned long hash = 2166136261u;
+
+	while (text && *text)
+		hash = (hash ^ (unsigned char)*text++) * 16777619u;
+	return (hash ^ length) | 1;
+}
+#endif
 static short shared_open_map_file_index[2] = {NONE, NONE};
 static HANDLE shared_open_file[2] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
 static long shared_open_length[2];
@@ -590,8 +622,10 @@ boolean cache_files_forget_cached_map(
 {
 	short map_file_index = cached_map_files_find_map(map_name);
 
-	/* (what was last read of its shared files: a copy just installed draws on what the one before didn't) */
+	/* (what was last read of its shared files: a copy just installed draws on what the one before didn't; nothing of the
+	one before served from a 128 MB console's RAM cache) */
 	shared_lookup_forget();
+	cache_ram_forgets++;
 	if (map_file_index == NONE || map_file_index == cache_file_globals.open_map_file_index ||
 		map_file_index == cache_file_globals.copying_to_map_file_index || shared_slot_kept(map_file_index))
 	{
@@ -936,6 +970,19 @@ boolean cache_file_open(
 		header,
 		&cached_map_file_get(map_file_index)->header,
 		sizeof(struct cache_file_header));
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: the open map's identity for a 128 MB console's RAM cache: its whole header (name, checksum, length, the
+	shared files' reference with its tag data's CRC), and the FTP server's changes since boot */
+	{
+		extern long oxbox_ftp_writes;
+		unsigned char const *bytes = (unsigned char const *)header;
+		unsigned long hash = 2166136261u, k;
+
+		for (k = 0; k < sizeof(struct cache_file_header); k++)
+			hash = (hash ^ bytes[k]) * 16777619u;
+		open_map_identity = (hash ^ ((unsigned long)oxbox_ftp_writes << 16) ^ cache_ram_forgets) | 1;
+	}
+#endif
 
 	return TRUE;
 }
@@ -1056,6 +1103,14 @@ short cache_file_read(
 			reads = read_kb = hits = hit_kb = 0;
 			last = now;
 		}
+	}
+#endif
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: what it reads, for a 128 MB console's RAM cache (the cache thread looks there first) */
+	if (oxbox_ram_get)
+	{
+		oxbox_ram_requests[request_index].source = shared ? shared_open_identity[shared - 1] : open_map_identity;
+		oxbox_ram_requests[request_index].dest = NULL;
 	}
 #endif
 	*completion_flag_reference = FALSE;
@@ -1519,6 +1574,28 @@ static void CALLBACK cache_file_read_io_completion_routine(
 	/* port: a read that failed or came up short completes as failed: what
 	waits on it stops waiting, and a caller that checks (the map's tags and
 	bsps) sees it, instead of taking what is in its buffer for the map */
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: kept in a 128 MB console's RAM cache, and a bounce buffer's bytes copied on to where they go (before the
+	waiter is told: it may reuse the buffer at once) */
+	if (oxbox_ram_get)
+	{
+		struct cache_ram_request *note = &oxbox_ram_requests[finished_request - cache_file_globals.requests];
+
+		if (note->source && error_code == ERROR_SUCCESS && bytes_transferred == (unsigned long)finished_request->size)
+		{
+			oxbox_ram_put(2, note->source, finished_request->overlapped.Offset, (unsigned long)finished_request->size,
+				finished_request->buffer);
+		}
+		if (note->dest)
+		{
+			memcpy(note->dest, finished_request->buffer, (size_t)finished_request->size);
+			__asm__ __volatile__("sfence" ::: "memory");   /* (write-combined: out before the waiter's told) */
+			oxbox_ram_bounce_give(finished_request->buffer);
+			finished_request->buffer = note->dest;
+			note->dest = NULL;
+		}
+	}
+#endif
 	*(volatile boolean *)finished_request->overlapped.hEvent =
 		error_code == ERROR_SUCCESS && bytes_transferred == (unsigned long)finished_request->size ?
 			TRUE :
@@ -1578,6 +1655,37 @@ static void cache_file_windows_thread_proc(
 				1327,
 				!best_request->running);
 			best_request->running = TRUE;
+#if defined(HALO_XBOX_TARGET)
+			/* oxbox: a 128 MB console's RAM cache: kept from before, copied now; else, bound for the texture cache, read
+			into a bounce buffer (copied on from there as it's kept) when one is free, or not kept */
+			if (oxbox_ram_get && oxbox_ram_requests[best_request - cache_file_globals.requests].source)
+			{
+				struct cache_ram_request *note = &oxbox_ram_requests[best_request - cache_file_globals.requests];
+				char *texture_cache = (char *)physical_memory_get_texture_cache_base_address();
+				char *at = (char *)best_request->buffer;
+
+				if (oxbox_ram_get(2, note->source, best_request->overlapped.Offset,
+					(unsigned long)best_request->size, best_request->buffer))
+				{
+					*(volatile boolean *)best_request->overlapped.hEvent = TRUE;
+					best_request->pending = FALSE;
+					best_request->running = FALSE;
+					continue;
+				}
+				if (texture_cache && at >= texture_cache && at < texture_cache + physical_memory_get_texture_cache_size())
+				{
+					void *bounce = oxbox_ram_bounce_take((unsigned long)best_request->size);
+
+					if (bounce)
+					{
+						note->dest = best_request->buffer;
+						best_request->buffer = bounce;
+					}
+					else
+						note->source = 0;
+				}
+			}
+#endif
 			cached_map_issue_async_read(
 				file,
 				&best_request->overlapped,
@@ -2498,6 +2606,9 @@ static void shared_open_close(
 		shared_open_file[k] = INVALID_HANDLE_VALUE;
 		shared_open_map_file_index[k] = NONE;
 		shared_open_length[k] = 0;
+#if defined(HALO_XBOX_TARGET)
+		shared_open_identity[k] = 0;
+#endif
 	}
 }
 
@@ -2522,6 +2633,9 @@ static boolean cache_files_shared_open(
 			if (shared_open_file[k] != INVALID_HANDLE_VALUE)
 			{
 				shared_open_length[k] = shared_lookup.files[k].length;
+#if defined(HALO_XBOX_TARGET)
+				shared_open_identity[k] = cache_ram_identity(shared_lookup.files[k].key, shared_open_length[k]);
+#endif
 				platform_log("shared: %s opened with %s.shared (read where it is)", map_name, shared_lookup.files[k].key + 1);
 				continue;
 			}
@@ -2533,6 +2647,9 @@ static boolean cache_files_shared_open(
 			{
 				shared_open_file[k] = cached_map_file_get_handle(shared_open_map_file_index[k]);
 				shared_open_length[k] = cached_map_file_get(shared_open_map_file_index[k])->header.file_length;
+#if defined(HALO_XBOX_TARGET)
+				shared_open_identity[k] = cache_ram_identity(shared_lookup.files[k].key, shared_open_length[k]);
+#endif
 				platform_log("shared: %s opened with %s.shared (cache file %d)", map_name, shared_lookup.files[k].key + 1,
 					(int)shared_open_map_file_index[k]);
 				continue;
@@ -2749,6 +2866,7 @@ struct tags_rebuild
 	unsigned long arena_used;
 	z_stream stream;
 	unsigned long frames_read, runs, inflated, read_bytes, slices;
+	unsigned long frames_ram;   /* (oxbox: frames a 128 MB console's RAM cache had) */
 };
 
 static unsigned long tags_u32(
@@ -2885,6 +3003,15 @@ static char const *tags_frame(
 
 	if (frame >= r->frames)
 		return "recipe: out of bounds";
+#if defined(HALO_XBOX_TARGET)
+	/* oxbox: a 128 MB console's RAM cache: the frame unpacked before */
+	*size = r->pool_size - frame * TAGS_FRAME < TAGS_FRAME ? r->pool_size - frame * TAGS_FRAME : TAGS_FRAME;
+	if (oxbox_ram_get && oxbox_ram_get(1, r->pool_size, frame, *size, r->unpacked))
+	{
+		r->frames_ram++;
+		return NULL;
+	}
+#endif
 	if (frame < r->table_first || frame >= r->table_first + r->table_count)
 	{
 		r->table_first = frame;
@@ -2913,6 +3040,10 @@ static char const *tags_frame(
 			return "stocktags.shared: bad";
 		r->inflated += *size;
 	}
+#if defined(HALO_XBOX_TARGET)
+	if (oxbox_ram_put)
+		oxbox_ram_put(1, r->pool_size, frame, *size, r->unpacked);
+#endif
 	return NULL;
 }
 
@@ -3141,8 +3272,9 @@ boolean cache_file_tags_rebuild(
 		platform_log("tags: %s can't load: %s", scenario_name, why);
 		return FALSE;
 	}
-	platform_log("tags: %s rebuilt: %lu frames (%lu KB read, %lu KB unpacked), %lu pack slices, %lu runs, %lu KB recipe, "
-		"%lu ms", scenario_name, r.frames_read, r.read_bytes / 1024, r.inflated / 1024, r.slices, r.runs,
+	platform_log("tags: %s rebuilt: %lu frames (%lu in RAM, %lu KB read, %lu KB unpacked), %lu pack slices, %lu runs, "
+		"%lu KB recipe, %lu ms", scenario_name, r.frames_read + r.frames_ram, r.frames_ram, r.read_bytes / 1024,
+		r.inflated / 1024, r.slices, r.runs,
 		recipe_size / 1024, system_milliseconds() - started);
 #if defined(OXBOX_TAG_RECIPE_CHECK)
 	/* (a lab build: the rebuilt tag data's CRC32 against the reference's) */
