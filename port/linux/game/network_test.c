@@ -48,6 +48,8 @@ Called from the main loop every frame (main.c).
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
+
+boolean player_handle_powerup(long player_index, short powerup_type, short duration);   /* (players.c) */
 #include "objects/objects.h"
 #include "units/units.h"
 #include "units/unit_definitions.h"

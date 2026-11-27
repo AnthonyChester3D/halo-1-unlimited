@@ -137,6 +137,10 @@ struct preview_slot
 
 void *__stdcall LocalAlloc(unsigned int flags, unsigned int bytes);
 void *__stdcall LocalFree(void *memory);
+/* (stdcall, as XAPI's own: undeclared, it was called as cdecl and the caller took its argument off the stack a second
+time. hmp_maps_note_gametypes then returned to its own first argument: v1.211's dense sweep crashed on Gemini, a map
+without CTF's flags played as Slayer, writing "Gametypes:" into its info .txt) */
+int __stdcall FlushFileBuffers(HANDLE file);
 
 /* ---------- globals */
 

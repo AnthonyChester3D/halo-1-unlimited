@@ -456,6 +456,7 @@ void interface_draw_fullscreen_overlays(
 			extern int oxbox_update_prompt_lines(wchar_t lines[5][100]);
 			extern int hmp_share_room_prompt_lines(wchar_t lines[5][100]);
 			extern void draw_quad(rectangle2d *bounds, pixel32 color);
+			extern boolean main_menu_screen_is_active(void);   /* (ui_widget.c: a byte, not an int) */
 			wchar_t lines[5][100];
 			int count = main_menu_screen_is_active() ? oxbox_update_prompt_lines(lines) : 0;
 

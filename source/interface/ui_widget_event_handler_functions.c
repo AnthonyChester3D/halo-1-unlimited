@@ -930,6 +930,10 @@ symbols in this file:
 #include "custom_edition_maps.h" /* port: port/linux/game/custom_edition_maps.c */
 #include "saved games/saved_game_files.h"
 #include "text/unicode.h"
+
+/* port: undeclared here before (saved games/playlist_profile.c; its header clashes with this file's) */
+struct game_variant_options;
+boolean playlist_profile_get_options(long playlist_profile_index, struct game_variant_options *options);
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
 
 /* ---------- constants */
