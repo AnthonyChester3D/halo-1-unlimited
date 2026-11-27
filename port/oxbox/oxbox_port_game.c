@@ -211,6 +211,3 @@ long hud_hires_asset_at(unsigned long address, long width, long height) { return
 
 /* collision's packed copy of the objects' bounding spheres (a PC speed-up, 48 KB): collision reads each object's
 own, as stock */
-void object_bounds_cache_update(long object_index, void const *center, real radius) { }
-void object_bounds_cache_invalidate(void) { }
-boolean object_bounds_cache_out_of_reach(long object_index, void const *point, real radius) { return 0; }

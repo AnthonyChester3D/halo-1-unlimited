@@ -33,6 +33,13 @@ symbols in this file:
 #include "bsp3d.h"
 #include "math/geometry.h"
 
+#if defined(OXBOX_COLLISION_PROFILE)
+/* lab: the collision tests wrapped, by who calls them (port/oxbox/oxbox_collision_lab.c): the definitions below
+become the inner ones, wrapped at the end of the file; this file's own calls go straight to them */
+#define bsp3d_test_point cp_inner_bsp3d_test_point
+long cp_inner_bsp3d_test_point(struct bsp3d const *bsp, long node_index, union real_point3d const *point);
+#endif
+
 /* ---------- constants */
 
 enum
@@ -381,3 +388,22 @@ static long bsp3d_clip_polygon_to_leaves_recursive(
 
 	return intersected_leaf_count;
 }
+
+#if defined(OXBOX_COLLISION_PROFILE)
+extern int oxbox_cp_depth;
+void oxbox_cp_note(int kind, unsigned long caller, unsigned long caller2, unsigned long long cycles);
+#undef bsp3d_test_point
+long cp_inner_bsp3d_test_point(struct bsp3d const *bsp, long node_index, union real_point3d const *point);
+long bsp3d_test_point(struct bsp3d const *bsp, long node_index, union real_point3d const *point)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	long cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_bsp3d_test_point(bsp, node_index, point);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(12, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#endif

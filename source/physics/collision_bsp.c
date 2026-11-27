@@ -86,6 +86,15 @@ symbols in this file:
 #include "scenario/scenario.h"
 #include "tag_files/tag_groups.h"
 
+#if defined(OXBOX_COLLISION_PROFILE)
+/* lab: the collision tests wrapped, by who calls them (port/oxbox/oxbox_collision_lab.c): the definitions below
+become the inner ones, wrapped at the end of the file; this file's own calls go straight to them */
+#define collision_bsp_test_vector cp_inner_collision_bsp_test_vector
+#define collision_bsp_test_sphere cp_inner_collision_bsp_test_sphere
+boolean cp_inner_collision_bsp_test_vector(unsigned long flags, struct collision_bsp const *bsp, short breakable_surface_count, byte const *breakable_surface_flags, real_point3d const *point, real_vector3d const *vector, real maximum_t, struct collision_bsp_test_vector_result *result);
+boolean cp_inner_collision_bsp_test_sphere(struct collision_bsp const *bsp, short breakable_surface_count, byte const *breakable_surface_flags, real_point3d const *center, real radius, struct collision_bsp_test_sphere_result *result);
+#endif
+
 /* ---------- constants */
 
 enum
@@ -187,6 +196,19 @@ struct test_sphere_data
 	long bsp2d_nodes_left;
 };
 
+/* port (v1.214): the surfaces a sphere test has tested, with the plane designator each was reached through (its
+projection: the same pair is the same test, with the same result). A big surface lies in many leaves, and a third
+of a biped move's surface tests were of one already tested (xemu, Blood Gulch, 15 bots); beyond 64, tested again.
+The list is on collision_bsp_test_sphere's stack, not in the resident image */
+static long (*sphere_tested)[2];
+static short sphere_tested_count;
+static long sphere_designator;
+#if defined(OXBOX_COLLISION_PROFILE)
+/* lab: inside the BSP sphere tests (oxbox_collision_lab.c): calls, 3D nodes, leaves, 2D references looked at, those on
+the walk's planes (a 2D walk each), 2D nodes, surface tests, surface tests passed over as already tested, cycles in
+the 2D walks, cycles in the surface tests; [10] (OXBOX_COLLISION_CHECK) passed-over tests that would have added */
+extern unsigned long long oxbox_cp_bsp[12];
+#endif
 typedef char collision_bsp_test_sphere_context_size_assert[
 	sizeof(struct test_sphere_data) == 0x228 + 8 ? 1 : -1];
 typedef char collision_bsp_test_sphere_context_plane_stack_offset_assert[
@@ -1191,9 +1213,11 @@ boolean collision_bsp_test_sphere(
 {
 	struct test_sphere_data context;
 	short collision_function = 6 + (bsp == global_collision_bsp);
+	long tested[64][2];
 
 	collision_log_usage(collision_function);
 	collision_log_start_time(&collision_bsp_usage_times.sphere);
+	sphere_tested = tested;
 
 	context.bsp = bsp;
 	context.breakable_surface_count = breakable_surface_count;
@@ -1208,6 +1232,10 @@ boolean collision_bsp_test_sphere(
 	result->surface_count = 0;
 	result->edge_count = 0;
 	result->vertex_count = 0;
+	sphere_tested_count = 0;
+#if defined(OXBOX_COLLISION_PROFILE)
+	oxbox_cp_bsp[0]++;
+#endif
 
 	bsp3d_test_sphere_recursive(&context, 0, 0);
 	collision_log_end_time(
@@ -1797,6 +1825,9 @@ static void bsp2d_test_sphere_recursive(
 		{
 			return;
 		}
+#if defined(OXBOX_COLLISION_PROFILE)
+		oxbox_cp_bsp[5]++;
+#endif
 		node = TAG_BLOCK_GET_ELEMENT(
 			&data->bsp->bsp2d.nodes,
 			child_index,
@@ -1813,7 +1844,46 @@ static void bsp2d_test_sphere_recursive(
 		child_index = node->child_indices[1];
 	}
 
-	collision_surface_test_sphere(data, child_index & LONG_MAX);
+	{
+		long surface = child_index & LONG_MAX;
+		short k;
+#if defined(OXBOX_COLLISION_PROFILE)
+		unsigned long long cp_t = __builtin_ia32_rdtsc();
+
+		oxbox_cp_bsp[6]++;
+#endif
+
+		for (k = 0; k < sphere_tested_count &&
+			(sphere_tested[k][0] != surface || sphere_tested[k][1] != sphere_designator); k++) ;
+		if (k < sphere_tested_count)
+		{
+#if defined(OXBOX_COLLISION_PROFILE)
+			oxbox_cp_bsp[7]++;
+#endif
+#if defined(OXBOX_COLLISION_CHECK)
+			{
+				long counts = data->result->surface_count + data->result->edge_count + data->result->vertex_count;
+
+				collision_surface_test_sphere(data, surface);
+				if (data->result->surface_count + data->result->edge_count + data->result->vertex_count != counts)
+					oxbox_cp_bsp[10]++;
+			}
+#endif
+		}
+		else
+		{
+			if (sphere_tested_count < 64)
+			{
+				sphere_tested[sphere_tested_count][0] = surface;
+				sphere_tested[sphere_tested_count][1] = sphere_designator;
+				sphere_tested_count++;
+			}
+			collision_surface_test_sphere(data, surface);
+		}
+#if defined(OXBOX_COLLISION_PROFILE)
+		oxbox_cp_bsp[9] += __builtin_ia32_rdtsc() - cp_t;
+#endif
+	}
 
 	return;
 }
@@ -2006,6 +2076,9 @@ static void bsp3d_test_sphere_recursive(
 		{
 			return;
 		}
+#if defined(OXBOX_COLLISION_PROFILE)
+		oxbox_cp_bsp[1]++;
+#endif
 		node = TAG_BLOCK_GET_ELEMENT(
 			&data->bsp->bsp3d.nodes,
 			node_index,
@@ -2061,6 +2134,10 @@ static void bsp3d_test_sphere_recursive(
 			data->result->leaf_indices[data->result->leaf_count] = leaf_index;
 			data->result->leaf_count++;
 		}
+#if defined(OXBOX_COLLISION_PROFILE)
+		oxbox_cp_bsp[2]++;
+		oxbox_cp_bsp[3] += leaf->bsp2d_reference_count;
+#endif
 
 		for (
 			reference_index = leaf->first_bsp2d_reference_index;
@@ -2113,7 +2190,18 @@ static void bsp3d_test_sphere_recursive(
 						&data->center2d);
 					/* port: (collision_bsp2d_enter_node) */
 					data->bsp2d_nodes_left = data->bsp->bsp2d.nodes.count;
+					sphere_designator = reference->plane_designator;
+#if defined(OXBOX_COLLISION_PROFILE)
+					{
+						unsigned long long cp_t = __builtin_ia32_rdtsc();
+
+						oxbox_cp_bsp[4]++;
+						bsp2d_test_sphere_recursive(data, reference->root_index, 0);
+						oxbox_cp_bsp[8] += __builtin_ia32_rdtsc() - cp_t;
+					}
+#else
 					bsp2d_test_sphere_recursive(data, reference->root_index, 0);
+#endif
 					break;
 				}
 			}
@@ -2667,3 +2755,36 @@ static boolean bsp3d_test_pill_recursive(
 
 	return hit;
 }
+
+#if defined(OXBOX_COLLISION_PROFILE)
+extern int oxbox_cp_depth;
+void oxbox_cp_note(int kind, unsigned long caller, unsigned long caller2, unsigned long long cycles);
+#undef collision_bsp_test_vector
+boolean cp_inner_collision_bsp_test_vector(unsigned long flags, struct collision_bsp const *bsp, short breakable_surface_count, byte const *breakable_surface_flags, real_point3d const *point, real_vector3d const *vector, real maximum_t, struct collision_bsp_test_vector_result *result);
+boolean collision_bsp_test_vector(unsigned long flags, struct collision_bsp const *bsp, short breakable_surface_count, byte const *breakable_surface_flags, real_point3d const *point, real_vector3d const *vector, real maximum_t, struct collision_bsp_test_vector_result *result)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_bsp_test_vector(flags, bsp, breakable_surface_count, breakable_surface_flags, point, vector, maximum_t, result);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(10, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_bsp_test_sphere
+boolean cp_inner_collision_bsp_test_sphere(struct collision_bsp const *bsp, short breakable_surface_count, byte const *breakable_surface_flags, real_point3d const *center, real radius, struct collision_bsp_test_sphere_result *result);
+boolean collision_bsp_test_sphere(struct collision_bsp const *bsp, short breakable_surface_count, byte const *breakable_surface_flags, real_point3d const *center, real radius, struct collision_bsp_test_sphere_result *result)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_bsp_test_sphere(bsp, breakable_surface_count, breakable_surface_flags, center, radius, result);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(11, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#endif

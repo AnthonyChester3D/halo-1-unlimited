@@ -113,8 +113,34 @@ symbols in this file:
 #include "scenario/scenario.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/bipeds.h"
+
+#if defined(OXBOX_COLLISION_PROFILE)
+/* lab: the collision tests wrapped, by who calls them (port/oxbox/oxbox_collision_lab.c): the definitions below
+become the inner ones, wrapped at the end of the file; this file's own calls go straight to them */
+#define collision_test_vector cp_inner_collision_test_vector
+#define collision_get_features_in_sphere cp_inner_collision_get_features_in_sphere
+#define collision_test_sphere cp_inner_collision_test_sphere
+#define collision_test_point cp_inner_collision_test_point
+#define collision_test_pill cp_inner_collision_test_pill
+#define collision_move_sphere cp_inner_collision_move_sphere
+#define collision_move_point cp_inner_collision_move_point
+#define collision_move_pill cp_inner_collision_move_pill
+#define collision_objects_in_sphere cp_inner_collision_objects_in_sphere
+#define collision_fix_pill cp_inner_collision_fix_pill
+boolean cp_inner_collision_test_vector(unsigned long flags, real_point3d const *point, real_vector3d const *vector, long ignore_object_index, struct collision_result *collision);
+boolean cp_inner_collision_get_features_in_sphere(unsigned long flags, real_point3d const *center, real radius, real height, real width, long ignore_object_index, struct collision_feature_list *features);
+boolean cp_inner_collision_test_sphere(real_point3d const *center, real radius, long ignore_object_index);
+boolean cp_inner_collision_test_point(unsigned long flags, real_point3d const *point, long ignore_object_index);
+boolean cp_inner_collision_test_pill(unsigned long flags, real_point3d const *point, real_vector3d const *vector, real radius, long ignore_object_index, struct collision_result *collision);
+short cp_inner_collision_move_sphere(unsigned long flags, real_point3d const *position, real_vector3d const *velocity, real radius, long ignore_object_index, real_point3d *clipped_position, real_vector3d *clipped_velocity, short maximum_collision_count, struct collision_plane *collisions);
+short cp_inner_collision_move_point(real_point3d const *old_position, real_vector3d const *old_velocity, struct collision_feature_list const *features, real_point3d *new_position, real_vector3d *new_velocity, short maximum_collision_count, struct collision_plane *collisions);
+short cp_inner_collision_move_pill(unsigned long flags, real_point3d const *position, real_vector3d const *velocity, real height, real radius, long ignore_object_index, real_point3d *clipped_position, real_vector3d *clipped_velocity, short maximum_collision_count, struct collision_plane *collisions);
+short cp_inner_collision_objects_in_sphere(unsigned long flags, real_point3d const *center, real radius, long ignore_object_index, long *object_indices, short maximum_count);
+boolean cp_inner_collision_fix_pill(unsigned long flags, real_point3d const *old_position, real distance, real height, real width, long ignore_object_index, real_point3d *new_position);
+#endif
 /* port: object_bounds_cache.c's */
 boolean object_bounds_cache_out_of_reach(long object_index, real_point3d const *point, real radius);
+boolean object_bounds_cache_misses_vector(long object_index, real_point3d const *point, real_vector3d const *vector);
 
 #undef REAL_MATH_EXTERNAL_POINT_FROM_LINE3D
 
@@ -707,7 +733,26 @@ boolean collision_test_vector_counted(
 						if (TEST_FLAG(flags, object_get(object_index)->object.type + _collision_test_objects_first_type_bit))
 							collision_lab[4]++;
 #endif
-						if (object_mark_function(object_index) &&
+						/* port (v1.214): an object whose bounding sphere the vector misses passed over on the packed copy
+						(object_bounds_cache.c), before its marker or anything of it is read: object_test_vector's
+						own first test on the same values, its attachments only tested through it */
+#if defined(OXBOX_COLLISION_CHECK)
+						/* (lab: a passed-over object tested anyway: a hit there is a difference) */
+						if (object_bounds_cache_misses_vector(object_index, point, vector))
+						{
+							extern unsigned long long oxbox_cp_bsp[12];
+							struct collision_result check = *collision;
+
+							oxbox_cp_bsp[11] += 1ULL << 32;
+							if (object_test_vector(object_index, flags, bsp_flags, point, vector, ignore_object_index,
+								&check))
+							{
+								oxbox_cp_bsp[11]++;
+							}
+						}
+#endif
+						if (!object_bounds_cache_misses_vector(object_index, point, vector) &&
+							object_mark_function(object_index) &&
 							object_test_vector(
 								object_index,
 								flags,
@@ -944,6 +989,15 @@ boolean collision_get_features_in_sphere(
 		collision_log_usage(_collision_function_vector_bounds_object);
 		collision_log_start_time(&collision_usage_times.features);
 		radius += 0.0625f;
+#if defined(OXBOX_COLLISION_PROFILE)
+		extern unsigned long long oxbox_cp_parts[2][12];
+		extern int oxbox_cp_in_move;
+		unsigned long long *cp = oxbox_cp_parts[oxbox_cp_in_move ? 0 : 1];
+		unsigned long long cp_t = __builtin_ia32_rdtsc(), cp_u;
+
+		cp[8]++;
+		cp[10] += (unsigned long long)(radius * 1000.0f);
+#endif
 
 		if (collision_bsp_test_sphere(
 			collision_bsp,
@@ -954,6 +1008,9 @@ boolean collision_get_features_in_sphere(
 			&result) &&
 			structure_flags)
 		{
+#if defined(OXBOX_COLLISION_PROFILE)
+			cp_u = __builtin_ia32_rdtsc(); cp[0] += cp_u - cp_t; cp_t = cp_u;
+#endif
 			collision_bsp_get_features_in_sphere(
 				collision_bsp,
 				&result,
@@ -962,7 +1019,18 @@ boolean collision_get_features_in_sphere(
 				width,
 				NONE,
 				features);
+#if defined(OXBOX_COLLISION_PROFILE)
+			cp_u = __builtin_ia32_rdtsc(); cp[1] += cp_u - cp_t; cp_t = cp_u;
+			cp[5] += features->count[0] + features->count[1] + features->count[2];
+#endif
 		}
+#if defined(OXBOX_COLLISION_PROFILE)
+		else
+		{
+			cp_u = __builtin_ia32_rdtsc(); cp[0] += cp_u - cp_t; cp_t = cp_u;
+		}
+		cp[9] += result.leaf_count;
+#endif
 
 		if (objects && result.leaf_count > 0)
 		{
@@ -996,9 +1064,33 @@ boolean collision_get_features_in_sphere(
 					{
 						/* port: (the far ones passed over on a packed copy
 						of their bounding spheres: object_bounds_cache.c) */
-						if (object_mark_function(object_index) &&
-							!object_bounds_cache_out_of_reach(object_index, center, radius))
+#if defined(OXBOX_COLLISION_PROFILE)
+						cp[3]++;
+#endif
+						/* (v1.214: the copy first, so a far object's marker isn't read either) */
+#if defined(OXBOX_COLLISION_CHECK)
+						/* (lab: a passed-over object gathered anyway, into the list and taken back: a feature there is a
+						difference) */
+						if (object_bounds_cache_out_of_reach(object_index, center, radius))
 						{
+							extern unsigned long long oxbox_cp_bsp[12];
+							short counts[NUMBER_OF_COLLISION_FEATURE_TYPES];
+
+							memcpy(counts, features->count, sizeof(counts));
+							oxbox_cp_bsp[10] += 1ULL << 32;
+							object_get_features_in_sphere(flags, object_index, center, radius, height, width,
+								ignore_object_index, features);
+							if (memcmp(counts, features->count, sizeof(counts)))
+								oxbox_cp_bsp[10] += 1ULL << 16;
+							memcpy(features->count, counts, sizeof(counts));
+						}
+#endif
+						if (!object_bounds_cache_out_of_reach(object_index, center, radius) &&
+							object_mark_function(object_index))
+						{
+#if defined(OXBOX_COLLISION_PROFILE)
+							cp[4]++;
+#endif
 							object_get_features_in_sphere(
 								flags,
 								object_index,
@@ -1015,6 +1107,10 @@ boolean collision_get_features_in_sphere(
 			object_marker_end();
 			structure_cluster_marker_end();
 		}
+#if defined(OXBOX_COLLISION_PROFILE)
+		cp[2] += __builtin_ia32_rdtsc() - cp_t;
+		cp[11] += features->count[0] + features->count[1] + features->count[2];
+#endif
 
 		collision_log_end_time(
 			_collision_function_vector_bounds_object,
@@ -1693,6 +1789,13 @@ short collision_move_pill(
 	center.x = position->x + velocity->i * 0.5f;
 	center.y = position->y + velocity->j * 0.5f;
 	center.z = height * 0.5f + (position->z + velocity->k * 0.5f);
+#if defined(OXBOX_COLLISION_PROFILE)
+	extern unsigned long long oxbox_cp_parts[2][12];
+	extern int oxbox_cp_in_move;
+	unsigned long long cp_t;
+
+	oxbox_cp_in_move = 1;
+#endif
 
 	if (collision_get_features_in_sphere(
 		flags,
@@ -1703,6 +1806,10 @@ short collision_move_pill(
 		ignore_object_index,
 		&features))
 	{
+#if defined(OXBOX_COLLISION_PROFILE)
+		oxbox_cp_in_move = 0;
+		cp_t = __builtin_ia32_rdtsc();
+#endif
 		result = collision_move_point(
 			position,
 			velocity,
@@ -1711,6 +1818,10 @@ short collision_move_pill(
 			clipped_velocity,
 			maximum_collision_count,
 			collisions);
+#if defined(OXBOX_COLLISION_PROFILE)
+		oxbox_cp_parts[0][6] += __builtin_ia32_rdtsc() - cp_t;
+		oxbox_cp_parts[0][7]++;
+#endif
 	}
 	else
 	{
@@ -1721,6 +1832,9 @@ short collision_move_pill(
 		*clipped_velocity = *velocity;
 	}
 
+#if defined(OXBOX_COLLISION_PROFILE)
+	oxbox_cp_in_move = 0;
+#endif
 	match_assert("c:\\halo\\SOURCE\\physics\\collisions.c", 1230, global_current_collision_user_depth > 1);
 	--global_current_collision_user_depth;
 
@@ -2062,3 +2176,148 @@ static void collision_fix_pill_nudge_collision(
 
 	return;
 }
+
+#if defined(OXBOX_COLLISION_PROFILE)
+extern int oxbox_cp_depth;
+void oxbox_cp_note(int kind, unsigned long caller, unsigned long caller2, unsigned long long cycles);
+#undef collision_test_vector
+boolean cp_inner_collision_test_vector(unsigned long flags, real_point3d const *point, real_vector3d const *vector, long ignore_object_index, struct collision_result *collision);
+boolean collision_test_vector(unsigned long flags, real_point3d const *point, real_vector3d const *vector, long ignore_object_index, struct collision_result *collision)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_test_vector(flags, point, vector, ignore_object_index, collision);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(0, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_get_features_in_sphere
+boolean cp_inner_collision_get_features_in_sphere(unsigned long flags, real_point3d const *center, real radius, real height, real width, long ignore_object_index, struct collision_feature_list *features);
+boolean collision_get_features_in_sphere(unsigned long flags, real_point3d const *center, real radius, real height, real width, long ignore_object_index, struct collision_feature_list *features)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_get_features_in_sphere(flags, center, radius, height, width, ignore_object_index, features);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(1, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_test_sphere
+boolean cp_inner_collision_test_sphere(real_point3d const *center, real radius, long ignore_object_index);
+boolean collision_test_sphere(real_point3d const *center, real radius, long ignore_object_index)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_test_sphere(center, radius, ignore_object_index);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(2, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_test_point
+boolean cp_inner_collision_test_point(unsigned long flags, real_point3d const *point, long ignore_object_index);
+boolean collision_test_point(unsigned long flags, real_point3d const *point, long ignore_object_index)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_test_point(flags, point, ignore_object_index);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(3, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_test_pill
+boolean cp_inner_collision_test_pill(unsigned long flags, real_point3d const *point, real_vector3d const *vector, real radius, long ignore_object_index, struct collision_result *collision);
+boolean collision_test_pill(unsigned long flags, real_point3d const *point, real_vector3d const *vector, real radius, long ignore_object_index, struct collision_result *collision)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_test_pill(flags, point, vector, radius, ignore_object_index, collision);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(4, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_move_sphere
+short cp_inner_collision_move_sphere(unsigned long flags, real_point3d const *position, real_vector3d const *velocity, real radius, long ignore_object_index, real_point3d *clipped_position, real_vector3d *clipped_velocity, short maximum_collision_count, struct collision_plane *collisions);
+short collision_move_sphere(unsigned long flags, real_point3d const *position, real_vector3d const *velocity, real radius, long ignore_object_index, real_point3d *clipped_position, real_vector3d *clipped_velocity, short maximum_collision_count, struct collision_plane *collisions)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	short cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_move_sphere(flags, position, velocity, radius, ignore_object_index, clipped_position, clipped_velocity, maximum_collision_count, collisions);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(5, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_move_point
+short cp_inner_collision_move_point(real_point3d const *old_position, real_vector3d const *old_velocity, struct collision_feature_list const *features, real_point3d *new_position, real_vector3d *new_velocity, short maximum_collision_count, struct collision_plane *collisions);
+short collision_move_point(real_point3d const *old_position, real_vector3d const *old_velocity, struct collision_feature_list const *features, real_point3d *new_position, real_vector3d *new_velocity, short maximum_collision_count, struct collision_plane *collisions)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	short cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_move_point(old_position, old_velocity, features, new_position, new_velocity, maximum_collision_count, collisions);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(6, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_move_pill
+short cp_inner_collision_move_pill(unsigned long flags, real_point3d const *position, real_vector3d const *velocity, real height, real radius, long ignore_object_index, real_point3d *clipped_position, real_vector3d *clipped_velocity, short maximum_collision_count, struct collision_plane *collisions);
+short collision_move_pill(unsigned long flags, real_point3d const *position, real_vector3d const *velocity, real height, real radius, long ignore_object_index, real_point3d *clipped_position, real_vector3d *clipped_velocity, short maximum_collision_count, struct collision_plane *collisions)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	short cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_move_pill(flags, position, velocity, height, radius, ignore_object_index, clipped_position, clipped_velocity, maximum_collision_count, collisions);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(7, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_objects_in_sphere
+short cp_inner_collision_objects_in_sphere(unsigned long flags, real_point3d const *center, real radius, long ignore_object_index, long *object_indices, short maximum_count);
+short collision_objects_in_sphere(unsigned long flags, real_point3d const *center, real radius, long ignore_object_index, long *object_indices, short maximum_count)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	short cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_objects_in_sphere(flags, center, radius, ignore_object_index, object_indices, maximum_count);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(8, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#undef collision_fix_pill
+boolean cp_inner_collision_fix_pill(unsigned long flags, real_point3d const *old_position, real distance, real height, real width, long ignore_object_index, real_point3d *new_position);
+boolean collision_fix_pill(unsigned long flags, real_point3d const *old_position, real distance, real height, real width, long ignore_object_index, real_point3d *new_position)
+{
+	unsigned long long t0 = __builtin_ia32_rdtsc();
+	boolean cp_result;
+
+	oxbox_cp_depth++;
+	cp_result = cp_inner_collision_fix_pill(flags, old_position, distance, height, width, ignore_object_index, new_position);
+	if (!--oxbox_cp_depth)
+		oxbox_cp_note(9, (unsigned long)__builtin_return_address(0), (unsigned long)__builtin_return_address(1),
+			__builtin_ia32_rdtsc() - t0);
+	return cp_result;
+}
+#endif
