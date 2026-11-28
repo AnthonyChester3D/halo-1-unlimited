@@ -140,7 +140,7 @@ boolean cp_inner_collision_fix_pill(unsigned long flags, real_point3d const *old
 #endif
 /* port: object_bounds_cache.c's */
 boolean object_bounds_cache_out_of_reach(long object_index, real_point3d const *point, real radius);
-boolean object_bounds_cache_misses_vector(long object_index, real_point3d const *point, real_vector3d const *vector);
+boolean object_bounds_cache_missed_by_vector(long object_index, real_point3d const *point, real_vector3d const *vector);
 
 #undef REAL_MATH_EXTERNAL_POINT_FROM_LINE3D
 
@@ -733,12 +733,9 @@ boolean collision_test_vector_counted(
 						if (TEST_FLAG(flags, object_get(object_index)->object.type + _collision_test_objects_first_type_bit))
 							collision_lab[4]++;
 #endif
-						/* port (v1.214): an object whose bounding sphere the vector misses passed over on the packed copy
-						(object_bounds_cache.c), before its marker or anything of it is read: object_test_vector's
-						own first test on the same values, its attachments only tested through it */
 #if defined(OXBOX_COLLISION_CHECK)
 						/* (lab: a passed-over object tested anyway: a hit there is a difference) */
-						if (object_bounds_cache_misses_vector(object_index, point, vector))
+						if (object_bounds_cache_missed_by_vector(object_index, point, vector))
 						{
 							extern unsigned long long oxbox_cp_bsp[12];
 							struct collision_result check = *collision;
@@ -751,7 +748,10 @@ boolean collision_test_vector_counted(
 							}
 						}
 #endif
-						if (!object_bounds_cache_misses_vector(object_index, point, vector) &&
+						/* port: (the ones the vector misses passed over on a
+						packed copy of their bounding spheres, before they
+						are marked, which reads them: object_bounds_cache.c) */
+						if (!object_bounds_cache_missed_by_vector(object_index, point, vector) &&
 							object_mark_function(object_index) &&
 							object_test_vector(
 								object_index,
@@ -1062,12 +1062,9 @@ boolean collision_get_features_in_sphere(
 						object_index != NONE;
 						object_index = cluster_get_next_collideable_object(&reference_index))
 					{
-						/* port: (the far ones passed over on a packed copy
-						of their bounding spheres: object_bounds_cache.c) */
 #if defined(OXBOX_COLLISION_PROFILE)
 						cp[3]++;
 #endif
-						/* (v1.214: the copy first, so a far object's marker isn't read either) */
 #if defined(OXBOX_COLLISION_CHECK)
 						/* (lab: a passed-over object gathered anyway, into the list and taken back: a feature there is a
 						difference) */
@@ -1085,6 +1082,10 @@ boolean collision_get_features_in_sphere(
 							memcpy(features->count, counts, sizeof(counts));
 						}
 #endif
+						/* port: (the far ones passed over on a packed copy
+						of their bounding spheres: object_bounds_cache.c;
+						before they are marked, which reads them: one met
+						again in another cluster is passed over again) */
 						if (!object_bounds_cache_out_of_reach(object_index, center, radius) &&
 							object_mark_function(object_index))
 						{

@@ -2,22 +2,22 @@
 OBJECT_BOUNDS_CACHE.C
 
 The objects' bounding spheres packed by absolute index, so collision's object
-loop (collisions.c) passes over the far objects of a crowded cluster without
-reading each one. Written by their only writer (object_compute_node_matrices);
-an entry counts only for its datum index and until the game state is next
-replaced (game_state.c). The same test on the same values: the features
-gathered do not change. (Kept out of the game state, whose layout the saved
-games share.) v1.214: the Xbox has it too, and collision's vector test passes
-over objects whose copy the vector misses.
+loops (collisions.c) pass over the objects of a crowded cluster that are far
+from a sphere, or that a vector misses, without reading each one. Written by
+their only writer (object_compute_node_matrices); an entry counts only for its
+datum index and until the game state is next replaced (game_state.c). The
+same tests on the same values: what the loops find does not change. (Kept out
+of the game state, whose layout the saved games share.) v1.214: the Xbox has
+it too, its copy in memory the AI's pools leave unused on the map.
 */
 
 #include "cseries.h"
 #include "math/real_math.h"
 #include "objects/objects.h"
 
+#if defined(HALO_XBOX_TARGET)
 #include <string.h>
 
-#if defined(HALO_XBOX_TARGET)
 /* oxbox (v1.214): the copy lives in the room the AI's pools leave on a map that doesn't need it (cache_files.c, after
 the host's damage checks: object_bounds_cache_memory), 20 bytes an object (40 KB); none when there's no room (a
 campaign level's AI), and every object is read as before. No epoch: invalidating fills the entries with NONE */
@@ -83,7 +83,7 @@ boolean object_bounds_cache_out_of_reach(
 
 /* whether the vector is known to miss the object's bounding sphere (object_test_vector's own first test, on the
 copy); FALSE when it is not known */
-boolean object_bounds_cache_misses_vector(
+boolean object_bounds_cache_missed_by_vector(
 	long object_index,
 	real_point3d const *point,
 	real_vector3d const *vector)
@@ -140,9 +140,9 @@ boolean object_bounds_cache_out_of_reach(
 		!point_in_sphere(point, &bounds->center, bounds->radius + radius);
 }
 
-/* whether the vector is known to miss the object's bounding sphere (object_test_vector's own first test, on the
-copy); FALSE when it is not known */
-boolean object_bounds_cache_misses_vector(
+/* whether the vector from the point is known to miss the object's bounding
+sphere (collision's own test on the copy); FALSE when it is not known */
+boolean object_bounds_cache_missed_by_vector(
 	long object_index,
 	real_point3d const *point,
 	real_vector3d const *vector)
