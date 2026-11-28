@@ -209,5 +209,3 @@ void hud_hires_tags_unloaded(void) { }
 void const *hud_hires_sprite_bitmap(void const *bitmap, short sequence_index) { return bitmap; }
 long hud_hires_asset_at(unsigned long address, long width, long height) { return -1; }
 
-/* collision's packed copy of the objects' bounding spheres (a PC speed-up, 48 KB): collision reads each object's
-own, as stock */
