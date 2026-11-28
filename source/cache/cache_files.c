@@ -1538,8 +1538,12 @@ static void cache_file_lend_free_tag_memory(
 	long idle_size = 0;
 	extern void network_damage_check_memory(void **idle, long *idle_size);
 
+	extern void object_bounds_cache_memory(void **idle, long *idle_size);
+
 	/* (the host's damage checks get none of it unless they're given it below: port/linux/game/network_damage.c) */
 	network_damage_check_memory(NULL, NULL);
+	/* (nor collision's copy of the objects' bounding spheres: port/linux/game/object_bounds_cache.c) */
+	object_bounds_cache_memory(NULL, NULL);
 #if defined(OXBOX_CROSSPLAY)
 	{
 		extern void hmp_links_memory(void **idle, long *idle_size);
@@ -1560,6 +1564,8 @@ static void cache_file_lend_free_tag_memory(
 		game_state_ai_pools_lay_out(scenario, &idle, &idle_size);
 		/* (a network game's host takes the start of it for its damage checks) */
 		network_damage_check_memory(&idle, &idle_size);
+		/* (and every game, 40 KB of it for collision's copy of the objects' bounding spheres, v1.214) */
+		object_bounds_cache_memory(&idle, &idle_size);
 #if defined(OXBOX_CROSSPLAY)
 		/* (a client in someone else's PC game on a linked map, for its tag tables: port/linux/game/hmp_links.c) */
 		{

@@ -2554,7 +2554,7 @@ static char const sweep_fields[] =
 fast maps run (v1.199: 1, after v1.195-198's multiplayer savings; v1.200: 2, resting vehicles, equipment, scenery and
 off lights; v1.203: 3, resting doors, lifts and switches, teleporters): the maps measured at an older one that weren't
 perfect are measured again, the slowest first (sweep_next) */
-#define SWEEP_VERSION 3
+#define SWEEP_VERSION 4
 #define SWEEP_PRIORITY "sweep_priority.txt"     /* (perf\: maps measured first, a key a line) */
 
 /* v1.201: perf_sweep_lod = 1 with perf_sweep_pass N: the pass's maps (perf\sweep_list_p<N>.txt) measured with widescreen

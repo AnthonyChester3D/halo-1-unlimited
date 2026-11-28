@@ -4,12 +4,12 @@ INCLUDE ovl.ld   /* OpenCE .bss over the retail game's unused code and globals (
 SECTIONS {
   . = 0x3B9000;
   __oxbox_image_start = .;
-  .text : { *(.text.oxbox_entry) *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .text .text.*) }
-  .rodata : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .rodata .rodata.*) }
-  .data : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .data .data.*) }
+  .text : { *(.text.oxbox_entry) *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o *oxbox_ram.o) .text .text.*) }
+  .rodata : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o *oxbox_ram.o) .rodata .rodata.*) }
+  .data : { *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o *oxbox_ram.o) .data .data.*) }
   .init_array : { __oxbox_init_start = .; KEEP(*(.init_array*)) __oxbox_init_end = .; }
   __oxbox_image_end = .;
-  .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o) .bss .bss.* COMMON)
+  .bss (NOLOAD) : { __oxbox_bss_start = .; *(EXCLUDE_FILE(*oxbox_perf.o *oxbox_ftp.o *oxbox_update.o *mbedtls/library/*.o *oxbox_menus.o *oxbox_ram.o) .bss .bss.* COMMON)
                     __oxbox_bss_end = .; }
   /* the developers' perf log (port/oxbox/oxbox_perf.c), code, data and buffers, in its own XBE section (OXPERF, tools/mkxbe.py)
      after the image: not loaded at boot, only when opence.ini says perf_log = 1 or perf_sweep = 1 (oxbox_sdk.c
@@ -44,6 +44,14 @@ SECTIONS {
   __oxmenu_load_end = .;
   .oxmenu.bss (NOLOAD) : { *oxbox_menus.o(.bss .bss.* COMMON) }
   __oxmenu_end = .;
+  /* a 128 MB console's RAM cache (port/oxbox/oxbox_ram.c), likewise: OXRAM, loaded only on a console with 100 MB or more
+     (oxbox_sdk.c oxbox_ram_load): a 64 MB console carries none of it */
+  . = ALIGN(0x1000);
+  __oxram_start = .;
+  .oxram : { *oxbox_ram.o(.text .text.* .rodata .rodata.* .data .data.*) }
+  __oxram_load_end = .;
+  .oxram.bss (NOLOAD) : { *oxbox_ram.o(.bss .bss.* COMMON) }
+  __oxram_end = .;
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.gnu*) }
 }
 /* the overlay's .bss parts oxbox_entry zeroes (ovl.ld defines those it has) */

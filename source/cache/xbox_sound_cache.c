@@ -734,6 +734,11 @@ boolean _sound_cache_sound_request(
 			{
 				if (!cache_sound->initialized)
 				{
+#if defined(HALO_XBOX_TARGET)
+					void oxbox_sound_data_check(struct sound_permutation const *sound);
+
+					oxbox_sound_data_check(sound);
+#endif
 					cache_sound->initialized = TRUE;
 					cache_sound->software_reference_count = 0;
 					cache_sound->hardware_reference_count = 0;
@@ -873,3 +878,49 @@ void sound_cache_debug_render(
 
 	return;
 }
+
+#if defined(HALO_XBOX_TARGET)
+/* oxbox: a sound's data that can't be sound, logged once a map (Llama, 2026-11-26: Aerial's h1_spillway played its
+waterfall and river as loud noise, their data being junk, a broken conversion; tools/check_maps.py finds such maps on
+the PC). Xbox ADPCM's blocks (36 bytes a channel) open with a sample, a step index 0-88 and a zero byte: the first
+64 KB are read as mono and as stereo, and data that fits neither is junk. The sound still plays */
+void oxbox_sound_data_check(
+	struct sound_permutation const *sound)
+{
+	static long logged[8];
+	static short logged_count;
+	byte const *data = (byte const *)sound->cache_base_address;
+	long size = MIN(sound->samples.size, 0x10000), bad[2] = { 0, 0 }, blocks[2] = { 0, 0 }, layout, at, k;
+
+	if (sound->compression != 1 || !data || size < 72)
+		return;
+	for (layout = 0; layout < 2; layout++)
+	{
+		long block = 36 * (layout + 1);
+
+		for (at = 0; at + block <= size; at += block)
+		{
+			for (k = 0; k <= layout; k++)
+			{
+				blocks[layout]++;
+				bad[layout] += data[at + k * 4 + 2] > 88 || data[at + k * 4 + 3] != 0;
+			}
+		}
+	}
+	if (bad[0] * 20 <= blocks[0] || bad[1] * 20 <= blocks[1])
+		return;
+	for (k = 0; k < logged_count; k++)
+		if (logged[k] == sound->cache_tag_index)
+			return;
+	if (logged_count < (short)NUMBEROF(logged))
+		logged[logged_count++] = sound->cache_tag_index;
+	{
+		void platform_log(char const *format, ...);
+		char const *cache_files_loaded_map_name(void);
+
+		platform_log("sound: %s (%s) in %s isn't sound: %ld%% of its blocks can't be (a broken map: check_maps.py)",
+			tag_get_name(sound->cache_tag_index), sound->name, cache_files_loaded_map_name(),
+			bad[1] * 100 / MAX(blocks[1], 1));
+	}
+}
+#endif

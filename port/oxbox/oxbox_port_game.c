@@ -209,12 +209,6 @@ void hud_hires_tags_unloaded(void) { }
 void const *hud_hires_sprite_bitmap(void const *bitmap, short sequence_index) { return bitmap; }
 long hud_hires_asset_at(unsigned long address, long width, long height) { return -1; }
 
-/* collision's packed copy of the objects' bounding spheres (a PC speed-up, 48 KB): collision reads each object's
-own, as stock */
-void object_bounds_cache_update(long object_index, void const *center, real radius) { }
-void object_bounds_cache_invalidate(void) { }
-boolean object_bounds_cache_out_of_reach(long object_index, void const *point, real radius) { return 0; }
-
 /* ---------- OpenCE's PC hooks after the merge with OpenCE of Oct 31 2026 (the Server branch), answered as the Xbox
 plays: stock model detail, no remapped controller, no tone mapping, no Custom Edition bitmaps, no server */
 unsigned char const controller_remap_controls[10] = {0, 1, 2, 3, 4, 5, 6, 7, 10, 11};
@@ -246,7 +240,6 @@ struct bitmap_data const *hud_hires_crosshair_bitmap(struct bitmap_data const *b
 {
 	return bitmap;
 }
-boolean object_bounds_cache_missed_by_vector(long object_index, void const *point, void const *vector) { return 0; }
 void network_votekick_draw(short local_player_index) { }
 int map_share_map_downloaded(char const *map_name) { return 0; }
 void master_list_browse(int on) { }

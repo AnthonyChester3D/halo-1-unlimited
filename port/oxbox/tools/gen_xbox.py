@@ -14,7 +14,7 @@ srcs = sorted(p for p in Path(game['root']).rglob('*.c')
 PC_ONLY = ('custom_edition_', 'tag_validate', 'map_share', 'render_interpolation', 'menu_functions', 'menu_tags',
            # (test build 14: OpenCE's PC extras, all switched off on the Xbox: port/oxbox/oxbox_port_game.c)
            'first_person_legs', 'object_mesh', 'shield_glow', 'shield_color', 'view_fov', 'loose_sounds',
-           'network_votekick', 'network_voice', 'hud_hires_tags', 'object_bounds_cache',
+           'network_votekick', 'network_voice', 'hud_hires_tags',
            # (the OpenCE merge's PC extras, 600 KB of the Xbox's memory: streamer mode's word filter, campaign co-op's
            # extra vehicles, the CPU structure culling, OpenCE's split-screen bots, tag mods, text chat, a dedicated
            # server's VPN door: port/oxbox/oxbox_port_game.c answers them as off)
@@ -32,7 +32,7 @@ abi = ['--target=i686-linux-gnu', '-m32', '-fms-extensions', '-fshort-wchar', '-
        # Xbox code (MSVC, the libraries, the kernel) keeps the stack 4-byte aligned, not 16
        '-mstack-alignment=4',
        '-ffunction-sections', '-fdata-sections', '-fno-stack-protector', '-fno-asynchronous-unwind-tables',
-       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=211', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
+       '-DHALO_RELEASE', '-DHALO_XBOX_TARGET', '-DOXBOX_STRIP', '-DOXBOX_BUILD_NUMBER=214', '-D__thread='] + os.environ.get('OXBOX_EXTRA', '').split()
 abi += [f'-fno-builtin-{n}' for n in ('wcslen', 'wcsnlen', 'wcschr', 'wcsrchr', 'wcscmp', 'wcsncmp', 'wcscpy', 'wcsncpy',
                                       'wcscat', 'wcsncat', 'wmemchr', 'wmemcmp', 'wmemcpy', 'wmemmove', 'wmemset')]
 gflags = ['-std=gnu89', '-D__STRICT_ANSI__', '-w', '-Wno-error=incompatible-pointer-types',

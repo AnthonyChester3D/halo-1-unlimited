@@ -757,6 +757,27 @@ void oxbox_boot_watch_start(void)
 	}
 }
 
+/* a 128 MB console's RAM cache (oxbox_ram.c), its own section, OXRAM: loaded once the boot's work is done, on a
+console with 100 MB or more, unless opence.ini says ram_cache = 0 */
+static void oxbox_ram_load(void)
+{
+	extern int oxbox_setting_ram_cache;
+	int oxbox_ram_start(void);
+	oxbox_section_proc load_section = (oxbox_section_proc)oxbox_kernel_export(327);
+	oxbox_section_proc unload_section = (oxbox_section_proc)oxbox_kernel_export(328);
+	MEMORYSTATUS memory;
+	void *section;
+
+	GlobalMemoryStatus(&memory);
+	if (!oxbox_setting_ram_cache || memory.dwTotalPhys < 100UL << 20)
+		return;
+	section = oxbox_section_named("OXRAM");
+	if (!section || !load_section || !unload_section || load_section(section) < 0)
+		platform_log("ram cache: no OXRAM");
+	else if (!oxbox_ram_start())
+		unload_section(section);
+}
+
 void oxbox_boot_frame(int game_map)
 {
 	extern boolean bink_playback_in_progress(void);
@@ -778,6 +799,7 @@ void oxbox_boot_frame(int game_map)
 	oxbox_boot_done = 1;
 	platform_log("boot: %s: the network and the rest start now (%lu KB free)", game_map ? "a map is loading" :
 		oxbox_boot_movie_seen ? "the intro is over" : "no intro in 60 seconds", free_kb());
+	oxbox_ram_load();
 	oxbox_boot_step = "the network starts";
 	{
 		void oxbox_lwip_release(void);
